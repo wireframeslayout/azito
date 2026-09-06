@@ -9,10 +9,11 @@ export interface AgentActivityBridgePayload {
   target: string;
   running: boolean;
   label?: string;
+  windowId?: number;
 }
 
 export interface AgentWatchBridgeDeps {
-  agentWatchRepo: Pick<SqliteAgentWatchRepository, 'findByKey' | 'deleteById'>;
+  agentWatchRepo: Pick<SqliteAgentWatchRepository, 'findByKey' | 'findByWindowId' | 'deleteById'>;
   pushSubRepo: Pick<SqlitePushSubscriptionRepository, 'findByEndpoint'>;
   pushService: Pick<PushNotificationService, 'sendToAll'>;
 }
@@ -31,7 +32,9 @@ export async function notifyAgentWatchesOnIdle(
 ): Promise<void> {
   if (payload.running) return;
 
-  const watches = deps.agentWatchRepo.findByKey(payload.serverName, payload.target);
+  const watches = payload.windowId != null
+    ? deps.agentWatchRepo.findByWindowId(payload.windowId)
+    : deps.agentWatchRepo.findByKey(payload.serverName, payload.target);
   if (watches.length === 0) return;
 
   for (const watch of watches) {
@@ -43,7 +46,7 @@ export async function notifyAgentWatchesOnIdle(
             label: watch.label ?? payload.label ?? payload.target,
             serverName: payload.serverName,
           }),
-          data: { url: agentPushUrl({ serverName: payload.serverName, target: payload.target }) },
+          data: { url: agentPushUrl({ serverName: payload.serverName, target: payload.target, windowId: payload.windowId }) },
         }));
       } catch {
         // ignore — watch is still deleted below (see design decision above)

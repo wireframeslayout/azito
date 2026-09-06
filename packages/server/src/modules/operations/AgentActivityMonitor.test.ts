@@ -158,7 +158,7 @@ describe('AgentActivityMonitor', () => {
     await monitor.tick();
     expect(emit).toHaveBeenCalledWith({
       type: 'agent:activity',
-      payload: { serverName: 'local', target: 'azito:agent-1', running: true, source: 'manual', operation: false, taskId: 7, label: 'agent-1', projectId: 1, paneName: 'claude' },
+      payload: { serverName: 'local', target: 'azito:agent-1', running: true, source: 'manual', operation: false, taskId: 7, label: 'agent-1', projectId: 1, paneName: 'claude', windowId: 1, status: undefined },
     });
   });
 

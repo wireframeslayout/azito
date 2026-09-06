@@ -12,6 +12,7 @@ import type { WebSocket } from 'ws';
 
 import agentRoutes from './routes';
 import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
@@ -97,15 +98,31 @@ async function main(): Promise<void> {
       const mode = url.searchParams.get('mode');
 
       if (mode === 'terminal') {
+        const refParam = url.searchParams.get('ref');
+        const paneParam = url.searchParams.get('pane');
         const target = url.searchParams.get('target');
         const cols = parseInt(url.searchParams.get('cols') || '120', 10);
         const rows = parseInt(url.searchParams.get('rows') || '40', 10);
-        if (!target) {
-          socket.send(JSON.stringify({ error: 'target required' }));
+
+        let ref: MuxRef;
+        if (refParam) {
+          try {
+            ref = parseMuxRef(decodeURIComponent(refParam));
+          } catch {
+            socket.send(JSON.stringify({ error: 'Invalid ref parameter' }));
+            socket.close();
+            return;
+          }
+        } else if (target) {
+          ref = muxRefFromTmuxTarget(target);
+        } else {
+          socket.send(JSON.stringify({ error: 'ref or target required' }));
           socket.close();
           return;
         }
-        handleAgentTerminal(socket, target, cols, rows, agentTransport);
+        const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+
+        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
         return;
       }
 

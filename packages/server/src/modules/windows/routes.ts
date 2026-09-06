@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository } from './Window';
+import { isPrimaryTaskWindow } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { TmuxClient } from '../tmux/TmuxClient';
@@ -14,7 +15,8 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
-import { muxRefFromTmuxTarget } from '@azito/shared';
+import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type PaneOrdinal } from '@azito/shared';
+import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -33,6 +35,7 @@ export interface WindowsRouteOptions {
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
   harnessPrefix?: string;
+  destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -63,9 +66,18 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: 'Project not found' });
       const body = request.body as Record<string, unknown>;
       const serverName = body['server_name'] as string | undefined;
-      const tmuxTarget = body['tmux_target'] as string | undefined;
+      let tmuxTarget = body['tmux_target'] as string | undefined;
+      const refJson = body['ref'] as string | undefined;
+      if (refJson && !tmuxTarget) {
+        try {
+          const parsed = parseMuxRef(refJson);
+          tmuxTarget = tmuxTargetFromMuxRef(parsed);
+        } catch {
+          return reply.status(400).send({ error: 'Invalid ref' });
+        }
+      }
       if (!serverName || !tmuxTarget)
-        return reply.status(400).send({ error: 'server_name and tmux_target required' });
+        return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
 
       const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       if (existing) {
@@ -174,9 +186,18 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.status(404).send({ error: 'Task not found' });
       const body = request.body as Record<string, unknown>;
       const serverName = body['server_name'] as string | undefined;
-      const tmuxTarget = body['tmux_target'] as string | undefined;
+      let tmuxTarget = body['tmux_target'] as string | undefined;
+      const refJson = body['ref'] as string | undefined;
+      if (refJson && !tmuxTarget) {
+        try {
+          const parsed = parseMuxRef(refJson);
+          tmuxTarget = tmuxTargetFromMuxRef(parsed);
+        } catch {
+          return reply.status(400).send({ error: 'Invalid ref' });
+        }
+      }
       if (!serverName || !tmuxTarget)
-        return reply.status(400).send({ error: 'server_name and tmux_target required' });
+        return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
 
       const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       if (existing) {
@@ -344,7 +365,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         throw err;
       }
       notifyWindowsChanged(srv.name);
-      return { ok: true, tmuxTarget: result.tmuxTarget };
+      return { ok: true, tmuxTarget: result.tmuxTarget, windowId: id };
     },
   );
 
@@ -410,13 +431,24 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   // ── GET /api/windows/pane-loading-state ──
   // Backs XTermView's loading overlay (see frontend useSupervisedLoadingOverlay). Agent windows
   // are always supervised on agent servers — derived from windowType, not a persisted flag.
-  fastify.get<{ Querystring: { server_name?: string; tmux_target?: string } }>(
+  fastify.get<{ Querystring: { server_name?: string; tmux_target?: string; windowId?: string } }>(
     '/api/windows/pane-loading-state',
     async (request, reply) => {
-      const serverName = request.query.server_name;
-      const tmuxTarget = request.query.tmux_target;
+      let serverName: string | undefined;
+      let tmuxTarget: string | undefined;
+
+      if (request.query.windowId) {
+        const win = windowRepo.findById(parseInt(request.query.windowId, 10));
+        if (!win) return reply.status(404).send({ error: 'Window not found' });
+        serverName = win.serverName;
+        tmuxTarget = win.tmuxTarget;
+      } else {
+        serverName = request.query.server_name;
+        tmuxTarget = request.query.tmux_target;
+      }
+
       if (!serverName || !tmuxTarget)
-        return reply.status(400).send({ error: 'server_name and tmux_target required' });
+        return reply.status(400).send({ error: 'windowId or server_name+tmux_target required' });
 
       const win = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       const srv = serverRepo.findByName(serverName);
@@ -433,6 +465,170 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const supervised = isSupervised && !recentExit;
 
       return { supervised, ready: null, childCommand: win?.launchCommand ?? null };
+    },
+  );
+
+  // ── DELETE /api/windows/:id/kill ──
+  fastify.delete<{ Params: { id: string } }>(
+    '/api/windows/:id/kill',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const deps: KillWindowDeps = {
+        muxClient: tmux,
+        windowRepo,
+        destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
+        notifySessionsChanged: notifyWindowsChanged,
+      };
+      const result = await killWindowCore(deps, srv, ref, win);
+      return result;
+    },
+  );
+
+  // ── PUT /api/windows/:id/rename ──
+  fastify.put<{ Params: { id: string } }>(
+    '/api/windows/:id/rename',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      await tmux.renameWindowByRef(srv, ref, name);
+      notifyWindowsChanged(win.serverName);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/windows/:id/panes ──
+  fastify.post<{ Params: { id: string } }>(
+    '/api/windows/:id/panes',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+
+      if (win.taskId !== null && isPrimaryTaskWindow(win)) {
+        return reply.status(409).send({
+          error: 'primary_task_window_pane_add_unsupported',
+          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+        });
+      }
+
+      const body = request.body as { ordinal?: number; direction?: string };
+      const direction = (body.direction || 'v') as 'h' | 'v';
+      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.splitPaneByHandle(srv, handle, direction);
+      notifyWindowsChanged(win.serverName);
+      return { ok: true };
+    },
+  );
+
+  // ── GET /api/windows/:id/panes/:ordinal/capture ──
+  fastify.get<{ Params: { id: string; ordinal: string }; Querystring: { start?: string; end?: string; history?: string } }>(
+    '/api/windows/:id/panes/:ordinal/capture',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const startLine = request.query.start != null ? parseInt(request.query.start, 10) : undefined;
+      const endLine = request.query.end != null ? parseInt(request.query.end, 10) : undefined;
+      if (startLine == null && endLine == null && request.query.history) {
+        const h = parseInt(request.query.history, 10);
+        const { stdout } = await tmux.captureScreen(srv, handle, -h, undefined);
+        return { content: stdout };
+      }
+      const { stdout } = await tmux.captureScreen(srv, handle, startLine, endLine);
+      return { content: stdout };
+    },
+  );
+
+  // ── POST /api/windows/:id/panes/:ordinal/send-keys ──
+  fastify.post<{ Params: { id: string; ordinal: string } }>(
+    '/api/windows/:id/panes/:ordinal/send-keys',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const { keys } = request.body as { keys?: string[] };
+      if (!keys || !Array.isArray(keys))
+        return reply.status(400).send({ error: 'keys array required' });
+      await tmux.sendKeysToHandle(srv, handle, keys);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/windows/:id/panes/:ordinal/zoom ──
+  fastify.post<{ Params: { id: string; ordinal: string } }>(
+    '/api/windows/:id/panes/:ordinal/zoom',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.zoomPaneByHandle(srv, handle);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/windows/:id/panes/:ordinal/unzoom ──
+  fastify.post<{ Params: { id: string; ordinal: string } }>(
+    '/api/windows/:id/panes/:ordinal/unzoom',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.unzoomPaneByHandle(srv, handle);
+      return { ok: true };
+    },
+  );
+
+  // ── PUT /api/windows/:id/panes/:ordinal/rename ──
+  fastify.put<{ Params: { id: string; ordinal: string } }>(
+    '/api/windows/:id/panes/:ordinal/rename',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      await tmux.setPaneTitle(srv, handle, name);
+      return { ok: true };
+    },
+  );
+
+  // ── DELETE /api/windows/:id/panes/:ordinal ──
+  fastify.delete<{ Params: { id: string; ordinal: string } }>(
+    '/api/windows/:id/panes/:ordinal',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.closePane(srv, handle);
+      notifyWindowsChanged(win.serverName);
+      return { ok: true };
     },
   );
 

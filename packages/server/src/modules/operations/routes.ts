@@ -21,6 +21,7 @@ export interface RunningOperation {
   taskId: number;
   target: string;
   serverName: string;
+  windowId?: number;
 }
 
 // ─── Plugin ───
@@ -39,7 +40,8 @@ const operationsRoutes: FastifyPluginCallback<OperationsRouteOptions> = (fastify
     const operations: RunningOperation[] = [];
     for (const [unitId, executions] of Object.entries(running)) {
       for (const execution of executions) {
-        operations.push({ unitId: Number(unitId), taskId: execution.taskId, target: execution.target, serverName: execution.serverName });
+        const win = windowRepo.findByServerAndTarget(execution.serverName, execution.target);
+        operations.push({ unitId: Number(unitId), taskId: execution.taskId, target: execution.target, serverName: execution.serverName, windowId: win?.id });
       }
     }
     return operations;

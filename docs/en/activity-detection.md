@@ -305,6 +305,8 @@ stage and therefore ends as `unknown`.
 
 ## 7. Stop-transition reasons
 
+The `agent:activity` notification payload includes `windowId?: number` (the `windows` table primary key, present when resolvable). `supervisor:ready` similarly includes `windowId?: number`. Push notification deep-link URLs include `windowId=` alongside the legacy `server` / `target` params.
+
 Every running → stopped transition carries a **stop reason**. The UI's "finished" rows are
 generated from `completed` only (interrupts, deletions and offline are not completions).
 

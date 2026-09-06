@@ -287,6 +287,8 @@ housekeeping レコードで埋まることが常態です。固定 16KB の単�
 
 ## 7. 停止遷移の reason
 
+`agent:activity` 通知ペイロードには `windowId?: number`（`windows` テーブルの主キー、解決可能な場合のみ）が付きます。`supervisor:ready` にも同様に `windowId?: number` が含まれます。Push 通知のディープリンク URL にも `windowId=` パラメータが付与されます（旧パラメータ `server` / `target` も併記）。
+
 稼働→停止の遷移イベントには**停止理由**が付きます。UI の「完了」行は `completed` のみから
 生成されます（中断・削除・オフラインは完了扱いしない）。
 
