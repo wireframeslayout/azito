@@ -23,6 +23,7 @@ export interface Window {
   taskId?: number;
   serverName: string;
   tmuxTarget: string;
+  muxRef?: string;
   label?: string;
   isPrimary: boolean;
   windowType: 'terminal' | 'agent';
@@ -78,7 +79,7 @@ export interface Unit {
 }
 /** A currently-running execution of a Unit against a Task (formerly the Operation entity; Issue #263 Refine B). */
 export interface RunningOperation {
-  unitId: number; taskId: number; target: string; serverName: string;
+  unitId: number; taskId: number; target: string; serverName: string; windowId?: number;
 }
 export interface Task {
   id: number; title: string; description?: string; status: string; currentPhase?: string | null; projectId: number;
@@ -153,7 +154,7 @@ export interface Server {
   isolationVerifiedAt?: string | null;
 }
 export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; }
-export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; }
+export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; ref: string; windowId: number | null; }
 export interface Session { name: string; windows: TmuxWindow[]; }
 export interface LogEntry { type: string; content: string; createdAt: string; unitId?: number; }
 

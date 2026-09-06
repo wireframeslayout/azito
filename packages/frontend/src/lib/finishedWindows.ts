@@ -6,6 +6,7 @@
 export interface FinishedEntry {
   serverName: string;
   target: string;
+  windowId?: number;
   label?: string;
   taskId?: number;
   projectId?: number;
@@ -13,8 +14,16 @@ export interface FinishedEntry {
   paneName?: string;
 }
 
-import { windowKey as activityKey } from '@azito/shared';
-export { activityKey };
+import { windowKey } from '@azito/shared';
+
+export function activityKey(serverName: string, target: string, windowId?: number): string {
+  if (windowId != null) return `wid:${windowId}`;
+  return windowKey(serverName, target);
+}
+
+export function activityKeyForEntry(entry: FinishedEntry): string {
+  return activityKey(entry.serverName, entry.target, entry.windowId);
+}
 
 /**
  * 完了行の寿命。読み込み時・定期・保存時の3箇所で同じ値が適用される（以前は SPバーの表示
@@ -35,8 +44,8 @@ export function pruneFinished(entries: FinishedEntry[], now: number): FinishedEn
  * 自動的に未読へ戻る）。
  */
 export function upsertFinished(entries: FinishedEntry[], entry: FinishedEntry): FinishedEntry[] {
-  const key = activityKey(entry.serverName, entry.target);
-  const idx = entries.findIndex((e) => activityKey(e.serverName, e.target) === key);
+  const key = activityKeyForEntry(entry);
+  const idx = entries.findIndex((e) => activityKeyForEntry(e) === key);
   if (idx === -1) return [...entries, entry];
   const next = [...entries];
   next[idx] = entry;
@@ -45,6 +54,6 @@ export function upsertFinished(entries: FinishedEntry[], entry: FinishedEntry): 
 
 /** 指定キーの完了行を取り除く（ウィンドウ削除・再稼働・既読化などの経路で使う）。 */
 export function removeFinished(entries: FinishedEntry[], key: string): FinishedEntry[] {
-  const kept = entries.filter((e) => activityKey(e.serverName, e.target) !== key);
+  const kept = entries.filter((e) => activityKeyForEntry(e) !== key);
   return kept.length === entries.length ? entries : kept;
 }

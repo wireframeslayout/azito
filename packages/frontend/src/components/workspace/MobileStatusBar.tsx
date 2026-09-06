@@ -6,6 +6,7 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import { FINISHED_TTL_MS } from '../../hooks/useAgentActivity';
 import type { Task } from '../../pages/workspace/types';
@@ -27,7 +28,7 @@ const BAR_HEIGHT = 26;
 interface MobileStatusBarProps {
   allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
-  connectPane: (serverName: string, target: string, projectId?: number) => void;
+  connectPane: ConnectPaneFn;
 }
 
 interface WorkingGroup {

@@ -38,6 +38,8 @@ export interface TmuxWindow {
   name: string;
   panes: Pane[];
   activity?: number;
+  ref: string;
+  windowId: number | null;
 }
 
 export interface Session {
@@ -135,17 +137,32 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setSessions(newSessions);
 
     for (const tab of tabsRef.current) {
-      if (tab.type !== 'terminal') continue;
+      if (tab.type !== 'terminal' || !tab.serverName) continue;
+      if (!successfulServers.has(tab.serverName)) continue;
+      const serverSessions = newSessions[tab.serverName];
+      if (!serverSessions) continue;
+
+      if (tab.terminalRef) {
+        const ref = tab.terminalRef;
+        if (ref.kind === 'windowId') {
+          const exists = serverSessions.some((s) => s.windows.some((w) => w.windowId === ref.windowId));
+          if (!exists) closeTabRef.current(tab.id);
+        } else {
+          const exists = serverSessions.some((s) => s.windows.some((w) => w.ref === ref.ref));
+          if (!exists) closeTabRef.current(tab.id);
+        }
+        continue;
+      }
+
       const slashIdx = tab.id.indexOf('/');
       if (slashIdx === -1) continue;
       const serverName = tab.id.slice('terminal:'.length, slashIdx);
-      if (!successfulServers.has(serverName)) continue;
       const target = tab.id.slice(slashIdx + 1);
       const colonIdx = target.indexOf(':');
       if (colonIdx === -1) continue;
       const sessionName = target.slice(0, colonIdx);
       const windowPart = target.slice(colonIdx + 1).split('.')[0];
-      const session = newSessions[serverName]?.find((s) => s.name === sessionName);
+      const session = serverSessions.find((s) => s.name === sessionName);
       if (!session) { closeTabRef.current(tab.id); continue; }
       const idx = parseInt(windowPart, 10);
       const windowExists = Number.isNaN(idx)
@@ -354,40 +371,66 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     refreshAll();
   }, [refreshAll]);
 
-  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string) => {
-    await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    }
     refreshAll();
   }, [refreshAll]);
 
-  const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string) => {
+  const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string, windowId?: number) => {
     const newName = prompt('Rename window:', currentName);
     if (!newName || newName === currentName) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    if (windowId != null) {
+      await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    }
     refreshAll();
   }, [refreshAll]);
 
-  const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string) => {
+  const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string, windowId?: number, paneOrdinal?: number) => {
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    }
     refreshAll();
   }, [refreshAll]);
 
-  const handleKillWindow = useCallback(async (serverName: string, target: string) => {
+  const handleKillWindow = useCallback(async (serverName: string, target: string, windowId?: number) => {
     const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: target }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
-    tabs.filter((t) => t.id.startsWith(`terminal:${serverName}/${target}.`)).forEach((t) => closeTab(t.id));
+    if (windowId != null) {
+      await api(`/windows/${windowId}/kill`, { method: 'DELETE' });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    }
+    tabs.filter((t) => t.type === 'terminal' && t.serverName === serverName && t.target && (t.target === target || t.target.startsWith(`${target}.`))).forEach((t) => closeTab(t.id));
     refreshAll();
   }, [refreshAll, tabs, closeTab, confirm, t]);
 
-  const handleKillPane = useCallback(async (serverName: string, target: string) => {
+  const handleKillPane = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number) => {
     const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: target }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
-    closeTab(`terminal:${serverName}/${target}`);
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}`, { method: 'DELETE' });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    }
+    const matchTarget = (tab: PersistedTab) =>
+      tab.type === 'terminal' && tab.serverName === serverName && (
+        tab.id === `terminal:${serverName}/${target}` ||
+        (windowId != null && paneOrdinal != null && tab.id === `terminal:${serverName}::w${windowId}.${paneOrdinal}`)
+      );
+    const matchingTab = tabs.find(matchTarget);
+    if (matchingTab) closeTab(matchingTab.id);
     refreshAll();
-  }, [refreshAll, closeTab, confirm, t]);
+  }, [refreshAll, tabs, closeTab, confirm, t]);
 
   return {
     sessions,

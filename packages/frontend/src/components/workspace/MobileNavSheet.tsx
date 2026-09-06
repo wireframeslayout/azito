@@ -5,6 +5,7 @@ import { Icon } from '../ui/Icon';
 import { ProjectAvatar } from '../ui/ProjectAvatar';
 import { MobileNavMenu } from './MobileNavMenu';
 import { MobileActiveWindowsPanel } from './MobileActiveWindowsPanel';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { paths } from '../../paths';
 import type { SidebarMode } from '../../pages/workspace/types';
@@ -40,7 +41,7 @@ interface MobileNavSheetProps {
    * 応じてどのモード内容を描くかは呼び出し元（Workspace.tsx）が既に解決済み。 */
   sidebarContent: ReactNode;
   objectsCount: number;
-  connectPane?: (serverName: string, target: string, projectId?: number) => void;
+  connectPane?: ConnectPaneFn;
   openTask?: (taskId: number, title: string, projectId?: number) => void;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
 }

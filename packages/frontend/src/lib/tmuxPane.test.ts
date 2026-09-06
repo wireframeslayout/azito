@@ -24,6 +24,8 @@ describe('resolveActivePane', () => {
         {
           index: 0,
           name: 'editor',
+          ref: '{"kind":"tmux","workspace":"main","window":"editor"}',
+          windowId: null,
           panes: [
             { index: 0, title: 'vim', command: 'vim', width: 80, height: 24, active: false },
             { index: 1, title: 'implementing-default', command: 'claude', width: 80, height: 24, active: true },
@@ -32,6 +34,8 @@ describe('resolveActivePane', () => {
         {
           index: 1,
           name: 'shell',
+          ref: '{"kind":"tmux","workspace":"main","window":"shell"}',
+          windowId: null,
           panes: [
             { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true },
           ],
@@ -73,6 +77,8 @@ describe('resolveActivePane', () => {
       windows: [{
         index: 0,
         name: 'w',
+        ref: '{"kind":"tmux","workspace":"s","window":"w"}',
+        windowId: null,
         panes: [
           { index: 0, title: 'a', command: 'a', width: 80, height: 24, active: false },
           { index: 1, title: 'b', command: 'b', width: 80, height: 24, active: false },
@@ -89,6 +95,8 @@ describe('resolveActivePane', () => {
       windows: [{
         index: 0,
         name: 'foo.1',
+        ref: '{"kind":"tmux","workspace":"s","window":"foo.1"}',
+        windowId: null,
         panes: [
           { index: 0, title: 'dotted', command: 'bash', width: 80, height: 24, active: true },
         ],
@@ -108,6 +116,8 @@ describe('resolveActivePane', () => {
       windows: [{
         index: 0,
         name: 'foo.1',
+        ref: '{"kind":"tmux","workspace":"s","window":"foo.1"}',
+        windowId: null,
         panes: [
           { index: 0, title: 'first', command: 'bash', width: 80, height: 24, active: false },
           { index: 1, title: 'second', command: 'bash', width: 80, height: 24, active: false },
@@ -124,6 +134,8 @@ describe('resolveActivePane', () => {
       windows: [{
         index: 0,
         name: 'w',
+        ref: '{"kind":"tmux","workspace":"s","window":"w"}',
+        windowId: null,
         panes: [
           { index: 0, title: 'first', command: 'bash', width: 80, height: 24, active: false },
         ],

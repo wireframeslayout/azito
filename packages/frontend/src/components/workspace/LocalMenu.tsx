@@ -1,5 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode } from '../../pages/workspace/types';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { Icon, type IconName } from '../ui/Icon';
 import ActiveWindowIcons from './ActiveWindowIcons';
 
@@ -25,7 +26,7 @@ interface LocalMenuProps {
   sidebarMode: SidebarMode;
   onModeClick: (mode: SidebarMode, e?: React.MouseEvent) => void;
   onExpand?: () => void;
-  connectPane?: (serverName: string, target: string, projectId?: number) => void;
+  connectPane?: ConnectPaneFn;
   openTask?: (taskId: number, title: string, projectId?: number) => void;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** 収納時、展開ボタン直下に表示するプロジェクトアバターボタン。WorkspaceLayout 側で

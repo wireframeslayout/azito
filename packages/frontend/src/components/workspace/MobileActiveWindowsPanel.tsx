@@ -4,12 +4,13 @@ import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
+import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 export interface MobileActiveWindowsPanelProps {
   onClose: () => void;
-  connectPane: (serverName: string, target: string, projectId?: number) => void;
+  connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;
   taskWindows: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
 }
@@ -64,9 +65,12 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
               selectTaskTerminal(taskId, { serverName: row.serverName, target: row.target });
               openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), row.projectId);
             } else {
-              connectPane(row.serverName, row.target, row.projectId);
+              const ref: TerminalRef = row.windowId != null
+                ? { kind: 'windowId', serverName: row.serverName, windowId: row.windowId, pane: 1 }
+                : terminalRefFromTarget(row.serverName, row.target);
+              connectPane(ref, row.projectId);
             }
-            if (isFinished) dismissFinished(row.serverName, row.target);
+            if (isFinished) dismissFinished(row.serverName, row.target, row.windowId);
             onClose();
           };
 

@@ -352,7 +352,7 @@ describe('resolveWindowContextExtra', () => {
       {
         name: 'sess',
         windows: [
-          { index: 1, name: 'main', panes: [{ index: 0, title: 'my-title', command: 'bash', width: 80, height: 24, active: true }] },
+          { index: 1, name: 'main', ref: '{"kind":"tmux","workspace":"sess","window":"main"}', windowId: null, panes: [{ index: 0, title: 'my-title', command: 'bash', width: 80, height: 24, active: true }] },
         ],
       },
     ],
@@ -367,7 +367,7 @@ describe('resolveWindowContextExtra', () => {
 
   it('falls back to the pane command when the title equals the command', () => {
     const data: Record<string, Session[]> = {
-      local: [{ name: 'sess', windows: [{ index: 1, name: 'main', panes: [{ index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true }] }] }],
+      local: [{ name: 'sess', windows: [{ index: 1, name: 'main', ref: '{"kind":"tmux","workspace":"sess","window":"main"}', windowId: null, panes: [{ index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true }] }] }],
     };
     const w = makeWindow({ tmuxTarget: 'sess:1.0' });
     expect(resolveWindowContextExtra(w, data).paneTitle).toBe('bash');

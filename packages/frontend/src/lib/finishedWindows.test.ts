@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   activityKey,
+  activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
   removeFinished,
@@ -61,5 +62,42 @@ describe('removeFinished', () => {
   it('returns the same reference when the key is absent', () => {
     const list = [entry()];
     expect(removeFinished(list, activityKey('local', 'azito:nope'))).toBe(list);
+  });
+});
+
+describe('activityKey with windowId', () => {
+  it('uses wid: prefix when windowId is provided', () => {
+    expect(activityKey('local', 'azito:win--a', 42)).toBe('wid:42');
+  });
+
+  it('falls back to windowKey when windowId is undefined', () => {
+    expect(activityKey('local', 'azito:win--a')).toBe(activityKey('local', 'azito:win--a', undefined));
+  });
+
+  it('activityKeyForEntry uses windowId when available', () => {
+    const e = entry({ windowId: 99 });
+    expect(activityKeyForEntry(e)).toBe('wid:99');
+  });
+
+  it('activityKeyForEntry falls back to target when no windowId', () => {
+    const e = entry({ windowId: undefined });
+    expect(activityKeyForEntry(e)).toBe(activityKey('local', 'azito:win--a'));
+  });
+});
+
+describe('upsertFinished with windowId', () => {
+  it('matches by windowId when present', () => {
+    const first = entry({ windowId: 10, finishedAt: 1_000 });
+    const second = entry({ windowId: 10, target: 'azito:different', finishedAt: 9_000 });
+    const result = upsertFinished([first], second);
+    expect(result).toHaveLength(1);
+    expect(result[0].finishedAt).toBe(9_000);
+  });
+
+  it('does not match windowId entry with target-only entry', () => {
+    const withId = entry({ windowId: 10, finishedAt: 1_000 });
+    const withoutId = entry({ target: 'azito:win--a', finishedAt: 2_000 });
+    const result = upsertFinished([withId], withoutId);
+    expect(result).toHaveLength(2);
   });
 });

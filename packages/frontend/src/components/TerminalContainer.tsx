@@ -18,7 +18,9 @@ import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
-import { resolveActivePane, paneDisplayName } from '../lib/tmuxPane';
+import type { TerminalRef } from '../lib/terminalRef';
+import { resolveActivePane } from '../lib/tmuxPane';
+import { paneDisplayName } from '../lib/paneDisplay';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -39,6 +41,7 @@ function ensureSpinnerKeyframes(): void {
 interface TerminalContainerProps {
   serverName: string;
   target: string;
+  terminalRef?: TerminalRef;
   projectId?: number;
   taskId?: number;
   project?: Project | null;
@@ -81,7 +84,7 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target, terminalRef, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
@@ -351,6 +354,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             ref={xtermRef}
             serverName={serverName}
             target={target}
+            terminalRef={terminalRef}
             onDisconnect={onDisconnect}
             onWindowNotFound={() => setWindowMissing(true)}
             onMaxRetriesReached={() => setDisconnected(true)}

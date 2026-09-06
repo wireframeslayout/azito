@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
+import { tmuxTargetFromMuxRef, parseMuxRef } from '@azito/shared';
 import type { Server, Session, TmuxWindow } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import WindowTreePopover from '../WindowTreePopover';
@@ -23,7 +24,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
   const firstTarget = useMemo(() => {
     for (const sess of sessions) {
       for (const win of sess.windows) {
-        return `${sess.name}:${win.name ?? win.index}`;
+        try { return tmuxTargetFromMuxRef(parseMuxRef(win.ref)); } catch { return `${sess.name}:${win.name ?? win.index}`; }
       }
     }
     return null;
@@ -50,11 +51,15 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
     refresh();
   }, [server.name, refresh]);
 
-  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string) => {
-    await api(
-      `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
-      { method: 'POST', body: JSON.stringify({ direction }) },
-    );
+  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(
+        `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
+        { method: 'POST', body: JSON.stringify({ direction }) },
+      );
+    }
     refresh();
   }, [server.name, refresh]);
 

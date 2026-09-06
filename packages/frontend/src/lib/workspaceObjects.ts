@@ -18,9 +18,9 @@ export interface ObjectSections {
 }
 
 /**
- * serverName + pane-suffix-stripped tmuxTarget の物理ウィンドウキー。
- * taskId を含まないため、「同じ物理ウィンドウかどうか」の判定（isOperation 分類）専用。
- * 重複排除（別タスクが同じ物理ウィンドウを持つケースを潰さない）には使わないこと。
+ * 物理ウィンドウキー。同じ tmux ウィンドウを指す異なる DB 行（project 由来と task 由来）を
+ * 同一物理窓とみなすためのキー。target ベースで比較する（DB の id は行ごとに異なるため使えない）。
+ * taskId を含まないため、「同じ物理ウィンドウかどう��」の判定（isOperation 分類）専用。
  */
 function windowPhysicalKey(w: Window): string {
   return windowKey(w.serverName, w.tmuxTarget);
