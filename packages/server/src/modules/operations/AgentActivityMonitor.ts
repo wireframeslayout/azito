@@ -142,6 +142,7 @@ export interface AgentActivityEntry {
    */
   status?: 'working' | 'blocked';
   paneName?: string;
+  windowId?: number;
 }
 
 /**
@@ -532,6 +533,7 @@ export class AgentActivityMonitor {
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
   private processStates = new Map<string, ProcessActivityProbeEntry>();
+  private windowIdByKey = new Map<string, number>();
   // Screen-check cache, keyed the same as every other tier. Bounds the
   // `capture-pane` cost of the title-confirmation path (see screenVerdict) and
   // carries the failure bookkeeping the unknown-hold reads. Pruned alongside
@@ -826,6 +828,11 @@ export class AgentActivityMonitor {
   private async collect(): Promise<CollectResult> {
     this.tickCounter++;
     this.kickProcessProbeRefresh();
+    const allWindows = this.windowRepo.findAll();
+    this.windowIdByKey.clear();
+    for (const w of allWindows) {
+      this.windowIdByKey.set(windowKey(w.serverName, w.tmuxTarget), w.id);
+    }
     const next = new Map<string, AgentActivityEntry>();
     const reasons = new Map<string, AgentActivityStopReason>();
     const deletedKeys = new Set<string>();
@@ -893,6 +900,7 @@ export class AgentActivityMonitor {
           operation: true,
           taskId: e.taskId,
           status: supervisor?.agentStatus,
+          windowId: this.windowIdByKey.get(key),
         });
       }
     }
@@ -911,7 +919,7 @@ export class AgentActivityMonitor {
     // is absent from `next` but must still not fall through to the manual
     // hook/heuristic path — its state is owned by the operation+Tier 0 logic
     // above.
-    const allAgentWindows = this.windowRepo.findAll().filter((w): w is AgentWindow => isAgentWindow(w) && !w.sleeping);
+    const allAgentWindows = allWindows.filter((w): w is AgentWindow => isAgentWindow(w) && !w.sleeping);
 
     // Dedup: same server + same window (pane suffix stripped) → keep taskId row.
     // Multiple DB rows can point at the same tmux window (project-owned vs task-owned).
@@ -1079,6 +1087,7 @@ export class AgentActivityMonitor {
             label: w.label ?? undefined,
             projectId: w.projectId ?? undefined,
             status: effectiveStatus,
+            windowId: w.id,
           });
         } else {
           // The supervisor explicitly reported its child idle — an authoritative
@@ -1099,6 +1108,7 @@ export class AgentActivityMonitor {
               taskId: w.taskId ?? undefined,
               label: w.label ?? undefined,
               projectId: w.projectId ?? undefined,
+              windowId: w.id,
             },
           });
         }
@@ -1141,6 +1151,7 @@ export class AgentActivityMonitor {
         taskId: w.taskId ?? undefined,
         label: w.label ?? undefined,
         projectId: w.projectId ?? undefined,
+        windowId: w.id,
       };
 
       // Tier 1: an event-driven hook signal for this key overrides the Tier 2
@@ -1741,6 +1752,7 @@ export class AgentActivityMonitor {
           taskId: operationMeta?.taskId ?? probe.taskId,
           label: probe.label,
           projectId: probe.projectId,
+          windowId: this.windowIdByKey.get(key),
           reason: 'completed',
         },
       });
@@ -1773,6 +1785,7 @@ export class AgentActivityMonitor {
             projectId: entry.projectId,
             status: entry.status,
             paneName: entry.paneName,
+            windowId: entry.windowId,
           },
         });
         if (previous === undefined) {
@@ -1803,6 +1816,7 @@ export class AgentActivityMonitor {
             label: entry.label,
             projectId: entry.projectId,
             paneName: entry.paneName,
+            windowId: entry.windowId,
             reason,
           },
         });

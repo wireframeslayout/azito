@@ -74,6 +74,7 @@ import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
@@ -253,13 +254,15 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   supervisorRegistry.on('ready', (event) => {
     notificationBus.emit({
       type: 'supervisor:ready',
-      payload: { serverName: event.serverName, target: event.target, ...(event.taskId != null ? { taskId: event.taskId } : {}) },
+      payload: { serverName: event.serverName, target: event.target, ...(event.taskId != null ? { taskId: event.taskId } : {}), windowId: event.windowId },
     });
   });
   supervisorRegistry.on('registered', (event) => {
     if (event.muxPaneRef) {
       paneHandleResolver.warm(event.serverName, event.muxPaneRef);
     }
+    const win = windowRepo.findByServerAndTarget(event.serverName, event.target);
+    if (win) supervisorRegistry.setWindowId(event.serverName, event.target, win.id);
   });
 
   notificationBus.on((event) => {
@@ -526,7 +529,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
-  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sleepService: windowSleepService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix });
+  await app.register(windowsRoutes, {
+    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo,
+    respawnService: windowRespawnService, sleepService: windowSleepService,
+    sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
+    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix,
+    destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
+      const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
+      return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
+        onDestroyed();
+        supervisorRegistry.expireResolvedLaunch(launchId);
+      });
+    },
+  });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
     taskRepo,
@@ -543,7 +558,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(phasePromptsRoutes, { sidekickLoader: sidekickPackageLoader, renderSkillPromptUseCase, unitTypeLoader });
   await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, uploadAuth: storageUploadAuth });
   await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory, tmuxClient });
-  await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo });
+  await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo, windowRepo });
   await app.register(usageRoutes, { usageService });
   await app.register(webhookRoutes, {
     taskRepo,
@@ -672,14 +687,36 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         return;
       }
 
-      const srv = serverName ? serverRepo.findByName(serverName) : null;
-      if (!srv || !target) {
+      // ── Terminal mode: resolve ref from windowId → ref → target (fallback) ──
+      const windowIdParam = wsUrl.searchParams.get('windowId');
+      const refParam = wsUrl.searchParams.get('ref');
+      const paneParam = wsUrl.searchParams.get('pane');
+
+      let resolvedRef: MuxRef | null = null;
+      let resolvedServer = serverName ? serverRepo.findByName(serverName) : null;
+      const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+
+      if (windowIdParam) {
+        const win = windowRepo.findById(Number(windowIdParam));
+        if (win) {
+          resolvedRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
+          resolvedServer = serverRepo.findByName(win.serverName) ?? null;
+        }
+      } else if (refParam) {
+        try {
+          resolvedRef = parseMuxRef(decodeURIComponent(refParam));
+        } catch { /* invalid ref */ }
+      } else if (target) {
+        resolvedRef = muxRefFromTmuxTarget(target);
+      }
+
+      if (!resolvedServer || !resolvedRef) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();
         return;
       }
 
-      handleTerminalConnection(socket, srv, target, cols, rows, transportFactory);
+      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory);
     });
   });
 

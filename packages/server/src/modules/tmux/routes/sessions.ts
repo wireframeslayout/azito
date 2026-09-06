@@ -8,7 +8,8 @@ import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import { formatMuxRef, type MuxRef } from '@azito/shared';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 
 // ─── Types ───
 
@@ -300,7 +301,8 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           if (result.code !== 0)
             return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
           notifySessionsChanged(request.params.name);
-          return { ok: true, windowName };
+          const createdRef: MuxRef = { kind: 'tmux', workspace: request.params.session, window: windowName };
+          return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef) };
         } catch (err: unknown) {
           return reply.status(500).send({ error: (err as Error).message });
         }
@@ -312,6 +314,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; session: string; window: string } }>(
     '/api/servers/:name/sessions/:session/windows/:window/panes',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const direction = ((request.body as Record<string, unknown>)?.direction as string) || 'v';
       const target = `${request.params.session}:${request.params.window}`;
       try {
@@ -537,6 +540,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.delete<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/windows/:target',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
@@ -614,6 +618,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.delete<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/panes/:target',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
@@ -659,6 +664,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.put<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/windows/:target/rename',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { name } = request.body as { name?: string };
@@ -677,6 +683,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.put<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/panes/:target/rename',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { title } = request.body as { title?: string };
@@ -698,6 +705,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   }>(
     '/api/servers/:name/panes/:target/capture',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
@@ -729,6 +737,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/panes/:target/send-keys',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { keys } = request.body as { keys?: string[] };
@@ -747,6 +756,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/panes/:target/zoom',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
@@ -762,6 +772,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; target: string } }>(
     '/api/servers/:name/panes/:target/unzoom',
     async (request, reply) => {
+      reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
@@ -770,6 +781,170 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
       }
+    },
+  );
+
+  // ═══════════════════════════════════════════════════════════════════
+  // Ref-based routes: /api/servers/:name/mux/windows/:ref/*
+  // For unregistered windows (no DB row) and as a ref-first alternative.
+  // When a registered window is targeted by ref, its DB row is also
+  // operated on (kill deletes it, etc.).
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── POST /api/servers/:name/mux/windows/:ref/kill ──
+  fastify.post<{ Params: { name: string; ref: string } }>(
+    '/api/servers/:name/mux/windows/:ref/kill',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      if (!opts.windowRepo) return reply.status(500).send({ error: 'windowRepo not configured' });
+      const dbWindow = opts.windowRepo.findByServerAndRef(request.params.name, ref);
+      const deps: KillWindowDeps = {
+        muxClient: tmux,
+        windowRepo: opts.windowRepo,
+        destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
+        notifySessionsChanged,
+      };
+      return killWindowCore(deps, srv, ref, dbWindow);
+    },
+  );
+
+  // ── PUT /api/servers/:name/mux/windows/:ref/rename ──
+  fastify.put<{ Params: { name: string; ref: string } }>(
+    '/api/servers/:name/mux/windows/:ref/rename',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      await tmux.renameWindowByRef(srv, ref, name);
+      notifySessionsChanged(request.params.name);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/windows/:ref/panes ──
+  fastify.post<{ Params: { name: string; ref: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+
+      if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
+        return reply.status(409).send({
+          error: 'primary_task_window_pane_add_unsupported',
+          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+        });
+      }
+
+      const body = request.body as { ordinal?: number; direction?: string };
+      const direction = (body.direction || 'v') as 'h' | 'v';
+      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.splitPaneByHandle(srv, handle, direction);
+      notifySessionsChanged(request.params.name);
+      return { ok: true };
+    },
+  );
+
+  // ── GET /api/servers/:name/mux/windows/:ref/panes/:ordinal/capture ──
+  fastify.get<{ Params: { name: string; ref: string; ordinal: string }; Querystring: { start?: string; end?: string; history?: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes/:ordinal/capture',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const startLine = request.query.start != null ? parseInt(request.query.start, 10) : undefined;
+      const endLine = request.query.end != null ? parseInt(request.query.end, 10) : undefined;
+      if (startLine == null && endLine == null && request.query.history) {
+        const h = parseInt(request.query.history, 10);
+        const { stdout } = await tmux.captureScreen(srv, handle, -h, undefined);
+        return { content: stdout };
+      }
+      const { stdout } = await tmux.captureScreen(srv, handle, startLine, endLine);
+      return { content: stdout };
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/windows/:ref/panes/:ordinal/send-keys ──
+  fastify.post<{ Params: { name: string; ref: string; ordinal: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes/:ordinal/send-keys',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const { keys } = request.body as { keys?: string[] };
+      if (!keys || !Array.isArray(keys))
+        return reply.status(400).send({ error: 'keys array required' });
+      await tmux.sendKeysToHandle(srv, handle, keys);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/windows/:ref/panes/:ordinal/zoom ──
+  fastify.post<{ Params: { name: string; ref: string; ordinal: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes/:ordinal/zoom',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.zoomPaneByHandle(srv, handle);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/windows/:ref/panes/:ordinal/unzoom ──
+  fastify.post<{ Params: { name: string; ref: string; ordinal: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes/:ordinal/unzoom',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.unzoomPaneByHandle(srv, handle);
+      return { ok: true };
+    },
+  );
+
+  // ── PUT /api/servers/:name/mux/windows/:ref/panes/:ordinal/rename ──
+  fastify.put<{ Params: { name: string; ref: string; ordinal: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes/:ordinal/rename',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      await tmux.setPaneTitle(srv, handle, name);
+      return { ok: true };
+    },
+  );
+
+  // ── DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal ──
+  fastify.delete<{ Params: { name: string; ref: string; ordinal: string } }>(
+    '/api/servers/:name/mux/windows/:ref/panes/:ordinal',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const ref = resolveRefFromParam(request.params.ref);
+      const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
+      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      await tmux.closePane(srv, handle);
+      notifySessionsChanged(request.params.name);
+      return { ok: true };
     },
   );
 

@@ -280,7 +280,7 @@ packages/
 - SQLite (better-sqlite3) with WAL mode
 - Migration files in `packages/server/src/shared/db/migrations/`
 - DB path: `<project-root>/data.db`
-- Current migrations: 001-054 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint)
+- Current migrations: 001-071 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id)
 
 ### SSH (Tailscale)
 - Persistent shell pool with `\x02AGENTMGR_B/E` markers for command execution
@@ -305,7 +305,7 @@ packages/
 ### Terminal Mode (xterm.js)
 - Dynamic import of @xterm/xterm
 - FitAddon, WebLinksAddon
-- WebSocket to `/ws?server=X&target=Y&cols=C&rows=R`
+- WebSocket to `/ws?server=X&target=Y&cols=C&rows=R` (legacy). Terminal mode also accepts `windowId=<id>&pane=<ordinal>` (registered window) and `ref=<formatMuxRef>&pane=<ordinal>` (by MuxRef); `target=` is a compatibility fallback
 - Touch swipe scrolling via `useTmuxTouchScroll` hook (converts touch gestures to synthetic WheelEvents for xterm.js viewport)
 - Mobile quick action buttons (Enter/Tab/Esc/Ctrl+C/Arrow Up/Arrow Down) shown when viewport <= 768px
 
@@ -380,7 +380,12 @@ packages/
 - Install status: `/api/servers/:name/install-status` (dependency install detection for ServerDetailPanel)
 - Branch search: `GET /api/servers/:name/branches?working_directory=` (optional working directory override for branch listing)
 - Units: `/api/units` CRUD + `execute`/`follow-up`/`stop`/`approve-plan`/`logs` (merged Operation+WorkerProfile — behavior + runtime; Issue #263 Refine B)
-- Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target }[]`; no operations table anymore)
+- Window operations (5-A): `DELETE /api/windows/:id/kill`, `PUT /api/windows/:id/rename`, `POST /api/windows/:id/panes`,
+  `GET /api/windows/:id/panes/:ordinal/capture`, `POST .../send-keys`, `POST .../zoom`, `POST .../unzoom`,
+  `PUT .../rename`, `DELETE /api/windows/:id/panes/:ordinal` — windowId-based pane routes
+- Ref-based window operations (5-A): `/api/servers/:name/mux/windows/:ref/{kill,rename,panes,...}` — same operations via MuxRef for unregistered windows
+- `GET /api/windows/pane-loading-state` accepts `?windowId=` in addition to `?server_name=&tmux_target=`
+- Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target, windowId? }[]`; no operations table anymore)
 - Activity diagnostics: `GET /api/debug/activity` (read-only Tier attribution per window — `decidedBy`
   (`tier0_supervisor`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
   hook / probe material and the last announced transition; rendered in Settings → System「稼働検知診断」).

@@ -1,12 +1,13 @@
 import type { WebSocket } from 'ws';
 import type { IMuxTransport, ITerminalStream } from '../../servers/transport/ServerTransport';
-import { muxRefFromTmuxTarget, type PaneOrdinal } from '@azito/shared';
+import type { MuxRef, PaneOrdinal } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
 
 export function handleAgentTerminal(
   ws: WebSocket,
-  target: string,
+  ref: MuxRef,
+  ordinal: PaneOrdinal,
   cols: number,
   rows: number,
   transport: IMuxTransport,
@@ -32,9 +33,8 @@ export function handleAgentTerminal(
 
   ws.on('close', cleanup);
 
-  const ref = muxRefFromTmuxTarget(target);
   transport
-    .openTerminal(ref, 1 as PaneOrdinal, cols, rows)
+    .openTerminal(ref, ordinal, cols, rows)
     .then((stream) => {
       if (closed) { stream.close(); return; }
       activeStream = stream;

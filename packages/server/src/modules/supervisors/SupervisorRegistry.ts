@@ -100,6 +100,7 @@ interface SupervisorConnection {
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
   muxPaneRef: string | null;
+  windowId?: number;
 }
 
 export interface SupervisorEntry {
@@ -118,6 +119,7 @@ export interface SupervisorEntry {
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
   muxPaneRef: string | null;
+  windowId?: number;
 }
 
 export interface SupervisorActivityEvent {
@@ -142,6 +144,7 @@ export interface SupervisorReadyEvent {
   target: string;
   taskId: number | null;
   unitId: number | null;
+  windowId?: number;
 }
 
 export interface SupervisorChildExitEvent {
@@ -564,6 +567,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastReportedState: null,
       lastReportedStatus: null,
       muxPaneRef: info.muxPaneRef ?? null,
+      windowId: undefined,
     };
     this.connections.set(key, conn);
     this.socketKeys.set(socket, key);
@@ -628,6 +632,7 @@ export class SupervisorRegistry extends EventEmitter {
           target: conn.target,
           taskId: conn.taskId,
           unitId: conn.unitId,
+          windowId: conn.windowId,
         } satisfies SupervisorReadyEvent);
         break;
 
@@ -794,6 +799,12 @@ export class SupervisorRegistry extends EventEmitter {
     }
   }
 
+  setWindowId(serverName: string, target: string, windowId: number): void {
+    const key = keyFor(serverName, target);
+    const conn = this.connections.get(key);
+    if (conn) conn.windowId = windowId;
+  }
+
   snapshot(): SupervisorEntry[] {
     return [...this.connections.values()].map((conn) => ({
       serverName: conn.serverName,
@@ -810,6 +821,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastReportedState: conn.lastReportedState,
       lastReportedStatus: conn.lastReportedStatus,
       muxPaneRef: conn.muxPaneRef,
+      windowId: conn.windowId,
     }));
   }
 
