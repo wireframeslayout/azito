@@ -208,7 +208,10 @@ export function migrateTerminalTabs(
     if (tab.type !== 'terminal' || tab.terminalRef) return tab;
     const parsed = parseTerminalTabId(tab.id);
     if (!parsed || parsed.kind !== 'legacy') return tab;
-    const sessions = sessionsByServer.get(parsed.serverName) ?? [];
+    // Wait until this server's sessions have been fetched: migrating without them would
+    // always fall back to the ref form and lose the windowId even for registered windows.
+    const sessions = sessionsByServer.get(parsed.serverName);
+    if (!sessions) return tab;
     const ref = terminalRefFromLegacyTarget(parsed.serverName, parsed.target, sessions);
     const terminalRef: TerminalRef = { ...ref, pane: parsed.pane } as TerminalRef;
     const newId = terminalTabId(terminalRef);
@@ -304,6 +307,22 @@ export function useTabPersistence(storageKey?: string) {
       return [...pinned, { ...tab, ...(openerTabId ? { openerTabId } : {}) }];
     });
     setActiveTabId(tab.id);
+  }, []);
+
+  /**
+   * Rewrite legacy `terminal:<server>/<target>` tab ids to the TerminalRef form once the
+   * sessions for their servers are known (Workspace calls this whenever sessionData changes;
+   * it is a no-op when nothing is left to migrate). The active tab id follows the rename.
+   */
+  const migrateLegacyTerminalTabIds = useCallback((sessionsByServer: Map<string, Session[]>) => {
+    const current = tabsRef.current;
+    const { tabs: migrated, changed } = migrateTerminalTabs(current, sessionsByServer);
+    if (!changed) return;
+    const idMap = new Map<string, string>();
+    current.forEach((t, i) => { if (migrated[i].id !== t.id) idMap.set(t.id, migrated[i].id); });
+    setTabs(migrated);
+    const active = activeTabIdRef.current;
+    if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
   }, []);
 
   const togglePin = useCallback((tabId: string) => {
@@ -585,5 +604,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }
