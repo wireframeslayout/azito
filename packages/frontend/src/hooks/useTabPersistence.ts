@@ -8,6 +8,7 @@ import {
   terminalRefFromLegacyTarget,
   terminalRefDisplayLabel,
   terminalRefFromTarget,
+  isValidTerminalRef,
 } from '../lib/terminalRef';
 import type { Session } from '../pages/workspace/types';
 
@@ -179,6 +180,20 @@ export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
     if (rawType === 'worker-profiles-list' || rawType === 'tasks-list' || rawType === 'operations-running') continue;
     if (rawType === 'projects-list' || rawType === 'units-list' || rawType === 'sidekicks-list' || rawType === 'global-settings' || rawType === 'project-form') continue;
 
+    // Terminal tabs whose id/ref were built from a non-numeric windowId (rc.6 ObjectsSidebar
+    // regression) can never connect and keep the /ws reconnect loop alive on every page.
+    // Rebuild them from `target` when it is a real tmux target, otherwise drop them.
+    if (rawType === 'terminal' && (tab.id.includes('[object ') || (tab.terminalRef && !isValidTerminalRef(tab.terminalRef)))) {
+      const target = tab.target;
+      if (!target || target.includes('[object ') || !target.includes(':') || !tab.serverName) continue;
+      const repaired = terminalRefFromTarget(tab.serverName, target);
+      const repairedTab: PersistedTab = { ...tab, id: terminalTabId(repaired), terminalRef: repaired, label: terminalRefDisplayLabel(repaired) };
+      if (seenIds.has(repairedTab.id)) continue;
+      seenIds.add(repairedTab.id);
+      next.push(repairedTab);
+      continue;
+    }
+
     let normalized: PersistedTab;
     if (rawType === 'operation') {
       normalized = { ...tab, type: 'unit', id: normalizeLegacyTabId(tab.id) };
@@ -336,6 +351,10 @@ export function useTabPersistence(storageKey?: string) {
     let projectId: number | undefined;
     let opts: { reconnect?: boolean } | undefined;
     if (typeof serverNameOrRef === 'object') {
+      if (!isValidTerminalRef(serverNameOrRef)) {
+        console.error('[connectPane] ignoring invalid TerminalRef', serverNameOrRef);
+        return;
+      }
       ref = serverNameOrRef;
       projectId = typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined;
       opts = typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined;
