@@ -259,7 +259,14 @@ export class TmuxClient implements IMuxClient {
 
   async createWindow(server: ServerConfig, sessionName: string, baseName?: string, options?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ result: ExecResult; windowName: string }> {
     const windowName = options?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
-    const args = ['new-window', '-t', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
+    // `-t <session>:` (trailing colon) pins the target to the SESSION and lets
+    // tmux pick the next free window index. A bare `-t <session>` is resolved
+    // as a target-window first, and tmux matches window NAMES by prefix — so a
+    // window named e.g. `azito-rc` inside session `azito` made `new-window -t
+    // azito` try to create AT that window's index and fail with
+    // "create window failed: index 1 in use" (observed on the server001 hub
+    // when respawning a window while the RC hub ran in a window named azito-rc).
+    const args = ['new-window', '-t', `${sessionName}:`, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);

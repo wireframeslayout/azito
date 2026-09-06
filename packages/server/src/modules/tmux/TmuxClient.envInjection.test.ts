@@ -166,4 +166,17 @@ describe('TmuxClient.uiTokenEnvForServer', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
     expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ ...ISOLATION_MASKED_ENV });
   });
+  it('createWindow targets the session with a trailing colon so a window named like the session cannot capture the index', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    await client.createWindow(srv, 'azito', 'win');
+    const newWindowCall = calls.find((c) => c[0] === 'new-window')!;
+    const tIdx = newWindowCall.indexOf('-t');
+    // `-t azito` would be resolved as a target-window and prefix-match a window
+    // named `azito-rc`, making tmux try that window's index ("index 1 in use").
+    expect(newWindowCall[tIdx + 1]).toBe('azito:');
+  });
 });
