@@ -111,7 +111,7 @@ const notificationRoutes: FastifyPluginCallback<NotificationRouteOptions> = (fas
       if (body.endpoint && body.windowId != null && windowRepo) {
         const win = windowRepo.findById(body.windowId);
         if (!win) return reply.status(404).send({ error: 'Window not found' });
-        agentWatchRepo.add(body.endpoint, win.serverName, stripPaneSuffix(win.tmuxTarget), body.label ?? null, body.windowId);
+        agentWatchRepo.add(body.endpoint, win.serverName, win.tmuxTarget, body.label ?? null, body.windowId);
         return { ok: true };
       }
       return reply.status(400).send({ error: 'endpoint, serverName, target required' });

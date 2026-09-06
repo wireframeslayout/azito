@@ -18,12 +18,6 @@ export interface ITerminalStream extends EventEmitter {
 export interface IServerTransport {
   /** シェルコマンド実行（現行 TmuxClient.execCommand 相当） */
   exec(command: string, timeoutMs?: number): Promise<ExecResult>;
-  /** @deprecated Use IMuxTransport.execMux */
-  execTmux(args: string[]): Promise<ExecResult>;
-  /** @deprecated Use IMuxTransport.openTerminal */
-  openTerminal(target: string, cols: number, rows: number): Promise<ITerminalStream>;
-  /** @deprecated Use IMuxTransport.createPaneStream */
-  createPaneStream(paneId: string): IPaneStream;
 }
 
 export interface IMuxTransport {

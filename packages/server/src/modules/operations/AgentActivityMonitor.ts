@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { stripPaneSuffix, windowKey, asPaneHandle, type PaneHandle } from '@azito/shared';
+import { windowKey, asPaneHandle, type PaneHandle } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
 
@@ -735,7 +735,7 @@ export class AgentActivityMonitor {
         status: state === 'active' ? 'running' : 'idle',
         at: Date.now(),
         serverName,
-        target: stripPaneSuffix(target),
+        target,
         taskId,
         label,
         agentStatus: state === 'active' ? agentStatus : undefined,
@@ -847,7 +847,7 @@ export class AgentActivityMonitor {
       taskId?: number,
       evidenceAt?: number,
     ): void => {
-      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId, evidenceAt });
+      decisions.set(key, { serverName, target, decidedBy, state, taskId, evidenceAt });
     };
     // Candidate keys a Tier 0 supervisor reported idle on this tick, mapped to
     // the `windows` row and the entry they would publish if the Tier 2 blocked
@@ -894,7 +894,7 @@ export class AgentActivityMonitor {
         );
         next.set(key, {
           serverName: e.serverName,
-          target: stripPaneSuffix(e.target),
+          target: e.target,
           running: true,
           source: supervisor ? 'supervised' : 'operation',
           operation: true,
@@ -1079,7 +1079,7 @@ export class AgentActivityMonitor {
           decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined, supervisor.at);
           next.set(key, {
             serverName: w.serverName,
-            target: stripPaneSuffix(w.tmuxTarget),
+            target: w.tmuxTarget,
             running: true,
             source: 'supervised',
             operation: false,
@@ -1101,7 +1101,7 @@ export class AgentActivityMonitor {
             window: w,
             entry: {
               serverName: w.serverName,
-              target: stripPaneSuffix(w.tmuxTarget),
+              target: w.tmuxTarget,
               running: true,
               source: 'supervised',
               operation: false,
@@ -1144,7 +1144,7 @@ export class AgentActivityMonitor {
 
       const entry: AgentActivityEntry = {
         serverName: w.serverName,
-        target: stripPaneSuffix(w.tmuxTarget),
+        target: w.tmuxTarget,
         running: true,
         source: 'manual',
         operation: false,

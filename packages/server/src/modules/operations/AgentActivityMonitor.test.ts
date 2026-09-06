@@ -65,7 +65,7 @@ describe('AgentActivityMonitor', () => {
   let listSessions: ReturnType<typeof vi.fn>;
   let findByName: ReturnType<typeof vi.fn>;
   let emit: ReturnType<typeof vi.fn>;
-  let capturePane: ReturnType<typeof vi.fn>;
+  let captureScreen: ReturnType<typeof vi.fn>;
   let monitor: AgentActivityMonitor;
 
   beforeEach(() => {
@@ -76,14 +76,14 @@ describe('AgentActivityMonitor', () => {
     // *succeed* by default, since "could not read the pane" is now a distinct
     // answer that holds the previous state instead of resolving it. Tests that
     // care about the screen build their own client with their own content.
-    capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+    captureScreen = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     findByName = vi.fn().mockReturnValue({ name: 'local', type: 'local' } as ServerConfig);
     emit = vi.fn();
 
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
       { findAll } as unknown as IWindowRepository,
-      { listSessions, capturePane } as unknown as TmuxClient,
+      { listSessions, captureScreen } as unknown as TmuxClient,
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
     );
@@ -502,7 +502,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('flags a claude window as blocked via its screen tail once activity has advanced, keeping it a running entry', async () => {
-      const capturePane = vi.fn().mockResolvedValue({
+      const captureScreen = vi.fn().mockResolvedValue({
         stdout: 'Allow this action?\n  enter to select · esc to cancel',
         stderr: '',
         code: 0,
@@ -510,7 +510,7 @@ describe('AgentActivityMonitor', () => {
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, capturePane } as unknown as TmuxClient,
+        { listSessions, captureScreen } as unknown as TmuxClient,
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
       );
@@ -522,23 +522,23 @@ describe('AgentActivityMonitor', () => {
       // previous tick.
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'claude', title: 'claude' })]));
       await monitor.tick(); // baseline — no prior activity to compare against, capture-pane not yet consulted
-      expect(capturePane).not.toHaveBeenCalled();
+      expect(captureScreen).not.toHaveBeenCalled();
       expect(monitor.snapshot()).toEqual([]);
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + 1, [makePane({ command: 'claude', title: 'claude' })]));
       await monitor.tick();
-      expect(capturePane).toHaveBeenCalledWith(expect.anything(), 'azito:agent-1.1', -30);
+      expect(captureScreen).toHaveBeenCalledWith(expect.anything(), 'azito:agent-1.1', -30);
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual', status: 'blocked' }),
       ]);
     });
 
     it('does not consult capture-pane for a generic worker (no classifier rules), and still confirms via the Tier 3 heuristic', async () => {
-      const capturePane = vi.fn();
+      const captureScreen = vi.fn();
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, capturePane } as unknown as TmuxClient,
+        { listSessions, captureScreen } as unknown as TmuxClient,
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
       );
@@ -552,7 +552,7 @@ describe('AgentActivityMonitor', () => {
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + 2, [makePane({ command: 'some-generic-tool' })]));
       await monitor.tick();
 
-      expect(capturePane).not.toHaveBeenCalled();
+      expect(captureScreen).not.toHaveBeenCalled();
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual' }),
       ]);
@@ -928,7 +928,7 @@ describe('AgentActivityMonitor', () => {
         monitor = new AgentActivityMonitor(
           { getRunning } as unknown as ExecuteTaskUseCase,
           { findAll } as unknown as IWindowRepository,
-          { listSessions, capturePane: screenClient } as unknown as TmuxClient,
+          { listSessions, captureScreen: screenClient } as unknown as TmuxClient,
           { findByName } as unknown as IServerRepository,
           { emit } as unknown as NotificationBus,
         );
@@ -1551,7 +1551,7 @@ describe('AgentActivityMonitor', () => {
 
     function makeMonitorWithProbe(
       list: () => Promise<PartialProbeEntry[]>,
-      capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 }),
+      captureScreen = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 }),
     ): AgentActivityMonitor {
       const probe = {
         list: async (): Promise<ProcessActivityProbeEntry[]> =>
@@ -1560,7 +1560,7 @@ describe('AgentActivityMonitor', () => {
       return new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, capturePane } as unknown as TmuxClient,
+        { listSessions, captureScreen } as unknown as TmuxClient,
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
         probe,
@@ -2066,7 +2066,7 @@ describe('AgentActivityMonitor', () => {
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, capturePane } as unknown as TmuxClient,
+        { listSessions, captureScreen } as unknown as TmuxClient,
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
         probe,

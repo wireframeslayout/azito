@@ -5,8 +5,8 @@ import { TuiWorkerRuntime } from './TuiWorkerRuntime';
 function makeRuntime(capturePaneResponses: string[]) {
   let callIndex = 0;
   const tmux = {
-    sendKeys: vi.fn(async () => {}),
-    capturePane: vi.fn(async () => {
+    sendKeysToHandle: vi.fn(async () => {}),
+    captureScreen: vi.fn(async () => {
       const stdout = capturePaneResponses[callIndex] ?? capturePaneResponses[capturePaneResponses.length - 1];
       callIndex++;
       return { stdout };
@@ -42,20 +42,20 @@ describe('TuiWorkerRuntime.launch — waitForTuiReady', () => {
     const { runtime, tmux } = makeRuntime(['', '', 'shift+tab to cycle']);
     const ctx = { ...baseLaunchCtx, effectiveLaunchCommand: 'claude --dangerously-skip-permissions' };
     await expect(runtime.launch(ctx)).resolves.toBeDefined();
-    expect(tmux.capturePane.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(tmux.captureScreen.mock.calls.length).toBeGreaterThanOrEqual(3);
   }, 15_000);
 
   it('does NOT poll or throw for codex worker — returns after fixed 3s sleep', async () => {
     const { runtime, tmux } = makeRuntime([]);
     const ctx = { ...baseLaunchCtx, effectiveLaunchCommand: 'codex --dangerously-bypass-approvals-and-sandbox' };
     await expect(runtime.launch(ctx)).resolves.toBeDefined();
-    expect(tmux.capturePane).not.toHaveBeenCalled();
+    expect(tmux.captureScreen).not.toHaveBeenCalled();
   }, 10_000);
 
   it('does NOT poll or throw for generic worker', async () => {
     const { runtime, tmux } = makeRuntime([]);
     const ctx = { ...baseLaunchCtx, effectiveLaunchCommand: '/usr/bin/some-generic-tool' };
     await expect(runtime.launch(ctx)).resolves.toBeDefined();
-    expect(tmux.capturePane).not.toHaveBeenCalled();
+    expect(tmux.captureScreen).not.toHaveBeenCalled();
   }, 10_000);
 });

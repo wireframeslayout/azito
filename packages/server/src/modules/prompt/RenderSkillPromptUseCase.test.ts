@@ -224,7 +224,7 @@ function makeRepos(overrides: {
   };
 
   const transportFactory = {
-    getTransport: vi.fn(() => ({ exec: vi.fn(), execTmux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() })),
+    getTransport: vi.fn(() => ({ exec: vi.fn(), execMux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() })),
     invalidate: vi.fn(),
     ...overrides.transportFactory,
   } as unknown as TransportFactory;

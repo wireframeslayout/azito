@@ -63,7 +63,7 @@ function makeTransport(overrides: TransportOverrides = {}) {
     }
     return { stdout: echoMarker(cmd), stderr: '', code: 0 };
   });
-  const transport = { exec, execTmux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() } as unknown as IServerTransport;
+  const transport = { exec, execMux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() } as unknown as IServerTransport;
   return { transport, exec };
 }
 

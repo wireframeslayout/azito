@@ -156,7 +156,7 @@ export class TmuxClient implements IMuxClient {
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).execTmux(args);
+    return this.transportFactory.getTransport(server).execMux(args);
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {
@@ -431,21 +431,6 @@ export class TmuxClient implements IMuxClient {
     }
   }
 
-  /** @deprecated Use resolvePane */
-  async resolvePaneId(server: ServerConfig, windowTarget: string): Promise<string> {
-    const { stdout, code } = await this.runTmuxCommand(server, [
-      'list-panes', '-t', windowTarget, '-F', '#{pane_id}',
-    ]);
-    if (code !== 0) {
-      throw new Error(`Failed to resolve pane ID for target "${windowTarget}"`);
-    }
-    const firstPaneId = stdout.trim().split('\n')[0];
-    if (!firstPaneId || !firstPaneId.startsWith('%')) {
-      throw new Error(`No valid pane ID found for target "${windowTarget}"`);
-    }
-    return firstPaneId;
-  }
-
   async listPaneIds(server: ServerConfig, windowTarget: string): Promise<Array<{ index: number; paneId: string }>> {
     const { stdout, code } = await this.runTmuxCommand(server, [
       'list-panes', '-t', windowTarget, '-F', '#{pane_index}|||#{pane_id}',
@@ -573,43 +558,8 @@ export class TmuxClient implements IMuxClient {
     return this.runTmuxCommand(server, ['kill-session', '-t', sessionName]);
   }
 
-  /** @deprecated Use closeWindow */
-  async killWindow(server: ServerConfig, target: string): Promise<ExecResult> {
-    return this.runTmuxCommand(server, ['kill-window', '-t', target]);
-  }
-
   async killPane(server: ServerConfig, target: string): Promise<ExecResult> {
     return this.runTmuxCommand(server, ['kill-pane', '-t', target]);
-  }
-
-  /** @deprecated Use captureScreen */
-  async capturePane(
-    server: ServerConfig,
-    target: string,
-    startLine?: number,
-    endLine?: number,
-  ): Promise<ExecResult> {
-    const args = ['capture-pane', '-p', '-t', target, '-e'];
-    if (startLine != null) args.push('-S', String(startLine));
-    if (endLine != null) args.push('-E', String(endLine));
-    return this.runTmuxCommand(server, args);
-  }
-
-  /** @deprecated Use sendKeysToHandle */
-  async sendKeys(server: ServerConfig, target: string, keys: string[]): Promise<void> {
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i];
-      if (SPECIAL_KEYS.has(key)) {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
-      } else if (Buffer.byteLength(key, 'utf8') > 500) {
-        await this.sendLongText(server, target, key);
-        if (keys[i + 1] === 'Enter') {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-      } else {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
-      }
-    }
   }
 
   /**
@@ -759,7 +709,9 @@ export class TmuxClient implements IMuxClient {
     return { ref: { kind: 'tmux' as const, workspace, window: windowName }, result };
   }
 
-  async closeWindow(server: ServerConfig, ref: MuxRef) { return this.killWindow(server, tmuxTargetFromMuxRef(ref)); }
+  async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
+    return this.runTmuxCommand(server, ['kill-window', '-t', tmuxTargetFromMuxRef(ref)]);
+  }
   async closeWorkspace(server: ServerConfig, workspace: string) { return this.killSession(server, workspace); }
   async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string) { return this.renameWindow(server, tmuxTargetFromMuxRef(ref), name); }
   async renameWorkspace(server: ServerConfig, from: string, to: string) { return this.renameSession(server, from, to); }
@@ -831,8 +783,28 @@ export class TmuxClient implements IMuxClient {
   }
 
   async closePane(server: ServerConfig, handle: PaneHandle) { return this.killPane(server, handle as string); }
-  async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number) { return this.capturePane(server, handle as string, start, end); }
-  async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]) { return this.sendKeys(server, handle as string, keys); }
+  async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> {
+    const args = ['capture-pane', '-p', '-t', handle as string, '-e'];
+    if (start != null) args.push('-S', String(start));
+    if (end != null) args.push('-E', String(end));
+    return this.runTmuxCommand(server, args);
+  }
+  async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
+    const target = handle as string;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (SPECIAL_KEYS.has(key)) {
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
+      } else if (Buffer.byteLength(key, 'utf8') > 500) {
+        await this.sendLongText(server, target, key);
+        if (keys[i + 1] === 'Enter') {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } else {
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
+      }
+    }
+  }
   async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
   async panePidByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPanePid(server, handle as string); }
   async paneCommandByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPaneCurrentCommand(server, handle as string); }

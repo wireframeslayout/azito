@@ -89,7 +89,7 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
   let monitor: AgentActivityMonitor;
   let findAll: ReturnType<typeof vi.fn>;
   let listSessions: ReturnType<typeof vi.fn>;
-  let capturePane: ReturnType<typeof vi.fn>;
+  let captureScreen: ReturnType<typeof vi.fn>;
   let findByName: ReturnType<typeof vi.fn>;
   let getRunning: ReturnType<typeof vi.fn>;
   let emit: ReturnType<typeof vi.fn>;
@@ -103,14 +103,14 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
     getRunning = vi.fn().mockReturnValue({});
     findAll = vi.fn<() => Window[]>().mockReturnValue([]);
     listSessions = vi.fn().mockResolvedValue([]);
-    capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+    captureScreen = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     findByName = vi.fn().mockReturnValue({ name: 'local', type: 'local' } as ServerConfig);
     emit = vi.fn();
 
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
       { findAll } as unknown as IWindowRepository,
-      { listSessions, capturePane } as unknown as TmuxClient,
+      { listSessions, captureScreen } as unknown as TmuxClient,
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
     );

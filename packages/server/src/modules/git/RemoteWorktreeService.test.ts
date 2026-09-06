@@ -9,7 +9,7 @@ function mockTransport(responses: ExecResult[]): IServerTransport {
       if (callIndex < responses.length) return responses[callIndex++];
       return { stdout: '', stderr: '', code: 0 };
     }),
-    execTmux: vi.fn(),
+    execMux: vi.fn(),
     openTerminal: vi.fn(),
     createPaneStream: vi.fn(),
   } as unknown as IServerTransport;
@@ -100,7 +100,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('git branch -D')) throw new Error('no branch');
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -121,7 +121,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('rev-parse --verify')) return ok('fatal: Needed a single revision\n');
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -143,7 +143,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('rev-parse --verify')) return ok('a'.repeat(40) + '\n');
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -176,7 +176,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('rev-parse --verify')) return { stdout: '', stderr: '', code: 128 };
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -196,7 +196,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('git worktree add')) return ok('fatal: \'task-1\' is already checked out at \'/other/path\'\n');
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -214,7 +214,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('git worktree add')) return ok('error: unknown switch `x\'\n');
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -236,7 +236,7 @@ describe('RemoteWorktreeService', () => {
           }
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -254,7 +254,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('git worktree add')) return { stdout: '', stderr: 'fatal: invalid reference: bad-ref', code: 1 };
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -281,7 +281,7 @@ describe('RemoteWorktreeService', () => {
     it('returns false on transport error', async () => {
       const transport = {
         exec: vi.fn(async () => { throw new Error('connection failed'); }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -319,7 +319,7 @@ describe('RemoteWorktreeService', () => {
     it('returns null on error', async () => {
       const transport = {
         exec: vi.fn(async () => { throw new Error('fail'); }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -357,7 +357,7 @@ describe('RemoteWorktreeService', () => {
           if (callCount === 1) throw new Error('no merge base');
           return ok('A\tnew-file.ts\n');
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -420,7 +420,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.startsWith('test -d') && cmd.includes('yes')) return ok('yes\n');
           return ok('');
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;
@@ -438,7 +438,7 @@ describe('RemoteWorktreeService', () => {
           if (cmd.includes('rev-parse --verify')) return ok('fatal: Needed a single revision\n');
           return ok();
         }),
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       } as unknown as IServerTransport;

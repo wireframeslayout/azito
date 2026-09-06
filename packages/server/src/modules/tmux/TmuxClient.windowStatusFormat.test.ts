@@ -8,10 +8,10 @@ const PUBLIC_URL = 'http://100.64.1.42:3001';
 const LOCAL_URL = 'http://127.0.0.1:3001';
 
 function makeClient(
-  execTmux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
+  execMux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
 ): TmuxClient {
   const factory = {
-    getTransport: () => ({ execTmux: vi.fn(execTmux) }),
+    getTransport: () => ({ execMux: vi.fn(execMux) }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, PUBLIC_URL, '', LOCAL_URL);
 }

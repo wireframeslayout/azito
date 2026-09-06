@@ -8,7 +8,7 @@ import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 
 // ─── Types ───
@@ -591,14 +591,14 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             // pass-through can actually find it.
             windowRow.tmuxTarget,
             'window_killed_via_sessions_route',
-            () => tmux.killWindow(srv, target),
+            () => tmux.closeWindow(srv, muxRefFromTmuxTarget(target)),
             cleanupWindowRows,
           );
         } else {
           // resolveKillOutcome normalizes local (throws on failure) vs agent
           // (resolves with a non-zero code) transports into one verdict —
           // see its doc comment.
-          outcome = await resolveKillOutcome(tmux.killWindow(srv, target));
+          outcome = await resolveKillOutcome(tmux.closeWindow(srv, muxRefFromTmuxTarget(target)));
           if (outcome.success) cleanupWindowRows();
         }
         if (!outcome.success) {
@@ -717,7 +717,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       if (startLine == null && endLine == null && request.query.history) {
         const h = parseInt(request.query.history, 10);
         try {
-          const { stdout } = await tmux.capturePane(srv, decodedTarget, -h, undefined);
+          const { stdout } = await tmux.captureScreen(srv, asPaneHandle(decodedTarget), -h, undefined);
           return { content: stdout };
         } catch (err: unknown) {
           return reply.status(500).send({ error: (err as Error).message });
@@ -725,7 +725,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       }
 
       try {
-        const { stdout } = await tmux.capturePane(srv, decodedTarget, startLine, endLine);
+        const { stdout } = await tmux.captureScreen(srv, asPaneHandle(decodedTarget), startLine, endLine);
         return { content: stdout };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
@@ -744,7 +744,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
       try {
-        await tmux.sendKeys(srv, decodeURIComponent(request.params.target), keys);
+        await tmux.sendKeysToHandle(srv, asPaneHandle(decodeURIComponent(request.params.target)), keys);
         return { ok: true };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });

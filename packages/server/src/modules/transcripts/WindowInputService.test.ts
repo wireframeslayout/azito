@@ -61,7 +61,7 @@ function buildDeps(opts: {
   findById?: IWindowRepository['findById'];
   listAllPanes?: TmuxClient['listAllPanes'];
   sendLiteralText?: TmuxClient['sendLiteralText'];
-  sendKeys?: TmuxClient['sendKeys'];
+  sendKeysToHandle?: TmuxClient['sendKeysToHandle'];
   isPaneInMode?: TmuxClient['isPaneInMode'];
   servers?: ServerConfig[];
 } = {}) {
@@ -69,13 +69,13 @@ function buildDeps(opts: {
     findById: opts.findById ?? (() => buildWindow()),
   } as unknown as IWindowRepository;
 
-  const calls: { sendLiteralText: unknown[]; sendKeys: unknown[]; wait: number[]; cancelPaneMode: unknown[] } =
-    { sendLiteralText: [], sendKeys: [], wait: [], cancelPaneMode: [] };
+  const calls: { sendLiteralText: unknown[]; sendKeysToHandle: unknown[]; wait: number[]; cancelPaneMode: unknown[] } =
+    { sendLiteralText: [], sendKeysToHandle: [], wait: [], cancelPaneMode: [] };
 
   const tmuxClient = {
     listAllPanes: opts.listAllPanes ?? (async () => [buildPane()]),
     sendLiteralText: opts.sendLiteralText ?? (async (...args: unknown[]) => { calls.sendLiteralText.push(args); }),
-    sendKeys: opts.sendKeys ?? (async (...args: unknown[]) => { calls.sendKeys.push(args); }),
+    sendKeysToHandle: opts.sendKeysToHandle ?? (async (...args: unknown[]) => { calls.sendKeysToHandle.push(args); }),
     // copy-mode 判定は既定で「モード外（=0）」— 既存の非 copy-mode 送信系テストが preparePaneForInput
     // の追加呼び出しで壊れないようにする（Issue #69 T12）。
     isPaneInMode: opts.isPaneInMode ?? (async () => false),
@@ -132,7 +132,7 @@ describe('WindowInputService', () => {
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
       expect(calls.sendLiteralText).toEqual([[LOCAL_SERVER, '%1', 'echo hello']]);
-      expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['Enter']]]);
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['Enter']]]);
     });
 
     it('does not wait before Enter for workerType "claude" (no submitDelayMs)', async () => {
@@ -148,7 +148,7 @@ describe('WindowInputService', () => {
       const tmuxClient = {
         listAllPanes: async () => [buildPane()],
         sendLiteralText: async () => { order.push('sendLiteralText'); },
-        sendKeys: async () => { order.push('sendKeys'); },
+        sendKeysToHandle: async () => { order.push('sendKeysToHandle'); },
         isPaneInMode: async () => false,
         cancelPaneMode: async () => { order.push('cancelPaneMode'); },
       } as unknown as TmuxClient;
@@ -156,7 +156,7 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'reply with OK only');
       expect(result).toBe('ok');
-      expect(order).toEqual(['sendLiteralText', 'wait:200', 'sendKeys']);
+      expect(order).toEqual(['sendLiteralText', 'wait:200', 'sendKeysToHandle']);
     });
 
     it('cancels copy-mode before sending when the pane is in_mode (Issue #69 T12)', async () => {
@@ -167,13 +167,13 @@ describe('WindowInputService', () => {
         isPaneInMode: async () => true,
         cancelPaneMode: async () => { order.push('cancelPaneMode'); },
         sendLiteralText: async () => { order.push('sendLiteralText'); },
-        sendKeys: async () => { order.push('sendKeys'); },
+        sendKeysToHandle: async () => { order.push('sendKeysToHandle'); },
       } as unknown as TmuxClient;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
-      expect(order).toEqual(['cancelPaneMode', 'wait:100', 'sendLiteralText', 'sendKeys']);
+      expect(order).toEqual(['cancelPaneMode', 'wait:100', 'sendLiteralText', 'sendKeysToHandle']);
     });
 
     it('does not cancel copy-mode when the pane is not in_mode', async () => {
@@ -214,7 +214,7 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
-      expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['Escape']]]);
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['Escape']]]);
     });
 
     it('defaults to C-c when workerType has no transcript profile (e.g. generic)', async () => {
@@ -222,7 +222,7 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
-      expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
     });
 
     it('defaults to C-c when workerType is null (plain terminal window)', async () => {
@@ -230,7 +230,7 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'interrupt');
       expect(result).toBe('ok');
-      expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
     });
 
     it('sends the explicitly given key for action:"key"', async () => {
@@ -238,7 +238,7 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, tmuxClient, serverRepo);
       const result = await service.sendSignal(42, asPaneHandle('%1'), 'key', 'C-c');
       expect(result).toBe('ok');
-      expect(calls.sendKeys).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
+      expect(calls.sendKeysToHandle).toEqual([[LOCAL_SERVER, '%1', ['C-c']]]);
     });
 
     it('cancels copy-mode before sending the signal when the pane is in_mode (Issue #69 T12)', async () => {

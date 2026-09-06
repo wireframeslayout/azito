@@ -5,9 +5,9 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
 
-function makeClient(execTmux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>): TmuxClient {
+function makeClient(execMux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>): TmuxClient {
   const factory = {
-    getTransport: () => ({ execTmux: vi.fn(execTmux) }),
+    getTransport: () => ({ execMux: vi.fn(execMux) }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, 'http://localhost:3001', '', 'http://127.0.0.1:3001');
 }

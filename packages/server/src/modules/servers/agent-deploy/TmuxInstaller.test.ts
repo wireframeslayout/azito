@@ -17,7 +17,7 @@ describe('TmuxInstaller', () => {
         if (cmd.includes('rm -f')) return { stdout: '', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
       },
-      execTmux: async () => ({ stdout: '', stderr: '', code: 0 }),
+      execMux: async () => ({ stdout: '', stderr: '', code: 0 }),
       openTerminal: async () => { throw new Error('not implemented'); },
       createPaneStream: () => { throw new Error('not implemented'); },
     } as unknown as IServerTransport;
@@ -36,7 +36,7 @@ describe('TmuxInstaller', () => {
         if (cmd === 'uname -s') return { stdout: 'Darwin\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
       },
-      execTmux: async () => ({ stdout: '', stderr: '', code: 0 }),
+      execMux: async () => ({ stdout: '', stderr: '', code: 0 }),
       openTerminal: async () => { throw new Error('not implemented'); },
       createPaneStream: () => { throw new Error('not implemented'); },
     } as unknown as IServerTransport;
@@ -61,7 +61,7 @@ describe('TmuxInstaller', () => {
         if (cmd.includes('rm -f')) return { stdout: '', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
       },
-      execTmux: async () => ({ stdout: '', stderr: '', code: 0 }),
+      execMux: async () => ({ stdout: '', stderr: '', code: 0 }),
       openTerminal: async () => { throw new Error('not implemented'); },
       createPaneStream: () => { throw new Error('not implemented'); },
     } as unknown as IServerTransport;

@@ -86,7 +86,6 @@ import { SessionCaptureService } from '../modules/windows/SessionCaptureService'
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
-import { stripPaneSuffix } from '../modules/windows/paneTarget';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
 import { UsageService } from '../modules/usage/UsageService';
@@ -505,7 +504,7 @@ function buildAgentActivityMonitor(
     (serverName, target) => {
       const wins = repos.windowRepo.findAll().filter(
         (w) => w.serverName === serverName
-          && stripPaneSuffix(w.tmuxTarget) === stripPaneSuffix(target)
+          && w.tmuxTarget === target
           && !w.agentSessionId
           && w.workerType === 'codex',
       );

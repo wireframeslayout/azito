@@ -95,8 +95,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       findByName: (name: string) => (name === server.name ? server : null),
     };
     const tmux: Partial<TmuxClient> = {
-      sendKeys: sendKeys as unknown as TmuxClient['sendKeys'],
-      resolvePaneId: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePaneId'],
+      sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
       resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
     };
 
@@ -239,8 +238,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {
-        sendKeys: sendKeys as unknown as TmuxClient['sendKeys'],
-        resolvePaneId: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePaneId'],
+        sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
         resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
       } as TmuxClient,
       serverRepo: {

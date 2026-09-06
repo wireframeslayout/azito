@@ -68,33 +68,11 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     return execLocal(this.rt.bin, [...this.rt.baseArgs, ...args]);
   }
 
-  /** @deprecated Use execMux */
-  execTmux(args: string[]): Promise<ExecResult> {
-    return this.execMux(args);
-  }
-
-  async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
-  /** @deprecated Use MuxRef overload */
-  async openTerminal(target: string, cols: number, rows: number): Promise<ITerminalStream>;
-  async openTerminal(refOrTarget: MuxRef | string, colsOrOrdinal: PaneOrdinal | number, rowsOrCols: number, maybeRows?: number): Promise<ITerminalStream> {
-    let sessionName: string;
-    let windowTarget: string;
-    let cols: number;
-    let rows: number;
-    if (typeof refOrTarget === 'string') {
-      const match = refOrTarget.match(/^([^:]+):(.+?)(?:\.(\d+))?$/);
-      if (!match) throw new Error(`Invalid target: ${refOrTarget}`);
-      [, sessionName, windowTarget] = match;
-      cols = colsOrOrdinal;
-      rows = rowsOrCols;
-    } else {
-      const tmuxTarget = tmuxTargetFromMuxRef(refOrTarget);
-      const colonIdx = tmuxTarget.indexOf(':');
-      sessionName = tmuxTarget.slice(0, colonIdx);
-      windowTarget = tmuxTarget.slice(colonIdx + 1);
-      cols = rowsOrCols;
-      rows = maybeRows!;
-    }
+  async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    const tmuxTarget = tmuxTargetFromMuxRef(ref);
+    const colonIdx = tmuxTarget.indexOf(':');
+    const sessionName = tmuxTarget.slice(0, colonIdx);
+    const windowTarget = tmuxTarget.slice(colonIdx + 1);
 
     await new Promise<void>((resolve, reject) => {
       execFile(this.rt.bin, [...this.rt.baseArgs, 'list-panes', '-t', `${sessionName}:${windowTarget}`], (err) => {
@@ -154,10 +132,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     return new LocalTerminalStream(ptyProcess, linkedSessionName, this.rt);
   }
 
-  createPaneStream(handle: PaneHandle): IPaneStream;
-  /** @deprecated Use PaneHandle overload */
-  createPaneStream(paneId: string): IPaneStream;
-  createPaneStream(handleOrId: PaneHandle | string): IPaneStream {
-    return new PaneOutputStream(handleOrId as string);
+  createPaneStream(handle: PaneHandle): IPaneStream {
+    return new PaneOutputStream(handle as string);
   }
 }

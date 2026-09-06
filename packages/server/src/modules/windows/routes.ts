@@ -14,7 +14,7 @@ import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
-import { isSameWindowTarget, stripPaneSuffix } from './paneTarget';
+import { isSameWindowTarget } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
