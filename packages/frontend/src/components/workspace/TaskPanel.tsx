@@ -37,7 +37,7 @@ import type { Task, Unit, Window, Session, Project, ExecutionApprovalData } from
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useClickOutside } from '../../hooks/useClickOutside';
-import { isSameWindowTarget } from '../../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';

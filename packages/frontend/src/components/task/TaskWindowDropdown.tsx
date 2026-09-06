@@ -4,7 +4,7 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import type { WindowItem } from '../ui/WindowPaneTree';
 import type { Session } from '../../pages/workspace/types';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
-import { isSameWindowTarget } from '../../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
 
 interface TaskWindowDropdownProps {

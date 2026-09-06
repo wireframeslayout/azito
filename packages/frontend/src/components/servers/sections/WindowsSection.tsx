@@ -51,11 +51,15 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
     refresh();
   }, [server.name, refresh]);
 
-  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string) => {
-    await api(
-      `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
-      { method: 'POST', body: JSON.stringify({ direction }) },
-    );
+  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(
+        `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
+        { method: 'POST', body: JSON.stringify({ direction }) },
+      );
+    }
     refresh();
   }, [server.name, refresh]);
 

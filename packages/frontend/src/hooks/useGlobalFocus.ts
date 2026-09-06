@@ -1,7 +1,7 @@
 import { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import type { ReactNode } from 'react';
 import React from 'react';
-import { isSameWindowTarget } from '../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
 
 interface GlobalFocus {
   serverName: string | null;

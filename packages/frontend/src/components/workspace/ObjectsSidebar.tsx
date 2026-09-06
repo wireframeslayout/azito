@@ -289,10 +289,14 @@ export default function ObjectsSidebar({
     label: type === 'terminal' ? t('common:labels.terminal') : (agentByType.get(type)?.label ?? type),
   })), [agentByType, t]);
 
-  const handlePaneClick = useCallback(async (serverName: string, target: string) => {
+  const handlePaneClick = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number) => {
     if (mobile) {
       try {
-        await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/zoom`, { method: 'POST' });
+        if (windowId != null && paneOrdinal != null) {
+          await api(`/windows/${windowId}/panes/${paneOrdinal}/zoom`, { method: 'POST' });
+        } else {
+          await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/zoom`, { method: 'POST' });
+        }
       } catch { /* best-effort */ }
     }
     connectPane(serverName, target);

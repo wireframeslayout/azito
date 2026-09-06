@@ -6,7 +6,7 @@ import { AgentIcon } from '../ui/AgentIcons';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
-import { isSameWindowTarget } from '../../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
 import StatusDropdown from '../task/StatusDropdown';
 import type { Task, Window } from '../../pages/workspace/types';
 

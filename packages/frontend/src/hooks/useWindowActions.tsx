@@ -72,8 +72,9 @@ export function useWindowActions(
           const base = tmuxTarget.replace(/\.\d+$/, '');
           let identity: { sessionName: string; windowIndex: number; windowName: string } | null = null;
           try {
+            // Use windowId kill route (5-A) which also removes the tmux window and DB rows.
             const res = await api<{ ok: boolean; identity?: { sessionName: string; windowIndex: number; windowName: string } | null }>(
-              `/servers/${serverName}/windows/${encodeURIComponent(base)}`, { method: 'DELETE' },
+              `/windows/${windowId}/kill`, { method: 'DELETE' },
             );
             identity = res.identity ?? null;
           } catch (e) {
@@ -81,9 +82,6 @@ export function useWindowActions(
             showToast(t('windows.deleteFailed', { error: (e as Error).message }));
             return;
           }
-          // Fallback cleanup: the tmux-kill route above already removes matching DB
-          // rows, so this can 404 — best-effort only.
-          await api(`/windows/${windowId}`, { method: 'DELETE' }).catch(() => {});
           // Tabs may address the window in name form ("sess:win--xxxx") or index form
           // ("sess:3") — match every form the killed window was known under.
           const bases = [base];
@@ -111,17 +109,25 @@ export function useWindowActions(
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRenameWindow = useCallback(async (serverName: string, tmuxTarget: string, currentName: string) => {
+  const handleRenameWindow = useCallback(async (serverName: string, tmuxTarget: string, currentName: string, windowId?: number) => {
     const newName = prompt(t('windows.renameWindowPrompt'), currentName);
     if (!newName || newName === currentName) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(tmuxTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    if (windowId != null) {
+      await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(tmuxTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    }
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRenamePane = useCallback(async (serverName: string, paneTarget: string, currentTitle: string) => {
+  const handleRenamePane = useCallback(async (serverName: string, paneTarget: string, currentTitle: string, windowId?: number, paneOrdinal?: number) => {
     const newTitle = prompt(t('windows.renamePanePrompt'), currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(paneTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(paneTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    }
     refreshWorkspace();
   }, [refreshWorkspace]);
 

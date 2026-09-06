@@ -356,37 +356,57 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     refreshAll();
   }, [refreshAll]);
 
-  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string) => {
-    await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    }
     refreshAll();
   }, [refreshAll]);
 
-  const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string) => {
+  const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string, windowId?: number) => {
     const newName = prompt('Rename window:', currentName);
     if (!newName || newName === currentName) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    if (windowId != null) {
+      await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    }
     refreshAll();
   }, [refreshAll]);
 
-  const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string) => {
+  const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string, windowId?: number, paneOrdinal?: number) => {
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    }
     refreshAll();
   }, [refreshAll]);
 
-  const handleKillWindow = useCallback(async (serverName: string, target: string) => {
+  const handleKillWindow = useCallback(async (serverName: string, target: string, windowId?: number) => {
     const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: target }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
-    tabs.filter((t) => t.id.startsWith(`terminal:${serverName}/${target}.`)).forEach((t) => closeTab(t.id));
+    if (windowId != null) {
+      await api(`/windows/${windowId}/kill`, { method: 'DELETE' });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    }
+    tabs.filter((t) => t.type === 'terminal' && t.serverName === serverName && t.target && (t.target === target || t.target.startsWith(`${target}.`))).forEach((t) => closeTab(t.id));
     refreshAll();
   }, [refreshAll, tabs, closeTab, confirm, t]);
 
-  const handleKillPane = useCallback(async (serverName: string, target: string) => {
+  const handleKillPane = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number) => {
     const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: target }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}`, { method: 'DELETE' });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    }
     closeTab(`terminal:${serverName}/${target}`);
     refreshAll();
   }, [refreshAll, closeTab, confirm, t]);

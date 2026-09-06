@@ -593,17 +593,21 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [setSelectedRepoId, project, openIssueListRaw, currentProjectId, mobile, setSidebarOpen]);
 
-  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v') => {
-    const colonIdx = target.indexOf(':');
-    if (colonIdx < 0) return;
-    const sessionName = target.substring(0, colonIdx);
-    const rest = target.substring(colonIdx + 1);
-    const dotIdx = rest.indexOf('.');
-    if (dotIdx < 0) return;
-    const windowIndex = parseInt(rest.substring(0, dotIdx), 10);
-    if (isNaN(windowIndex)) return;
+  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number) => {
     try {
-      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${windowIndex}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      if (windowId != null) {
+        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      } else {
+        const colonIdx = target.indexOf(':');
+        if (colonIdx < 0) return;
+        const sessionName = target.substring(0, colonIdx);
+        const rest = target.substring(colonIdx + 1);
+        const dotIdx = rest.indexOf('.');
+        if (dotIdx < 0) return;
+        const windowIndex = parseInt(rest.substring(0, dotIdx), 10);
+        if (isNaN(windowIndex)) return;
+        await api(`/servers/${serverName}/sessions/${sessionName}/windows/${windowIndex}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      }
       showToast(t(direction === 'h' ? 'workspace:pane.splitSuccessH' : 'workspace:pane.splitSuccessV'));
     } catch (e) {
       showToast(t('workspace:pane.splitFailed', { error: e instanceof Error ? e.message : String(e) }));

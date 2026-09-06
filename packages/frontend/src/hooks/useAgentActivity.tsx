@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
-import { findByWindowTarget } from '../utils/tmuxTarget';
+import { stripPaneSuffix } from '@azito/shared';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
@@ -265,14 +265,26 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     setFinished((cur) => cur.filter((e) => activityKey(e.serverName, e.target) !== key));
   }, []);
 
-  // Raw entry lookup normalized against pane-suffix variance: `entries` keys targets exactly
-  // as reported by the activity source (pane suffix already stripped server-side), while
-  // callers (e.g. a window's `tmuxTarget`) may carry a `.<paneIndex>` suffix.
-  const findEntry = useCallback((serverName: string, target: string): AgentActivityInfo | undefined =>
-    findByWindowTarget(entries.values(), serverName, target), [entries]);
+  const findEntry = useCallback((serverName: string, target: string, windowId?: number): AgentActivityInfo | undefined => {
+    if (windowId != null) {
+      for (const e of entries.values()) {
+        if (e.windowId === windowId) return e;
+      }
+    }
+    const normalized = stripPaneSuffix(target);
+    for (const e of entries.values()) {
+      if (e.serverName === serverName && stripPaneSuffix(e.target) === normalized) return e;
+    }
+    return undefined;
+  }, [entries]);
 
-  const findFinished = useCallback((serverName: string, target: string): FinishedEntry | undefined =>
-    findByWindowTarget(finished, serverName, target), [finished]);
+  const findFinished = useCallback((serverName: string, target: string, windowId?: number): FinishedEntry | undefined => {
+    if (windowId != null) {
+      return finished.find((e) => e.windowId === windowId);
+    }
+    const normalized = stripPaneSuffix(target);
+    return finished.find((e) => e.serverName === serverName && stripPaneSuffix(e.target) === normalized);
+  }, [finished]);
 
   const isRunning = (serverName: string, target: string): boolean =>
     findEntry(serverName, target)?.running === true;
