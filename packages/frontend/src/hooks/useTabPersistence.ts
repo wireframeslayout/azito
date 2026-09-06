@@ -1,6 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import { closeBrowserGroup } from '../lib/browserGroup';
+import {
+  type TerminalRef,
+  terminalTabId,
+  parseTerminalTabId,
+  terminalRefFromLegacyTarget,
+} from '../lib/terminalRef';
+import type { Session } from '../pages/workspace/types';
 
 export type TabType = 'terminal' | 'file' | 'unit' | 'task' | 'task-form' | 'unit-form' | 'sidekick-form' | 'issue' | 'issue-list' | 'server' | 'settings' | 'project-tasks' | 'storage-file' | 'diff' | 'browser';
 
@@ -20,7 +27,9 @@ export interface PersistedTab {
   openerTabId?: string;
   // Terminal-specific
   serverName?: string;
+  /** @deprecated Use terminalRef instead. Kept for 1-release backward compat. */
   target?: string;
+  terminalRef?: TerminalRef;
   // File-specific
   filePath?: string;
   line?: number;
@@ -188,6 +197,25 @@ export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
   return next;
 }
 
+export function migrateTerminalTabs(
+  tabs: PersistedTab[],
+  sessionsByServer: Map<string, Session[]>,
+): { tabs: PersistedTab[]; changed: boolean } {
+  let changed = false;
+  const next = tabs.map((tab) => {
+    if (tab.type !== 'terminal' || tab.terminalRef) return tab;
+    const parsed = parseTerminalTabId(tab.id);
+    if (!parsed || parsed.kind !== 'legacy') return tab;
+    const sessions = sessionsByServer.get(parsed.serverName) ?? [];
+    const ref = terminalRefFromLegacyTarget(parsed.serverName, parsed.target, sessions);
+    const terminalRef: TerminalRef = { ...ref, pane: parsed.pane } as TerminalRef;
+    const newId = terminalTabId(terminalRef);
+    if (newId !== tab.id) changed = true;
+    return { ...tab, id: newId, terminalRef };
+  });
+  return { tabs: next, changed };
+}
+
 export function useTabPersistence(storageKey?: string) {
   const initialized = useRef(false);
 
@@ -282,8 +310,27 @@ export function useTabPersistence(storageKey?: string) {
     ));
   }, []);
 
-  const connectPane = useCallback((serverName: string, target: string, projectId?: number, opts?: { reconnect?: boolean }) => {
-    const tabId = `terminal:${serverName}/${target}`;
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }, legacyOpts?: { reconnect?: boolean }) => {
+    let ref: TerminalRef;
+    let projectId: number | undefined;
+    let opts: { reconnect?: boolean } | undefined;
+    if (typeof serverNameOrRef === 'object') {
+      ref = serverNameOrRef;
+      projectId = typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined;
+      opts = typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined;
+    } else {
+      const serverName = serverNameOrRef;
+      const target = targetOrProjectId as string;
+      projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
+      opts = legacyOpts;
+      const parsed = parseTerminalTabId(`terminal:${serverName}/${target}`);
+      if (parsed && parsed.kind !== 'legacy') {
+        ref = parsed;
+      } else {
+        ref = { kind: 'ref', serverName, ref: target, pane: 1 };
+      }
+    }
+    const tabId = terminalTabId(ref);
     if (opts?.reconnect) {
       const existing = tabsRef.current.find((t) => t.id === tabId);
       if (existing) {
@@ -294,12 +341,14 @@ export function useTabPersistence(storageKey?: string) {
         return;
       }
     }
+    const label = ref.kind === 'windowId' ? `w${ref.windowId}` : (ref as { ref: string }).ref;
     openTab({
       id: tabId,
       type: 'terminal',
-      label: target,
-      serverName,
-      target,
+      label,
+      serverName: ref.serverName,
+      target: ref.kind === 'windowId' ? `w${ref.windowId}` : (ref as { ref: string }).ref,
+      terminalRef: ref,
       projectId,
     });
   }, [openTab]);
@@ -385,10 +434,18 @@ export function useTabPersistence(storageKey?: string) {
     return tab ? tab.label : null;
   }, []);
 
-  const retargetTab = useCallback((oldTabId: string, serverName: string, newTarget: string) => {
-    const newTabId = `terminal:${serverName}/${newTarget}`;
+  const retargetTab = useCallback((oldTabId: string, serverName: string, newTarget: string, windowId?: number) => {
+    let newRef: TerminalRef;
+    if (windowId !== undefined) {
+      const oldParsed = parseTerminalTabId(oldTabId);
+      const pane = oldParsed && oldParsed.kind !== 'legacy' ? oldParsed.pane : 1;
+      newRef = { kind: 'windowId', serverName, windowId, pane };
+    } else {
+      newRef = { kind: 'ref', serverName, ref: newTarget, pane: 1 };
+    }
+    const newTabId = terminalTabId(newRef);
     setTabs((prev) => prev.map((t) =>
-      t.id === oldTabId ? { ...t, id: newTabId, target: newTarget, label: newTarget } : t,
+      t.id === oldTabId ? { ...t, id: newTabId, target: newTarget, label: newTarget, terminalRef: newRef } : t,
     ));
     setActiveTabId((prev) => prev === oldTabId ? newTabId : prev);
   }, []);

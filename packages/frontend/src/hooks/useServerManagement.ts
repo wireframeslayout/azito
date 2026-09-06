@@ -38,6 +38,8 @@ export interface TmuxWindow {
   name: string;
   panes: Pane[];
   activity?: number;
+  ref: string;
+  windowId: number | null;
 }
 
 export interface Session {

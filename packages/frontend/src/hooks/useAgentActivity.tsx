@@ -6,6 +6,7 @@ import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
   activityKey,
+  activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
   removeFinished,
@@ -15,7 +16,7 @@ import {
 
 // 完了行のキー規約・寿命・リスト操作は lib/finishedWindows.ts に集約してある（純関数としてテスト
 // されている）。ここからの re-export は既存の import 経路（useActiveWindowRows 等）を保つため。
-export { activityKey, FINISHED_TTL_MS };
+export { activityKey, activityKeyForEntry, FINISHED_TTL_MS };
 export type { FinishedEntry };
 
 export interface AgentActivityInfo {
@@ -24,6 +25,7 @@ export interface AgentActivityInfo {
   running: boolean;
   source: 'operation' | 'manual' | 'supervised';
   taskId?: number;
+  windowId?: number;
   projectId?: number;
   label?: string;
   status: 'working' | 'blocked';
@@ -36,6 +38,7 @@ interface AgentActivitySnapshotEntry {
   running: boolean;
   source: 'operation' | 'manual' | 'supervised';
   taskId?: number;
+  windowId?: number;
   projectId?: number;
   label?: string;
   status?: 'working' | 'blocked';
@@ -85,12 +88,13 @@ function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, Agen
   const map = new Map<string, AgentActivityInfo>();
   for (const e of snapshot) {
     if (!e.running) continue;
-    map.set(activityKey(e.serverName, e.target), {
+    map.set(activityKey(e.serverName, e.target, e.windowId), {
       serverName: e.serverName,
       target: e.target,
       running: true,
       source: e.source,
       taskId: e.taskId,
+      windowId: e.windowId,
       projectId: e.projectId,
       label: e.label,
       status: e.status ?? 'working',
@@ -177,7 +181,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
-      const key = activityKey(payload.serverName, payload.target);
+      const key = activityKey(payload.serverName, payload.target, payload.windowId);
       setEntries((prev) => {
         const next = new Map(prev);
         if (payload.running) {
@@ -187,6 +191,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
             running: true,
             source: payload.source,
             taskId: payload.taskId,
+            windowId: payload.windowId,
             projectId: payload.projectId,
             label: payload.label,
             status: payload.status ?? 'working',
@@ -199,10 +204,6 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       });
       if (payload.running) return;
 
-      // 完了行のライフサイクルは遷移の reason だけで決まる（P3）。
-      // - 'completed' のみが完了行を生む。中断・ウィンドウ削除・プロセス消滅・判定不能は生まない
-      //   （これらを一律「完了」にしていたのが、リスポーンやハブ再起動で偽の完了行が鋳造される原因だった）。
-      // - 'deleted' は該当キーの完了行を即時に取り除く（実体の無いウィンドウの幽霊行を残さない）。
       if (payload.reason === 'deleted') {
         setFinished((cur) => removeFinished(cur, key));
         return;
@@ -212,6 +213,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       setFinished((cur) => upsertFinished(cur, {
         serverName: payload.serverName,
         target: payload.target,
+        windowId: payload.windowId,
         label: payload.label,
         taskId: payload.taskId,
         projectId: payload.projectId,
@@ -231,10 +233,9 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
   }, [browserFocused, activeTabId, focusedTarget]);
   isWatchedRef.current = isWatched;
 
-  // 再稼働したキーの完了行は落とす（同じウィンドウが「稼働中」と「完了」に二重表示されない）。
   useEffect(() => {
-    if (!finished.some((e) => entries.has(activityKey(e.serverName, e.target)))) return;
-    setFinished((cur) => cur.filter((e) => !entries.has(activityKey(e.serverName, e.target))));
+    if (!finished.some((e) => entries.has(activityKeyForEntry(e)))) return;
+    setFinished((cur) => cur.filter((e) => !entries.has(activityKeyForEntry(e))));
   }, [entries, finished]);
 
   // TTL の定期適用。読み込み時（loadFinishedEntries）と保存時（下の effect）にも同じ規則が効く。
