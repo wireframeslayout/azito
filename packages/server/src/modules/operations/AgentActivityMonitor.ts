@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { stripPaneSuffix, windowKey, asPaneHandle } from '@azito/shared';
+import { windowKey, asPaneHandle, type PaneHandle } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
 
@@ -697,7 +697,7 @@ export class AgentActivityMonitor {
   }
 
   /**
-   * Record a Tier 0 supervisor signal for a `${serverName}::${stripPaneSuffix(target)}` key,
+   * Record a Tier 0 supervisor signal for a `${serverName}::${target}` key,
    * then tick immediately so the UI reflects the transition without waiting
    * for the next poll interval. Unlike recordHookSignal, this is not matched
    * against the `windows` table here — the caller (SupervisorRegistry event)
@@ -735,7 +735,7 @@ export class AgentActivityMonitor {
         status: state === 'active' ? 'running' : 'idle',
         at: Date.now(),
         serverName,
-        target: stripPaneSuffix(target),
+        target,
         taskId,
         label,
         agentStatus: state === 'active' ? agentStatus : undefined,
@@ -847,7 +847,7 @@ export class AgentActivityMonitor {
       taskId?: number,
       evidenceAt?: number,
     ): void => {
-      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId, evidenceAt });
+      decisions.set(key, { serverName, target, decidedBy, state, taskId, evidenceAt });
     };
     // Candidate keys a Tier 0 supervisor reported idle on this tick, mapped to
     // the `windows` row and the entry they would publish if the Tier 2 blocked
@@ -894,7 +894,7 @@ export class AgentActivityMonitor {
         );
         next.set(key, {
           serverName: e.serverName,
-          target: stripPaneSuffix(e.target),
+          target: e.target,
           running: true,
           source: supervisor ? 'supervised' : 'operation',
           operation: true,
@@ -1079,7 +1079,7 @@ export class AgentActivityMonitor {
           decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined, supervisor.at);
           next.set(key, {
             serverName: w.serverName,
-            target: stripPaneSuffix(w.tmuxTarget),
+            target: w.tmuxTarget,
             running: true,
             source: 'supervised',
             operation: false,
@@ -1101,7 +1101,7 @@ export class AgentActivityMonitor {
             window: w,
             entry: {
               serverName: w.serverName,
-              target: stripPaneSuffix(w.tmuxTarget),
+              target: w.tmuxTarget,
               running: true,
               source: 'supervised',
               operation: false,
@@ -1144,7 +1144,7 @@ export class AgentActivityMonitor {
 
       const entry: AgentActivityEntry = {
         serverName: w.serverName,
-        target: stripPaneSuffix(w.tmuxTarget),
+        target: w.tmuxTarget,
         running: true,
         source: 'manual',
         operation: false,
@@ -1398,7 +1398,7 @@ export class AgentActivityMonitor {
     const activityAdvanced = prevHistory !== undefined && window.activity > prevHistory.lastActivity;
     if (!activityAdvanced) return 'unknown';
 
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, asPaneHandle(w.tmuxTarget));
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
   }
@@ -1563,7 +1563,7 @@ export class AgentActivityMonitor {
     paneIndex: number | null,
   ): Promise<ScreenVerdict> {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, asPaneHandle(w.tmuxTarget));
     if (screenTail === null) return 'unknown';
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
@@ -1639,9 +1639,9 @@ export class AgentActivityMonitor {
   }
 
   /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */
-  private async captureScreenTail(server: ServerConfig, target: string): Promise<string | null> {
+  private async captureScreenTail(server: ServerConfig, handle: PaneHandle): Promise<string | null> {
     try {
-      const { stdout, code } = await this.tmux.capturePane(server, target, -30);
+      const { stdout, code } = await this.tmux.captureScreen(server, handle, -30);
       if (code !== 0) return null;
       return stdout;
     } catch {

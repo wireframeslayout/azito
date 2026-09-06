@@ -3,7 +3,6 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import { windowSpecMatches } from '../tmux/TmuxClient';
-import { stripPaneSuffix } from '../windows/paneTarget';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TailState, TranscriptSource } from './sources/TranscriptSource';
 import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
@@ -137,10 +136,9 @@ function toGateState(
 // ─── Helpers ───
 
 export function splitWindowTarget(tmuxTarget: string): { sessionName: string; windowSpec: string } {
-  const stripped = stripPaneSuffix(tmuxTarget);
-  const colonIndex = stripped.indexOf(':');
-  if (colonIndex === -1) return { sessionName: stripped, windowSpec: '' };
-  return { sessionName: stripped.slice(0, colonIndex), windowSpec: stripped.slice(colonIndex + 1) };
+  const colonIndex = tmuxTarget.indexOf(':');
+  if (colonIndex === -1) return { sessionName: tmuxTarget, windowSpec: '' };
+  return { sessionName: tmuxTarget.slice(0, colonIndex), windowSpec: tmuxTarget.slice(colonIndex + 1) };
 }
 
 /**

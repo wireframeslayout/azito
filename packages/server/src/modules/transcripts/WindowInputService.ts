@@ -1,3 +1,4 @@
+import type { PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import { windowSpecMatches } from '../tmux/TmuxClient';
@@ -37,37 +38,37 @@ export class WindowInputService {
     private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   ) {}
 
-  async sendInput(windowId: number, paneId: string, text: string): Promise<WindowInputResult> {
+  async sendInput(windowId: number, handle: PaneHandle, text: string): Promise<WindowInputResult> {
     const window = this.windowRepo.findById(windowId);
     if (!window) return 'window_not_found';
 
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const belongsToWindow = await this.paneBelongsToWindow(server, window, paneId);
+    const belongsToWindow = await this.paneBelongsToWindow(server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(server, paneId);
-    await this.tmuxClient.sendLiteralText(server, paneId, text);
+    await this.preparePaneForInput(server, handle);
+    await this.tmuxClient.sendLiteralText(server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
-    await this.tmuxClient.sendKeys(server, paneId, ['Enter']);
+    await this.tmuxClient.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
   }
 
-  async sendSignal(windowId: number, paneId: string, action: 'interrupt' | 'key', key?: InterruptKey | AnswerKey): Promise<WindowSignalResult> {
+  async sendSignal(windowId: number, handle: PaneHandle, action: 'interrupt' | 'key', key?: InterruptKey | AnswerKey): Promise<WindowSignalResult> {
     const window = this.windowRepo.findById(windowId);
     if (!window) return 'window_not_found';
 
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const belongsToWindow = await this.paneBelongsToWindow(server, window, paneId);
+    const belongsToWindow = await this.paneBelongsToWindow(server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(server, paneId);
+    await this.preparePaneForInput(server, handle);
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey | AnswerKey);
-    await this.tmuxClient.sendKeys(server, paneId, [resolvedKey]);
+    await this.tmuxClient.sendKeysToHandle(server, handle, [resolvedKey]);
     return 'ok';
   }
 

@@ -63,8 +63,8 @@ function buildService(overrides: {
     update: vi.fn(),
   };
 
-  const killWindow = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
-  const tmux: Partial<TmuxClient> = { killWindow: killWindow as unknown as TmuxClient['killWindow'] };
+  const closeWindow = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+  const tmux: Partial<TmuxClient> = { closeWindow: closeWindow as unknown as TmuxClient['closeWindow'] };
 
   const sessionStrategyFactory: ISessionStrategyFactory = {
     create: (workerType: string | null) => ({
@@ -88,7 +88,7 @@ function buildService(overrides: {
     serverRepo as IServerRepository,
   );
 
-  return { service, windowRepo, tmux, killWindow, serverRepo };
+  return { service, windowRepo, tmux, closeWindow, serverRepo };
 }
 
 describe('WindowSleepService', () => {
@@ -120,14 +120,14 @@ describe('WindowSleepService', () => {
   });
 
   describe('sleep', () => {
-    it('calls tmux.killWindow and windowRepo.update({sleeping: true})', async () => {
+    it('calls tmux.closeWindow and windowRepo.update({sleeping: true})', async () => {
       const win = makeWindow();
-      const { service, killWindow, windowRepo } = buildService({ windows: [win] });
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
 
       await service.sleep(win.id);
 
-      expect(killWindow).toHaveBeenCalledTimes(1);
-      expect(killWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), 'azito:task-1');
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(closeWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), { kind: 'tmux', workspace: 'azito', window: 'task-1' });
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 
@@ -144,24 +144,24 @@ describe('WindowSleepService', () => {
       await expect(service.sleep(999)).rejects.toThrow('Window not found');
     });
 
-    it('sets sleeping: true even when killWindow fails', async () => {
+    it('sets sleeping: true even when closeWindow fails', async () => {
       const win = makeWindow();
-      const { service, killWindow, windowRepo } = buildService({ windows: [win] });
-      killWindow.mockRejectedValue(new Error('tmux error'));
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
+      closeWindow.mockRejectedValue(new Error('tmux error'));
 
       await service.sleep(win.id);
 
-      expect(killWindow).toHaveBeenCalledTimes(1);
+      expect(closeWindow).toHaveBeenCalledTimes(1);
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 
     it('sets sleeping: true even when server is not found (window may have been on a removed server)', async () => {
       const win = makeWindow();
-      const { service, killWindow, windowRepo } = buildService({ windows: [win], server: null });
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win], server: null });
 
       await service.sleep(win.id);
 
-      expect(killWindow).not.toHaveBeenCalled();
+      expect(closeWindow).not.toHaveBeenCalled();
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
   });
@@ -193,8 +193,8 @@ describe('WindowSleepService', () => {
     it('continues sleeping other windows when one fails', async () => {
       const win1 = makeWindow({ id: 1, taskId: 5 });
       const win2 = makeWindow({ id: 2, taskId: 5, tmuxTarget: 'azito:task-2.1' });
-      const { service, killWindow, windowRepo } = buildService({ windows: [win1, win2] });
-      killWindow.mockRejectedValueOnce(new Error('kill failed'));
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win1, win2] });
+      closeWindow.mockRejectedValueOnce(new Error('kill failed'));
 
       const result = await service.sleepTaskWindows(5);
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { applyProductionWindowsDrift } from '../testing/productionSchemaFixtures';
 
 import * as m001 from './001_initial_schema';
 import * as m002 from './002_legacy_migrations';
@@ -107,6 +108,42 @@ function buildSeededDb(): Database.Database {
   return db;
 }
 
+/** Build DB up to 067, apply production windows drift, then run 068-069. */
+function buildDriftedDb(): Database.Database {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  // Run 001-067 (everything before the last 2 entries: m068, m069)
+  const priorTo068 = PRIOR_MIGRATIONS.slice(0, -2);
+  for (const migration of priorTo068) {
+    const needsRebuild = MIGRATIONS_REQUIRING_TABLE_REBUILD.has(migration.version);
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+    }
+    db.transaction(() => migration.up(db))();
+    if (needsRebuild) {
+      db.pragma('legacy_alter_table = OFF');
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  // Swap windows table to production DDL with lifecycle column
+  applyProductionWindowsDrift(db);
+  // Run remaining migrations (068, 069) with rebuild handling
+  for (const migration of PRIOR_MIGRATIONS.slice(-2)) {
+    const needsRebuild = MIGRATIONS_REQUIRING_TABLE_REBUILD.has(migration.version);
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+    }
+    db.transaction(() => migration.up(db))();
+    if (needsRebuild) {
+      db.pragma('legacy_alter_table = OFF');
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  return db;
+}
+
 describe('migration 070: supervisor_launch pane_ref and agent_watches normalize', () => {
   let db: Database.Database;
   beforeEach(() => { db = buildSeededDb(); });
@@ -197,5 +234,24 @@ describe('migration 070: supervisor_launch pane_ref and agent_watches normalize'
 
     const rows = db.prepare('SELECT target FROM agent_watches').all() as Array<{ target: string }>;
     expect(rows[0].target).toBe('sess:win.abc');
+  });
+
+  describe('production schema drift (lifecycle column)', () => {
+    it('completes migration with drifted windows schema', () => {
+      const driftDb = buildDriftedDb();
+
+      driftDb.transaction(() => m070.up(driftDb))();
+
+      // supervisor_launches columns added successfully
+      const slCols = driftDb.prepare("PRAGMA table_info('supervisor_launches')").all() as Array<{ name: string }>;
+      expect(slCols.map(c => c.name)).toContain('mux_pane_ref');
+      expect(slCols.map(c => c.name)).toContain('window_id');
+
+      // lifecycle column still present on windows
+      const wCols = driftDb.pragma('table_info(windows)') as { name: string }[];
+      expect(wCols.map(c => c.name)).toContain('lifecycle');
+
+      driftDb.close();
+    });
   });
 });

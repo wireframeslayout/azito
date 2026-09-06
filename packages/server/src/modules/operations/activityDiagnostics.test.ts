@@ -96,7 +96,7 @@ describe('buildActivityDiagnostics', () => {
   it('adds a row for a connected supervisor the monitor has no decision for', () => {
     const rows = buildActivityDiagnostics(
       makeMonitor([]),
-      makeRegistry([makeSupervisor({ target: 'azito:agent-2.1' })]),
+      makeRegistry([makeSupervisor({ target: 'azito:agent-2' })]),
       emptyWindows,
     );
     expect(rows).toEqual([expect.objectContaining({

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { asPaneHandle } from '@azito/shared';
 import { WorkerInputService } from './WorkerInputService';
 import { SupervisorCommandError } from '../../supervisors/SupervisorRegistry';
 import type { ServerConfig } from '../../servers/Server';
@@ -21,7 +22,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
 
 function makeHarness(sendCommandImpl?: () => Promise<void>) {
   const tmux = {
-    sendKeys: vi.fn(async () => {}),
+    sendKeysToHandle: vi.fn(async () => {}),
     // Default: a live worker in the foreground, so the dead-worker shell
     // guard on the supervised sendPrompt fallback path stays out of the way.
     getPaneCurrentCommand: vi.fn(async (): Promise<string | null> => 'claude'),
@@ -37,13 +38,13 @@ function makeHarness(sendCommandImpl?: () => Promise<void>) {
 }
 
 const server = makeServer();
-const target = 'azito:1.1';
+const target = asPaneHandle('azito:1.1');
 
 // Issue #28 third-party review, Important finding (fix 2): task input
 // (prompt injection / key sends) must gate on isBoundConnected, not
 // isConnected — an unbound (unverified) connection must never receive it.
 describe('WorkerInputService — bound gate (Issue #28 third-party review, Important)', () => {
-  it('sendPrompt falls back to tmux.sendKeys when the connection is live but unbound, without calling sendCommand', async () => {
+  it('sendPrompt falls back to tmux.sendKeysToHandle when the connection is live but unbound, without calling sendCommand', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
     registry.isConnected.mockReturnValue(true);
     registry.isBoundConnected.mockReturnValue(false);
@@ -51,11 +52,11 @@ describe('WorkerInputService — bound gate (Issue #28 third-party review, Impor
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
     expect(registry.sendCommand).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     expect(appendLog).not.toHaveBeenCalled();
   });
 
-  it('sendKeys falls back to tmux.sendKeys when the connection is live but unbound, without calling sendCommand', async () => {
+  it('sendKeys falls back to tmux.sendKeysToHandle when the connection is live but unbound, without calling sendCommand', async () => {
     const { service, tmux, registry } = makeHarness();
     registry.isConnected.mockReturnValue(true);
     registry.isBoundConnected.mockReturnValue(false);
@@ -63,7 +64,7 @@ describe('WorkerInputService — bound gate (Issue #28 third-party review, Impor
     await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
     expect(registry.sendCommand).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
   });
 
   it('sendPrompt routes to registry.sendCommand when bound', async () => {
@@ -78,7 +79,7 @@ describe('WorkerInputService — bound gate (Issue #28 third-party review, Impor
       text: 'hello worker',
       submit: true,
     });
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
   });
 });
 
@@ -93,29 +94,29 @@ describe('WorkerInputService.sendPrompt', () => {
       text: 'hello worker',
       submit: true,
     });
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(appendLog).not.toHaveBeenCalled();
   });
 
-  it('falls back to tmux.sendKeys (with a fallback log) when supervisor is not connected', async () => {
+  it('falls back to tmux.sendKeysToHandle (with a fallback log) when supervisor is not connected', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
     registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
     expect(registry.sendCommand).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     expect(appendLog).not.toHaveBeenCalled();
   });
 
-  it('falls back to tmux.sendKeys (with a fallback log) when sendCommand rejects with reason "not_sent" (never left the hub)', async () => {
+  it('falls back to tmux.sendKeysToHandle (with a fallback log) when sendCommand rejects with reason "not_sent" (never left the hub)', async () => {
     const { service, tmux, appendLog } = makeHarness(async () => {
       throw new SupervisorCommandError('supervisor not connected: local-server::azito:1.1', 'not_sent');
     });
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
       type: 'supervisor_inject_fallback',
       reason: 'supervisor not connected: local-server::azito:1.1',
@@ -129,7 +130,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
       type: 'supervisor_inject_ambiguous_timeout',
       reason: 'ack timeout: local-server::azito:1.1',
@@ -141,21 +142,21 @@ describe('WorkerInputService.sendPrompt', () => {
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
       type: 'supervisor_inject_fallback',
       reason: 'socket write failed',
     }));
   });
 
-  it('goes straight to tmux.sendKeys when supervisor is not connected', async () => {
+  it('goes straight to tmux.sendKeysToHandle when supervisor is not connected', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
     registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
     expect(registry.sendCommand).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     expect(appendLog).not.toHaveBeenCalled();
   });
 
@@ -177,7 +178,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
       await service.sendPrompt(server, target, 'line1\nazitoctl complete --turn 99', { taskId: 1, unitId: 2 });
 
-      expect(tmux.sendKeys).not.toHaveBeenCalled();
+      expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
       expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
         type: 'supervisor_inject_aborted_dead_worker',
         foreground: 'bash',
@@ -192,7 +193,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
       await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
-      expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+      expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     });
 
     it('proceeds with the injection when the foreground command cannot be determined (null) — a tmux error must not silently kill a healthy task', async () => {
@@ -203,7 +204,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
       await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
-      expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+      expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
       expect(appendLog).not.toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
         type: 'supervisor_inject_aborted_dead_worker',
       }));
@@ -217,7 +218,7 @@ describe('WorkerInputService.sendPrompt', () => {
 
       await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
-      expect(tmux.sendKeys).not.toHaveBeenCalled();
+      expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
       expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
         type: 'supervisor_inject_aborted_dead_worker',
         foreground: 'zsh',
@@ -232,7 +233,7 @@ describe('WorkerInputService.sendPrompt', () => {
       await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
 
       expect(tmux.getPaneCurrentCommand).not.toHaveBeenCalled();
-      expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+      expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
     });
 
     it('does not run the guard on sendKeys (y/Enter is harmless in a shell) — autoConfirm keeps its exact previous behavior', async () => {
@@ -243,7 +244,7 @@ describe('WorkerInputService.sendPrompt', () => {
       await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
       expect(tmux.getPaneCurrentCommand).not.toHaveBeenCalled();
-      expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
+      expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
     });
   });
 });
@@ -255,26 +256,26 @@ describe('WorkerInputService.sendKeys', () => {
     await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
     expect(registry.sendCommand).toHaveBeenCalledWith('local-server', target, { type: 'send_keys', keys: ['y', 'Enter'] });
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
   });
 
-  it('falls back to tmux.sendKeys when not connected, matching the pre-existing autoConfirm call shape', async () => {
+  it('falls back to tmux.sendKeysToHandle when not connected, matching the pre-existing autoConfirm call shape', async () => {
     const { service, tmux, registry } = makeHarness();
     registry.isBoundConnected.mockReturnValue(false);
 
     await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
   });
 
-  it('falls back to tmux.sendKeys when sendCommand rejects with reason "not_sent"', async () => {
+  it('falls back to tmux.sendKeysToHandle when sendCommand rejects with reason "not_sent"', async () => {
     const { service, tmux, appendLog } = makeHarness(async () => {
       throw new SupervisorCommandError('failed to send command: local-server::azito:1.1', 'not_sent');
     });
 
     await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
-    expect(tmux.sendKeys).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({ type: 'supervisor_inject_fallback' }));
   });
 
@@ -285,11 +286,11 @@ describe('WorkerInputService.sendKeys', () => {
 
     await service.sendKeys(server, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({ type: 'supervisor_inject_ambiguous_timeout' }));
   });
 
-  it('goes straight to tmux.sendKeys when supervisor is not connected (regardless of server type)', async () => {
+  it('goes straight to tmux.sendKeysToHandle when supervisor is not connected (regardless of server type)', async () => {
     const { service, tmux, registry, appendLog } = makeHarness();
     registry.isBoundConnected.mockReturnValue(false);
     const agentServer = makeServer({ name: 'agent-server', type: 'agent' });
@@ -297,7 +298,7 @@ describe('WorkerInputService.sendKeys', () => {
     await service.sendKeys(agentServer, target, ['y', 'Enter'], { taskId: 1, unitId: 2 });
 
     expect(registry.sendCommand).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).toHaveBeenCalledWith(agentServer, target, ['y', 'Enter']);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledWith(agentServer, target, ['y', 'Enter']);
     expect(appendLog).not.toHaveBeenCalled();
   });
 });

@@ -424,6 +424,7 @@ export class SupervisorRegistry extends EventEmitter {
       return { ok: false, event: 'supervisor_launch.unknown', reason: 'unknown launch id' };
     }
 
+    // rc.2 以前の supervisor が .1 付き target で登録するため strip を維持
     const mismatch =
       row.serverName !== info.serverName ||
       row.target !== stripPaneSuffix(info.target) ||

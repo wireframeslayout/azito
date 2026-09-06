@@ -11,11 +11,11 @@ const LOCAL_URL = 'http://127.0.0.1:3001';
 const UI_TOKEN = 'test-ui-token-123';
 
 function makeClient(
-  execTmux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
+  execMux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
   uiToken: string = UI_TOKEN,
 ): TmuxClient {
   const factory = {
-    getTransport: () => ({ execTmux: vi.fn(execTmux) }),
+    getTransport: () => ({ execMux: vi.fn(execMux) }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, PUBLIC_URL, uiToken, LOCAL_URL);
 }

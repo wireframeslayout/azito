@@ -3,9 +3,9 @@ import { TmuxClient } from './TmuxClient';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { MuxRef } from '@azito/shared';
 
-function makeClient(execTmux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>) {
+function makeClient(execMux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>) {
   const factory = {
-    getTransport: () => ({ execTmux: vi.fn(execTmux) }),
+    getTransport: () => ({ execMux: vi.fn(execMux) }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, '', '', '');
 }

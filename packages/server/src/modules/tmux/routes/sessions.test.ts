@@ -160,7 +160,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     const windowRepo = makeWindowRepo();
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: "can't find window: 2", code: 1 })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: "can't find window: 2", code: 1 })),
     };
     app = await buildApp({ tmux, windowRepo });
 
@@ -175,7 +175,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     const windowRepo = makeWindowRepo();
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
-      killWindow: vi.fn(async () => { throw new Error("Command failed: tmux kill-window -t session:2\ncan't find window: 2"); }),
+      closeWindow: vi.fn(async () => { throw new Error("Command failed: tmux kill-window -t session:2\ncan't find window: 2"); }),
     };
     app = await buildApp({ tmux, windowRepo });
 
@@ -189,7 +189,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     const windowRepo = makeWindowRepo();
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => ({ sessionName: 'session', windowIndex: 2, windowName: 'win--abcd' })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
     };
     app = await buildApp({ tmux, windowRepo });
 
@@ -203,7 +203,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
     const windowRepo = makeWindowRepo();
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => ({ sessionName: 'session', windowIndex: 2, windowName: 'win--abcd' })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     };
     app = await buildApp({ tmux, windowRepo });
 
@@ -228,7 +228,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       };
       const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
       app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
@@ -246,7 +246,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       };
       const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
       app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
@@ -269,7 +269,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       };
       const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
       app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
@@ -287,7 +287,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: 'some other tmux error', code: 1 })),
       };
       const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
       app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });
@@ -310,7 +310,7 @@ describe('DELETE /api/servers/:name/windows/:target', () => {
       });
       const tmux: Partial<TmuxClient> = {
         getWindowIdentity: vi.fn(async () => null),
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: "can't find window: 2", code: 1 })),
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: "can't find window: 2", code: 1 })),
       };
       const destroyPrimaryTaskWindow = makeDestroyPrimaryTaskWindow();
       app = await buildApp({ tmux, windowRepo, destroyPrimaryTaskWindow });

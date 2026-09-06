@@ -2,7 +2,7 @@ import type { IWindowRepository, Window } from './Window';
 import { isAgentWindow } from './Window';
 import type { WindowSessionResolver, WindowActivityProbeResult } from '../transcripts/WindowSessionResolver';
 import type { IServerRepository } from '../servers/Server';
-import { stripPaneSuffix, windowKey } from '@azito/shared';
+import { windowKey } from '@azito/shared';
 import { resolveInterval } from '../../shared/testIntervals';
 
 export interface WindowActivityStatusEntry {
@@ -160,10 +160,7 @@ export class WindowActivityStatusService {
         return {
           windowId: w.id,
           serverName: w.serverName,
-          // Stripped, not `w.tmuxTarget` — must match AgentActivityMonitor's emitted
-          // `target` (also stripped) so its Tier 4 lookup, keyed on
-          // `serverName::stripPaneSuffix(target)`, resolves to the same window.
-          target: stripPaneSuffix(w.tmuxTarget),
+          target: w.tmuxTarget,
           status: probe.status,
           completedAt: probe.completedAt,
           interruptedAt: probe.interruptedAt,

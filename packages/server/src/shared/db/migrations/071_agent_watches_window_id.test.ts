@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { applyProductionWindowsDrift } from '../testing/productionSchemaFixtures';
 
 import * as m001 from './001_initial_schema';
 import * as m002 from './002_legacy_migrations';
@@ -108,6 +109,42 @@ function buildSeededDb(): Database.Database {
   return db;
 }
 
+/** Build DB up to 067, apply production windows drift, then run 068-070. */
+function buildDriftedDb(): Database.Database {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  // Run 001-067 (everything before the last 3 entries: m068, m069, m070)
+  const priorTo068 = PRIOR_MIGRATIONS.slice(0, -3);
+  for (const migration of priorTo068) {
+    const needsRebuild = MIGRATIONS_REQUIRING_TABLE_REBUILD.has(migration.version);
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+    }
+    db.transaction(() => migration.up(db))();
+    if (needsRebuild) {
+      db.pragma('legacy_alter_table = OFF');
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  // Swap windows table to production DDL with lifecycle column
+  applyProductionWindowsDrift(db);
+  // Run remaining migrations (068, 069, 070) with rebuild handling
+  for (const migration of PRIOR_MIGRATIONS.slice(-3)) {
+    const needsRebuild = MIGRATIONS_REQUIRING_TABLE_REBUILD.has(migration.version);
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+    }
+    db.transaction(() => migration.up(db))();
+    if (needsRebuild) {
+      db.pragma('legacy_alter_table = OFF');
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  return db;
+}
+
 describe('migration 071: agent_watches window_id', () => {
   let db: Database.Database;
   beforeEach(() => { db = buildSeededDb(); });
@@ -147,5 +184,37 @@ describe('migration 071: agent_watches window_id', () => {
     db.transaction(() => m071.up(db))();
     const rows = db.prepare('SELECT * FROM agent_watches').all();
     expect(rows).toHaveLength(0);
+  });
+
+  describe('production schema drift (lifecycle column)', () => {
+    it('completes migration with drifted windows schema', () => {
+      const driftDb = buildDriftedDb();
+      // Seed data
+      driftDb.prepare(`INSERT INTO projects (name) VALUES (?)`).run('drift-proj');
+      const projId = (driftDb.prepare("SELECT id FROM projects WHERE name = 'drift-proj'").get() as { id: number }).id;
+      driftDb.prepare(
+        "INSERT INTO windows (owner_type, project_id, server_name, tmux_target, is_primary, window_type) VALUES (?, ?, ?, ?, ?, ?)",
+      ).run('project', projId, 'local', 'sess:win-d', 0, 'terminal');
+
+      driftDb.prepare("INSERT INTO agent_watches (endpoint, server_name, target, label) VALUES (?, ?, ?, ?)")
+        .run('https://push.example/ep', 'local', 'sess:win-d', 'drifted');
+
+      driftDb.transaction(() => m071.up(driftDb))();
+
+      // window_id column added to agent_watches
+      const awCols = driftDb.prepare("PRAGMA table_info('agent_watches')").all() as Array<{ name: string }>;
+      expect(awCols.map(c => c.name)).toContain('window_id');
+
+      // lifecycle column still present on windows
+      const wCols = driftDb.pragma('table_info(windows)') as { name: string }[];
+      expect(wCols.map(c => c.name)).toContain('lifecycle');
+
+      // backfill worked with drifted schema
+      const rows = driftDb.prepare('SELECT window_id FROM agent_watches WHERE target = ?').all('sess:win-d') as Array<{ window_id: number | null }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].window_id).not.toBeNull();
+
+      driftDb.close();
+    });
   });
 });

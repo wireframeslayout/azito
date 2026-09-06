@@ -49,7 +49,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -67,7 +67,7 @@ function sleep(ms: number): Promise<void> {
 
 interface RunningExecution {
   taskId: number;
-  target: string;
+  handle: PaneHandle;
   muxRef: MuxRef;
   serverName: string;
   abortController: AbortController;
@@ -836,7 +836,7 @@ export class ExecuteTaskUseCase {
             await confirmOldWindowGone(
               this.tmux,
               freshServer,
-              oldWin ? { target: `${muxWorkspace}:${oldWin.index}`, kind: 'window' } : null,
+              oldWin ? { kind: 'window' as const, ref: { kind: 'tmux' as const, workspace: muxWorkspace, window: String(oldWin.index) } } : null,
               task.id,
             );
             if (oldWin) await sleep(300);
@@ -884,7 +884,7 @@ export class ExecuteTaskUseCase {
 
     const ref: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
     const windowTarget = tmuxTargetFromMuxRef(ref);
-    const target = await this.tmux.resolvePane(server, ref, 1) as string;
+    const handle = await this.tmux.resolvePane(server, ref, 1);
 
     // Canonicalized ONCE, immediately after resolution (Issue #87
     // third-party review, 11th round, Important finding 1) — see
@@ -1176,7 +1176,7 @@ export class ExecuteTaskUseCase {
         // metacharacters via a maliciously named directory/symlink inside
         // the allowed root (Issue #27 review finding: cd command injection).
         // `--` guards against a leading `-` being read as a cd option.
-        await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
+        await this.tmux.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
         await sleep(500);
       } catch {}
     }
@@ -1275,7 +1275,7 @@ export class ExecuteTaskUseCase {
       const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
       try {
         const actualCommand = await runtime.launch({
-          server, target, supervisorTarget: windowTarget, taskId, unitId,
+          server, handle, supervisorTarget: windowTarget, taskId, unitId,
           windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
@@ -1287,7 +1287,7 @@ export class ExecuteTaskUseCase {
 
     const abortController = new AbortController();
     const executions = this.runningExecutions.get(unitId) || [];
-    executions.push({ taskId, abortController, target, muxRef: ref, serverName });
+    executions.push({ taskId, abortController, handle, muxRef: ref, serverName });
     this.runningExecutions.set(unitId, executions);
     this.appendLog(taskId, unitId, 'status_change', { status: 'started' });
 
@@ -1316,7 +1316,7 @@ export class ExecuteTaskUseCase {
       serverName,
       task,
       server,
-      target,
+      handle,
       abortController.signal,
       windowTarget,
       distributionRepoEntry,
@@ -1526,7 +1526,7 @@ export class ExecuteTaskUseCase {
 
     const ref: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
     const windowTarget = tmuxTargetFromMuxRef(ref);
-    const target = await this.tmux.resolvePane(server, ref, 1) as string;
+    const handle = await this.tmux.resolvePane(server, ref, 1);
 
     if (!windowExists) {
       // Use worktree path if available, otherwise fall back to working directory.
@@ -1579,7 +1579,7 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
+          await this.tmux.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
           await sleep(500);
         } catch {}
       }
@@ -1604,7 +1604,7 @@ export class ExecuteTaskUseCase {
         }
         try {
           const actualCommand = await runtime.resume({
-            server, target, supervisorTarget: windowTarget, taskId, unitId,
+            server, handle, supervisorTarget: windowTarget, taskId, unitId,
             windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
@@ -1617,7 +1617,7 @@ export class ExecuteTaskUseCase {
 
     const abortController = new AbortController();
     const followUpExecutions = this.runningExecutions.get(unitId) || [];
-    followUpExecutions.push({ taskId, abortController, target, muxRef: ref, serverName });
+    followUpExecutions.push({ taskId, abortController, handle, muxRef: ref, serverName });
     this.runningExecutions.set(unitId, followUpExecutions);
     this.appendLog(taskId, unitId, 'status_change', { status: 'follow_up_started', comment });
 
@@ -1635,7 +1635,7 @@ export class ExecuteTaskUseCase {
 
       // Start pipe-pane BEFORE sending to capture all output — this capture runs
       // in BOTH execution modes (see PhaseLoopRunner.stateMachineLoop's identical note).
-      const followUpStream = this.workerWaiter.startPaneStream(server, target, taskId, unitId);
+      const followUpStream = this.workerWaiter.startPaneStream(server, handle, taskId, unitId);
       if (!followUpStream) return;
 
       const followUpProject = this.projectRepo.findById(task.projectId);
@@ -1682,7 +1682,7 @@ export class ExecuteTaskUseCase {
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
       const envelopeResult = runtime.buildFollowUpEnvelope({
         nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, target, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+        server, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const followUpSignalStream = envelopeResult.signalStream;
@@ -1695,7 +1695,7 @@ export class ExecuteTaskUseCase {
       // (supervisor PTY when supervised+connected, tmux send-keys otherwise —
       // see WorkerInputService)
       try {
-        await runtime.sendPrompt({ server, target, supervisorTarget: windowTarget, taskId, unitId }, commentWithMarkers);
+        await runtime.sendPrompt({ server, handle, supervisorTarget: windowTarget, taskId, unitId }, commentWithMarkers);
       } catch (err: unknown) {
         followUpStream.stop();
         followUpSignalStream.stop();
@@ -1704,7 +1704,7 @@ export class ExecuteTaskUseCase {
         return;
       }
 
-      const waitResult = await this.workerWaiter.waitForWorker(server, target, taskId, unitId, abortController.signal, followUpStream, doneMarker, followUpSignalStream, undefined, windowTarget);
+      const waitResult = await this.workerWaiter.waitForWorker(server, handle, taskId, unitId, abortController.signal, followUpStream, doneMarker, followUpSignalStream, undefined, windowTarget);
       const output = waitResult.output;
       let classification = waitResult.classification;
       let httpSignalFinalTurn = httpSignalTurn;
@@ -1743,7 +1743,7 @@ export class ExecuteTaskUseCase {
         if (followUpPhaseDef?.planApproval) {
           const planMarkdown = followUpPhaseOutput !== null
             ? followUpPhaseOutput
-            : await this.workerWaiter.extractPlanWithFallback(server, target, output);
+            : await this.workerWaiter.extractPlanWithFallback(server, handle, output);
           if (planMarkdown) {
             this.taskRepo.update(taskId, { planMarkdown } as Partial<Task>);
           }
@@ -1794,7 +1794,7 @@ export class ExecuteTaskUseCase {
           // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
           // parameter doc comment.
           const followUpDistributionRequired = isDistributionRequiredForContinuation(task.distributionRepositoryId, server, followUpProjectServer);
-          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
+          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, handle, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
           return;
         }
       }
@@ -1850,11 +1850,11 @@ export class ExecuteTaskUseCase {
     const windowName = task.tmuxWindow || `task-${task.id}`;
     const ref: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
     const windowTarget = tmuxTargetFromMuxRef(ref);
-    const target = await this.tmux.resolvePane(server, ref, 1) as string;
+    const handle = await this.tmux.resolvePane(server, ref, 1);
 
     const abortController = new AbortController();
     const executions = this.runningExecutions.get(unitId) || [];
-    executions.push({ taskId, abortController, target, muxRef: ref, serverName });
+    executions.push({ taskId, abortController, handle, muxRef: ref, serverName });
     this.runningExecutions.set(unitId, executions);
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
@@ -1903,7 +1903,7 @@ export class ExecuteTaskUseCase {
       serverName,
       { ...task },
       server,
-      target,
+      handle,
       abortController.signal,
       windowTarget,
       resumeDistributionRepoEntry,

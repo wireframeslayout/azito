@@ -157,8 +157,8 @@ interface Mocks {
     [key: string]: unknown;
   };
   tmuxClient: {
-    capturePane: ReturnType<typeof vi.fn>;
-    sendKeys: ReturnType<typeof vi.fn>;
+    captureScreen: ReturnType<typeof vi.fn>;
+    sendKeysToHandle: ReturnType<typeof vi.fn>;
     [key: string]: unknown;
   };
   executeTaskUseCase: {
@@ -216,8 +216,8 @@ function createMocks(): Mocks {
     tmuxClient: {
       resolvePaneId: vi.fn().mockResolvedValue('%0'),
       resolvePane: vi.fn().mockResolvedValue('%0'),
-      capturePane: vi.fn().mockResolvedValue({ stdout: 'pane content', code: 0 }),
-      sendKeys: vi.fn().mockResolvedValue(undefined),
+      captureScreen: vi.fn().mockResolvedValue({ stdout: 'pane content', code: 0 }),
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
     },
     executeTaskUseCase: {
       getRunning: vi.fn().mockReturnValue({}),
@@ -330,7 +330,7 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.taskRepo.updateStatus).toHaveBeenCalledWith(10, 'running');
     expect(mocks.taskRepo.updateCurrentPhase).toHaveBeenCalledWith(10, 'reviewing');
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 10);
-    expect(mocks.tmuxClient.sendKeys).toHaveBeenCalled();
+    expect(mocks.tmuxClient.sendKeysToHandle).toHaveBeenCalled();
   });
 
   it('should retry current phase when marker not found (incomplete)', async () => {
@@ -404,7 +404,7 @@ describe('RecoverStuckTasksUseCase', () => {
     mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
       status === 'running' ? [task] : [],
     );
-    mocks.tmuxClient.capturePane.mockRejectedValue(new Error('pane not found'));
+    mocks.tmuxClient.captureScreen.mockRejectedValue(new Error('pane not found'));
 
     const useCase = createUseCase(mocks);
     await useCase.run();
@@ -473,7 +473,7 @@ describe('RecoverStuckTasksUseCase', () => {
     const useCase = createUseCase(mocks);
     await useCase.run();
 
-    expect(mocks.tmuxClient.sendKeys).toHaveBeenCalledWith(
+    expect(mocks.tmuxClient.sendKeysToHandle).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'local' }),
       '%0',
       ['Escape'],

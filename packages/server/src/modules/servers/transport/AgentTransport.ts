@@ -95,29 +95,9 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return this.post('/api/tmux', { args, mux: this.muxRuntime });
   }
 
-  /** @deprecated Use execMux */
-  async execTmux(args: string[]): Promise<ExecResult> {
-    return this.execMux(args);
-  }
-
-  openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
-  /** @deprecated Use MuxRef overload */
-  openTerminal(target: string, cols: number, rows: number): Promise<ITerminalStream>;
-  openTerminal(refOrTarget: MuxRef | string, colsOrOrdinal: PaneOrdinal | number, rowsOrCols: number, maybeRows?: number): Promise<ITerminalStream> {
-    let target: string;
-    let cols: number;
-    let rows: number;
-    let refParam = '';
-    if (typeof refOrTarget === 'string') {
-      target = refOrTarget;
-      cols = colsOrOrdinal;
-      rows = rowsOrCols;
-    } else {
-      target = tmuxTargetFromMuxRef(refOrTarget);
-      refParam = `&ref=${encodeURIComponent(formatMuxRef(refOrTarget))}&pane=${colsOrOrdinal}`;
-      cols = rowsOrCols;
-      rows = maybeRows!;
-    }
+  openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    const target = tmuxTargetFromMuxRef(ref);
+    const refParam = `&ref=${encodeURIComponent(formatMuxRef(ref))}&pane=${ordinal}`;
     return new Promise((resolve, reject) => {
       const url = `${this.wsBaseUrl}/ws?mode=terminal&target=${encodeURIComponent(target)}${refParam}&cols=${cols}&rows=${rows}&mux=${this.muxRuntime}`;
       const ws = new WebSocket(url, { headers: { authorization: this.authHeader } });
@@ -138,11 +118,8 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     });
   }
 
-  createPaneStream(handle: PaneHandle): IPaneStream;
-  /** @deprecated Use PaneHandle overload */
-  createPaneStream(paneId: string): IPaneStream;
-  createPaneStream(handleOrId: PaneHandle | string): IPaneStream {
-    return new AgentPaneStream(handleOrId as string, this, this.wsBaseUrl, this.authHeader);
+  createPaneStream(handle: PaneHandle): IPaneStream {
+    return new AgentPaneStream(handle as string, this, this.wsBaseUrl, this.authHeader);
   }
 
   private async post(path: string, body: Record<string, unknown>): Promise<ExecResult> {

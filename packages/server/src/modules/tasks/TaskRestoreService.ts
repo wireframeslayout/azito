@@ -367,7 +367,7 @@ export class TaskRestoreService {
 
       const ref: MuxRef = { kind: 'tmux', workspace: tmuxSession, window: windowName };
       const windowTarget = tmuxTargetFromMuxRef(ref);
-      const paneId = await tmux.resolvePane(server, ref, 1) as string;
+      const handle = await tmux.resolvePane(server, ref, 1);
       const dbTarget = windowTarget;
       // `lockedProjectServer` (Issue #87 16th-round review, Important finding
       // 2), not the pre-lock `projectServer` — this line runs AFTER
@@ -596,7 +596,7 @@ export class TaskRestoreService {
           // effectiveDir is a resolved (symlink-free) real path — must be
           // shell-quoted before being typed into the pane; see the matching
           // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
+          await tmux.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);

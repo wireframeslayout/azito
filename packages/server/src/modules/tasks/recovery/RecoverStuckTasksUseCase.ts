@@ -16,7 +16,7 @@ import { extractPhaseSummary } from '../extractPhaseSummary';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from '../execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
-import type { MuxRef } from '@azito/shared';
+import type { MuxRef, PaneHandle } from '@azito/shared';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -106,19 +106,19 @@ export class RecoverStuckTasksUseCase {
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     const windowName = task.tmuxWindow || `task-${task.id}`;
 
-    let target: string;
+    let handle: PaneHandle;
     try {
       const ref: MuxRef = { kind: 'tmux', workspace: muxWorkspace, window: windowName };
-      target = await this.tmuxClient.resolvePane(server, ref, 1) as string;
+      handle = await this.tmuxClient.resolvePane(server, ref, 1);
     } catch {
       this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWorkspace}:${windowName})`);
       return;
     }
 
     try {
-      await this.tmuxClient.capturePane(server, target);
+      await this.tmuxClient.captureScreen(server, handle);
     } catch {
-      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${target})`);
+      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${handle})`);
       return;
     }
 
@@ -135,7 +135,7 @@ export class RecoverStuckTasksUseCase {
       return;
     }
 
-    await this.tmuxClient.sendKeys(server, target, ['Escape']);
+    await this.tmuxClient.sendKeysToHandle(server, handle, ['Escape']);
     await sleep(500);
 
     if (usesHttpSignalPath(unit.workerExecutionMode)) {

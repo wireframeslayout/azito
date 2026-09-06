@@ -37,9 +37,6 @@ export function resolveMuxWorkspace(
   return ps?.tmuxSession || DEFAULT_TMUX_SESSION;
 }
 
-/** @deprecated Use resolveMuxWorkspace */
-export const resolveTmuxSession = resolveMuxWorkspace;
-
 /**
  * Resolves the Unit id that governs both behavior and "what runs" a task:
  * the task's own override, falling back to the project's default. Returns

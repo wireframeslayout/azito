@@ -1,6 +1,6 @@
 import type { IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
-import { stripPaneSuffix, windowKey, asPaneHandle } from '@azito/shared';
+import { windowKey, asPaneHandle } from '@azito/shared';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { ActivityDiagnosticEntry, AgentActivityMonitor } from './AgentActivityMonitor';
 import type { PaneHandleResolver } from './PaneHandleResolver';
@@ -161,7 +161,7 @@ export function buildActivityDiagnostics(
   for (const [key, supervisor] of supervisors) {
     rows.push({
       serverName: supervisor.serverName,
-      target: stripPaneSuffix(supervisor.target),
+      target: supervisor.target,
       taskId: supervisor.taskId ?? undefined,
       state: 'none',
       decidedBy: 'none',

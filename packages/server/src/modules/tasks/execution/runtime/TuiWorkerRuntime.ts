@@ -1,3 +1,4 @@
+import type { PaneHandle } from '@azito/shared';
 import type { TmuxClient } from '../../../tmux/TmuxClient';
 import type { WorkerInputService } from '../WorkerInputService';
 import type { WorkerWaiter } from '../WorkerWaiter';
@@ -69,20 +70,20 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
           }),
         })
       : ctx.effectiveLaunchCommand;
-    await this.tmux.sendKeys(ctx.server, ctx.target, [sendCommand, 'Enter']);
+    await this.tmux.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
     const isClaudeWorker = isClaudeLaunchCommand(ctx.effectiveLaunchCommand);
-    await this.waitForTuiReady(ctx.server, ctx.target, isClaudeWorker);
+    await this.waitForTuiReady(ctx.server, ctx.handle, isClaudeWorker);
     return sendCommand;
   }
 
-  private async waitForTuiReady(server: ServerConfig, target: string, strict: boolean): Promise<void> {
+  private async waitForTuiReady(server: ServerConfig, handle: PaneHandle, strict: boolean): Promise<void> {
     await sleep(3000);
 
     if (!strict) return;
 
     const deadline = Date.now() + 27000;
     while (Date.now() < deadline) {
-      const result = await this.tmux.capturePane(server, target, -50);
+      const result = await this.tmux.captureScreen(server, handle, -50);
       if (isTuiReady(result.stdout)) return;
       await sleep(1000);
     }
@@ -93,7 +94,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {
     await this.workerInput.sendPrompt(
       ctx.server,
-      ctx.target,
+      ctx.handle,
       prompt,
       { taskId: ctx.taskId, unitId: ctx.unitId },
       ctx.supervisorTarget,
@@ -112,7 +113,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         capability: ctx.capability,
         nonce: ctx.nonce,
         server: ctx.server,
-        target: ctx.target,
+        target: ctx.handle,
         prompt: ctx.prompt,
         outputFilePath: ctx.outputFilePath,
       });
@@ -154,7 +155,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         capability: FOLLOW_UP_CAPABILITY,
         nonce: ctx.nonce,
         server: ctx.server,
-        target: ctx.target,
+        target: ctx.handle,
         prompt: ctx.prompt,
         outputFilePath: ctx.outputFilePath,
       });

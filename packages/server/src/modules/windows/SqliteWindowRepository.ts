@@ -1,6 +1,6 @@
 import type { Database as SqliteDatabase } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
-import { isSameWindowTarget } from './paneTarget';
+import { isSameWindowTarget } from '@azito/shared';
 import { type MuxRef, formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 
 // Re-exported so tmux/routes/sessions.ts (base layer — dependency-cruiser's
@@ -78,6 +78,9 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   add(window: Omit<Window, 'id' | 'createdAt'>): number {
+    if (window.tmuxTarget && /\.\d+$/.test(window.tmuxTarget)) {
+      throw new Error(`tmuxTarget must not contain pane suffix: ${window.tmuxTarget}`);
+    }
     if (window.ownerType === 'project') {
       const existing = this.findProjectWindowStmt.get(window.projectId, window.serverName, window.tmuxTarget) as { id: number } | undefined;
       if (existing) {
@@ -189,6 +192,9 @@ export class SqliteWindowRepository implements IWindowRepository {
 
     if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
     if (data.tmuxTarget !== undefined) {
+      if (/\.\d+$/.test(data.tmuxTarget)) {
+        throw new Error(`tmuxTarget must not contain pane suffix: ${data.tmuxTarget}`);
+      }
       fields.push('tmux_target = ?'); values.push(data.tmuxTarget);
       if (!data.muxRef) { fields.push('mux_ref = ?'); values.push(formatMuxRef(muxRefFromTmuxTarget(data.tmuxTarget))); }
     }

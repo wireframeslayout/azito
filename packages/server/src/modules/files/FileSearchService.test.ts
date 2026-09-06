@@ -13,7 +13,7 @@ function createMockTransportFactory(execResults: Record<string, { stdout: string
     factory: {
       getTransport: () => ({
         exec: execFn,
-        execTmux: vi.fn(),
+        execMux: vi.fn(),
         openTerminal: vi.fn(),
         createPaneStream: vi.fn(),
       }),

@@ -47,7 +47,7 @@ function registerMessage(overrides: Partial<RegisterMessage> = {}): RegisterMess
     type: 'register',
     protocolVersion: SUPERVISOR_PROTOCOL_VERSION,
     serverName: 'local',
-    target: 'azito:agent-1.1',
+    target: 'azito:agent-1',
     taskId: 42,
     unitId: 7,
     pid: 1234,
@@ -89,7 +89,7 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
   let monitor: AgentActivityMonitor;
   let findAll: ReturnType<typeof vi.fn>;
   let listSessions: ReturnType<typeof vi.fn>;
-  let capturePane: ReturnType<typeof vi.fn>;
+  let captureScreen: ReturnType<typeof vi.fn>;
   let findByName: ReturnType<typeof vi.fn>;
   let getRunning: ReturnType<typeof vi.fn>;
   let emit: ReturnType<typeof vi.fn>;
@@ -103,14 +103,14 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
     getRunning = vi.fn().mockReturnValue({});
     findAll = vi.fn<() => Window[]>().mockReturnValue([]);
     listSessions = vi.fn().mockResolvedValue([]);
-    capturePane = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+    captureScreen = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
     findByName = vi.fn().mockReturnValue({ name: 'local', type: 'local' } as ServerConfig);
     emit = vi.fn();
 
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
       { findAll } as unknown as IWindowRepository,
-      { listSessions, capturePane } as unknown as TmuxClient,
+      { listSessions, captureScreen } as unknown as TmuxClient,
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
     );
@@ -133,7 +133,7 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
   });
 
   it('a downgrade clears a previously-established Tier 0 verdict, and the downgraded connection cannot re-establish it', async () => {
-    const issued = registry.issueLaunch({ serverName: 'local', target: 'azito:agent-1.1', taskId: 42, unitId: 7 })!;
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'azito:agent-1', taskId: 42, unitId: 7 })!;
     const socket = new MockSocket();
     registry.register(asSocket(socket), registerMessage({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
     expect(registry.snapshot()[0].bound).toBe(true);
@@ -149,7 +149,7 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
     // A fresh launch is issued for the same key while the old supervisor is
     // still connected (e.g. the new process then fails to start) — the old
     // connection is downgraded to unbound in place.
-    registry.issueLaunch({ serverName: 'local', target: 'azito:agent-1.1', taskId: 42, unitId: 7 });
+    registry.issueLaunch({ serverName: 'local', target: 'azito:agent-1', taskId: 42, unitId: 7 });
     expect(registry.snapshot()[0].bound).toBe(false);
     await monitor.tick();
 
@@ -168,7 +168,7 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
   });
 
   it('an unbound connection`s child_exit still clears any stale Tier 0 state for its key (deletion is not authority-gated)', async () => {
-    const issued = registry.issueLaunch({ serverName: 'local', target: 'azito:agent-1.1', taskId: 42, unitId: 7 })!;
+    const issued = registry.issueLaunch({ serverName: 'local', target: 'azito:agent-1', taskId: 42, unitId: 7 })!;
     const socket = new MockSocket();
     registry.register(asSocket(socket), registerMessage({ launchId: issued.launchId, bootstrapToken: issued.bootstrapToken }));
     registry.handleMessage(asSocket(socket), { type: 'activity', state: 'active', bytesInWindow: 12, ts: Date.now() });

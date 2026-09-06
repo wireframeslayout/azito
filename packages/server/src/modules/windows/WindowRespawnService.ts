@@ -1,7 +1,7 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
-import { muxRefFromTmuxTarget, type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -376,7 +376,7 @@ export class WindowRespawnService {
         await confirmOldWindowGone(
           this.tmux,
           freshServer,
-          windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
+          windowAlive ? { kind: 'window', ref: { kind: 'tmux' as const, workspace: sessionName, window: windowPart } } : null,
           isPrimary ? task!.id : null,
         );
 
@@ -451,14 +451,14 @@ export class WindowRespawnService {
           await this.restorePaneLayout(respawnServer, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
         } else {
           const respawnRef = muxRefFromTmuxTarget(baseTarget);
-          const paneId = await this.tmux.resolvePane(respawnServer, respawnRef, 1) as string;
+          const paneId = await this.tmux.resolvePane(respawnServer, respawnRef, 1);
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
         }
       } catch (err) {
         try {
           if (isPrimary && tokenId !== null) {
             await rollbackWindowReference(
-              this.tmux.killWindow(respawnServer, baseTarget),
+              this.tmux.closeWindow(respawnServer, muxRefFromTmuxTarget(baseTarget)),
               this.paneEnvService,
               tokenId,
               'respawn_restore_failed_rollback',
@@ -466,7 +466,7 @@ export class WindowRespawnService {
               () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget }),
             );
           } else {
-            const outcome = await resolveKillOutcome(this.tmux.killWindow(respawnServer, baseTarget));
+            const outcome = await resolveKillOutcome(this.tmux.closeWindow(respawnServer, muxRefFromTmuxTarget(baseTarget)));
             if (!outcome.success) {
               this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
             }
@@ -705,7 +705,7 @@ export class WindowRespawnService {
       const legacyRef: MuxRef = { kind: 'tmux', workspace: tmuxSession, window: created.windowName };
       const windowTarget = tmuxTargetFromMuxRef(legacyRef);
       try {
-        const paneId = await this.tmux.resolvePane(server, legacyRef, 1) as string;
+        const paneId = await this.tmux.resolvePane(server, legacyRef, 1);
         // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
         // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
         // of going through it (see that function's own doc comment for why the
@@ -731,7 +731,7 @@ export class WindowRespawnService {
               }),
             })
           : resumeCommand;
-        await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+        await this.tmux.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
       } catch (err) {
         // resolvePaneId()/sendKeys() failing after createRotatedWindow already
         // succeeded used to leave an untracked window (tmuxWindow never
@@ -749,7 +749,7 @@ export class WindowRespawnService {
         // TaskPaneEnvironmentService.revokeGeneration's doc comment.
         try {
           await rollbackWindowReference(
-            this.tmux.killWindow(server, windowTarget),
+            this.tmux.closeWindow(server, legacyRef),
             this.paneEnvService,
             created.tokenId,
             'resume_legacy_launch_failed_rollback',
@@ -879,9 +879,9 @@ export class WindowRespawnService {
   ): Promise<void> {
     const paneCount = paneLayout.panes.length;
     const layoutRef = muxRefFromTmuxTarget(baseTarget);
-    const firstPaneId = await this.tmux.resolvePane(server, layoutRef, 1) as string;
+    const firstPaneId = await this.tmux.resolvePane(server, layoutRef, 1);
     for (let i = 1; i < paneCount; i++) {
-      await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
+      await this.tmux.splitPaneByHandle(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
       await sleep(200);
     }
 
@@ -889,10 +889,10 @@ export class WindowRespawnService {
       await this.tmux.applyLayout(server, layoutRef, paneLayout.layout);
     }
 
-    const paneIdMap = new Map<number, string>();
+    const paneIdMap = new Map<number, PaneHandle>();
     const paneEntries = await this.tmux.listPanesByRef(server, layoutRef);
     for (const entry of paneEntries) {
-      paneIdMap.set(entry.ordinal - 1, entry.handle as string);
+      paneIdMap.set(entry.ordinal - 1, entry.handle);
     }
 
     for (const pane of paneLayout.panes) {
@@ -906,7 +906,7 @@ export class WindowRespawnService {
       if (cwd) {
         // cwd is a resolved (symlink-free) real path — must be shell-quoted
         // before being typed into the pane (Issue #27 cd injection).
-        await this.tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(cwd)}`, 'Enter']);
+        await this.tmux.sendKeysToHandle(server, paneId, [`cd -- ${shellQuote(cwd)}`, 'Enter']);
         await sleep(300);
       }
 
@@ -917,7 +917,7 @@ export class WindowRespawnService {
         const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
         if (cmd) {
           const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
-          await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+          await this.tmux.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
         }
       }
     }
@@ -925,7 +925,7 @@ export class WindowRespawnService {
 
   private async setupSinglePane(
     server: ServerConfig,
-    paneId: string,
+    handle: PaneHandle,
     supervisorTarget: string,
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
@@ -936,7 +936,7 @@ export class WindowRespawnService {
       // containment-checked by resolveAllCwds() before any destructive tmux
       // operation ran — must be shell-quoted before being typed into the
       // pane (Issue #27 cd injection).
-      await this.tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(singleCwd)}`, 'Enter']);
+      await this.tmux.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(singleCwd)}`, 'Enter']);
       await sleep(300);
     }
 
@@ -949,7 +949,7 @@ export class WindowRespawnService {
       const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
       if (cmd) {
         const sendCmd = this.wrapIfSupervised(cmd, server, supervisorTarget, supervision);
-        await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+        await this.tmux.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }
     }
   }

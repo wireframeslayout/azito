@@ -274,6 +274,7 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
   create(expectation: SupervisorLaunchExpectation): IssuedSupervisorLaunch {
     const launchId = crypto.randomUUID();
     const bootstrapToken = crypto.randomBytes(32).toString('hex');
+    // rc.2 以前の supervisor が .1 付き target で登録するため strip を維持
     const run = this.db.transaction((exp: SupervisorLaunchExpectation, id: string, hash: string): void => {
       this.supersedeForTargetStmt.run(exp.serverName, stripPaneSuffix(exp.target));
       this.insertStmt.run(id, exp.serverName, stripPaneSuffix(exp.target), exp.taskId, exp.unitId, exp.windowId ?? null, hash);
@@ -292,6 +293,7 @@ export class SqliteSupervisorLaunchRepository implements ISupervisorLaunchReposi
     return row ? toRow(row) : null;
   }
 
+  // rc.2 以前の supervisor が .1 付き target で登録するため strip を維持
   findActiveByTarget(serverName: string, target: string): SupervisorLaunchRow | null {
     const row = this.findActiveByTargetStmt.get(serverName, stripPaneSuffix(target)) as LaunchRawRow | undefined;
     return row ? toRow(row) : null;

@@ -150,9 +150,8 @@ function makeOpts(
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      killWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
       closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
-      sendKeys: vi.fn(async () => {}),
+      sendKeysToHandle: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     } as unknown as TasksRouteOptions['tmux'],
@@ -289,7 +288,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Could not resolve the server/);
-    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.tmux.closeWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
     expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
     expect(opts.taskRepo.update).not.toHaveBeenCalled();
@@ -304,7 +303,7 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.tmux.closeWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
   });
@@ -318,7 +317,7 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(400);
-    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect(opts.tmux.closeWindow).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the task does not exist', async () => {

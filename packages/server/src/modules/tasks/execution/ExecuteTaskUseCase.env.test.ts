@@ -343,9 +343,8 @@ function buildUseCase(opts: {
     resolvePaneId: vi.fn(async () => '%0'),
     resolvePane: vi.fn(async () => '%0'),
     killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    sendKeys: vi.fn(async () => {}),
+    sendKeysToHandle: vi.fn(async () => {}),
     checkPaneExists: vi.fn(async () => true),
     windowExists: vi.fn(async () => true),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -569,7 +568,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.followUp(49, 4, 'please continue');
 
-    const launchCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
+    const launchCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
     expect(launchCall).toBeDefined();
     const sentCommand = (launchCall as unknown[])[2] as string[];
     // Wrapped (not the bare launch command) — checked via the wrap's own flags rather than a
@@ -582,7 +581,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(supervisorRegistry.clearExitMarker).toHaveBeenCalledWith('local-server', 'azito:w1');
   });
 
-  it('wraps the worker launch sendKeys command for an agent window on a local server (http-signal mode)', async () => {
+  it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (http-signal mode)', async () => {
     const unit = makeUnit({ id: 47, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'http-signal' });
     const task = makeTask({ id: 3, serverName: 'local-server', unitId: 47 });
     const { useCase, tmux } = buildUseCase({
@@ -593,7 +592,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.execute(47, 3);
 
-    const launchCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
+    const launchCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
     expect(launchCall).toBeDefined();
     const sentCommand = (launchCall as unknown[])[2] as string[];
     expect(sentCommand[0]).toContain('tui-supervisor');
@@ -602,7 +601,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(sentCommand[0]).toContain('--unit-id 47');
   });
 
-  it('wraps the worker launch sendKeys command for an agent window on a local server (tmux-pipe mode)', async () => {
+  it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (tmux-pipe mode)', async () => {
     const unit = makeUnit({ id: 48, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'tmux-pipe' });
     const task = makeTask({ id: 4, serverName: 'local-server', unitId: 48 });
     const { useCase, tmux } = buildUseCase({
@@ -613,7 +612,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     await useCase.execute(48, 4);
 
-    const launchCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
+    const launchCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => (call[2] as string[])[0]?.includes('claude'));
     expect(launchCall).toBeDefined();
     const sentCommand = (launchCall as unknown[])[2] as string[];
     expect(sentCommand[0]).toContain('tui-supervisor');
@@ -622,7 +621,7 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(sentCommand[0]).toContain('--unit-id 48');
   });
 
-  it('does not wrap the worker launch sendKeys command for a terminal window', async () => {
+  it('does not wrap the worker launch sendKeysToHandle command for a terminal window', async () => {
     const unit = makeUnit({ id: 55, workerType: null, workerModel: null, workerExecutionMode: 'tmux-pipe' });
     const task = makeTask({ id: 5, serverName: 'local-server', unitId: 55 });
     const { useCase, tmux } = buildUseCase({
@@ -635,12 +634,12 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
 
     // Terminal windows (workerType: null) have no agent launch command to wrap,
     // and shouldSupervise returns false for windowType 'terminal'.
-    const launchCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => {
+    const launchCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => {
       const keys = call[2] as string[];
       return keys[0] && !keys[0].includes('tui-supervisor');
     });
     // No supervisor wrapping should occur for terminal windows
-    const supervisorCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => {
+    const supervisorCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => {
       const keys = call[2] as string[];
       return keys[0]?.includes('tui-supervisor');
     });
@@ -848,7 +847,7 @@ describe('ExecuteTaskUseCase concurrent execute() serialization (Issue #28 revie
       // `${tmuxSession}:${windowName}` (name-based) — this mock matches
       // either form against the shared window store, same as real tmux would
       // resolve either addressing scheme to the same window.
-      (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
+      (tmux.closeWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
         const seg = (target as string).split(':')[1];
         windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
         return { stdout: '', stderr: '', code: 0 };
@@ -940,7 +939,7 @@ describe('ExecuteTaskUseCase concurrent execute() serialization (Issue #28 revie
         windows.push({ name, index: windows.length });
         return { result: { stdout: '', stderr: '', code: 0 }, windowName: name };
       });
-      (tmux.killWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
+      (tmux.closeWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, target: string) => {
         const seg = (target as string).split(':')[1];
         windows = windows.filter((w) => w.name !== seg && String(w.index) !== seg);
         return { stdout: '', stderr: '', code: 0 };
@@ -1150,7 +1149,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     await expect(useCase.followUp(10, 1, 'please continue')).rejects.toThrow(/requires approval/);
 
     expect(tmux.listSessions).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     // pendingOperation 'resume' lets the approval handler resume via
     // resumeStateMachine() rather than re-inferring it from task.tmuxWindow
     // (Issue #328 third-round review finding 1).
@@ -1481,9 +1480,8 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       resolvePaneId: vi.fn(async () => '%0'),
       resolvePane: vi.fn(async () => '%0'),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
+      sendKeysToHandle: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
       getWindowActivity: vi.fn(async () => null),
@@ -1570,7 +1568,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     expect(turnRepo.turns).toHaveLength(1);
     expect(turnRepo.turns[0]).toMatchObject({ taskId: 1, unitId: 42, kind: 'follow_up', phase: null, status: 'running' });
 
-    const sentPrompt = tmux.sendKeys.mock.calls.find(
+    const sentPrompt = tmux.sendKeysToHandle.mock.calls.find(
       (c) => typeof c[2]?.[0] === 'string' && (c[2][0] as string).includes('completion_signal'),
     )?.[2]?.[0] as string | undefined;
     expect(sentPrompt).toBeDefined();
@@ -1686,7 +1684,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     await useCase.execute(16, 9);
 
     expect(windowRepo.add).toHaveBeenCalled();
-    const cdCall = tmux.sendKeys.mock.calls.find((call: unknown[]) => ((call as unknown[])[2] as string[])[0]?.startsWith('cd '));
+    const cdCall = tmux.sendKeysToHandle.mock.calls.find((call: unknown[]) => ((call as unknown[])[2] as string[])[0]?.startsWith('cd '));
     expect(cdCall).toBeDefined();
     const cdCommand = ((cdCall as unknown[])[2] as string[])[0];
     expect(cdCommand).toBe(`cd -- ${shellQuote(dangerousDir)}`);
@@ -1802,7 +1800,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     // Agent-transport style failure: resolves (doesn't throw) with a
     // non-zero code — a bare await/`.then` here previously read this as
     // success (Issue #28 third-party review finding 2).
-    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
     await expect(useCase.execute(30, 40)).rejects.toThrow(/Failed to kill window .* before rotating window/);
 
@@ -1824,7 +1822,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     // opened alongside the worker pane) — not modeled in this listSessions
     // mock's minimal { name, index } shape, but that's exactly the point:
     // confirmOldWindowGone must target the whole window regardless of how
-    // many panes it holds. Only killWindow removes all of them; a killPane
+    // many panes it holds. Only closeWindow removes all of them; a killPane
     // call targeting just the active pane would leave a sibling pane (and
     // the old token it still holds) alive.
     tmux.listSessions.mockResolvedValue([
@@ -1833,7 +1831,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     await useCase.execute(35, 45);
 
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:5');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: '5' });
     expect(tmux.killPane).not.toHaveBeenCalled();
     expect(windowRepo.add).toHaveBeenCalled();
   });
@@ -1916,7 +1914,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
   // discovered only AFTER the old window was already dead, leaving
   // task.tmuxWindow pointing at a killed window with no replacement ever
   // created. This test asserts the corrected ordering: the mismatch aborts
-  // BEFORE killWindow is ever called.
+  // BEFORE closeWindow is ever called.
   it('execute(): aborts BEFORE killing the leftover window when the row read inside the lock disagrees with the session-bootstrap row on a security field', async () => {
     const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'old-window' });
@@ -1944,7 +1942,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     await expect(useCase.execute(36, 46)).rejects.toThrow(/設定が実行準備中に変更された/);
 
-    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(tmux.createWindow).not.toHaveBeenCalled();
     expect(windowRepo.add).not.toHaveBeenCalled();
@@ -2489,9 +2487,8 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       resolvePaneId: vi.fn(async () => '%0'),
       resolvePane: vi.fn(async () => '%0'),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      sendKeys: vi.fn(async () => {}),
+      sendKeysToHandle: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
       windowExists: vi.fn(async () => true),
       listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
