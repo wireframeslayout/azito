@@ -341,4 +341,44 @@ describe('ActivityTracker', () => {
       expect(snap.status).toBeUndefined();
     });
   });
+  it('does not go active while the user is typing (input-box repaint within the input grace)', () => {
+    // Claude Code redraws its whole prompt frame on every keystroke: ~300 bytes
+    // per key, 5 keys/second — far above the 200-byte window threshold.
+    for (let i = 0; i < 20; i++) {
+      tracker.notifyInput();
+      tracker.record(300);
+      vi.advanceTimersByTime(200);
+    }
+    // 4 seconds of continuous typing, 4 ticks elapsed
+    expect(transitions).toEqual([]);
+    expect(tracker.getState()).toBe('idle');
+  });
+
+  it('goes active when output continues after the input grace (agent started working on Enter)', () => {
+    tracker.notifyInput(); // Enter
+    tracker.record(300); // immediate redraw — graced
+    vi.advanceTimersByTime(600); // past the 500ms grace
+    tracker.record(250); // agent output
+    vi.advanceTimersByTime(1_000); // tick: above, streak=1
+    tracker.record(250);
+    vi.advanceTimersByTime(1_000); // tick: above, streak=2 → active
+    expect(transitions).toEqual([{ state: 'active', bytes: 500 }]);
+    expect(tracker.getState()).toBe('active');
+  });
+
+  it('does not let typing alone keep an active agent alive past idleAfterMs', () => {
+    tracker.record(250);
+    vi.advanceTimersByTime(1_000);
+    tracker.record(250);
+    vi.advanceTimersByTime(1_000);
+    expect(tracker.getState()).toBe('active');
+    // agent finished; user types for 12s (idleAfterMs is 10s in this suite)
+    for (let i = 0; i < 60; i++) {
+      tracker.notifyInput();
+      tracker.record(300);
+      vi.advanceTimersByTime(200);
+    }
+    expect(tracker.getState()).toBe('idle');
+    expect(transitions.map((t) => t.state)).toEqual(['active', 'idle']);
+  });
 });

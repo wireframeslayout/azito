@@ -20,6 +20,16 @@ export interface ActivityTrackerOptions {
    * once — making unrelated windows light up as running on focus.
    */
   resizeGraceMs?: number;
+  /**
+   * After a keystroke (or any bytes written INTO the child PTY), output for
+   * this long is NOT counted as activity. A TUI agent repaints its input box on
+   * every keystroke — Claude Code redraws the whole prompt frame, several
+   * hundred bytes per key — so merely typing a prompt would otherwise push the
+   * byte window over the threshold on consecutive ticks and light the window
+   * up as 'active'. Real agent work produces output long after the last input
+   * byte, so gating on input quiet time separates the two without thresholds.
+   */
+  inputGraceMs?: number;
 }
 
 interface Sample {
@@ -46,9 +56,10 @@ const ACTIVE_CONSECUTIVE_TICKS = 2;
  *    spinner) enter this mode immediately.
  * 2. Combined mode (default — including Claude Code ≥2.1.236 on tmux, which
  *    only sets a static `✳ <topic>` title and never writes a working spinner):
- *    the byte-volume sliding window decides idle/active, with an echo filter
- *    requiring the threshold to be exceeded for ACTIVE_CONSECUTIVE_TICKS
- *    consecutive ticks before transitioning to active. A `working` or `blocked`
+ *    the byte-volume sliding window decides idle/active. Output that arrives
+ *    within inputGraceMs of a keystroke is dropped (input-box repaint is not
+ *    work), and the remaining volume must exceed the threshold for
+ *    ACTIVE_CONSECUTIVE_TICKS consecutive ticks before transitioning to active. A `working` or `blocked`
  *    title promotes the tracker to title-authoritative mode immediately.
  *
  * An idle marker (`✳ `) alone does NOT disable the byte heuristic — Claude Code
@@ -61,6 +72,7 @@ export class ActivityTracker extends EventEmitter {
   private readonly idleAfterMs: number;
   private readonly tickMs: number;
   private readonly resizeGraceMs: number;
+  private readonly inputGraceMs: number;
 
   private samples: Sample[] = [];
   private state: ActivityState = 'idle';
@@ -68,6 +80,7 @@ export class ActivityTracker extends EventEmitter {
   private lastAboveThresholdTs = 0;
   private lastActiveEmitTs = 0;
   private resizeGraceUntil = 0;
+  private inputGraceUntil = 0;
   private timer: NodeJS.Timeout | undefined;
   /** Latest classified title state — 'unknown' until a title is first observed. */
   private titleState: TitleAgentState = 'unknown';
@@ -87,6 +100,16 @@ export class ActivityTracker extends EventEmitter {
     this.idleAfterMs = options.idleAfterMs ?? 5_000;
     this.tickMs = options.tickMs ?? 1_000;
     this.resizeGraceMs = options.resizeGraceMs ?? 800;
+    this.inputGraceMs = options.inputGraceMs ?? 500;
+  }
+
+  /**
+   * Call when bytes were written into the child PTY (user keystrokes forwarded
+   * from stdin, or hub-injected input). Output within the following
+   * inputGraceMs is treated as echo / input-box repaint, not activity.
+   */
+  notifyInput(): void {
+    this.inputGraceUntil = Date.now() + this.inputGraceMs;
   }
 
   /** Call when the terminal was resized; suppresses the repaint burst that follows. */
@@ -125,6 +148,10 @@ export class ActivityTracker extends EventEmitter {
     // its bytes are dropped, so a resize can neither light up an idle agent
     // nor keep an active one alive by itself.
     if (now < this.resizeGraceUntil) return;
+    // Within the post-input grace, treat output as keystroke echo / prompt
+    // repaint: typing must never light the window up, and (while active) it
+    // must not extend activity by itself either.
+    if (now < this.inputGraceUntil) return;
     this.samples.push({ ts: now, bytes });
     this.freshBytes = true;
   }

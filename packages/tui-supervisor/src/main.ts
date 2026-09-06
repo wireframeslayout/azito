@@ -29,6 +29,11 @@ proxy.on('data', (bytes: number, data: string) => {
 proxy.on('resize', () => {
   tracker.notifyResize();
 });
+// Keystrokes (and hub-injected input) make the agent repaint its input box;
+// that output is echo, not work — see ActivityTracker.inputGraceMs.
+proxy.on('input', () => {
+  tracker.notifyInput();
+});
 
 const muxPaneRef = /^%\d+$/.test(process.env.TMUX_PANE ?? '') ? process.env.TMUX_PANE : undefined;
 
