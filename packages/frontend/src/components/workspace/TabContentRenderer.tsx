@@ -150,6 +150,7 @@ export default function TabContentRenderer({
         <TerminalContainer
           serverName={tab.serverName!}
           target={tab.target!}
+          terminalRef={tab.terminalRef}
           projectId={tab.projectId}
           project={project}
           allTasks={allTasks}
