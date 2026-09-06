@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { applyProductionWindowsDrift } from '../testing/productionSchemaFixtures';
 
 import * as m001 from './001_initial_schema';
 import * as m002 from './002_legacy_migrations';
@@ -307,5 +308,35 @@ describe('migration 068: merge duplicate window rows', () => {
     expect(merged.supervised).toBe(1);
     expect(db.prepare('SELECT COUNT(*) AS c FROM windows WHERE id = ?').get(projectRow)).toEqual({ c: 0 });
     expect(db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='index' AND name='idx_windows_physical_unique'").get()).toEqual({ c: 1 });
+  });
+
+  describe('production schema drift (lifecycle column)', () => {
+    it('preserves lifecycle value and drops NOT NULL constraint', () => {
+      // Swap windows table to pre-068 production DDL with lifecycle column
+      applyProductionWindowsDrift(db);
+
+      const taskId = insertTask(db);
+      insertWindow(db, { ownerType: 'project', tmuxTarget: 'sess:drift-lc', label: 'lc-label' });
+      insertWindow(db, {
+        ownerType: 'task',
+        taskId,
+        tmuxTarget: 'sess:drift-lc.1',
+        createdAt: '2026-01-02 00:00:00',
+      });
+      // lifecycle defaults to 'active' from the production DDL
+
+      runMigration068(db);
+
+      const rows = db.prepare("SELECT * FROM windows WHERE tmux_target = 'sess:drift-lc'").all() as Array<Record<string, unknown>>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].lifecycle).toBe('active');
+      expect(rows[0].label).toBe('lc-label');
+
+      // extraColumns DDL generation intentionally drops NOT NULL — values are preserved
+      const colInfo = db.pragma('table_info(windows)') as { name: string; notnull: number }[];
+      const lifecycleCol = colInfo.find(c => c.name === 'lifecycle');
+      expect(lifecycleCol).toBeDefined();
+      expect(lifecycleCol!.notnull).toBe(0);
+    });
   });
 });

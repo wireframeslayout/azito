@@ -20,15 +20,14 @@ set -g base-index 1
 set -g pane-base-index 1
 ```
 
-- **`pane-base-index 1`**: AZITO stores `tmux_target` at window level
-  (`<session>:<window>`) in the DB and resolves panes at runtime via pane ID (`%N`).
-  `pane-base-index 1` remains required (some `send-keys` / `pipe-pane` paths still
-  use pane ordinals).
-- **`base-index 1`**: windows are referenced by name, so there is no direct dependency,
-  but keep it aligned with pane-base-index (both are included in `azito.conf`).
+- **`pane-base-index 1`**: AZITO manages window coordinates via `windows.mux_ref`
+  (driver-specific JSON — `{kind, workspace, window}`) and `windows.id` (DB primary key).
+  Panes are resolved at runtime via pane ID (`%N` → `PaneHandle`). `tmux_target` remains
+  as a compatibility display column. `pane-base-index 1` is recommended but no longer
+  required (direct ordinal paths have been removed).
 
-> Note: Issue #357 tracks migrating pane references to index-independent pane IDs.
-> Once that lands these settings become merely recommended; until then they are required.
+> Note: The pane-reference migration to index-independent pane IDs (Issue #357) was
+> completed in Stage 6. `pane-base-index 1` is recommended but not required.
 
 ## Recommended
 

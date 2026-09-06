@@ -134,7 +134,7 @@ packages/
                                   #         updateScript (out-of-process self-update), serviceControl
         health/                   # [upper] GET /api/health
       shared/
-        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-054)
+        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-071)
   frontend/                        # React 19 + Vite + TypeScript
     src/
       components/                  # Layout, Terminal, Modal, FileExplorer, TaskLogView, etc.

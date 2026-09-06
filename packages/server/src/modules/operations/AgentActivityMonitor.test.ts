@@ -16,7 +16,7 @@ function makeWindow(overrides: Partial<Window>): Window {
     projectId: 1,
     taskId: null,
     serverName: 'local',
-    tmuxTarget: 'azito:agent-1.1',
+    tmuxTarget: 'azito:agent-1',
     label: 'agent-1',
     isPrimary: false,
     windowType: 'agent',
@@ -90,7 +90,7 @@ describe('AgentActivityMonitor', () => {
   });
 
   it('emits agent:activity once when an operation run appears, not again while unchanged', async () => {
-    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
 
     await monitor.tick();
     expect(emit).toHaveBeenCalledTimes(1);
@@ -104,7 +104,7 @@ describe('AgentActivityMonitor', () => {
   });
 
   it('emits running:false once when a running entry disappears', async () => {
-    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
     await monitor.tick();
     emit.mockClear();
 
@@ -129,8 +129,8 @@ describe('AgentActivityMonitor', () => {
   });
 
   it('prefers operation source over manual for the same key and skips its tmux call', async () => {
-    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:agent-1.1', serverName: 'local' }] });
-    findAll.mockReturnValue([makeWindow({ serverName: 'local', tmuxTarget: 'azito:agent-1.1' })]);
+    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:agent-1', serverName: 'local' }] });
+    findAll.mockReturnValue([makeWindow({ serverName: 'local', tmuxTarget: 'azito:agent-1' })]);
 
     await monitor.tick();
     expect(listSessions).not.toHaveBeenCalled();
@@ -144,7 +144,7 @@ describe('AgentActivityMonitor', () => {
     // activity must advance twice within the sliding window before it is
     // confirmed running — see the dedicated debounce tests below for the
     // single-advance (focus redraw) case.
-    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
     const base = Math.floor(Date.now() / 1000) - 5;
     listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base));
     await monitor.tick();
@@ -165,7 +165,7 @@ describe('AgentActivityMonitor', () => {
   it('treats a fresh manual agent window with only a shell in the foreground as idle', async () => {
     // Core regression case: focusing a pane and typing (or just the shell
     // prompt) bumps window_activity without an agent actually running there.
-    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
     listSessions.mockResolvedValue(makeSessions(
       'azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 5,
       [makePane({ command: 'bash' })],
@@ -177,7 +177,7 @@ describe('AgentActivityMonitor', () => {
   });
 
   it('detects a running agent in the specific pane named by the target even when other panes are shells', async () => {
-    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.2' })]);
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
     const base = Math.floor(Date.now() / 1000) - 5;
     const panes = [makePane({ index: 1, command: 'bash' }), makePane({ index: 2, command: 'claude' })];
     listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base, panes));
@@ -193,7 +193,7 @@ describe('AgentActivityMonitor', () => {
   });
 
   it('detects a fresh manual agent window as running via index-form target', async () => {
-    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:2.1' })]);
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:2' })]);
     const base = Math.floor(Date.now() / 1000) - 5;
     listSessions.mockResolvedValueOnce(makeSessions('azito', 'some-other-name', 2, base));
     await monitor.tick();
@@ -208,15 +208,15 @@ describe('AgentActivityMonitor', () => {
   });
 
   it('detects a window whose name itself ends in .digits (raw spec, no pane stripping)', async () => {
-    // The stored target's trailing `.1` here is part of the window name
-    // ("agent-1.1"), not a pane suffix — the raw spec must be tried too.
-    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+    // Post-migration 068 the DB never stores a trailing `.N` pane suffix,
+    // so the stored target is already the plain window name.
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
     const base = Math.floor(Date.now() / 1000) - 5;
-    listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1.1', 3, base));
+    listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base));
     await monitor.tick();
-    listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1.1', 3, base + 1));
+    listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + 1));
     await monitor.tick();
-    listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1.1', 3, base + 2));
+    listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + 2));
     await monitor.tick();
 
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({
@@ -226,8 +226,8 @@ describe('AgentActivityMonitor', () => {
 
   it('does not match a numeric-spec target against a coincidentally numeric window name', async () => {
     // tmux resolves a fully numeric spec as an index; a live window *named* "2"
-    // at index 5 must not make the stale index-form target `azito:2.1` running.
-    findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:2.1' })]);
+    // at index 5 must not make the stale index-form target `azito:2` running.
+    findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:2' })]);
     listSessions.mockResolvedValue(makeSessions('azito', '2', 5, Math.floor(Date.now() / 1000)));
 
     await monitor.tick();
@@ -239,7 +239,7 @@ describe('AgentActivityMonitor', () => {
     // Core regression case: display-message used to silently answer with the
     // session's active window even when this target's window was gone, which
     // made stale rows look "running" forever. listSessions must not find it.
-    findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:gone-window.1' })]);
+    findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:gone-window' })]);
     listSessions.mockResolvedValue(makeSessions('azito', 'some-active-window', 9, Math.floor(Date.now() / 1000)));
 
     await monitor.tick();
@@ -258,8 +258,8 @@ describe('AgentActivityMonitor', () => {
 
   it('treats a failing server query as idle for its candidates without aborting the tick', async () => {
     findAll.mockReturnValue([
-      makeWindow({ id: 1, serverName: 'offline-server', tmuxTarget: 'azito:agent-1.1' }),
-      makeWindow({ id: 2, serverName: 'local', tmuxTarget: 'azito:agent-2.1', label: 'agent-2' }),
+      makeWindow({ id: 1, serverName: 'offline-server', tmuxTarget: 'azito:agent-1' }),
+      makeWindow({ id: 2, serverName: 'local', tmuxTarget: 'azito:agent-2', label: 'agent-2' }),
     ]);
     findByName.mockImplementation((name: string) => ({ name, type: name === 'local' ? 'local' : 'ssh' }) as ServerConfig);
     let activity = Math.floor(Date.now() / 1000);
@@ -291,14 +291,14 @@ describe('AgentActivityMonitor', () => {
     expect(consoleError).toHaveBeenCalled();
 
     // The guard must be released so the next tick still runs.
-    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
     await monitor.tick();
     expect(emit).toHaveBeenCalledTimes(1);
     consoleError.mockRestore();
   });
 
   it('snapshot returns only currently running entries', async () => {
-    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+    getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
     await monitor.tick();
 
     expect(monitor.snapshot()).toEqual([
@@ -310,7 +310,7 @@ describe('AgentActivityMonitor', () => {
     it('never confirms running when activity advances only once, then stops advancing', async () => {
       // Core regression case: focusing a pane triggers exactly one TUI
       // redraw (one window_activity advance), then nothing — must not emit.
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base));
@@ -332,7 +332,7 @@ describe('AgentActivityMonitor', () => {
       // still be confirmed — the old "N consecutive ticks" rule required
       // every tick to advance and would reset the streak at tick2, never
       // confirming this agent as running.
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base));
@@ -358,7 +358,7 @@ describe('AgentActivityMonitor', () => {
       // A single advance followed by enough non-advancing ticks to fall out
       // of START_WINDOW_TICKS must be forgotten: a much later second advance
       // is then just a fresh lone advance (1 of 2), not confirmed.
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base));
@@ -385,7 +385,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('confirms running on the second of two consecutive activity advances', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base));
@@ -405,7 +405,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('keeps running while activity stays fresh even without further advances, then ends once stale', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const nowSec = Math.floor(Date.now() / 1000);
 
       // Confirm running via two consecutive advances (as above).
@@ -442,8 +442,8 @@ describe('AgentActivityMonitor', () => {
       // A key running as 'operation' must not ride the manual continuation
       // shortcut once the operation ends: residual pane output (prompt
       // redraw) is a single advance and must be debounced like any new key.
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
-      getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+      getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1', serverName: 'local' }] });
 
       await monitor.tick(); // running as operation
       expect(emit).toHaveBeenCalledWith(expect.objectContaining({
@@ -478,7 +478,7 @@ describe('AgentActivityMonitor', () => {
 
   describe('pane-state classifier (Tier 2)', () => {
     it('confirms a claude window running via a braille-spinner title on the very first tick, with no debounce', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
       listSessions.mockResolvedValue(makeSessions(
         'azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 5,
         [makePane({ command: 'claude', title: '⠐ タスク要約' })],
@@ -491,7 +491,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('treats a claude window with a ✳-prefixed idle title as idle even with fresh activity', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
       listSessions.mockResolvedValue(makeSessions(
         'azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
         [makePane({ command: 'claude', title: '✳ タスク要約' })],
@@ -515,7 +515,7 @@ describe('AgentActivityMonitor', () => {
         { emit } as unknown as NotificationBus,
       );
 
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
       // Title alone is inconclusive ('claude' matches no title rule) — the
       // screen tail is only consulted once activity has advanced since the
@@ -527,7 +527,7 @@ describe('AgentActivityMonitor', () => {
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + 1, [makePane({ command: 'claude', title: 'claude' })]));
       await monitor.tick();
-      expect(captureScreen).toHaveBeenCalledWith(expect.anything(), 'azito:agent-1.1', -30);
+      expect(captureScreen).toHaveBeenCalledWith(expect.anything(), 'azito:agent-1', -30);
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual', status: 'blocked' }),
       ]);
@@ -543,7 +543,7 @@ describe('AgentActivityMonitor', () => {
         { emit } as unknown as NotificationBus,
       );
 
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'some-generic-tool' })]));
       await monitor.tick();
@@ -582,7 +582,7 @@ describe('AgentActivityMonitor', () => {
     }
 
     it('flips a matching window to running immediately on a start signal, with zero activity advances and even with stale activity', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       // Stale by Tier 2's own threshold — must not matter once a hook signal exists.
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 120));
 
@@ -595,7 +595,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('keeps a window idle on every tick after a stop signal, even while the foreground pane stays non-shell', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
 
       monitor.recordHookSignal(baseSignal({ event: 'start' }));
@@ -614,7 +614,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('drops hook state once the foreground pane becomes a bare shell, allowing the heuristic to resume afterward', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'claude' })]));
 
@@ -648,7 +648,7 @@ describe('AgentActivityMonitor', () => {
       // outlive the hooked process. After claude exits (bare shell), a
       // different agent that fires no Claude Code hooks (e.g. codex)
       // starting in the same pane must be detectable via Tier 2 again.
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'claude' })]));
 
@@ -683,7 +683,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('drops hook state when the window disappears', async () => {
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
       monitor.recordHookSignal(baseSignal({ event: 'start' }));
       await flush();
@@ -699,9 +699,9 @@ describe('AgentActivityMonitor', () => {
       // azito:3         → index-form match, no pane suffix (matches any pane).
       // other-server's azito:agent-1.1 must never be affected.
       findAll.mockReturnValue([
-        makeWindow({ id: 1, serverName: 'local', tmuxTarget: 'azito:agent-1.2', label: 'name-and-pane' }),
+        makeWindow({ id: 1, serverName: 'local', tmuxTarget: 'azito:agent-1', label: 'name-and-pane' }),
         makeWindow({ id: 2, serverName: 'local', tmuxTarget: 'azito:3', label: 'index-form-no-pane' }),
-        makeWindow({ id: 3, serverName: 'other-server', tmuxTarget: 'azito:agent-1.1', label: 'other-server' }),
+        makeWindow({ id: 3, serverName: 'other-server', tmuxTarget: 'azito:agent-1', label: 'other-server' }),
       ]);
 
       // Pane mismatch on the pane-pinned target: no match for either local window.
@@ -721,7 +721,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('immediately ticks so a caller need not wait for the next poll interval', async () => {
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
 
       monitor.recordHookSignal(baseSignal({ event: 'start' }));
@@ -742,10 +742,10 @@ describe('AgentActivityMonitor', () => {
     }
 
     it('confirms running immediately on an active signal, bypassing the Tier 2 debounce entirely', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       // No listSessions call needed/mocked — Tier 0 must not consult tmux at all.
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
       await flush();
 
       expect(monitor.snapshot()).toEqual([
@@ -774,10 +774,10 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('keeps operation:true for a supervised key that IS a registered execution run', async () => {
-      getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+      getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
       findAll.mockReturnValue([]);
 
-      monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'active', 10);
+      monitor.recordSupervisorSignal('local', 'azito:task-10', 'active', 10);
       await flush();
 
       expect(monitor.snapshot()).toEqual([
@@ -786,7 +786,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('confirms idle on an idle signal even while a hook state claims the same key is running', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
 
       monitor.recordHookSignal({
@@ -795,23 +795,23 @@ describe('AgentActivityMonitor', () => {
       await flush();
       expect(monitor.snapshot()).toHaveLength(1);
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle');
       await flush();
 
       expect(monitor.snapshot()).toEqual([]);
     });
 
     it('releases the key back to Tier 1/2 detection on an exited signal', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       const base = Math.floor(Date.now() / 1000) - 5;
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
       await flush();
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'supervised' }),
       ]);
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'exited');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'exited');
       await flush();
       // Tier 0 state is gone; falls through to the Tier 2 heuristic, which
       // has not yet observed any activity for this key — idle.
@@ -830,8 +830,8 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('keeps supervisor state alive for a key no longer among the candidates (a live supervisor connection is its own ground truth)', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1');
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1');
       await flush();
       expect(monitor.snapshot()).toHaveLength(1);
 
@@ -845,15 +845,15 @@ describe('AgentActivityMonitor', () => {
       ]);
 
       // Only an explicit 'exited' signal removes it.
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'exited');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'exited');
       await flush();
       expect(monitor.snapshot()).toEqual([]);
     });
 
     it('immediately ticks so a caller need not wait for the next poll interval', async () => {
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
       await flush();
 
       expect(emit).toHaveBeenCalledWith(expect.objectContaining({
@@ -862,9 +862,9 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('propagates a title-derived blocked status into the entry and emits again on a working→blocked flip', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
       await flush();
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'supervised', status: 'working' }),
@@ -872,7 +872,7 @@ describe('AgentActivityMonitor', () => {
       emit.mockClear();
 
       // The agent hit a permission prompt: still running, but blocked.
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'blocked');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'blocked');
       await flush();
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'blocked' }),
@@ -883,9 +883,9 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('leaves status undefined for a signal without one (old supervisor / byte-heuristic fallback)', async () => {
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
       await flush();
 
       const entry = monitor.snapshot()[0];
@@ -932,7 +932,7 @@ describe('AgentActivityMonitor', () => {
           { findByName } as unknown as IServerRepository,
           { emit } as unknown as NotificationBus,
         );
-        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
         listSessions.mockImplementation(async () => makeSessions(
           'azito', 'agent-1', 3, paneActivity,
           [makePane({ command: 'claude', title: paneTitle })],
@@ -967,12 +967,12 @@ describe('AgentActivityMonitor', () => {
       describe('Tier 0 reported the key idle', () => {
         it('keeps the key running as blocked and emits no completion', async () => {
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           emit.mockClear();
 
           openSelectionPrompt();
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
 
           expect(monitor.snapshot()).toEqual([
@@ -986,10 +986,10 @@ describe('AgentActivityMonitor', () => {
 
         it('emits the completion exactly once when the selection prompt clears', async () => {
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           openSelectionPrompt();
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
           expect(monitor.snapshot()).toHaveLength(1);
           emit.mockClear();
@@ -1011,12 +1011,12 @@ describe('AgentActivityMonitor', () => {
 
         it('leaves the idle standing when the screen is not blocked (completion announced as before)', async () => {
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           emit.mockClear();
 
           paneTitle = IDLE_TITLE;
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
 
           expect(monitor.snapshot()).toEqual([]);
@@ -1027,10 +1027,10 @@ describe('AgentActivityMonitor', () => {
 
         it('reports the refinement in the diagnostics row without taking the decision from Tier 0', async () => {
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           openSelectionPrompt();
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
 
           expect(monitor.diagnostics()).toEqual([
@@ -1048,7 +1048,7 @@ describe('AgentActivityMonitor', () => {
           // working-title check (claude keeps its spinner during a permission
           // prompt); the idle refinement must not claim a working key.
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
 
           expect(monitor.snapshot()).toEqual([
@@ -1102,10 +1102,10 @@ describe('AgentActivityMonitor', () => {
           ['capture-pane throws', 'throw' as const],
         ])('keeps a blocked key blocked while %s', async (_label, mode) => {
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           openSelectionPrompt();
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
           expect(monitor.snapshot()).toEqual([expect.objectContaining({ status: 'blocked' })]);
           emit.mockClear();
@@ -1121,10 +1121,10 @@ describe('AgentActivityMonitor', () => {
 
         it('keeps a blocked key blocked while the tmux snapshot for its server fails', async () => {
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           openSelectionPrompt();
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
           emit.mockClear();
 
@@ -1142,13 +1142,13 @@ describe('AgentActivityMonitor', () => {
           // the check that would have seen it fails, so there is no blocked
           // state to hold yet — only the previous working one.
           arrangeCandidate(WORKING_TITLE, PROMPT_SCREEN);
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active', 7, 'agent-1', 'working');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active', 7, 'agent-1', 'working');
           await flush();
           emit.mockClear();
 
           openSelectionPrompt();
           breakScreenReads('exit-code');
-          monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle', 7, 'agent-1');
+          monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle', 7, 'agent-1');
           await flush();
 
           expect(monitor.snapshot()).toEqual([
@@ -1227,9 +1227,9 @@ describe('AgentActivityMonitor', () => {
 
     describe('operation-covered keys', () => {
       it('overrides a running operation entry with source supervised on an active signal, keeping the operation taskId', async () => {
-        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
 
-        monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'active');
+        monitor.recordSupervisorSignal('local', 'azito:task-10', 'active');
         await flush();
 
         expect(monitor.snapshot()).toEqual([
@@ -1238,9 +1238,9 @@ describe('AgentActivityMonitor', () => {
       });
 
       it('shows a supervised-idle operation key as idle even while its run is still registered, and keeps it idle across later ticks', async () => {
-        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
 
-        monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'active');
+        monitor.recordSupervisorSignal('local', 'azito:task-10', 'active');
         await flush();
         expect(monitor.snapshot()).toHaveLength(1);
         emit.mockClear();
@@ -1248,7 +1248,7 @@ describe('AgentActivityMonitor', () => {
         // e.g. waiting_input between turns: the child stopped producing
         // output, the supervisor reported idle, but the operation run is
         // still registered.
-        monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'idle');
+        monitor.recordSupervisorSignal('local', 'azito:task-10', 'idle');
         await flush();
         expect(monitor.snapshot()).toEqual([]);
         expect(emit).toHaveBeenCalledWith(expect.objectContaining({
@@ -1261,7 +1261,7 @@ describe('AgentActivityMonitor', () => {
         expect(monitor.snapshot()).toEqual([]);
 
         // Once the supervisor reports active again, it flips straight back.
-        monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'active');
+        monitor.recordSupervisorSignal('local', 'azito:task-10', 'active');
         await flush();
         expect(monitor.snapshot()).toEqual([
           expect.objectContaining({ target: 'azito:task-10', running: true, source: 'supervised', taskId: 10 }),
@@ -1269,7 +1269,7 @@ describe('AgentActivityMonitor', () => {
       });
 
       it('keeps plain operation entries untouched when no supervisor state exists for the key', async () => {
-        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
 
         await monitor.tick();
 
@@ -1279,13 +1279,13 @@ describe('AgentActivityMonitor', () => {
       });
 
       it('falls back to the plain operation entry after an exited signal releases the key', async () => {
-        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10.1', serverName: 'local' }] });
+        getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
 
-        monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'idle');
+        monitor.recordSupervisorSignal('local', 'azito:task-10', 'idle');
         await flush();
         expect(monitor.snapshot()).toEqual([]);
 
-        monitor.recordSupervisorSignal('local', 'azito:task-10.1', 'exited');
+        monitor.recordSupervisorSignal('local', 'azito:task-10', 'exited');
         await flush();
         expect(monitor.snapshot()).toEqual([
           expect.objectContaining({ target: 'azito:task-10', running: true, source: 'operation', taskId: 10 }),
@@ -1293,10 +1293,10 @@ describe('AgentActivityMonitor', () => {
       });
 
       it('does not route a supervised-idle operation key through the manual heuristic even when an agent window row shares the key', async () => {
-        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
-        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1' })]);
+        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1', serverName: 'local' }] });
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
 
-        monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle');
+        monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle');
         await flush();
         expect(monitor.snapshot()).toEqual([]);
 
@@ -1312,7 +1312,7 @@ describe('AgentActivityMonitor', () => {
       // for it at all; the supervisor connection alone must still surface it.
 
       it('shows a pure manual supervised key as running with source supervised and its own taskId/label on an active signal', async () => {
-        monitor.recordSupervisorSignal('local', 'azito:manual-1.1', 'active', 42, 'claude');
+        monitor.recordSupervisorSignal('local', 'azito:manual-1', 'active', 42, 'claude');
         await flush();
 
         expect(listSessions).not.toHaveBeenCalled();
@@ -1324,18 +1324,18 @@ describe('AgentActivityMonitor', () => {
       });
 
       it('does not surface a pure manual supervised key as an entry while idle', async () => {
-        monitor.recordSupervisorSignal('local', 'azito:manual-1.1', 'idle', 42, 'claude');
+        monitor.recordSupervisorSignal('local', 'azito:manual-1', 'idle', 42, 'claude');
         await flush();
 
         expect(monitor.snapshot()).toEqual([]);
       });
 
       it('removes a pure manual supervised key on an exited signal (child_exit) and does not resurrect it on later ticks', async () => {
-        monitor.recordSupervisorSignal('local', 'azito:manual-1.1', 'active', 42, 'claude');
+        monitor.recordSupervisorSignal('local', 'azito:manual-1', 'active', 42, 'claude');
         await flush();
         expect(monitor.snapshot()).toHaveLength(1);
 
-        monitor.recordSupervisorSignal('local', 'azito:manual-1.1', 'exited');
+        monitor.recordSupervisorSignal('local', 'azito:manual-1', 'exited');
         await flush();
         expect(monitor.snapshot()).toEqual([]);
 
@@ -1347,11 +1347,11 @@ describe('AgentActivityMonitor', () => {
         // recordSupervisorSignal(..., 'exited') is what both child_exit and
         // registry 'disconnected' events funnel into (buildServer.ts) — the
         // monitor itself has one removal path for both.
-        monitor.recordSupervisorSignal('local', 'azito:manual-2.1', 'active', null, 'codex');
+        monitor.recordSupervisorSignal('local', 'azito:manual-2', 'active', null, 'codex');
         await flush();
         expect(monitor.snapshot()).toHaveLength(1);
 
-        monitor.recordSupervisorSignal('local', 'azito:manual-2.1', 'exited');
+        monitor.recordSupervisorSignal('local', 'azito:manual-2', 'exited');
         await flush();
         expect(monitor.snapshot()).toEqual([]);
       });
@@ -1360,7 +1360,7 @@ describe('AgentActivityMonitor', () => {
         findAll.mockReturnValue([]);
         getRunning.mockReturnValue({});
 
-        monitor.recordSupervisorSignal('local', 'azito:manual-1.1', 'active', 42, 'claude');
+        monitor.recordSupervisorSignal('local', 'azito:manual-1', 'active', 42, 'claude');
         await flush();
 
         await monitor.tick();
@@ -1398,7 +1398,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('does not create a duplicate entry when operation target matches windows table tmuxTarget', async () => {
-      const target = 'azito:task-10.1';
+      const target = 'azito:task-10';
       getRunning.mockReturnValue({ 5: [{ taskId: 10, target, serverName: 'local' }] });
       findAll.mockReturnValue([makeWindow({ taskId: 10, tmuxTarget: target })]);
 
@@ -1421,7 +1421,7 @@ describe('AgentActivityMonitor', () => {
     it('deduplicates project-owned and task-owned rows into one entry and prefers taskId', async () => {
       findAll.mockReturnValue([
         makeWindow({ id: 1, ownerType: 'project', taskId: null, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
-        makeWindow({ id: 2, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1.1', serverName: 'local' }),
+        makeWindow({ id: 2, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
       listSessions.mockResolvedValue(makeSessions('azito', 'win--2sg1', 5, nowSec));
 
@@ -1467,7 +1467,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('excludes window-table rows when operation covers the same window (pane suffix differs)', async () => {
-      getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:win--2sg1.0', serverName: 'local' }] });
+      getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:win--2sg1', serverName: 'local' }] });
       findAll.mockReturnValue([
         makeWindow({ id: 1, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
@@ -1483,7 +1483,7 @@ describe('AgentActivityMonitor', () => {
     it('hook and supervisor signals with different pane suffixes converge to the same entry', async () => {
       findAll.mockReturnValue([
         makeWindow({ id: 1, ownerType: 'project', taskId: null, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
-        makeWindow({ id: 2, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1.1', serverName: 'local' }),
+        makeWindow({ id: 2, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
       listSessions.mockResolvedValue(makeSessions('azito', 'win--2sg1', 5, nowSec));
 
@@ -1497,7 +1497,7 @@ describe('AgentActivityMonitor', () => {
       expect(monitor.snapshot()).toHaveLength(1);
 
       // Supervisor signal arrives with the pane-suffixed target
-      monitor.recordSupervisorSignal('local', 'azito:win--2sg1.1', 'active', 42);
+      monitor.recordSupervisorSignal('local', 'azito:win--2sg1', 'active', 42);
       await flush();
 
       // Still one entry (supervisor overrides hook for same window key)
@@ -1510,7 +1510,7 @@ describe('AgentActivityMonitor', () => {
 
     it('running→finished transition uses the same normalized target so frontend dedup works', async () => {
       findAll.mockReturnValue([
-        makeWindow({ id: 1, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1.1', serverName: 'local' }),
+        makeWindow({ id: 1, ownerType: 'task', taskId: 42, tmuxTarget: 'azito:win--2sg1', serverName: 'local' }),
       ]);
       listSessions.mockResolvedValue(makeSessions('azito', 'win--2sg1', 5, nowSec));
 
@@ -1570,7 +1570,7 @@ describe('AgentActivityMonitor', () => {
     it('promotes a window no higher tier can speak for to running when the probe reports working', async () => {
       const list = vi.fn().mockResolvedValue([{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
       monitor = makeMonitorWithProbe(list);
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       // Activity stale enough that the Tier 3 heuristic would call this idle —
       // Tier 4 must decide before it is ever reached.
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600,
@@ -1590,7 +1590,7 @@ describe('AgentActivityMonitor', () => {
       // window whose session it could not resolve at all, so it must not be
       // able to suppress Tier 3 — Tier 4 is additive only.
       monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'idle' as const }]);
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       const base = Math.floor(Date.now() / 1000);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'some-generic-tool' })]));
 
@@ -1607,13 +1607,13 @@ describe('AgentActivityMonitor', () => {
 
     it('never re-lights a key the supervisor (Tier 0) reported idle', async () => {
       monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
         [makePane({ command: 'claude', title: 'claude' })]));
 
       await monitor.tick();
       await settleProbe();
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle');
       await settleProbe();
 
       await monitor.tick();
@@ -1622,7 +1622,7 @@ describe('AgentActivityMonitor', () => {
 
     it('never re-lights a key the hook (Tier 1) reported idle', async () => {
       monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
         [makePane({ command: 'claude', title: 'claude' })]));
 
@@ -1641,7 +1641,7 @@ describe('AgentActivityMonitor', () => {
     it('never re-lights a key the pane classifier (Tier 2) resolved as idle', async () => {
       monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
       // A codex window whose title the classifier reads as idle.
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'codex' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'codex' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
         [makePane({ command: 'codex', title: 'codex' })]));
 
@@ -1659,7 +1659,7 @@ describe('AgentActivityMonitor', () => {
           .mockResolvedValueOnce([{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }])
           .mockRejectedValue(new Error('ps failed'));
         monitor = makeMonitorWithProbe(list);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         // Stale tmux activity: without Tier 4 this key is idle.
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
 
@@ -1684,9 +1684,9 @@ describe('AgentActivityMonitor', () => {
 
     it('does not let a cached "working" convert an ended operation run into a manual entry', async () => {
       monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: 'working' as const }]);
-      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
-      getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+      getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1', serverName: 'local' }] });
 
       await monitor.tick();
       await settleProbe();
@@ -1711,9 +1711,9 @@ describe('AgentActivityMonitor', () => {
       try {
         const status: { value: 'working' | 'idle' } = { value: 'working' };
         monitor = makeMonitorWithProbe(async () => [{ serverName: 'local', target: 'azito:agent-1', status: status.value }]);
-        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
-        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1', serverName: 'local' }] });
         await monitor.tick();
         await vi.advanceTimersByTimeAsync(0);
 
@@ -1743,7 +1743,7 @@ describe('AgentActivityMonitor', () => {
     it('does not await the probe on the tick path and survives a failing probe', async () => {
       const list = vi.fn().mockRejectedValue(new Error('ps failed'));
       monitor = makeMonitorWithProbe(list);
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
 
       await expect(monitor.tick()).resolves.toBeUndefined();
@@ -1763,7 +1763,7 @@ describe('AgentActivityMonitor', () => {
 
       it("labels a Tier 2 working→idle stop as 'completed'", async () => {
         monitor = makeMonitorWithProbe(async () => []);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
         const now = Math.floor(Date.now() / 1000);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, now, [makePane({ command: 'claude', title: '⠐ working' })]));
         await monitor.tick();
@@ -1777,7 +1777,7 @@ describe('AgentActivityMonitor', () => {
 
       it("labels a hook Stop signal as 'completed'", async () => {
         monitor = makeMonitorWithProbe(async () => []);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
           [makePane({ command: 'claude', title: '⠐ working' })]));
         await monitor.tick();
@@ -1794,15 +1794,15 @@ describe('AgentActivityMonitor', () => {
 
       it("labels a supervisor active→idle report as 'completed'", async () => {
         monitor = makeMonitorWithProbe(async () => []);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
-        monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+        monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
         await settleProbe(); // recordSupervisorSignal ticks internally
         await monitor.tick();
         expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, source: 'supervised' })]);
 
         emit.mockClear();
-        monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'idle');
+        monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle');
         await settleProbe();
         await monitor.tick();
         expect(lastStopPayload('azito:agent-1')?.reason).toBe('completed');
@@ -1810,7 +1810,7 @@ describe('AgentActivityMonitor', () => {
 
       it("labels a vanished window as 'deleted' and does not repeat the announcement", async () => {
         monitor = makeMonitorWithProbe(async () => []);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000),
           [makePane({ command: 'claude', title: '⠐ working' })]));
         await monitor.tick();
@@ -1829,7 +1829,7 @@ describe('AgentActivityMonitor', () => {
       it("announces 'deleted' once for a window that was already idle, so a finished row can be dropped", async () => {
         monitor = makeMonitorWithProbe(async () => []);
         // Idle from the start (bare shell foreground, stale activity): never running.
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'claude' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
         await monitor.tick();
         expect(monitor.snapshot()).toEqual([]);
@@ -1851,7 +1851,7 @@ describe('AgentActivityMonitor', () => {
           monitor = makeMonitorWithProbe(async () => [{
             serverName: 'local', target: 'azito:agent-1', status: probe.status, interruptedAt: probe.interruptedAt,
           }]);
-          findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+          findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
           listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
           await monitor.tick();
           await vi.advanceTimersByTimeAsync(0);
@@ -1878,7 +1878,7 @@ describe('AgentActivityMonitor', () => {
         monitor = makeMonitorWithProbe(async () => [{
           serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt, taskId: 42, label: 'agent-1',
         }]);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
 
         await monitor.tick();
@@ -1902,7 +1902,7 @@ describe('AgentActivityMonitor', () => {
         monitor = makeMonitorWithProbe(async () => [{
           serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt: Date.now() - 10 * 60 * 1000,
         }]);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
 
         await monitor.tick();
@@ -1916,7 +1916,7 @@ describe('AgentActivityMonitor', () => {
         // 行は残ったままウィンドウだけ消えるケース（review Important 1）。稼働していなくても
         // 完了行を落とせるよう一度は通知が要るが、毎ティック繰り返してはならない。
         monitor = makeMonitorWithProbe(async () => []);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
         await monitor.tick(); // window is live but idle — never running
         expect(monitor.snapshot()).toEqual([]);
@@ -1937,7 +1937,7 @@ describe('AgentActivityMonitor', () => {
         monitor = makeMonitorWithProbe(async () => [{
           serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt: Date.now(),
         }]);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
         await monitor.tick();
         await settleProbe();
@@ -1963,9 +1963,9 @@ describe('AgentActivityMonitor', () => {
         monitor = makeMonitorWithProbe(async () => [{
           serverName: 'local', target: 'azito:agent-1', status: 'idle', completedAt: Date.now(), taskId: 7,
         }]);
-        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
-        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1.1', serverName: 'local' }] });
+        getRunning.mockReturnValue({ 5: [{ taskId: 7, target: 'azito:agent-1', serverName: 'local' }] });
         await monitor.tick();
         await settleProbe();
 
@@ -1984,7 +1984,7 @@ describe('AgentActivityMonitor', () => {
 
       it("labels a stop the Tier 3 heuristic merely aged out as 'unknown', never a completion", async () => {
         monitor = makeMonitorWithProbe(async () => []);
-        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+        findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
         const base = Math.floor(Date.now() / 1000);
         listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, base, [makePane({ command: 'some-generic-tool' })]));
         await monitor.tick();
@@ -2004,7 +2004,7 @@ describe('AgentActivityMonitor', () => {
     it('refreshes the probe at most once per PROCESS_PROBE_REFRESH_MS, not on every tick', async () => {
       const list = vi.fn().mockResolvedValue([]);
       monitor = makeMonitorWithProbe(list);
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
 
       await monitor.tick();
@@ -2016,10 +2016,10 @@ describe('AgentActivityMonitor', () => {
   });
   describe('diagnostics() (read-only Tier attribution)', () => {
     it('attributes a supervised window to Tier 0 and reports its last transition', async () => {
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
 
-      monitor.recordSupervisorSignal('local', 'azito:agent-1.1', 'active');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
       // recordSupervisorSignal fires its own tick; flush it before asserting.
       await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -2038,7 +2038,7 @@ describe('AgentActivityMonitor', () => {
     });
 
     it('attributes a hook Stop to Tier 1 with the hook signal that produced it', async () => {
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
 
       monitor.recordHookSignal({
@@ -2071,7 +2071,7 @@ describe('AgentActivityMonitor', () => {
         { emit } as unknown as NotificationBus,
         probe,
       );
-      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1.1', workerType: 'generic' })]);
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
       // Stale activity: Tier 3 would call this idle, so a 'working' verdict can only be Tier 4's.
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
 
@@ -2091,8 +2091,8 @@ describe('AgentActivityMonitor', () => {
 
   it('excludes sleeping windows from manual-candidate enumeration', async () => {
     findAll.mockReturnValue([
-      makeWindow({ id: 1, tmuxTarget: 'azito:agent-1.1', sleeping: true }),
-      makeWindow({ id: 2, tmuxTarget: 'azito:agent-2.1', sleeping: false }),
+      makeWindow({ id: 1, tmuxTarget: 'azito:agent-1', sleeping: true }),
+      makeWindow({ id: 2, tmuxTarget: 'azito:agent-2', sleeping: false }),
     ]);
     const base = Math.floor(Date.now() / 1000) - 5;
     listSessions.mockResolvedValue(makeSessions('azito', 'agent-2', 2, base));

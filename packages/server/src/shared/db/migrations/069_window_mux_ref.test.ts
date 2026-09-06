@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import Database from 'better-sqlite3';
+import { applyProductionWindowsDrift } from '../testing/productionSchemaFixtures';
 
 import * as m001 from './001_initial_schema';
 import * as m002 from './002_legacy_migrations';
@@ -123,6 +124,35 @@ function insertWindow(db: Database.Database, overrides: {
   );
 }
 
+/** Build DB up to 067, apply production windows drift, then run 068. */
+function buildDriftedDb(): Database.Database {
+  const db = new Database(':memory:');
+  db.pragma('foreign_keys = ON');
+  // Run 001-067 (all except the last entry, which is m068)
+  const priorTo068 = PRIOR_MIGRATIONS.slice(0, -1);
+  for (const migration of priorTo068) {
+    const needsRebuild = MIGRATIONS_REQUIRING_TABLE_REBUILD.has(migration.version);
+    if (needsRebuild) {
+      db.pragma('foreign_keys = OFF');
+      db.pragma('legacy_alter_table = ON');
+    }
+    db.transaction(() => migration.up(db))();
+    if (needsRebuild) {
+      db.pragma('legacy_alter_table = OFF');
+      db.pragma('foreign_keys = ON');
+    }
+  }
+  // Swap windows table to production DDL with lifecycle column
+  applyProductionWindowsDrift(db);
+  // Run 068 (requires table rebuild)
+  db.pragma('foreign_keys = OFF');
+  db.pragma('legacy_alter_table = ON');
+  db.transaction(() => PRIOR_MIGRATIONS[PRIOR_MIGRATIONS.length - 1].up(db))();
+  db.pragma('legacy_alter_table = OFF');
+  db.pragma('foreign_keys = ON');
+  return db;
+}
+
 describe('migration 069: window mux_ref', () => {
   let db: Database.Database;
   beforeEach(() => { db = buildSeededDb(); });
@@ -175,5 +205,33 @@ describe('migration 069: window mux_ref', () => {
 
     const cols = db.prepare("PRAGMA table_info('windows')").all() as Array<{ name: string }>;
     expect(cols.map(c => c.name)).toContain('mux_ref');
+  });
+
+  describe('production schema drift (lifecycle column)', () => {
+    it('completes migration and preserves lifecycle column', () => {
+      const driftDb = buildDriftedDb();
+      // Seed data
+      driftDb.prepare(`INSERT INTO projects (id, name, slug) VALUES (1, 'Test Project', 'test-project')`).run();
+      driftDb.prepare(`INSERT INTO servers (name, type) VALUES ('srv-a', 'local')`).run();
+      driftDb.prepare(
+        `INSERT INTO windows (owner_type, project_id, server_name, tmux_target, is_primary, window_type, sleeping)
+         VALUES ('project', 1, 'srv-a', 'main:win--abc', 0, 'terminal', 0)`,
+      ).run();
+
+      // Run 069
+      driftDb.transaction(() => m069.up(driftDb))();
+
+      // lifecycle column still exists with its value
+      const colInfo = driftDb.pragma('table_info(windows)') as { name: string; notnull: number }[];
+      const lifecycleCol = colInfo.find(c => c.name === 'lifecycle');
+      expect(lifecycleCol).toBeDefined();
+
+      const rows = driftDb.prepare('SELECT lifecycle, mux_ref FROM windows').all() as Array<{ lifecycle: string; mux_ref: string }>;
+      expect(rows).toHaveLength(1);
+      expect(rows[0].lifecycle).toBe('active');
+      expect(rows[0].mux_ref).toBe('{"kind":"tmux","workspace":"main","window":"win--abc"}');
+
+      driftDb.close();
+    });
   });
 });
