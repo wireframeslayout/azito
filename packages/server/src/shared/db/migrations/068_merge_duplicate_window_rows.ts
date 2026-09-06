@@ -35,7 +35,37 @@ export function up(db: Database.Database): void {
 
   // 1. Recreate windows table with relaxed CHECK constraint.
   //    Task rows can now hold project_id (previously required NULL).
-  //    Column set: 035 base + 063 sleeping (050 supervised was dropped by 056).
+  //
+  //    The live column layout of `windows` is NOT guaranteed to match a fresh
+  //    migration chain: databases that lived through 050 (ADD supervised) →
+  //    056 (DROP COLUMN supervised) → 063 (ADD sleeping) can differ in column
+  //    order and column set from one created by the same migrations today
+  //    (SQLite's DROP COLUMN rewrites the table, and older hubs may carry extra
+  //    columns from intermediate releases). A positional `INSERT ... SELECT *`
+  //    therefore fails with "table windows_new has N columns but M values were
+  //    supplied" — observed on the server001 hub during the v0.10.0-rc.1 cutover.
+  //    Copy by explicit column name instead: known columns map 1:1, and any
+  //    extra live column is carried over verbatim so no data is dropped.
+  const KNOWN_COLUMNS = [
+    'id', 'owner_type', 'project_id', 'task_id', 'server_name', 'tmux_target', 'label',
+    'is_primary', 'window_type', 'worker_type', 'worker_model', 'agent_session_id',
+    'launch_command', 'working_directory', 'pane_layout', 'created_at', 'sleeping',
+  ];
+  const liveColumns = db.prepare('PRAGMA table_info(windows)').all() as Array<{
+    name: string; type: string; notnull: number; dflt_value: string | null; pk: number;
+  }>;
+  const liveNames = new Set(liveColumns.map((c) => c.name));
+  const missingRequired = ['id', 'owner_type', 'server_name', 'tmux_target'].filter((c) => !liveNames.has(c));
+  if (missingRequired.length > 0) {
+    throw new Error(`068: windows table is missing required columns: ${missingRequired.join(', ')}`);
+  }
+  const extraColumns = liveColumns.filter((c) => !KNOWN_COLUMNS.includes(c.name));
+  const extraDefs = extraColumns.map((c) => {
+    const type = c.type ? ` ${c.type}` : '';
+    const dflt = c.dflt_value !== null ? ` DEFAULT ${c.dflt_value}` : '';
+    return `      "${c.name}"${type}${dflt},\n`;
+  }).join('');
+
   db.exec(`
     CREATE TABLE windows_new (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -55,14 +85,21 @@ export function up(db: Database.Database): void {
       pane_layout TEXT,
       created_at TEXT NOT NULL DEFAULT (datetime('now')),
       sleeping INTEGER NOT NULL DEFAULT 0,
-      CHECK (
+${extraDefs}      CHECK (
         (owner_type = 'project' AND project_id IS NOT NULL AND task_id IS NULL)
         OR (owner_type = 'task' AND task_id IS NOT NULL)
       )
     )
   `);
 
-  db.exec('INSERT INTO windows_new SELECT * FROM windows');
+  // Copy only the columns that exist on the live table; columns that are new
+  // to windows_new (e.g. `sleeping` on a DB where 063 was skipped) take their
+  // DEFAULT. Quote every identifier — extra columns may carry arbitrary names.
+  const copyColumns = [
+    ...KNOWN_COLUMNS.filter((c) => liveNames.has(c)),
+    ...extraColumns.map((c) => c.name),
+  ].map((c) => `"${c}"`).join(', ');
+  db.exec(`INSERT INTO windows_new (${copyColumns}) SELECT ${copyColumns} FROM windows`);
   db.exec('DROP TABLE windows');
   db.exec('ALTER TABLE windows_new RENAME TO windows');
 
@@ -128,5 +165,5 @@ export function up(db: Database.Database): void {
   db.exec('DROP INDEX IF EXISTS idx_windows_project_unique');
   db.exec('CREATE UNIQUE INDEX idx_windows_physical_unique ON windows (server_name, tmux_target)');
 
-  console.log(`[migration 068] merged ${merged} duplicate window groups`);
+  console.log(`[migration 068] merged ${merged} duplicate window groups${extraColumns.length ? ` (carried extra columns: ${extraColumns.map((c) => c.name).join(', ')})` : ''}`);
 }
