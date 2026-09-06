@@ -10,7 +10,7 @@ import { useTranslation } from 'react-i18next';
 interface TaskWindowDropdownProps {
   windows: WindowItem[];
   sessionData: Record<string, Session[]>;
-  activeTarget: { serverName: string; target: string } | null;
+  activeTarget: { serverName: string; target: string; windowId?: number } | null;
   onPaneClick: (serverName: string, target: string) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
@@ -27,9 +27,11 @@ export default function TaskWindowDropdown({
   const ref = useClickOutside<HTMLDivElement>(onClose);
   const { windowIndicator, findFinished } = useAgentActivity();
 
-  const checkActive = (serverName: string, target: string, level: 'window' | 'pane') =>
+  const checkActive = (serverName: string, target: string, level: 'window' | 'pane', windowId?: number) =>
     !!activeTarget && activeTarget.serverName === serverName
-    && (level === 'pane' ? activeTarget.target === target : isSameWindowTarget(activeTarget.target, target));
+    && (level === 'pane' ? activeTarget.target === target
+      : (activeTarget.windowId != null && windowId != null ? activeTarget.windowId === windowId
+        : isSameWindowTarget(activeTarget.target, target)));
 
   const renderExtra = useCallback((w: WindowItem) => {
     const status = windowIndicator(w.serverName, w.tmuxTarget);

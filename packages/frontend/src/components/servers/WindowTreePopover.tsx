@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { tmuxTargetFromMuxRef, parseMuxRef } from '@azito/shared';
 import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
 import { Icon } from '../ui/Icon';
 
@@ -68,7 +69,8 @@ export default function WindowTreePopover({
               </span>
             </TreeRow>
             {expanded && sess.windows.map((win) => {
-              const winTarget = `${sess.name}:${win.name ?? win.index}`;
+              let winTarget: string;
+              try { winTarget = tmuxTargetFromMuxRef(parseMuxRef(win.ref)); } catch { winTarget = `${sess.name}:${win.name ?? win.index}`; }
               return (
                 <div key={win.index}>
                   <TreeRow
@@ -94,7 +96,7 @@ export default function WindowTreePopover({
                     </span>
                   </TreeRow>
                   {win.panes.map((pane) => {
-                    const paneTarget = `${sess.name}:${win.name ?? win.index}.${pane.index}`;
+                    const paneTarget = `${winTarget}.${pane.index}`;
                     return (
                       <TreeRow
                         key={pane.index}

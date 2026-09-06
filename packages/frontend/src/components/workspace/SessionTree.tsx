@@ -5,6 +5,7 @@ import ContextMenu from '../ContextMenu';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
 import { lookupWindowTask } from '../../lib/windowTask';
+import { terminalTabId, terminalRefFromWindow } from '../../lib/terminalRef';
 import { Icon } from '../ui/Icon';
 
 interface SessionTreeProps {
@@ -103,8 +104,9 @@ export default function SessionTree({
                       })()}
                     </div>
                     {win.panes.map((pane) => {
+                      const tRef = terminalRefFromWindow(serverName, win.windowId, win.ref, pane.index);
                       const target = `${session.name}:${windowId}.${pane.index}`;
-                      const tabId = `terminal:${serverName}/${target}`;
+                      const tabId = terminalTabId(tRef);
                       const isActive = activeTabId === tabId;
                       const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
                       return (

@@ -62,7 +62,7 @@ interface TaskDetailMenuProps {
   /** タスクの全ウィンドウ（Issue #69 T8a）。「ウィンドウとブラウザ」節が空なら描かない。 */
   windows: Window[];
   /** 現在コンテンツ表示中（または最終アクティブ）のウィンドウ — 該当行に ✓ を出す。 */
-  focusedWindowTarget: { serverName: string; target: string } | null;
+  focusedWindowTarget: { serverName: string; target: string; windowId?: number } | null;
   /** 行タップ: メニューを閉じ、そのウィンドウのコンテンツ（端末/チャットは localStorage 記憶
    * モード）を表示する。実際の表示切替は呼び出し元（TaskPanel の handleMobileSelect）が担う。 */
   onSelectWindow: (serverName: string, target: string) => void;
@@ -455,7 +455,8 @@ export default function TaskDetailMenu({
                   {windows.map((w) => {
                     const isCurrent = !!focusedWindowTarget
                       && focusedWindowTarget.serverName === w.serverName
-                      && isSameWindowTarget(focusedWindowTarget.target, w.tmuxTarget);
+                      && (focusedWindowTarget.windowId != null ? focusedWindowTarget.windowId === w.id
+                        : isSameWindowTarget(focusedWindowTarget.target, w.tmuxTarget));
                     return (
                       <WindowMenuRow
                         key={w.id}

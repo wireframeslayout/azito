@@ -54,6 +54,7 @@ import type { SidebarMode, Task, Project, Window } from './workspace/types';
 import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
+import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
 
 export default function Workspace() {
   return (
@@ -432,8 +433,12 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverName: string, target: string, projectId?: number) => {
-    connectPaneRaw(serverName, target, projectId ?? currentProjectId);
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectId?: number) => {
+    if (typeof serverNameOrRef === 'object') {
+      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId);
+    } else {
+      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId));
+    }
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
 
@@ -443,12 +448,15 @@ function WorkspaceInner() {
 
   useEffect(() => {
     if (!focusedActiveTabId?.startsWith('terminal:')) return;
-    const rest = focusedActiveTabId.slice('terminal:'.length);
-    const slashIdx = rest.indexOf('/');
-    if (slashIdx <= 0) return;
-    const serverName = rest.slice(0, slashIdx);
-    const target = rest.slice(slashIdx + 1);
-    setFocusedTarget(`${serverName}::${target}`);
+    const parsed = parseTerminalTabId(focusedActiveTabId);
+    if (!parsed) return;
+    if (parsed.kind === 'legacy') {
+      setFocusedTarget(`${parsed.serverName}::${parsed.target}`);
+    } else if (parsed.kind === 'windowId') {
+      setFocusedTarget(`${parsed.serverName}::w${parsed.windowId}`);
+    } else {
+      setFocusedTarget(`${parsed.serverName}::ref:${parsed.ref}`);
+    }
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);
   useEffect(() => {
@@ -527,13 +535,21 @@ function WorkspaceInner() {
       return;
     }
     if (focusedActiveTabId.startsWith('terminal:')) {
-      const rest = focusedActiveTabId.slice('terminal:'.length);
-      const slashIdx = rest.indexOf('/');
-      if (slashIdx > 0) {
-        const serverName = rest.slice(0, slashIdx);
-        const tmuxTarget = rest.slice(slashIdx + 1);
+      const parsed = parseTerminalTabId(focusedActiveTabId);
+      if (parsed) {
+        const serverName = parsed.serverName;
+        let tmuxTarget: string;
+        let windowId: number | undefined;
+        if (parsed.kind === 'windowId') {
+          windowId = parsed.windowId;
+          tmuxTarget = `w${parsed.windowId}`;
+        } else if (parsed.kind === 'legacy') {
+          tmuxTarget = parsed.target;
+        } else {
+          tmuxTarget = parsed.ref;
+        }
         const task = findTaskByTarget(tmuxTarget);
-        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null });
+        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId });
         return;
       }
     }
@@ -629,7 +645,16 @@ function WorkspaceInner() {
       navigate(location.pathname, { replace: true });
       return;
     }
+    const windowIdParam = params.get('windowId');
     const serverName = params.get('server');
+    if (windowIdParam && serverName) {
+      const wid = parseInt(windowIdParam, 10);
+      if (!isNaN(wid)) {
+        connectPaneRaw({ kind: 'windowId' as const, serverName, windowId: wid, pane: 1 }, currentProjectId);
+        navigate(location.pathname, { replace: true });
+        return;
+      }
+    }
     const target = params.get('target');
     if (serverName && target) {
       connectPane(serverName, target);

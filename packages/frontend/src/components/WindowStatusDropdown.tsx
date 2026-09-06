@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { Window, Task, Project } from '../pages/workspace/types';
 import { useToast } from '../hooks/useToast';
@@ -188,9 +189,11 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
     setActionLoading(true);
     try {
       const base = target.replace(/\.\d+$/, '');
+      let refJson: string | undefined;
+      try { refJson = formatMuxRef(muxRefFromTmuxTarget(base)); } catch { /* fall back to tmux_target */ }
       const body: Record<string, unknown> = {
         server_name: serverName,
-        tmux_target: base,
+        ...(refJson ? { ref: refJson } : { tmux_target: base }),
         window_type: selectedType === 'terminal' ? 'terminal' : 'agent',
         worker_type: selectedType === 'terminal' ? null : selectedType,
       };
