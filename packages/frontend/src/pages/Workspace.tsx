@@ -50,7 +50,7 @@ import { MobileStatusBar } from '../components/workspace/MobileStatusBar';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
-import type { SidebarMode, Task, Project, Window } from './workspace/types';
+import type { SidebarMode, Task, Project, Window, Session } from './workspace/types';
 import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
@@ -95,7 +95,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -119,6 +119,14 @@ function WorkspaceInner() {
 
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
+
+  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
+  // sessions of their servers are available (per server, so unfetched servers wait).
+  useEffect(() => {
+    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
+    if (byServer.size === 0) return;
+    migrateLegacyTerminalTabIds(byServer);
+  }, [sessionData, migrateLegacyTerminalTabIds]);
 
   // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
   // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
