@@ -280,4 +280,32 @@ describe('migration 068: merge duplicate window rows', () => {
     expect(row.project_id).toBe(1);
     expect(row.task_id).toBe(taskId);
   });
+  it('copies rows by column name when the live windows table has drifted (extra column, different order)', () => {
+    // Simulate a hub whose windows table carries an extra column left over from
+    // an intermediate release (e.g. `supervised` from 050 surviving on a DB that
+    // skipped 056, or any operator-added column). A positional INSERT ... SELECT *
+    // fails here with a column-count mismatch — observed on server001 during the
+    // v0.10.0-rc.1 cutover.
+    db.exec(`ALTER TABLE windows ADD COLUMN supervised INTEGER NOT NULL DEFAULT 0`);
+    const tid = insertTask(db);
+    const projectRow = insertWindow(db, { ownerType: 'project', tmuxTarget: 'sess:drift', label: 'kept-label' });
+    const taskRow = insertWindow(db, { ownerType: 'task', taskId: tid, projectId: null, tmuxTarget: 'sess:drift.1', createdAt: '2026-02-01 00:00:00' });
+    db.prepare('UPDATE windows SET supervised = 1 WHERE id = ?').run(taskRow);
+    insertWindow(db, { ownerType: 'project', tmuxTarget: 'sess:solo' });
+
+    runMigration068(db);
+
+    const cols = (db.prepare('PRAGMA table_info(windows)').all() as Array<{ name: string }>).map((c) => c.name);
+    expect(cols).toContain('supervised');
+    expect(cols).toContain('sleeping');
+    const rows = db.prepare('SELECT id, owner_type, project_id, task_id, tmux_target, label, supervised FROM windows ORDER BY id').all() as Array<Record<string, unknown>>;
+    expect(rows).toHaveLength(2);
+    const merged = rows.find((r) => r.tmux_target === 'sess:drift')!;
+    expect(merged.id).toBe(taskRow);
+    expect(merged.project_id).toBe(1);
+    expect(merged.label).toBe('kept-label');
+    expect(merged.supervised).toBe(1);
+    expect(db.prepare('SELECT COUNT(*) AS c FROM windows WHERE id = ?').get(projectRow)).toEqual({ c: 0 });
+    expect(db.prepare("SELECT COUNT(*) AS c FROM sqlite_master WHERE type='index' AND name='idx_windows_physical_unique'").get()).toEqual({ c: 1 });
+  });
 });
