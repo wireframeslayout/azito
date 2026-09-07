@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseEnvFile, resolveEnvFilePath, resolveHubEnv } from './env';
+import { parseEnvFile, resolveEnvFilePath, resolveHubEnv, resolveMuxPaneRef } from './env';
 
 describe('env', () => {
   let dir: string;
@@ -123,5 +123,31 @@ describe('resolveHubEnv with AZITO_PREFIX', () => {
     fs.writeFileSync(prefixFile, 'AZITO_URL=http://file-url\nAZITO_WEBHOOK_TOKEN=file-token\n');
     const env = resolveHubEnv({ AZITO_PREFIX: 'dev', AZITO_URL: 'http://env-url' }, prefixFile);
     expect(env).toEqual({ url: 'http://env-url', token: 'file-token' });
+  });
+});
+
+describe('resolveMuxPaneRef', () => {
+  it('returns HERDR_PANE_ID when set', () => {
+    expect(resolveMuxPaneRef({ HERDR_PANE_ID: 'w1:p3' })).toBe('w1:p3');
+  });
+
+  it('returns TMUX_PANE when HERDR_PANE_ID is absent', () => {
+    expect(resolveMuxPaneRef({ TMUX_PANE: '%42' })).toBe('%42');
+  });
+
+  it('prefers HERDR_PANE_ID over TMUX_PANE', () => {
+    expect(resolveMuxPaneRef({ HERDR_PANE_ID: 'w1:p1', TMUX_PANE: '%99' })).toBe('w1:p1');
+  });
+
+  it('returns undefined when neither is set', () => {
+    expect(resolveMuxPaneRef({})).toBeUndefined();
+  });
+
+  it('rejects invalid TMUX_PANE format', () => {
+    expect(resolveMuxPaneRef({ TMUX_PANE: 'not-a-pane' })).toBeUndefined();
+  });
+
+  it('accepts any HERDR_PANE_ID format (herdr controls the value)', () => {
+    expect(resolveMuxPaneRef({ HERDR_PANE_ID: 'ws2:p7' })).toBe('ws2:p7');
   });
 });

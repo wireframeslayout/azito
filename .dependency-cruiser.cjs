@@ -92,6 +92,8 @@ module.exports = {
         'トランスポート経由のイベント通知のため）。\n' +
         '- servers/agent-deploy/AgentUpdater.ts: units/SqliteUnitRepository・tasks/SqliteTaskRepository ' +
         'を参照（エージェント更新時に実行中タスク/Unit の状態を確認するため）。\n' +
+        '- servers/transport/LocalTransport.ts・TransportFactory.ts: mux/herdr/HerdrSocketClient を参照' +
+        '（herdr ドライバの NDJSON ソケットクライアントをトランスポートに注入するため、基盤⇄基盤。段階7-B）。\n' +
         'いずれも本来は上位層への逆依存であり理想形ではないが、現状の実装として個別に許可する。',
       from: { path: '^packages/server/src/modules/servers' },
       to: {
@@ -99,6 +101,7 @@ module.exports = {
         pathNot: [
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/tmux',
+          '^packages/server/src/modules/mux',
           '^packages/server/src/modules/git/DiffParser\\.ts$',
           '^packages/server/src/modules/git/RepoDiscoveryService\\.ts$',
           '^packages/server/src/modules/projects/Project\\.ts$',
@@ -125,6 +128,26 @@ module.exports = {
         pathNot: [
           '^packages/server/src/modules/supervisors',
           '^packages/server/src/modules/servers/Server\\.ts$',
+        ],
+      },
+    },
+
+    // --- 基盤層: modules/mux ---
+    {
+      name: 'base-mux-limited-upward',
+      severity: 'error',
+      comment:
+        '基盤層 modules/mux は modules/servers（トランスポート抽象）と ' +
+        'modules/tmux の IMuxClient.ts・MuxCapabilityError.ts（インターフェースとエラー型のみ）以外への' +
+        '依存を禁止する。herdr/zellij ドライバは基盤層として独立し、tmux 実装詳細には依存しない（段階7-B）。',
+      from: { path: '^packages/server/src/modules/mux' },
+      to: {
+        path: '^packages/server/src/modules',
+        pathNot: [
+          '^packages/server/src/modules/mux',
+          '^packages/server/src/modules/servers',
+          '^packages/server/src/modules/tmux/IMuxClient\\.ts$',
+          '^packages/server/src/modules/tmux/MuxCapabilityError\\.ts$',
         ],
       },
     },
