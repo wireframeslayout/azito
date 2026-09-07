@@ -178,6 +178,7 @@ function buildService(opts: {
 
   const sentCommands: string[] = [];
   const tmux = {
+    caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true },
     listSessions: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
     createSession: vi.fn(async (_server: unknown, _session: string, options?: { windowName?: string; exactName?: boolean }) => ({
       result: { stdout: '', stderr: '', code: 0 },
@@ -413,6 +414,30 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     for (const call of tmux.splitPaneByHandle.mock.calls) {
       expect(call[3]).toBe(rotatedEnv);
     }
+  });
+
+  it('skips split/applyLayout when caps.layoutSnapshot is false', async () => {
+    const win = makeWindow({
+      id: 1,
+      taskId: 5,
+      windowType: 'agent',
+      workerType: 'claude',
+      paneLayout: {
+        layout: 'some-layout',
+        panes: [
+          { index: 0, command: null, workingDirectory: null, title: null },
+          { index: 1, command: null, workingDirectory: null, title: null },
+        ],
+      },
+    });
+    const { service, tmux } = buildService({ window: win, task: makeTask({ id: 5 }) });
+    (tmux as any).caps = { ...(tmux as any).caps, layoutSnapshot: false };
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
+    expect(tmux.applyLayout).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).toHaveBeenCalled();
   });
 
   it('passes the legacy uiTokenEnvForServer() to splitPane calls for a non-task multi-pane window', async () => {

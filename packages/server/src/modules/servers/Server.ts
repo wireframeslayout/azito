@@ -1,4 +1,6 @@
-export type MuxRuntime = 'system' | 'managed';
+import type { MuxRuntime as SharedMuxRuntime } from '@azito/shared';
+
+export type MuxRuntime = SharedMuxRuntime;
 
 /**
  * The `isolation_report` value `updateIsolationIntent` atomically writes on a

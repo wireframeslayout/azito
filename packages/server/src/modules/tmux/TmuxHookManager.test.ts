@@ -22,7 +22,7 @@ describe('TmuxHookManager', () => {
 
     expect(execMux).toHaveBeenCalled();
     for (const call of execMux.mock.calls) {
-      const hookValue = call[0][3] as string;
+      const hookValue = (call[0] as { args: string[] }).args[3] as string;
       expect(hookValue).toContain("Authorization: Bearer my-secret-token");
       expect(hookValue).toContain("-H");
     }
@@ -36,7 +36,7 @@ describe('TmuxHookManager', () => {
 
     expect(execMux).toHaveBeenCalledTimes(7);
     const events = execMux.mock.calls.map((c: unknown[]) => {
-      const hookName = (c[0] as string[])[2] as string;
+      const hookName = (c[0] as { args: string[] }).args[2] as string;
       return hookName.replace(/\[\d+\]$/, '');
     });
     expect(events).toContain('window-linked');

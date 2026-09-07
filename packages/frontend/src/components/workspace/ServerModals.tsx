@@ -14,17 +14,17 @@ interface ServerFormFieldsProps {
   host: string;
   port: string;
   token: string;
-  muxRuntime: 'system' | 'managed';
+  muxRuntime: 'system' | 'managed' | 'herdr' | 'zellij';
   onAutoInstallChange: (v: boolean) => void;
   onTypeChange: (v: 'agent') => void;
   onHostChange: (v: string) => void;
   onPortChange: (v: string) => void;
   onTokenChange: (v: string) => void;
-  onMuxRuntimeChange: (v: 'system' | 'managed') => void;
+  onMuxRuntimeChange: (v: 'system' | 'managed' | 'herdr' | 'zellij') => void;
   nameField?: React.ReactNode;
   tokenPlaceholder?: string;
   installSteps?: InstallStep[];
-  originalMuxRuntime?: 'system' | 'managed';
+  originalMuxRuntime?: 'system' | 'managed' | 'herdr' | 'zellij';
   // Issue #29 review (3rd pass), Important finding 4: only meaningful — and
   // only rendered — in edit mode for an agent-type server (mirrors the
   // server-side gate in servers/routes.ts: isolationIntent is rejected
@@ -156,9 +156,11 @@ function ServerFormFields({ mode, autoInstall, type, host, port, token, muxRunti
         </>
       )}
       <FormField label={t('serverModals.muxRuntime')}>
-        <FormSelect value={muxRuntime} onChange={(e) => onMuxRuntimeChange(e.target.value as 'system' | 'managed')}>
+        <FormSelect value={muxRuntime} onChange={(e) => onMuxRuntimeChange(e.target.value as 'system' | 'managed' | 'herdr' | 'zellij')}>
           <option value="system">{t('serverModals.muxSystem')}</option>
           <option value="managed">{t('serverModals.muxManaged')}</option>
+          <option value="herdr">herdr</option>
+          <option value="zellij">Zellij</option>
         </FormSelect>
       </FormField>
       {mode === 'edit' && originalMuxRuntime && muxRuntime !== originalMuxRuntime && (
@@ -215,8 +217,8 @@ interface AddServerModalProps {
   onPortChange: (v: string) => void;
   token: string;
   onTokenChange: (v: string) => void;
-  muxRuntime: 'system' | 'managed';
-  onMuxRuntimeChange: (v: 'system' | 'managed') => void;
+  muxRuntime: 'system' | 'managed' | 'herdr' | 'zellij';
+  onMuxRuntimeChange: (v: 'system' | 'managed' | 'herdr' | 'zellij') => void;
   installSteps: InstallStep[];
 }
 
@@ -264,8 +266,8 @@ interface EditServerModalProps {
   onPortChange: (v: string) => void;
   token: string;
   onTokenChange: (v: string) => void;
-  muxRuntime: 'system' | 'managed';
-  onMuxRuntimeChange: (v: 'system' | 'managed') => void;
+  muxRuntime: 'system' | 'managed' | 'herdr' | 'zellij';
+  onMuxRuntimeChange: (v: 'system' | 'managed' | 'herdr' | 'zellij') => void;
   isolationIntent: boolean;
   onIsolationIntentChange: (v: boolean) => void;
 }

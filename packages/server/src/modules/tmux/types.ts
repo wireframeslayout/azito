@@ -1,3 +1,7 @@
+import type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo } from '@azito/shared';
+
+export type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
+
 export interface TmuxPane {
   index: number;
   command: string;

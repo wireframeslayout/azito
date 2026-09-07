@@ -10,7 +10,8 @@ import type {
 import type { IPaneStream } from '../../tmux/PaneStream';
 import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
+import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 
 function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
@@ -24,14 +25,13 @@ function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<E
 class LocalTerminalStream extends EventEmitter implements ITerminalStream {
   constructor(
     private ptyProcess: pty.IPty,
-    private linkedSessionName: string | null,
-    private rt: TmuxRuntime,
+    private cleanupFn: (() => void) | null,
   ) {
     super();
     ptyProcess.onData((data: string) => this.emit('data', data));
     ptyProcess.onExit(() => {
       this.emit('close');
-      this.killLinkedSession();
+      this.runCleanup();
     });
   }
 
@@ -45,12 +45,13 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
 
   close(): void {
     this.ptyProcess.kill();
-    this.killLinkedSession();
+    this.runCleanup();
   }
 
-  private killLinkedSession(): void {
-    if (this.linkedSessionName) {
-      execFile(this.rt.bin, [...this.rt.baseArgs, 'kill-session', '-t', this.linkedSessionName], () => {});
+  private runCleanup(): void {
+    if (this.cleanupFn) {
+      this.cleanupFn();
+      this.cleanupFn = null;
     }
   }
 }
@@ -64,8 +65,9 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
   }
 
-  execMux(args: string[]): Promise<ExecResult> {
-    return execLocal(this.rt.bin, [...this.rt.baseArgs, ...args]);
+  execMux(req: MuxExecRequest): Promise<ExecResult> {
+    if (req.kind !== 'tmux') throw new Error(`LocalTransport: unsupported mux kind "${req.kind}"`);
+    return execLocal(this.rt.bin, [...this.rt.baseArgs, ...req.args]);
   }
 
   async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
@@ -74,62 +76,63 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     const sessionName = tmuxTarget.slice(0, colonIdx);
     const windowTarget = tmuxTarget.slice(colonIdx + 1);
 
-    await new Promise<void>((resolve, reject) => {
-      execFile(this.rt.bin, [...this.rt.baseArgs, 'list-panes', '-t', `${sessionName}:${windowTarget}`], (err) => {
-        if (err) reject(new Error('WINDOW_NOT_FOUND'));
-        else resolve();
-      });
-    });
+    const linkedName = `_azito_${sessionName}_${++this.sessionCounter}_${Date.now()}`;
+    const plan = buildTmuxAttachPlan(sessionName, windowTarget, linkedName, this.publicUrl);
 
-    await new Promise<void>((resolve) => {
-      execFile(this.rt.bin, [...this.rt.baseArgs, 'set-option', '-s', 'set-clipboard', 'on'], () => resolve());
-    });
-
-    const linkedSessionName = `_azito_${sessionName}_${++this.sessionCounter}_${Date.now()}`;
-
-    return new Promise((resolve, reject) => {
-      // startPty runs inside execFile callbacks, so a synchronous throw from
-      // pty.spawn (e.g. "posix_spawnp failed" when node-pty's spawn-helper is
-      // not executable) escapes into the event loop and kills the whole hub —
-      // every other session with it. Route it into the promise instead, so the
-      // WS handler can report it on the one terminal that failed.
-      const attach = (tmuxArgs: string[], linked: string | null): void => {
-        try {
-          resolve(this.startPty(tmuxArgs, cols, rows, linked));
-        } catch (err) {
-          reject(new Error(`Failed to start terminal: ${(err as Error).message}`));
-        }
-      };
-
-      execFile(this.rt.bin, [...this.rt.baseArgs, 'new-session', '-d', '-t', sessionName, '-s', linkedSessionName, '-e', `AZITO_URL=${this.publicUrl}`], (err) => {
-        if (err) {
-          attach(['attach-session', '-t', `${sessionName}:${windowTarget}`], null);
-          return;
-        }
-
-        execFile(this.rt.bin, [...this.rt.baseArgs, 'set-option', '-t', linkedSessionName, 'status', 'off'], () => {
-          execFile(this.rt.bin, [...this.rt.baseArgs, 'select-window', '-t', `${linkedSessionName}:${windowTarget}`], () => {
-            attach(['attach-session', '-t', linkedSessionName], linkedSessionName);
-          });
+    const execTmux = (args: string[]): Promise<void> =>
+      new Promise((resolve, reject) => {
+        execFile(this.rt.bin, [...this.rt.baseArgs, ...args], (err) => {
+          if (err) reject(err);
+          else resolve();
         });
       });
-    });
-  }
 
-  private startPty(
-    tmuxArgs: string[],
-    cols: number,
-    rows: number,
-    linkedSessionName: string | null,
-  ): ITerminalStream {
-    const ptyProcess = pty.spawn(this.rt.bin, [...this.rt.baseArgs, ...tmuxArgs], {
-      name: 'xterm-256color',
+    await execTmux(plan.prepare[0]).catch(() => { throw new Error('WINDOW_NOT_FOUND'); });
+    await execTmux(plan.prepare[1]).catch(() => {});
+
+    let attachArgs: string[];
+    let cleanupFn: (() => void) | null = null;
+
+    try {
+      await execTmux(plan.prepare[2]);
+      await execTmux(plan.prepare[3]).catch(() => {});
+      await execTmux(plan.prepare[4]).catch(() => {});
+      attachArgs = plan.attach;
+      cleanupFn = () => {
+        execFile(this.rt.bin, [...this.rt.baseArgs, ...plan.cleanup], () => {});
+      };
+    } catch {
+      attachArgs = plan.fallbackAttach;
+    }
+
+    return this.spawnTerminal(
+      [...this.rt.baseArgs, ...attachArgs],
       cols,
       rows,
-      cwd: process.env.HOME,
-      env: process.env as Record<string, string>,
-    });
-    return new LocalTerminalStream(ptyProcess, linkedSessionName, this.rt);
+      undefined,
+      cleanupFn ?? undefined,
+    );
+  }
+
+  spawnTerminal(
+    argv: string[],
+    cols: number,
+    rows: number,
+    env?: Record<string, string>,
+    cleanup?: () => void,
+  ): ITerminalStream {
+    try {
+      const ptyProcess = pty.spawn(this.rt.bin, argv, {
+        name: 'xterm-256color',
+        cols,
+        rows,
+        cwd: process.env.HOME,
+        env: env ?? (process.env as Record<string, string>),
+      });
+      return new LocalTerminalStream(ptyProcess, cleanup ?? null);
+    } catch (err) {
+      throw new Error(`Failed to start terminal: ${(err as Error).message}`);
+    }
   }
 
   createPaneStream(handle: PaneHandle): IPaneStream {

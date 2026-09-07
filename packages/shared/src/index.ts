@@ -14,14 +14,21 @@ export {
 } from './agentScreenRules';
 export {
   type MuxDriverKind,
+  type MuxRuntime,
   type MuxRef,
   type PaneHandle,
   type PaneOrdinal,
   type MuxCapabilities,
+  type MuxPane,
+  type MuxWindowInfo,
+  type MuxWorkspace,
+  type MuxPaneInfo,
+  type MuxExecRequest,
   asPaneHandle,
   formatMuxRef,
   parseMuxRef,
   muxRefFromTmuxTarget,
   tmuxTargetFromMuxRef,
   windowKeyForRef,
+  muxKindForRuntime,
 } from './mux';

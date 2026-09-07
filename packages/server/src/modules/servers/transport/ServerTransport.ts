@@ -1,5 +1,5 @@
 import type { EventEmitter } from 'events';
-import type { MuxRef, PaneHandle, PaneOrdinal } from '@azito/shared';
+import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
 
 export interface ExecResult {
@@ -21,7 +21,7 @@ export interface IServerTransport {
 }
 
 export interface IMuxTransport {
-  execMux(args: string[]): Promise<ExecResult>;
+  execMux(req: MuxExecRequest): Promise<ExecResult>;
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
   createPaneStream(handle: PaneHandle): IPaneStream;
 }

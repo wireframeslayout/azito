@@ -13,7 +13,7 @@ export function useServerEditForm() {
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed' | 'herdr' | 'zellij'>('system');
   // Issue #29 review (3rd pass), Important finding 4: isolationIntent had no
   // UI — the only way to declare a server isolated was a raw PUT. Mirrors
   // the other edit* fields: seeded from the server row on open, sent back

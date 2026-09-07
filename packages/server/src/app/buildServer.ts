@@ -87,7 +87,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
-    agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
+    agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
@@ -453,7 +453,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(tmuxClient);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
-    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery,
+    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     onMuxRuntimeChanged: (serverName) => {
       paneHandleResolver.clearServer(serverName);
       supervisorRegistry.clearServerPaneRefs(serverName);
@@ -514,7 +514,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
-  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
+  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader, muxDriverRegistry });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver });
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {

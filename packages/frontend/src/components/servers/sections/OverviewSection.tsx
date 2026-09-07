@@ -436,7 +436,10 @@ export default function OverviewSection({
         <KvCard title={t('overview.runtimeTitle')}>
           <KvRow label={t('overview.muxRuntimeLabel')}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
-              {server.muxRuntime === 'managed' ? t('overview.muxManaged') : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
+              {server.muxRuntime === 'managed' ? t('overview.muxManaged')
+                : server.muxRuntime === 'herdr' ? 'herdr'
+                : server.muxRuntime === 'zellij' ? 'Zellij'
+                : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
             </span>
           </KvRow>
           {isAgent && (

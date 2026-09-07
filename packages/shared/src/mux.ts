@@ -1,6 +1,20 @@
 import { stripPaneSuffix, windowKey } from './windowKey';
 
-export type MuxDriverKind = 'tmux';
+export type MuxDriverKind = 'tmux' | 'herdr' | 'zellij';
+
+export type MuxRuntime = 'system' | 'managed' | 'herdr' | 'zellij';
+
+export function muxKindForRuntime(runtime: MuxRuntime): MuxDriverKind {
+  switch (runtime) {
+    case 'system':
+    case 'managed':
+      return 'tmux';
+    case 'herdr':
+      return 'herdr';
+    case 'zellij':
+      return 'zellij';
+  }
+}
 
 export interface MuxRef {
   kind: MuxDriverKind;
@@ -22,7 +36,49 @@ export interface MuxCapabilities {
   copyMode: boolean;
   paneTitle: boolean;
   activityCounter: boolean;
+  layoutSnapshot: boolean;
 }
+
+export interface MuxPane {
+  index: number;
+  command: string;
+  title: string;
+  width: number;
+  height: number;
+  active: boolean;
+  pid: number;
+}
+
+export interface MuxWindowInfo {
+  index: number;
+  name: string;
+  active: boolean;
+  panes: MuxPane[];
+  activity: number;
+}
+
+export interface MuxWorkspace {
+  name: string;
+  windowCount: number;
+  attached: boolean;
+  created: number;
+  windows: MuxWindowInfo[];
+}
+
+export interface MuxPaneInfo {
+  paneId: string;
+  sessionName: string;
+  windowIndex: number;
+  windowName: string;
+  paneIndex: number;
+  currentPath: string;
+  currentCommand: string;
+}
+
+export type MuxExecRequest =
+  | { kind: 'tmux'; args: string[] }
+  | { kind: 'herdr'; method: string; params: unknown }
+  | { kind: 'zellij'; args: string[] };
 
 export function asPaneHandle(s: string): PaneHandle {
   return s as PaneHandle;
@@ -34,10 +90,10 @@ export function formatMuxRef(ref: MuxRef): string {
 
 export function parseMuxRef(json: string): MuxRef {
   const obj = JSON.parse(json) as { kind: string; workspace: string; window: string };
-  if (obj.kind !== 'tmux') {
+  if (obj.kind !== 'tmux' && obj.kind !== 'herdr' && obj.kind !== 'zellij') {
     throw new Error(`Unknown MuxDriverKind: ${obj.kind}`);
   }
-  return { kind: obj.kind, workspace: obj.workspace, window: obj.window };
+  return { kind: obj.kind as MuxDriverKind, workspace: obj.workspace, window: obj.window };
 }
 
 export function muxRefFromTmuxTarget(target: string): MuxRef {

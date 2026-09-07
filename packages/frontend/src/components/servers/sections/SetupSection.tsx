@@ -331,6 +331,7 @@ function TmuxSetupCards({ server, refresh }: { server: Server; refresh: () => vo
   const { t } = useTranslation('servers');
   const [installing, setInstalling] = useState(false);
   const [steps, setSteps] = useState<InstallStep[]>([]);
+  if (server.muxRuntime === 'herdr' || server.muxRuntime === 'zellij') return null;
   const isManaged = server.muxRuntime === 'managed';
 
   const putMuxRuntime = useCallback(async (muxRuntime: 'system' | 'managed') => {

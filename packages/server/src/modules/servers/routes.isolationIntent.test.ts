@@ -109,6 +109,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // isolation flow unchanged. The dedicated C-1 describe block below
     // overrides this to false per-test.
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: vi.fn(() => ({ caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     ...overrides,
   };
 }

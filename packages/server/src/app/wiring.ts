@@ -220,7 +220,8 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const tmuxInstaller = new TmuxInstaller();
   const transportFactory = new TransportFactory(publicUrl);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl);
-  const muxDriverRegistry = new MuxDriverRegistry(tmuxClient);
+  const muxDriverRegistry = new MuxDriverRegistry();
+  muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);

@@ -6,10 +6,10 @@ import { generateWindowName, extractWindowId } from './windowNameUtils';
 import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 import type { IMuxClient } from './IMuxClient';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
-import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo } from './types';
+import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
-export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo };
+export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
 
 // ─── Special keys for send-keys ───
 
@@ -128,7 +128,7 @@ export class TmuxClient implements IMuxClient {
   readonly caps: MuxCapabilities = {
     outputStream: true, changeEvents: true, agentState: false,
     independentClients: true, envInjection: true, zoom: true,
-    copyMode: true, paneTitle: true, activityCounter: true,
+    copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true,
   };
 
   constructor(
@@ -156,7 +156,7 @@ export class TmuxClient implements IMuxClient {
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).execMux(args);
+    return this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {
@@ -864,14 +864,14 @@ export class TmuxClient implements IMuxClient {
     const token = this.webhookToken ?? this.uiToken;
     for (const event of HOOK_EVENTS) {
       const hookValue = buildHookValue(base, event, { token, serverName: server.name });
-      await transport.execMux(buildHookSetArgs(event, hookValue));
+      await transport.execMux({ kind: 'tmux', args: buildHookSetArgs(event, hookValue) });
     }
   }
 
   async uninstallChangeHooks(server: ServerConfig): Promise<void> {
     const transport = this.transportFactory.getTransport(server);
     for (const event of HOOK_EVENTS) {
-      await transport.execMux(buildHookUnsetArgs(event));
+      await transport.execMux({ kind: 'tmux', args: buildHookUnsetArgs(event) });
     }
   }
 }

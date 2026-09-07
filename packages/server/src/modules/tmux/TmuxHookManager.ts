@@ -16,7 +16,7 @@ export class TmuxHookManager {
     const base = `http://localhost:${this.webhookPort}/api/hooks/tmux`;
     for (const event of HOOK_EVENTS) {
       const hookValue = buildHookValue(base, event, { token: this.webhookToken, serverName: server.name });
-      await transport.execMux(buildHookSetArgs(event, hookValue));
+      await transport.execMux({ kind: 'tmux', args: buildHookSetArgs(event, hookValue) });
     }
     this.installedServers.add(server.name);
   }
@@ -24,7 +24,7 @@ export class TmuxHookManager {
   async uninstall(server: ServerConfig): Promise<void> {
     const transport = this.transportFactory.getTransport(server);
     for (const event of HOOK_EVENTS) {
-      await transport.execMux(buildHookUnsetArgs(event));
+      await transport.execMux({ kind: 'tmux', args: buildHookUnsetArgs(event) });
     }
     this.installedServers.delete(server.name);
   }

@@ -9,7 +9,7 @@ import type {
 import type { IPaneStream } from '../../tmux/PaneStream';
 import { AgentPaneStream } from './AgentPaneStream';
 import type { MuxRuntime } from '../Server';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
 
@@ -70,6 +70,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   private baseUrl: string;
   private wsBaseUrl: string;
   private authHeader: string;
+  private useLegacyMuxRoute = false;
 
   private token: string;
 
@@ -91,8 +92,20 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return this.post('/api/exec', { command, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
   }
 
-  async execMux(args: string[]): Promise<ExecResult> {
-    return this.post('/api/tmux', { args, mux: this.muxRuntime });
+  async execMux(req: MuxExecRequest): Promise<ExecResult> {
+    if (!this.useLegacyMuxRoute) {
+      try {
+        return await this.post('/api/mux', req as Record<string, unknown>);
+      } catch (err) {
+        if (req.kind === 'tmux' && (err as Error).message.includes('failed (404)')) {
+          this.useLegacyMuxRoute = true;
+          return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
+        }
+        throw err;
+      }
+    }
+    if (req.kind !== 'tmux') throw new Error(`Legacy agent does not support mux kind "${req.kind}"`);
+    return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
   }
 
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {

@@ -9,6 +9,9 @@ export interface TmuxRuntime {
 }
 
 export function resolveTmuxRuntime(muxRuntime: MuxRuntime, homeDir: string): TmuxRuntime {
+  if (muxRuntime !== 'system' && muxRuntime !== 'managed') {
+    throw new Error(`resolveTmuxRuntime called with non-tmux runtime: ${muxRuntime}`);
+  }
   if (muxRuntime === 'managed') {
     const dir = `${homeDir}/${MANAGED_TMUX_DIR}`;
     return {

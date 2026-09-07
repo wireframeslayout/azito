@@ -880,13 +880,16 @@ export class WindowRespawnService {
     const paneCount = paneLayout.panes.length;
     const layoutRef = muxRefFromTmuxTarget(baseTarget);
     const firstPaneId = await this.tmux.resolvePane(server, layoutRef, 1);
-    for (let i = 1; i < paneCount; i++) {
-      await this.tmux.splitPaneByHandle(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
-      await sleep(200);
-    }
 
-    if (paneLayout.layout) {
-      await this.tmux.applyLayout(server, layoutRef, paneLayout.layout);
+    if (this.tmux.caps.layoutSnapshot) {
+      for (let i = 1; i < paneCount; i++) {
+        await this.tmux.splitPaneByHandle(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
+        await sleep(200);
+      }
+
+      if (paneLayout.layout) {
+        await this.tmux.applyLayout(server, layoutRef, paneLayout.layout);
+      }
     }
 
     const paneIdMap = new Map<number, PaneHandle>();
@@ -895,7 +898,8 @@ export class WindowRespawnService {
       paneIdMap.set(entry.ordinal - 1, entry.handle);
     }
 
-    for (const pane of paneLayout.panes) {
+    const panesToRestore = this.tmux.caps.layoutSnapshot ? paneLayout.panes : paneLayout.panes.slice(0, 1);
+    for (const pane of panesToRestore) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
       // Already resolved and containment-checked by resolveAllCwds() before

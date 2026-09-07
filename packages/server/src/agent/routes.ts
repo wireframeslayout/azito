@@ -75,6 +75,13 @@ function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): P
   });
 }
 
+function execMuxCommand(req: { kind: string; args?: string[]; method?: string; params?: unknown }, timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
+  if (req.kind === 'tmux') {
+    return execTmuxCommand(req.args ?? [], timeoutMs, mux);
+  }
+  return Promise.reject({ statusCode: 501, message: `Mux kind "${req.kind}" not implemented on this agent` });
+}
+
 const VALID_HOOK_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
@@ -92,10 +99,25 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
     return execCommand(command, timeoutMs ?? 15000);
   });
 
-  // ── POST /api/tmux ──
+  // ── POST /api/tmux (compatibility wrapper) ──
   fastify.post('/api/tmux', async (request) => {
     const { args, timeoutMs, mux } = request.body as { args: string[]; timeoutMs?: number; mux?: MuxRuntime };
-    return execTmuxCommand(args, timeoutMs ?? 15000, mux);
+    return execMuxCommand({ kind: 'tmux', args }, timeoutMs ?? 15000, mux);
+  });
+
+  // ── POST /api/mux ──
+  fastify.post('/api/mux', async (request, reply) => {
+    const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number };
+    const { timeoutMs, ...muxReq } = req;
+    try {
+      return await execMuxCommand(muxReq, timeoutMs ?? 15000);
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'statusCode' in err) {
+        const e = err as Record<string, unknown>;
+        return reply.status(e.statusCode as number).send({ error: String(e.message ?? '') });
+      }
+      throw err;
+    }
   });
 
   // ── GET /api/files ──
