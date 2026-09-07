@@ -549,7 +549,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   await app.register(windowsRoutes, {
-    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo,
+    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
     windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix,

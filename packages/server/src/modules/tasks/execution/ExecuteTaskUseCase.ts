@@ -1303,7 +1303,11 @@ export class ExecuteTaskUseCase {
           effectiveLaunchCommand,
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
-      } catch {}
+      } catch (launchErr) {
+        // Keep the historical "launch failure is not fatal here" behaviour, but never hide it:
+        // on rc.15 a herdr launch failed silently and the phase went on to a dead pane.
+        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+      }
     }
 
     const abortController = new AbortController();
@@ -1634,7 +1638,9 @@ export class ExecuteTaskUseCase {
             effectiveLaunchCommand: effectiveFollowUpCommand,
           });
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
-        } catch {}
+        } catch (launchErr) {
+          this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+        }
       }
     }
 

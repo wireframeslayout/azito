@@ -140,7 +140,7 @@ describe('HerdrClient', () => {
     it('converts tmux keys to herdr keys and sends one per call', async () => {
       const sentKeys: string[] = [];
       const client = makeClient((method, params) => {
-        if (method === 'pane.send_keys') { sentKeys.push((params as any).key); return { type: 'ok' }; }
+        if (method === 'pane.send_keys') { sentKeys.push(...((params as any).keys as string[])); return { type: 'ok' }; }
         return { type: 'ok' };
       });
       await client.sendKeysToHandle(server, 'w1:p1' as any, ['C-c', 'Enter']);
@@ -277,5 +277,20 @@ describe('HerdrClient rpc envelope unwrapping', () => {
     const ws = await client.listWorkspaces({ name: 's', type: 'agent', muxRuntime: 'herdr' } as never);
     expect(ws.map((w) => w.name)).toEqual(['azito']);
     expect(ws[0].windows.map((w) => w.name)).toEqual(['1']);
+  });
+});
+
+// rc.16 E2E: the worker launch command was sent through pane.send_keys and herdr rejected it
+// with invalid_key, so tasks on a herdr server never started (and the failure was swallowed).
+describe('HerdrClient sendKeysToHandle text/key split', () => {
+  it('sends literal text via pane.send_text and key names via pane.send_keys', async () => {
+    const calls: Array<{ method: string; params: unknown }> = [];
+    const transport = { execMux: async (req: { method: string; params: unknown }) => { calls.push({ method: req.method, params: req.params }); return { stdout: JSON.stringify({ id: '1', result: { type: 'ok' } }), stderr: '', code: 0 }; } };
+    const client = new HerdrClient({ getTransport: () => transport } as never);
+    await client.sendKeysToHandle({ name: 's', type: 'agent', muxRuntime: 'herdr' } as never, 'w1:p5' as never, ['node ~/.azito/supervisor.cjs claude --flag', 'Enter', 'C-c']);
+    expect(calls.map((c) => c.method)).toEqual(['pane.send_text', 'pane.send_keys', 'pane.send_keys']);
+    expect(calls[0].params).toEqual({ pane_id: 'w1:p5', text: 'node ~/.azito/supervisor.cjs claude --flag' });
+    expect(calls[1].params).toEqual({ pane_id: 'w1:p5', keys: ['enter'] });
+    expect(calls[2].params).toEqual({ pane_id: 'w1:p5', keys: ['ctrl+c'] });
   });
 });
