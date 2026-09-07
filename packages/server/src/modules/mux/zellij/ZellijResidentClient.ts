@@ -11,7 +11,6 @@ function resolveZellijBin(): string {
 
 interface ResidentEntry {
   process: pty.IPty;
-  session: string;
 }
 
 export class ZellijResidentClient {
@@ -40,7 +39,7 @@ export class ZellijResidentClient {
 
     proc.onData(() => {});
 
-    const entry: ResidentEntry = { process: proc, session };
+    const entry: ResidentEntry = { process: proc };
     this.entries.set(session, entry);
 
     proc.onExit(() => {

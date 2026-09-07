@@ -104,16 +104,29 @@ export class ZellijClient implements IMuxClient {
     }
   }
 
+  private async execActionForSession(server: ServerConfig, session: string, args: string[]): Promise<ExecResult> {
+    return this.transportFactory.getTransport(server).execMux({
+      kind: 'zellij',
+      args: ['--session', session, 'action', ...args],
+    });
+  }
+
+  private async allPanesForSession(server: ServerConfig, session: string): Promise<ZellijPaneInfo[]> {
+    const result = await this.execActionForSession(server, session, ['list-panes', '--all', '--json']);
+    return parseListPanes(result.stdout);
+  }
+
   // ─── Resident client ───
 
-  private async ensureResident(server: ServerConfig): Promise<void> {
+  private async ensureResident(server: ServerConfig, session?: string): Promise<void> {
+    const sess = session ?? this.sessionName;
     if (server.type === 'local') {
-      await this.residentClient?.ensureAttached(this.sessionName);
+      await this.residentClient?.ensureAttached(sess);
     } else {
       await this.transportFactory.getTransport(server).execMux({
         kind: 'zellij-ctl',
         action: 'ensure-resident',
-        session: this.sessionName,
+        session: sess,
       });
     }
   }
@@ -173,15 +186,14 @@ export class ZellijClient implements IMuxClient {
       throw new Error(`Zellij session "${name}" does not exist. Start it with: zellij attach --session ${name}`);
     }
 
-    await this.ensureResident(server);
+    await this.ensureResident(server, name);
 
     const windowName = opts?.windowName ?? 'default';
-    await this.transportFactory.getTransport(server).execMux({
-      kind: 'zellij',
-      args: ['--session', name, 'action', 'new-tab', '--layout-string', 'layout { pane; }', '--name', windowName],
-    });
+    await this.execActionForSession(server, name, [
+      'new-tab', '--layout-string', 'layout { pane; }', '--name', windowName,
+    ]);
 
-    await this.ensurePaneExists(server, windowName, opts?.extraEnv);
+    await this.ensurePaneExists(server, windowName, opts?.extraEnv, name);
 
     return { ref: zellijMuxRef(name, windowName), result: this.okResult() };
   }
@@ -209,20 +221,24 @@ export class ZellijClient implements IMuxClient {
     server: ServerConfig,
     windowName: string,
     extraEnv?: Record<string, string>,
+    session?: string,
   ): Promise<void> {
-    const panes = await this.allPanes(server);
+    const exec = (args: string[]) =>
+      session ? this.execActionForSession(server, session, args) : this.execAction(server, args);
+
+    const panes = session
+      ? await this.allPanesForSession(server, session)
+      : await this.allPanes(server);
     const tabPanes = this.terminalPanesForTab(panes, windowName);
     if (tabPanes.length > 0) return;
 
-    // Pane was not created (headless fallback). Focus the tab via the
-    // resident client, then create a pane explicitly.
     return this.withSessionLock(async () => {
-      await this.execAction(server, ['go-to-tab-name', windowName]);
+      await exec(['go-to-tab-name', windowName]);
       if (extraEnv && Object.keys(extraEnv).length > 0) {
         const envArgs = Object.entries(extraEnv).flatMap(([k, v]) => ['env', `${k}=${v}`]);
-        await this.execAction(server, ['new-pane', '--', ...envArgs, '/bin/bash']);
+        await exec(['new-pane', '--', ...envArgs, '/bin/bash']);
       } else {
-        await this.execAction(server, ['new-pane']);
+        await exec(['new-pane']);
       }
     });
   }
