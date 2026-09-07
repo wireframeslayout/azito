@@ -176,11 +176,23 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     }
   }
 
-  private async openZellijTerminal(ref: MuxRef, _ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+  private async openZellijTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     const zellijBin = resolveZellijBin();
     try {
       await execLocal(zellijBin, ['--session', ref.workspace, 'action', 'go-to-tab-name', ref.window]);
     } catch { /* best-effort tab focus */ }
+    if (ordinal > 0) {
+      try {
+        const listResult = await execLocal(zellijBin, ['--session', ref.workspace, 'action', 'list-panes', '--all', '--json']);
+        const panes = JSON.parse(listResult.stdout) as Array<{ id: number; is_plugin: boolean; is_floating: boolean; is_suppressed: boolean; tab_name: string }>;
+        const tabTerminals = panes.filter((p) => p.tab_name === ref.window && !p.is_plugin && !p.is_floating && !p.is_suppressed);
+        const target = tabTerminals[ordinal - 1];
+        if (target) {
+          const paneId = `terminal_${target.id}`;
+          await execLocal(zellijBin, ['--session', ref.workspace, 'action', 'focus-pane-id', paneId]);
+        }
+      } catch { /* best-effort pane focus */ }
+    }
     return this.spawnTerminal(
       ['attach', ref.workspace],
       cols,
@@ -198,6 +210,5 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
 
 function resolveZellijBin(): string {
   const userBin = path.join(os.homedir(), '.local', 'bin', 'zellij');
-  if (fs.existsSync(userBin)) return userBin;
-  return 'zellij';
+  try { fs.accessSync(userBin, fs.constants.X_OK); return userBin; } catch { return 'zellij'; }
 }

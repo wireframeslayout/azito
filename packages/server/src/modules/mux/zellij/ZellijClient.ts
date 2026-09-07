@@ -146,7 +146,10 @@ export class ZellijClient implements IMuxClient {
     const windowName = opts?.windowName ?? 'default';
 
     if (sessions.includes(name)) {
-      await this.execAction(server, ['new-tab', '--name', windowName]);
+      await this.transportFactory.getTransport(server).execMux({
+        kind: 'zellij',
+        args: ['--session', name, 'action', 'new-tab', '--name', windowName],
+      });
       return { ref: zellijMuxRef(name, windowName), result: this.okResult() };
     }
 
