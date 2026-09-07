@@ -89,7 +89,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
-    executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    executeTaskUseCase, agentActivityMonitor, herdrEventBridge, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
@@ -811,6 +811,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const agentEventStreams: AgentEventStream[] = [];
 
   agentActivityMonitor.start();
+  herdrEventBridge.startAll();
 
   app.addHook('onClose', async () => {
     // stopAll() first: playwright's own SIGTERM/SIGINT/SIGHUP handlers are disabled
@@ -818,6 +819,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     // 8s hard cap in main.ts's graceful shutdown can starve it in favor of later steps.
     await browserSessionManager.stopAll();
     agentActivityMonitor.stop();
+    herdrEventBridge.stopAll();
     const localServers = serverRepo.findAll().filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
     for (const stream of agentEventStreams) stream.stop();

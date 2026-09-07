@@ -19,12 +19,17 @@ export class HerdrEventSubscriber extends EventEmitter {
   private stopped = false;
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private _connected = false;
 
   constructor(
     private socketPath: string,
     private subscriptions: HerdrSubscription[],
   ) {
     super();
+  }
+
+  get connected(): boolean {
+    return this._connected;
   }
 
   start(): void {
@@ -34,6 +39,7 @@ export class HerdrEventSubscriber extends EventEmitter {
 
   stop(): void {
     this.stopped = true;
+    this._connected = false;
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
@@ -54,7 +60,9 @@ export class HerdrEventSubscriber extends EventEmitter {
 
     sock.once('connect', () => {
       this.retryCount = 0;
+      this._connected = true;
       this.subscribe(sock);
+      this.emit('connected');
     });
 
     sock.on('data', (chunk: Buffer) => {
@@ -65,6 +73,7 @@ export class HerdrEventSubscriber extends EventEmitter {
     sock.on('close', () => {
       this.socket = null;
       this.buffer = '';
+      this._connected = false;
       if (!this.stopped) this.scheduleReconnect();
     });
 

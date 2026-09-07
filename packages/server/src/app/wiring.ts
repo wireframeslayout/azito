@@ -27,6 +27,7 @@ import { PaneClassifier } from '../modules/llm/PaneClassifier';
 import { LlmContentExtractor } from '../modules/llm/LlmContentExtractor';
 import type { IContentExtractor } from '../modules/llm/ContentExtractor';
 import { PaneStreamFactory } from '../modules/tmux/PaneStreamFactory';
+import { HerdrEventBridge } from '../modules/operations/HerdrEventBridge';
 import { GitProviderService } from '../modules/git/providers/GitProviderService';
 import { WorktreeServiceFactory } from '../modules/git/WorktreeServiceFactory';
 import { MinioStorageClient } from '../modules/files/storage/MinioStorageClient';
@@ -203,6 +204,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
+  herdrEventBridge: HerdrEventBridge;
   interactionMonitor: InteractionMonitor;
   paneHandleResolver: PaneHandleResolver;
   resourceGuard: ResourceGuard;
@@ -595,6 +597,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, harnessPrefix);
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
+  const herdrEventBridge = new HerdrEventBridge(agentActivityMonitor, infra.notificationBus, repos.serverRepo);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 
@@ -608,6 +611,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,
+    herdrEventBridge,
     interactionMonitor,
     paneHandleResolver,
     resourceGuard,
