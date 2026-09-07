@@ -553,8 +553,9 @@ export class ExecuteTaskUseCase {
       this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId);
     }
     try {
+      const rollbackDriver = this.resolveDriver(server);
       await rollbackWindowReference(
-        this.resolveDriver(server).closeWindow(server, { kind: this.resolveDriver(server).kind, workspace: muxWorkspace, window: windowName }),
+        rollbackDriver.closeWindow(server, { kind: rollbackDriver.kind, workspace: muxWorkspace, window: windowName }),
         this.paneEnvService,
         tokenId,
         revokeReason,
