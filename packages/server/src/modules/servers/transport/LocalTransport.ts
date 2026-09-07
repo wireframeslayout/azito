@@ -75,6 +75,9 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
       const result = await this.herdrSocket.call(req.method, req.params);
       return { stdout: JSON.stringify(result), stderr: '', code: 0 };
     }
+    if (req.kind === 'zellij-ctl') {
+      return { stdout: '', stderr: '', code: 0 };
+    }
     if (req.kind === 'zellij') {
       return execLocal(resolveZellijBin(), req.args);
     }

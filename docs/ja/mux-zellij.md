@@ -55,15 +55,30 @@ zellij はデーモンモードを持たない。最初のクライアント att
 - `workspace`: zellij セッション名（例: `"azito"`）
 - `window`: zellij タブ名（例: `"win--abc"`）
 
-## ヘッドレス制約
+## ヘッドレス制約と常駐クライアント
 
-ヘッドレスセッション（クライアント未接続）では `new-tab` が空タブ（ターミナルペイン 0 個）を作成する（`--layout-string` 指定時も同様）。`openWindow` は `--layout-string 'layout { pane; }'` をベストエフォートで使用するが、ペインはクライアント接続時にのみ生成される場合がある。ペインのないタブ:
+ヘッドレスセッション（クライアント未接続）では `new-tab` が空タブ（ターミナルペイン 0 個）を作成する（`--layout-string` 指定時も同様）。ペインのないタブ:
 
 - `list-panes --all --json` に出現しない
 - `query-tab-names` には表示されるが tab_id の相関が不安定
 - ペインが存在するまで操作不可（capture, send-keys, split）
 
-`resolveTabId` のフォールバックは `query-tab-names` のインデックスを tab_id として使用する（新規セッションで position == id の場合のみ正確）。ヘッドレスでの本格的なタブ作成には常駐クライアント（`zellij attach` を node-pty で保持）が必要。
+### 常駐クライアント方式（段階7-G で導入）
+
+`ZellijResidentClient` が `zellij attach <session>` を node-pty (200×50) で 1 本保持することで、セッションは「クライアントあり」になりタブ/ペイン作成が正常に動作する。
+
+| 検証項目 | 結果 |
+|---------|------|
+| (a) `new-tab --name X` でペインが生えるか | **成立** — terminal pane が 1 個作成される |
+| (b) `--layout-string 'layout { pane; }'` | **成立** — (a) と同等 |
+| (c) `go-to-tab-name X` → `new-pane` が X に作られるか | **成立** — 常駐クライアントのフォーカスが移動し、正しいタブにペイン作成 |
+| (d) 常駐クライアントの端末サイズが新ペインに影響するか | **影響あり** — ペインサイズは常駐クライアントの viewport (80×24 実測) に依存。node-pty 200×50 指定で十分な初期サイズを確保 |
+| (e) `mirror_session false` で独立フォーカス | **成立** — `go-to-tab-name` は常駐クライアントのフォーカスのみ変更。CLI の `action` コマンドは常駐クライアントのフォーカスを操作 |
+| (extra) `new-pane -- env KEY=VAL /bin/bash` | **成立** — 環境変数がペインに正しく渡される |
+
+**重要**: `new-pane` に `--tab-id` フラグはない。タブを指定してペインを作るには `go-to-tab-name` → `new-pane` の 2 ステップが必要（`withSessionLock` で直列化）。
+
+`resolveTabId` のフォールバックは `query-tab-names` のインデックスを tab_id として使用する（新規セッションで position == id の場合のみ正確）。
 
 ## AZITO への登録
 

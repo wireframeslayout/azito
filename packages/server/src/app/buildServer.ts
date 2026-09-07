@@ -95,6 +95,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
     originationService, scopedAuthEnabled, taskPaneEnvironmentService,
+    zellijResident,
   } = wiring;
 
   // ─── Webhook token ───
@@ -818,6 +819,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     // (see BrowserSession.ts), so a Chromium session must be closed here before the
     // 8s hard cap in main.ts's graceful shutdown can starve it in favor of later steps.
     await browserSessionManager.stopAll();
+    zellijResident.detachAll();
     agentActivityMonitor.stop();
     herdrEventBridge.stopAll();
     const localServers = serverRepo.findAll().filter((s) => s.type === 'local');
