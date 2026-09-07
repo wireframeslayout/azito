@@ -84,6 +84,7 @@ export class HerdrClient implements IMuxClient {
     paneTitle: true,
     activityCounter: false,
     layoutSnapshot: true,
+    stablePaneHandle: true,
   };
 
   constructor(

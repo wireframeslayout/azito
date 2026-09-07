@@ -51,6 +51,7 @@ describe('HerdrClient', () => {
     it('paneTitle is true', () => expect(client.caps.paneTitle).toBe(true));
     it('layoutSnapshot is true', () => expect(client.caps.layoutSnapshot).toBe(true));
     it('copyMode is false', () => expect(client.caps.copyMode).toBe(false));
+    it('stablePaneHandle is true', () => expect(client.caps.stablePaneHandle).toBe(true));
   });
 
   describe('listWorkspaces', () => {

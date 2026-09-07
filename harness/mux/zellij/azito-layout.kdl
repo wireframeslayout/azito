@@ -1,0 +1,4 @@
+// AZITO layout: no tab-bar, no status-bar
+layout {
+    pane
+}
