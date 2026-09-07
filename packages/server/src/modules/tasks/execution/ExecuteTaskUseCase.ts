@@ -1208,9 +1208,13 @@ export class ExecuteTaskUseCase {
       if (w.sleeping) continue;
       try {
         const windowDriver = this.resolveDriver(server);
-        const alive = w.muxRef
-          ? await windowDriver.windowExists(server, w.muxRef)
-          : await windowDriver.windowExists(server, await windowDriver.resolveRef(server, w.tmuxTarget) ?? { kind: windowDriver.kind, workspace: '', window: '' });
+        let alive: boolean;
+        if (w.muxRef) {
+          alive = await windowDriver.windowExists(server, w.muxRef);
+        } else {
+          const resolved = await windowDriver.resolveRef(server, w.tmuxTarget);
+          alive = resolved ? await windowDriver.windowExists(server, resolved) : true;
+        }
         if (!alive) this.windowRepo.remove(w.id);
       } catch {
         // checkPaneExists failed — keep the row rather than risk deleting a live window
