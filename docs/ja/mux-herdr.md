@@ -29,6 +29,23 @@ bash harness/mux/herdr/start.sh
 設定ファイル（`harness/mux/herdr/azito.toml`）で以下を無効化:
 - サイドバー、タブバー（1 tab 時）、ペイン境界線/ギャップ/スクロールバー、マウスキャプチャ、確認ダイアログ
 
+`start.sh` は `~/.config/herdr/config.toml` にデプロイし、既に起動中のサーバーには `server.reload_config` RPC でリロードする。
+
+## MuxRef 形式
+
+```json
+{"kind":"herdr","workspace":"<workspace label>","window":"<tab label>"}
+```
+
+- `workspace`: herdr ワークスペースラベル（例: `"azito"`）
+- `window`: herdr タブラベル（例: `"win--abc"`）
+
+herdr は内部 ID（`w1`, `w1:t1`）ではなくラベルベースでアドレッシングする。
+
+## agent 側 attach
+
+`AZITO_MUX_RUNTIME=herdr` の場合、agent プロセスは `HERDR_SESSION`（デフォルト `azito`）から `HerdrSocketClient` を生成する。ターミナル接続時（`/ws?ref=<herdr ref>&pane=1`）、agent はソケット経由で対象タブ/ペインにフォーカスしてから `herdr`（TUI クライアント）を起動する。`start.sh` で `azito.toml` をデプロイし、マウスキャプチャ（`?1000h`）が抑制されていること。
+
 ## AZITO への登録
 
 サーバー追加画面で `mux_runtime` に `herdr` を選択。既存 tmux サーバーとは別名で登録（例: `server007-herdr`）。

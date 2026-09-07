@@ -26,7 +26,22 @@ bash harness/mux/herdr/start.sh
 
 Socket: `~/.config/herdr/sessions/azito/herdr.sock`
 
-Config (`harness/mux/herdr/azito.toml`) disables: sidebar, tab bar (single tab), pane borders/gaps/scrollbars, mouse capture, close confirmation.
+Config (`harness/mux/herdr/azito.toml`) disables: sidebar, tab bar (single tab), pane borders/gaps/scrollbars, mouse capture, close confirmation. `start.sh` deploys this to `~/.config/herdr/config.toml` and reloads an already-running server via `server.reload_config` RPC.
+
+## MuxRef format
+
+```json
+{"kind":"herdr","workspace":"<workspace label>","window":"<tab label>"}
+```
+
+- `workspace`: herdr workspace label (e.g. `"azito"`)
+- `window`: herdr tab label (e.g. `"win--abc"`)
+
+Note: herdr uses label-based addressing, not internal IDs (`w1`, `w1:t1`).
+
+## Agent-side attach
+
+When `AZITO_MUX_RUNTIME=herdr`, the agent process creates a `HerdrSocketClient` from `HERDR_SESSION` (default `azito`). On terminal attach (`/ws?ref=<herdr ref>&pane=1`), the agent focuses the target tab/pane via the socket before spawning `herdr` (the TUI client). `start.sh` must have deployed `azito.toml` to suppress mouse capture (`?1000h`).
 
 ## Registering with AZITO
 

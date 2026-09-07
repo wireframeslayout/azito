@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, herdrPaneHandle, parseHerdrPaneHandle, herdrMuxRef, type MuxRef } from './mux';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, herdrPaneHandle, parseHerdrPaneHandle, herdrMuxRef, zellijMuxRef, type MuxRef } from './mux';
 import { windowKey } from './windowKey';
 
 describe('formatMuxRef / parseMuxRef', () => {
@@ -84,5 +84,27 @@ describe('herdrMuxRef', () => {
     expect(herdrMuxRef('myworkspace', 'mytab')).toEqual({
       kind: 'herdr', workspace: 'myworkspace', window: 'mytab',
     });
+  });
+  it('round-trips through formatMuxRef/parseMuxRef', () => {
+    const ref = herdrMuxRef('azito', 'dev');
+    expect(parseMuxRef(formatMuxRef(ref))).toEqual(ref);
+  });
+  it('produces stable key order', () => {
+    expect(formatMuxRef(herdrMuxRef('ws', 'tab1'))).toBe('{"kind":"herdr","workspace":"ws","window":"tab1"}');
+  });
+});
+
+describe('zellijMuxRef', () => {
+  it('creates a zellij MuxRef', () => {
+    expect(zellijMuxRef('azito', 'build')).toEqual({
+      kind: 'zellij', workspace: 'azito', window: 'build',
+    });
+  });
+  it('round-trips through formatMuxRef/parseMuxRef', () => {
+    const ref = zellijMuxRef('azito', 'editor');
+    expect(parseMuxRef(formatMuxRef(ref))).toEqual(ref);
+  });
+  it('produces stable key order', () => {
+    expect(formatMuxRef(zellijMuxRef('sess', 'tab1'))).toBe('{"kind":"zellij","workspace":"sess","window":"tab1"}');
   });
 });
