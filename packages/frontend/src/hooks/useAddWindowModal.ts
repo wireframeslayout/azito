@@ -46,7 +46,7 @@ export function useAddWindowModal(
   refreshWorkspace: () => void,
   refreshSessions?: () => Promise<void>,
   onConnect?: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void,
-  onTaskWindowAdded?: (taskId: number, serverName: string, tmuxTarget: string, label: string, activate: boolean, extra?: TaskWindowExtra & { windowId?: number; ref?: string }) => Promise<void>,
+  onTaskWindowAdded?: (taskId: number, serverName: string, tmuxTarget: string, label: string, activate: boolean, extra?: TaskWindowExtra & { ref?: string }) => Promise<void>,
 ) {
   const [addWindowOpen, setAddWindowOpen] = useState(false);
   const [awMode, setAwMode] = useState<'existing' | 'session' | 'new'>('existing');
@@ -340,10 +340,10 @@ export function useAddWindowModal(
         const extra = awAgent !== 'none'
           ? { windowType: 'agent' as const, workerType: awAgent === 'custom' ? 'generic' : awAgent, workerModel: awAgentModel || undefined, workingDirectory: awWorkDir.trim() || undefined }
           : undefined;
-        const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
         if (awTaskId != null) {
-          await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, windowId: created.id, ref: newRef });
+          await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, ref: newRef });
         } else {
+          const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
           onConnect?.(termRef, numericProjectId);
         }
 

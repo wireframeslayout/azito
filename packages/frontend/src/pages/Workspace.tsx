@@ -742,7 +742,7 @@ function WorkspaceInner() {
     tmuxTarget: string,
     label: string,
     activate: boolean,
-    extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; windowId?: number; ref?: string },
+    extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; ref?: string },
   ) => {
     try {
       const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
