@@ -32,14 +32,47 @@ export class HerdrEventSubscriber extends EventEmitter {
     return this._connected;
   }
 
+  /**
+   * Grow the subscription set. herdr 0.8.2 accepts exactly one `events.subscribe` per
+   * connection — a second request on an open stream resets the socket (observed on
+   * server007). So the merged list is applied by reconnecting (debounced so a burst of
+   * pane.created events yields one reconnect); the fresh stream replays `tab.created`
+   * for existing tabs, which keeps the caller's pane cache consistent.
+   */
   addSubscriptions(subs: HerdrSubscription[]): void {
-    if (!this.socket || !this._connected) return;
-    const req = JSON.stringify({
-      id: String(Date.now()),
-      method: 'events.subscribe',
-      params: { subscriptions: subs },
-    }) + '\n';
-    this.socket.write(req);
+    const key = (x: HerdrSubscription) => `${x.type}\u0000${(x as { pane_id?: string }).pane_id ?? ''}`;
+    const have = new Set(this.subscriptions.map(key));
+    let changed = false;
+    for (const x of subs) {
+      if (!have.has(key(x))) { this.subscriptions.push(x); have.add(key(x)); changed = true; }
+    }
+    if (changed) this.scheduleResubscribe();
+  }
+
+  /** Drop subscriptions for a pane that went away; applied lazily on the next reconnect. */
+  removePaneSubscriptions(paneId: string): void {
+    const before = this.subscriptions.length;
+    this.subscriptions = this.subscriptions.filter((x) => (x as { pane_id?: string }).pane_id !== paneId);
+    if (this.subscriptions.length !== before) this.scheduleResubscribe();
+  }
+
+  private resubscribeTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleResubscribe(): void {
+    if (this.stopped || !this.socket) return; // not started yet: connect() will send the full list
+    if (this.resubscribeTimer) return;
+    this.resubscribeTimer = setTimeout(() => {
+      this.resubscribeTimer = null;
+      if (this.stopped) return;
+      this._connected = false;
+      if (this.socket) {
+        this.socket.removeAllListeners();
+        this.socket.destroy();
+        this.socket = null;
+      }
+      this.buffer = '';
+      this.connect();
+    }, 150);
   }
 
   start(): void {
@@ -50,6 +83,10 @@ export class HerdrEventSubscriber extends EventEmitter {
   stop(): void {
     this.stopped = true;
     this._connected = false;
+    if (this.resubscribeTimer) {
+      clearTimeout(this.resubscribeTimer);
+      this.resubscribeTimer = null;
+    }
     if (this.retryTimer) {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
