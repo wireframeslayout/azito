@@ -214,6 +214,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       if (existing) {
+        // One physical window = one row (migration 068). The Add Window flow registers the
+        // window as a project window first and then attaches it here; returning the row
+        // untouched left it project-owned, so the task never got the window (win--qvp6 /
+        // task 368, three times). Convert ownership instead.
+        if (existing.ownerType === 'task' && existing.taskId != null && existing.taskId !== id) {
+          return reply.status(409).send({ error: `Window already belongs to task ${existing.taskId}`, windowId: existing.id, taskId: existing.taskId });
+        }
+        if (existing.ownerType !== 'task' || existing.taskId !== id) {
+          windowRepo.adoptForTask(existing.id, id);
+          const label = (body['label'] as string) || undefined;
+          const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
+          if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
+          return { ok: true, id: existing.id, adopted: true };
+        }
         return { ok: true, id: existing.id };
       }
 

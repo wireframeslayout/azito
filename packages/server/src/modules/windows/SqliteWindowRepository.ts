@@ -184,6 +184,10 @@ export class SqliteWindowRepository implements IWindowRepository {
     return rows.filter((r) => r.tmux_target.startsWith(prefix)).map((r) => this.toWindow(r));
   }
 
+  adoptForTask(id: number, taskId: number): void {
+    this.db.prepare("UPDATE windows SET owner_type = 'task', task_id = ? WHERE id = ?").run(taskId, id);
+  }
+
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void {
