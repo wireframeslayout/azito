@@ -77,6 +77,19 @@ describe('agentScreenRules', () => {
       expect(above).toHaveLength(5);
     });
 
+    it('returns the status area under the bottom rule as below', () => {
+      const rows = [
+        '  ✻ Thinking… (5s)',
+        '──────────────────────────────',
+        '  ❯ ',
+        '──────────────────────────────',
+        '  ⏸ manual mode on · esc to interrupt · ← for agents',
+        '',
+      ];
+      const { below } = splitPromptBox(rows);
+      expect(below).toEqual(['  ⏸ manual mode on · esc to interrupt · ← for agents']);
+    });
+
     it('handles trailing empty lines', () => {
       const rows = ['output', '', '', ''];
       const { above, promptBox } = splitPromptBox(rows);
@@ -149,6 +162,24 @@ describe('agentScreenRules', () => {
 
     it('returns working for spinner line', () => {
       const input = { above: ['  ✻ Thinking… (12s · ↓ 1.2k tokens)'], promptBox: [] };
+      expect(classifyScreen('claude', input)).toBe('working');
+    });
+
+    it('treats a `❯ 1. …` option cursor inside the box as blocked, not idle (real AskUserQuestion screen)', () => {
+      const input = {
+        above: ['あなたの好きな色はどれですか？'],
+        promptBox: ['❯ 1. 赤', '  2. 青', '  3. 緑', '  4. Type something.'],
+        below: ['  5. Chat about this', 'Enter to select · ↑/↓ to navigate · Esc to cancel'],
+      };
+      expect(classifyScreen('claude', input)).toBe('blocked');
+    });
+
+    it('reads `esc to interrupt` from the status bar below the box as working', () => {
+      const input = {
+        above: ['❯ 1+1 は？'],
+        promptBox: ['❯ '],
+        below: ['  ⏸ manual mode on · esc to interrupt · ← for agents'],
+      };
       expect(classifyScreen('claude', input)).toBe('working');
     });
 

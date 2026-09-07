@@ -1,16 +1,26 @@
 export type AgentKind = 'claude' | 'codex';
 export type PaneAgentState = 'working' | 'idle' | 'blocked' | 'unknown';
 
+/**
+ * A screen split around Claude Code's prompt box (the `❯` input framed by two
+ * `─` rule lines). Real 2.1.263 screens put different evidence in each part:
+ * the turn spinner (`✻ Thinking…`) is ABOVE the box, the AskUserQuestion
+ * option list is INSIDE it, and the key hints (`Enter to select · Esc to
+ * cancel`, `⏸ … esc to interrupt`) are BELOW it in the status area. Rules
+ * therefore name the region they read; `all` spans the three.
+ */
 export interface ScreenInput {
   above: string[];
   promptBox: string[];
+  /** Lines under the bottom rule (status bar, key hints). Optional for callers that only have the box. */
+  below?: string[];
 }
 
 export interface ScreenRule {
   id: string;
   state: PaneAgentState | 'skip';
   priority: number;
-  region: 'above' | 'promptBox' | 'all';
+  region: 'above' | 'promptBox' | 'below' | 'all';
   test: (lines: string[]) => boolean;
 }
 
@@ -20,6 +30,8 @@ const CLAUDE_SPINNER_LINE_RE = new RegExp(
 );
 const CLAUDE_INTERRUPT_LINE_RE = /^\s*[⏸⏵].*esc to interrupt(?:\s|·|$)/i;
 const CLAUDE_PROMPT_LINE_RE = /^\s*❯/;
+/** `❯ 1. Yes` — the selection cursor of an option list, not the input box. */
+const CLAUDE_OPTION_CURSOR_RE = /^\s*❯\s*\d+\./;
 
 const lower = (lines: string[]) => lines.map((l) => l.toLowerCase());
 const anyLine = (lines: string[], re: RegExp) => lines.some((l) => re.test(l));
@@ -64,7 +76,8 @@ export const CLAUDE_SCREEN_RULES: ScreenRule[] = [
     id: 'interrupt_line',
     state: 'working',
     priority: 70,
-    region: 'above',
+    // `⏸ manual mode on · esc to interrupt` is the status bar UNDER the box.
+    region: 'all',
     test: (ls) => anyLine(ls, CLAUDE_INTERRUPT_LINE_RE),
   },
   {
@@ -95,6 +108,7 @@ export const CLAUDE_SCREEN_RULES: ScreenRule[] = [
     region: 'promptBox',
     test: (ls) =>
       anyLine(ls, CLAUDE_PROMPT_LINE_RE) &&
+      !anyLine(ls, CLAUDE_OPTION_CURSOR_RE) &&
       !text(ls).includes('enter to select') &&
       !text(ls).includes('esc to cancel'),
   },
@@ -136,11 +150,15 @@ export const CODEX_SCREEN_RULES: ScreenRule[] = [
 
 export function classifyScreen(agent: AgentKind, input: ScreenInput): PaneAgentState | null {
   const rules = agent === 'claude' ? CLAUDE_SCREEN_RULES : CODEX_SCREEN_RULES;
-  const all = [...input.above, ...input.promptBox];
+  const below = input.below ?? [];
+  const all = [...input.above, ...input.promptBox, ...below];
   let best: ScreenRule | undefined;
   for (const r of rules) {
     const lines =
-      r.region === 'above' ? input.above : r.region === 'promptBox' ? input.promptBox : all;
+      r.region === 'above' ? input.above
+      : r.region === 'promptBox' ? input.promptBox
+      : r.region === 'below' ? below
+      : all;
     if (lines.length === 0) continue;
     if (r.test(lines) && (!best || r.priority > best.priority)) best = r;
   }
@@ -173,7 +191,7 @@ export function splitPromptBox(rows: string[], maxAbove = 12): ScreenInput {
     break;
   }
   if (top < 0) {
-    return { above: rows.filter((l) => l.trim() !== '').slice(-maxAbove), promptBox: [] };
+    return { above: rows.filter((l) => l.trim() !== '').slice(-maxAbove), promptBox: [], below: [] };
   }
   return {
     above: rows
@@ -181,5 +199,6 @@ export function splitPromptBox(rows: string[], maxAbove = 12): ScreenInput {
       .filter((l) => l.trim() !== '')
       .slice(-maxAbove),
     promptBox: rows.slice(top + 1, bottom),
+    below: rows.slice(bottom + 1).filter((l) => l.trim() !== ''),
   };
 }
