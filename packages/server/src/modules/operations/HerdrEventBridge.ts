@@ -23,9 +23,10 @@ const STRUCTURE_EVENTS: HerdrSubscription[] = [
   { type: 'pane.closed' },
 ];
 
+const DEFAULT_TAB_NAME = 'main';
+
 interface PaneMapping {
   workspaceLabel: string;
-  tabLabel: string;
 }
 
 const VALID_AGENT_STATUSES = new Set<string>(['working', 'idle', 'blocked', 'done', 'unknown']);
@@ -117,15 +118,12 @@ export class HerdrEventBridge {
       state.paneCache.clear();
       const wsLabels = new Map<string, string>();
       for (const ws of snapshot.workspaces) wsLabels.set(ws.workspace_id, ws.label);
-      const tabLabels = new Map<string, string>();
-      for (const tab of snapshot.tabs) tabLabels.set(tab.tab_id, tab.label);
 
       const paneIds: string[] = [];
       for (const pane of snapshot.panes) {
         const workspaceLabel = wsLabels.get(pane.workspace_id);
-        const tabLabel = tabLabels.get(pane.tab_id);
-        if (workspaceLabel && tabLabel) {
-          state.paneCache.set(pane.pane_id, { workspaceLabel, tabLabel });
+        if (workspaceLabel) {
+          state.paneCache.set(pane.pane_id, { workspaceLabel });
           paneIds.push(pane.pane_id);
         }
       }
@@ -163,9 +161,8 @@ export class HerdrEventBridge {
         // New pane — add to cache and subscribe to its agent_status.
         const paneId = event.pane_id as string | undefined;
         const wsId = event.workspace_id as string | undefined;
-        const tabId = event.tab_id as string | undefined;
-        if (paneId && wsId && tabId) {
-          void this.addPaneSubscription(serverName, state, paneId, wsId, tabId);
+        if (paneId && wsId) {
+          void this.addPaneSubscription(serverName, state, paneId, wsId);
         }
       }
       this.emitSessionsUpdated(serverName);
@@ -196,19 +193,16 @@ export class HerdrEventBridge {
     state: PerServerState,
     paneId: string,
     wsId: string,
-    tabId: string,
   ): Promise<void> {
     try {
       // Resolve labels from a snapshot (the event only carries IDs).
       const resp = await state.socketClient.call('session.snapshot');
       const snapshot = unwrapHerdrSnapshot(resp) as {
         workspaces: Array<{ workspace_id: string; label: string }>;
-        tabs: Array<{ tab_id: string; label: string }>;
       };
       const wsLabel = snapshot.workspaces.find(w => w.workspace_id === wsId)?.label;
-      const tabLabel = snapshot.tabs.find(t => t.tab_id === tabId)?.label;
-      if (wsLabel && tabLabel) {
-        state.paneCache.set(paneId, { workspaceLabel: wsLabel, tabLabel });
+      if (wsLabel) {
+        state.paneCache.set(paneId, { workspaceLabel: wsLabel });
       }
 
       state.subscriber.addSubscriptions([{
@@ -222,15 +216,14 @@ export class HerdrEventBridge {
 
   private resolveTarget(paneId: string, state: PerServerState): string | null {
     const mapping = state.paneCache.get(paneId);
-    if (mapping) return `${mapping.workspaceLabel}:${mapping.tabLabel}`;
+    if (mapping) return `${mapping.workspaceLabel}:${DEFAULT_TAB_NAME}`;
     return null;
   }
 
   private resolveTargetFromEvent(event: HerdrEvent): string | null {
-    // Agent-relayed events may carry workspace/tab labels directly.
+    // Agent-relayed events carry workspace labels directly.
     const ws = event.workspace_label as string | undefined;
-    const tab = event.tab_label as string | undefined;
-    if (ws && tab) return `${ws}:${tab}`;
+    if (ws) return `${ws}:${DEFAULT_TAB_NAME}`;
     return null;
   }
 

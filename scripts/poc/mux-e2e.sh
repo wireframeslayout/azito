@@ -116,8 +116,8 @@ else
   echo "  SKIP: no sessions (mux daemon may not be running)"
 fi
 
-# ── Step 2b: Window creation (zellij only) ──
-if [ "$RUNTIME" = "zellij" ] && [ "$SESSION_COUNT" -gt 0 ]; then
+# ── Step 2b: Window creation ──
+if [ "$SESSION_COUNT" -gt 0 ]; then
   echo ""
   echo "=== Step 2b: Window creation via openWindow ==="
   WORKSPACE=$(echo "$SESSIONS" | jq -r '.[0].name')
@@ -129,15 +129,28 @@ if [ "$RUNTIME" = "zellij" ] && [ "$SESSION_COUNT" -gt 0 ]; then
   if [ -n "$CREATE_REF" ]; then
     echo "  PASS: window created, ref=$(echo "$CREATE_REF" | jq -c .)"
     PASS=$((PASS + 1))
+
+    # herdr: ref.window should be "main" (workspace-level mapping)
+    if [ "$RUNTIME" = "herdr" ]; then
+      REF_WINDOW=$(echo "$CREATE_REF" | jq -r '.window')
+      assert_eq "herdr ref.window" "$REF_WINDOW" "main"
+    fi
+
     # Verify pane exists in the new window
     NEW_REF_ENC=$(python3 -c "import urllib.parse,json,sys; print(urllib.parse.quote(json.dumps(json.loads(sys.argv[1]))))" "$CREATE_REF")
-    PANES=$(curl -sf "${HUB}/api/servers/${SERVER}/sessions" -H "$AUTH" | \
-      jq --arg w "$WIN_NAME" '[.[0].windows[] | select(.name == $w) | .panes | length] | add // 0')
+    if [ "$RUNTIME" = "herdr" ]; then
+      # herdr: the new workspace appears as a separate session in the listing
+      PANES=$(curl -sf "${HUB}/api/servers/${SERVER}/sessions" -H "$AUTH" | \
+        jq --arg w "$WIN_NAME" '[.[] | select(.name == $w) | .windows[].panes | length] | add // 0')
+    else
+      PANES=$(curl -sf "${HUB}/api/servers/${SERVER}/sessions" -H "$AUTH" | \
+        jq --arg w "$WIN_NAME" '[.[0].windows[] | select(.name == $w) | .panes | length] | add // 0')
+    fi
     if [ "$PANES" -gt 0 ]; then
       echo "  PASS: window has ${PANES} pane(s)"
       PASS=$((PASS + 1))
     else
-      echo "  FAIL: window has 0 panes (resident client may not be working)"
+      echo "  FAIL: window has 0 panes (driver may not be working)"
       FAIL=$((FAIL + 1))
     fi
     # Clean up the window

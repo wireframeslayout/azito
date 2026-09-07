@@ -34,13 +34,30 @@ bash harness/mux/herdr/start.sh
 ## MuxRef 形式
 
 ```json
-{"kind":"herdr","workspace":"<workspace label>","window":"<tab label>"}
+{"kind":"herdr","workspace":"<workspace label>","window":"main"}
 ```
 
-- `workspace`: herdr ワークスペースラベル（例: `"azito"`）
-- `window`: herdr タブラベル（例: `"win--abc"`）
+- `workspace`: herdr ワークスペースラベル = AZITO の窓名
+- `window`: 固定値 `"main"`（表示には使用しない）
 
-herdr は内部 ID（`w1`, `w1:t1`）ではなくラベルベースでアドレッシングする。
+### 写像規則
+
+AZITO の窓 = herdr workspace。1 workspace に tab は 1 つだけ使用し、2 つ目以降の tab は無視する（診断ログに warn）。
+
+| AZITO の概念 | herdr の概念 |
+|---|---|
+| コンテナ（セッション） | herdr session（固定: `azito`） |
+| 窓（window） | herdr workspace |
+| ペイン（pane） | workspace 内の最初の tab の pane |
+
+- `openWindow()` は `workspace.create` を呼ぶ（`tab.create` ではない）
+- `closeWindow()` は `workspace.close` を呼ぶ
+- `renameWindowByRef()` は `workspace.rename` を呼ぶ
+- `windowExists()` は workspace ラベルの存在のみで判定（`ref.window` は無視）
+
+### 旧形式 ref のフォールバック
+
+`{"kind":"herdr","workspace":"azito","window":"win--abc"}` のような旧形式 ref（`window` が実際の tab ラベル）は、`resolvePane` / `listPanesByRef` で workspace が見つからない場合に tab ラベルによるフォールバック解決を行う。migration は追加しない。
 
 ## agent 側 attach
 

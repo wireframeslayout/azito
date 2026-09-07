@@ -31,13 +31,30 @@ Config (`harness/mux/herdr/azito.toml`) disables: sidebar, tab bar (single tab),
 ## MuxRef format
 
 ```json
-{"kind":"herdr","workspace":"<workspace label>","window":"<tab label>"}
+{"kind":"herdr","workspace":"<workspace label>","window":"main"}
 ```
 
-- `workspace`: herdr workspace label (e.g. `"azito"`)
-- `window`: herdr tab label (e.g. `"win--abc"`)
+- `workspace`: herdr workspace label = AZITO window name
+- `window`: fixed value `"main"` (not used for display)
 
-Note: herdr uses label-based addressing, not internal IDs (`w1`, `w1:t1`).
+### Mapping rules
+
+AZITO window = herdr workspace. Each workspace uses only the first tab; additional tabs are ignored (a diagnostic warning is logged).
+
+| AZITO concept | herdr concept |
+|---|---|
+| Container (session) | herdr session (fixed: `azito`) |
+| Window | herdr workspace |
+| Pane | Panes in the first tab of a workspace |
+
+- `openWindow()` calls `workspace.create` (not `tab.create`)
+- `closeWindow()` calls `workspace.close`
+- `renameWindowByRef()` calls `workspace.rename`
+- `windowExists()` checks workspace label existence only (`ref.window` is ignored)
+
+### Legacy ref fallback
+
+Legacy refs like `{"kind":"herdr","workspace":"azito","window":"win--abc"}` (where `window` is an actual tab label) are supported via fallback in `resolvePane` / `listPanesByRef` when the workspace label doesn't match. No migration is added.
 
 ## Agent-side attach
 

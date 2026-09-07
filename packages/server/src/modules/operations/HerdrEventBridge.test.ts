@@ -51,11 +51,12 @@ describe('HerdrEventBridge', () => {
           pane_id: 'w1:p1',
           agent_status: status,
           workspace_label: 'ws',
-          tab_label: 'tab',
         });
       }
 
       expect(recordMuxSignal).toHaveBeenCalledTimes(5);
+      const targets = recordMuxSignal.mock.calls.map((c: unknown[]) => c[1] as string);
+      expect(targets.every((t) => t === 'ws:main')).toBe(true);
       const statuses = recordMuxSignal.mock.calls.map((c: unknown[]) => c[2]);
       expect(statuses).toEqual(['working', 'idle', 'blocked', 'done', 'unknown']);
     });
@@ -68,7 +69,6 @@ describe('HerdrEventBridge', () => {
         pane_id: 'w1:p1',
         agent_status: 'invalid_status',
         workspace_label: 'ws',
-        tab_label: 'tab',
       });
 
       expect(recordMuxSignal).not.toHaveBeenCalled();
@@ -81,7 +81,6 @@ describe('HerdrEventBridge', () => {
         type: 'pane.agent_status_changed',
         agent_status: 'working',
         workspace_label: 'ws',
-        tab_label: 'tab',
       });
 
       expect(recordMuxSignal).not.toHaveBeenCalled();

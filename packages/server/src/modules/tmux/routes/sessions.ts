@@ -1021,6 +1021,10 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const driverKind = muxKindForRuntime(freshSrv.muxRuntime ?? 'system');
+        if (driverKind === 'herdr') {
+          return reply.status(400).send({ error: 'herdr uses a single session. Use POST /mux/workspaces/:ws/windows to add a window.' });
+        }
         const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);

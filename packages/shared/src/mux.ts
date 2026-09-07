@@ -141,8 +141,8 @@ export function isPaneHandleLike(s: string): boolean {
   return PANE_HANDLE_LIKE_RE.test(s);
 }
 
-/** herdr MuxRef: workspace = workspace label, window = tab label. */
-export function herdrMuxRef(workspaceName: string, tabName: string): MuxRef {
+/** herdr MuxRef: workspace = workspace label, window = fixed default tab name ('main'). */
+export function herdrMuxRef(workspaceName: string, tabName: string = 'main'): MuxRef {
   return { kind: 'herdr', workspace: workspaceName, window: tabName };
 }
 
