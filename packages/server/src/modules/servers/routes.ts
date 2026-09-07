@@ -1446,8 +1446,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const match = re.exec(content);
         if (!match) {
           warnings.push(`${key} is not set (recommended: ${expected})`);
-        } else if (match[1].trim() !== expected) {
-          warnings.push(`${key} = ${match[1].trim()} (recommended: ${expected})`);
+        } else {
+          const value = match[1].replace(/\s*#.*$/, '').trim();
+          if (value !== expected) {
+            warnings.push(`${key} = ${value} (recommended: ${expected})`);
+          }
         }
       }
 
