@@ -333,6 +333,9 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
   await Promise.all(workers);
 }
 
+/** herdr `pane.agent_status_changed` status values. */
+export type MuxAgentStatus = 'working' | 'idle' | 'blocked' | 'done' | 'unknown';
+
 /** Which rung of the ladder decided a key's state on the last tick. */
 export type ActivityDecidedBy =
   | 'tier0_supervisor'
@@ -555,10 +558,10 @@ export class AgentActivityMonitor {
   // inferring exit from a foreground-command fallback to a bare shell — so
   // Tier 0 needs no such fallback and bypasses Tier 1/2 entirely for its keys.
   private supervisorStates = new Map<string, SupervisorState>();
-  // Mux-native agent state (herdr pane.agent_status_changed events). Diagnostics
-  // only in this PoC — not wired into the collect() ladder yet (deferred to the
-  // #155 integration Issue). Keyed by windowKey(serverName, target).
-  private muxStates = new Map<string, { status: 'working' | 'idle' | 'blocked'; at: number; serverName: string; target: string }>();
+  // Mux-native agent state (herdr pane.agent_status_changed events).
+  // Wired into the collect() ladder as Tier 0 mux — below supervisor, above
+  // Tier 1 hooks. Keyed by windowKey(serverName, target).
+  private muxStates = new Map<string, { status: MuxAgentStatus; at: number; serverName: string; target: string }>();
   // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
@@ -777,30 +780,46 @@ export class AgentActivityMonitor {
 
   /**
    * Record a mux-native agent state signal (herdr `pane.agent_status_changed`).
-   * Diagnostics only in this PoC — the signal is stored in `muxStates` and
-   * merged into `decisions` at the end of each `collect()` call, surfaced as
-   * `decidedBy: 'tier0_mux'`. NOT wired into the `collect()` ladder's tier
-   * priority. Integration with the tier priority system is deferred to the
-   * post-#155 merge.
+   * Wired into the `collect()` ladder as Tier 0 mux — below supervisor, above
+   * Tier 1 hooks. `done` is treated as an explicit completion (the key is
+   * removed from `muxStates` so lower tiers can take over). `unknown` is
+   * stored but skipped during tier evaluation (lower tiers decide).
    */
   recordMuxSignal(
     serverName: string,
     target: string,
-    status: 'working' | 'idle' | 'blocked',
+    status: MuxAgentStatus,
   ): void {
     const key = windowKey(serverName, target);
+    if (status === 'done') {
+      this.muxStates.set(key, { status: 'done', at: Date.now(), serverName, target });
+      void this.tick();
+      return;
+    }
     this.muxStates.set(key, { status, at: Date.now(), serverName, target });
+    void this.tick();
+  }
+
+  private mapMuxStatus(raw: MuxAgentStatus): { state: ActivityDecidedState; reason?: AgentActivityStopReason } | null {
+    switch (raw) {
+      case 'working': return { state: 'working' };
+      case 'blocked': return { state: 'blocked' };
+      case 'idle': return { state: 'idle' };
+      case 'done': return { state: 'idle', reason: 'completed' };
+      case 'unknown': return null;
+      default: return null;
+    }
   }
 
   private mergeMuxDecisions(decisions: Map<string, ActivityDecision>): void {
     for (const [key, mux] of this.muxStates) {
       if (decisions.has(key)) continue;
-      const stateMap: Record<string, ActivityDecidedState> = { working: 'working', idle: 'idle', blocked: 'blocked' };
+      const mapped = this.mapMuxStatus(mux.status);
       decisions.set(key, {
         serverName: mux.serverName,
         target: mux.target,
         decidedBy: 'tier0_mux',
-        state: stateMap[mux.status] ?? 'none',
+        state: mapped?.state ?? 'none',
         evidenceAt: mux.at,
       });
     }
@@ -945,14 +964,27 @@ export class AgentActivityMonitor {
           decide(key, e.serverName, e.target, 'tier0_supervisor', 'idle', e.taskId, supervisor.at);
           continue;
         }
+        // Tier 0 mux fallback for operations without a supervisor.
+        const mux = !supervisor ? this.muxStates.get(key) : undefined;
+        const muxMapped = mux ? this.mapMuxStatus(mux.status) : null;
+        if (!supervisor && muxMapped?.state === 'idle') {
+          if (muxMapped.reason) reasons.set(key, muxMapped.reason);
+          decide(key, e.serverName, e.target, 'tier0_mux', 'idle', e.taskId, mux!.at);
+          continue;
+        }
+        const decidedBy: ActivityDecidedBy = supervisor ? 'tier0_supervisor' : (muxMapped ? 'tier0_mux' : 'none');
+        const effectiveStatus: 'working' | 'blocked' | undefined =
+          supervisor?.agentStatus === 'blocked' ? 'blocked'
+          : muxMapped?.state === 'blocked' ? 'blocked'
+          : supervisor?.agentStatus ?? (muxMapped?.state === 'working' ? 'working' : undefined);
         decide(
           key,
           e.serverName,
           e.target,
-          supervisor ? 'tier0_supervisor' : 'none',
-          supervisor?.agentStatus === 'blocked' ? 'blocked' : 'working',
+          decidedBy,
+          effectiveStatus === 'blocked' ? 'blocked' : 'working',
           e.taskId,
-          supervisor?.at,
+          supervisor?.at ?? mux?.at,
         );
         next.set(key, {
           serverName: e.serverName,
@@ -961,7 +993,7 @@ export class AgentActivityMonitor {
           source: supervisor ? 'supervised' : 'operation',
           operation: true,
           taskId: e.taskId,
-          status: supervisor?.agentStatus,
+          status: effectiveStatus,
           windowId: this.windowIdByKey.get(key),
         });
       }
@@ -1185,6 +1217,68 @@ export class AgentActivityMonitor {
           });
         }
         continue;
+      }
+
+      // Tier 0 mux: herdr's native agent_status for this key. Authoritative
+      // when no supervisor is present — herdr's paneStateClassifier is the
+      // same lineage as AZITO's Tier 2 screen classifier, but event-driven
+      // rather than polled. Bypasses Tier 1/2/3 but sits below a supervisor
+      // (whose rules are AZITO-controlled).
+      const muxState = this.muxStates.get(key);
+      if (muxState) {
+        const mapped = this.mapMuxStatus(muxState.status);
+        if (mapped) {
+          if (mapped.state === 'idle') {
+            if (mapped.reason) reasons.set(key, mapped.reason);
+            decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'idle', w.taskId ?? undefined, muxState.at);
+            tier0IdlePending.set(key, {
+              window: w,
+              entry: {
+                serverName: w.serverName,
+                target: w.tmuxTarget,
+                running: true,
+                source: 'manual',
+                operation: false,
+                taskId: w.taskId ?? undefined,
+                label: w.label ?? undefined,
+                projectId: w.projectId ?? undefined,
+                windowId: w.id,
+              },
+            });
+            continue;
+          }
+          // mux working/blocked — for claude, also check screen for blocked
+          // (herdr's blocked detection is unverified; same as supervisor path).
+          let effectiveMuxStatus = mapped.state === 'blocked' ? 'blocked' as const : undefined;
+          if (w.workerType === 'claude' && effectiveMuxStatus !== 'blocked') {
+            const server = servers.get(w.serverName);
+            if (server) {
+              const sessions = sessionsByServer.get(w.serverName) ?? [];
+              const muxWindow = findLiveWindow(sessions, w.tmuxTarget);
+              if (muxWindow) {
+                const { windowSpec: ws } = parseWindowTarget(w.tmuxTarget);
+                const pi = extractPaneIndex(ws, muxWindow.index, muxWindow.name);
+                const classified = await this.classifyCandidateState(server, w, muxWindow, pi, key);
+                if (classified === 'blocked') effectiveMuxStatus = 'blocked';
+              }
+            }
+          }
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', effectiveMuxStatus ?? 'working', w.taskId ?? undefined, muxState.at);
+          next.set(key, {
+            serverName: w.serverName,
+            target: w.tmuxTarget,
+            running: true,
+            source: 'manual',
+            operation: false,
+            taskId: w.taskId ?? undefined,
+            label: w.label ?? undefined,
+            projectId: w.projectId ?? undefined,
+            status: effectiveMuxStatus,
+            windowId: w.id,
+          });
+          continue;
+        }
+        // mapped === null → unknown: fall through to lower tiers.
       }
 
       const sessions = sessionsByServer.get(w.serverName) ?? [];
@@ -1417,6 +1511,13 @@ export class AgentActivityMonitor {
       const pi = extractPaneIndex(windowSpec, win.index, win.name);
       const name = getRelevantPaneName(win.panes, pi);
       if (name) next.set(key, { ...entry, paneName: name });
+    }
+
+    // Expire `done` mux entries: the agent session is finished, so herdr's
+    // state is no longer authoritative. Removing the entry lets lower tiers
+    // take over on subsequent ticks (e.g. the window may be reused).
+    for (const [key, mux] of this.muxStates) {
+      if (mux.status === 'done') this.muxStates.delete(key);
     }
 
     this.previousLiveKeys = liveKeys;
