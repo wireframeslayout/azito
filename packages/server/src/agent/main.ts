@@ -143,9 +143,9 @@ async function main(): Promise<void> {
           }
         }
         if (paneIds.length > 0) {
-          await herdrSocket!.call('events.subscribe', {
-            subscriptions: paneIds.map(id => ({ type: 'pane.agent_status_changed', pane_id: id })),
-          });
+          herdrSubscriber!.addSubscriptions(
+            paneIds.map(id => ({ type: 'pane.agent_status_changed', pane_id: id })),
+          );
         }
       } catch (err) {
         console.error('[agent-herdr] Failed to rebuild pane cache:', (err as Error).message);
@@ -165,10 +165,27 @@ async function main(): Promise<void> {
       // Structural events: relay + trigger session refresh.
       agentEventBus.emit('mux-event', event);
       agentEventBus.emit('tmux-event', { event: event.type });
-      if (event.type === 'pane.created' && event.pane_id && herdrSocket) {
-        void herdrSocket.call('events.subscribe', {
-          subscriptions: [{ type: 'pane.agent_status_changed', pane_id: event.pane_id as string }],
-        }).catch(() => {});
+      if (event.type === 'pane.created' && event.pane_id) {
+        herdrSubscriber!.addSubscriptions([{
+          type: 'pane.agent_status_changed',
+          pane_id: event.pane_id as string,
+        }]);
+        // Resolve labels for the new pane from a snapshot and add to cache.
+        void (async () => {
+          try {
+            const r = await herdrSocket!.call('session.snapshot');
+            const s = (r.result ?? r) as {
+              panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
+              workspaces: Array<{ workspace_id: string; label: string }>;
+              tabs: Array<{ tab_id: string; label: string }>;
+            };
+            const pane = s.panes.find(p => p.pane_id === event.pane_id);
+            if (!pane) return;
+            const wl = s.workspaces.find(w => w.workspace_id === pane.workspace_id)?.label;
+            const tl = s.tabs.find(t => t.tab_id === pane.tab_id)?.label;
+            if (wl && tl) paneCache.set(event.pane_id as string, { workspace_label: wl, tab_label: tl });
+          } catch { /* non-fatal */ }
+        })();
       }
       // Structural change invalidates cache.
       if (event.type !== 'pane.created' && event.type !== 'pane.closed') {

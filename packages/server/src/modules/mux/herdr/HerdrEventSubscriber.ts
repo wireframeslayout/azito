@@ -32,6 +32,16 @@ export class HerdrEventSubscriber extends EventEmitter {
     return this._connected;
   }
 
+  addSubscriptions(subs: HerdrSubscription[]): void {
+    if (!this.socket || !this._connected) return;
+    const req = JSON.stringify({
+      id: String(Date.now()),
+      method: 'events.subscribe',
+      params: { subscriptions: subs },
+    }) + '\n';
+    this.socket.write(req);
+  }
+
   start(): void {
     this.stopped = false;
     this.connect();

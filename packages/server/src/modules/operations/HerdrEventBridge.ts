@@ -122,13 +122,13 @@ export class HerdrEventBridge {
         }
       }
 
-      // Subscribe to agent_status for each pane individually (herdr requires specific pane_id).
+      // Subscribe to agent_status for each pane on the persistent event socket
+      // (not the one-shot RPC socket — HerdrSocketClient closes after each call).
       if (paneIds.length > 0) {
-        const statusSubs: HerdrSubscription[] = paneIds.map(id => ({
+        state.subscriber.addSubscriptions(paneIds.map(id => ({
           type: 'pane.agent_status_changed',
           pane_id: id,
-        }));
-        await state.socketClient.call('events.subscribe', { subscriptions: statusSubs });
+        })));
       }
     } catch (err) {
       console.error(`[herdr-bridge] Failed to rebuild cache for ${serverName}:`, err instanceof Error ? err.message : err);
@@ -203,9 +203,10 @@ export class HerdrEventBridge {
         state.paneCache.set(paneId, { workspaceLabel: wsLabel, tabLabel });
       }
 
-      await state.socketClient.call('events.subscribe', {
-        subscriptions: [{ type: 'pane.agent_status_changed', pane_id: paneId }],
-      });
+      state.subscriber.addSubscriptions([{
+        type: 'pane.agent_status_changed',
+        pane_id: paneId,
+      }]);
     } catch (err) {
       console.error(`[herdr-bridge] Failed to subscribe pane ${paneId} on ${serverName}:`, err instanceof Error ? err.message : err);
     }
