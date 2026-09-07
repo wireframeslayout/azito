@@ -79,7 +79,8 @@ export interface MuxPaneInfo {
 export type MuxExecRequest =
   | { kind: 'tmux'; args: string[] }
   | { kind: 'herdr'; method: string; params: unknown }
-  | { kind: 'zellij'; args: string[] };
+  | { kind: 'zellij'; args: string[] }
+  | { kind: 'zellij-ctl'; action: 'ensure-resident' | 'detach-resident'; session: string };
 
 export function asPaneHandle(s: string): PaneHandle {
   return s as PaneHandle;

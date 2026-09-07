@@ -116,6 +116,41 @@ else
   echo "  SKIP: no sessions (mux daemon may not be running)"
 fi
 
+# ── Step 2b: Window creation (zellij only) ──
+if [ "$RUNTIME" = "zellij" ] && [ "$SESSION_COUNT" -gt 0 ]; then
+  echo ""
+  echo "=== Step 2b: Window creation via openWindow ==="
+  WORKSPACE=$(echo "$SESSIONS" | jq -r '.[0].name')
+  WIN_NAME="e2e-win-$$"
+  CREATE=$(curl -sf -X POST "${HUB}/api/servers/${SERVER}/mux/workspaces/${WORKSPACE}/windows" \
+    -H "$AUTH" -H "Content-Type: application/json" \
+    -d "{\"name\":\"${WIN_NAME}\"}" 2>/dev/null || echo '{"error":"create failed"}')
+  CREATE_REF=$(echo "$CREATE" | jq -r '.ref // empty')
+  if [ -n "$CREATE_REF" ]; then
+    echo "  PASS: window created, ref=$(echo "$CREATE_REF" | jq -c .)"
+    PASS=$((PASS + 1))
+    # Verify pane exists in the new window
+    NEW_REF_ENC=$(python3 -c "import urllib.parse,json,sys; print(urllib.parse.quote(json.dumps(json.loads(sys.argv[1]))))" "$CREATE_REF")
+    PANES=$(curl -sf "${HUB}/api/servers/${SERVER}/sessions" -H "$AUTH" | \
+      jq --arg w "$WIN_NAME" '[.[0].windows[] | select(.name == $w) | .panes | length] | add // 0')
+    if [ "$PANES" -gt 0 ]; then
+      echo "  PASS: window has ${PANES} pane(s)"
+      PASS=$((PASS + 1))
+    else
+      echo "  FAIL: window has 0 panes (resident client may not be working)"
+      FAIL=$((FAIL + 1))
+    fi
+    # Clean up the window
+    CLOSE=$(curl -sf -X POST "${HUB}/api/servers/${SERVER}/mux/windows/${NEW_REF_ENC}/kill" \
+      -H "$AUTH" 2>/dev/null || echo '{"error":"close failed"}')
+    CLOSE_OK=$(echo "$CLOSE" | jq -r '.ok // false')
+    assert_eq "close created window" "$CLOSE_OK" "true"
+  else
+    echo "  FAIL: window creation returned no ref: $(echo "$CREATE" | jq -c .)"
+    FAIL=$((FAIL + 1))
+  fi
+fi
+
 # ── Step 3: Capture (if windows exist) ──
 echo ""
 echo "=== Step 3: Capture / send-keys / split / rename ==="

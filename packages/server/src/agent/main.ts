@@ -22,6 +22,7 @@ import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
 import { HerdrEventSubscriber, type HerdrEvent, type HerdrSubscription } from '../modules/mux/herdr/HerdrEventSubscriber';
 import { herdrSocketPath } from '../modules/mux/herdr/HerdrSocketClient';
+import { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
 
 /** `session.snapshot` arrives as `{ id, result: { type, snapshot } }` (or, from tests, already unwrapped). */
 function unwrapHerdrSnapshot(resp: unknown): unknown {
@@ -86,10 +87,13 @@ async function main(): Promise<void> {
 
   await app.register(websocket);
 
+  const zellijResident = new ZellijResidentClient();
+
   // Health endpoint (no auth) + tmux hook receiver + browser routes
   await app.register(agentRoutes, {
     agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS,
     onHerdrMuxRequest: () => startHerdrRelay(),
+    zellijResident,
   });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
@@ -333,6 +337,7 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
+    zellijResident.detachAll();
     if (herdrProbeTimer) { clearInterval(herdrProbeTimer); herdrProbeTimer = null; }
     herdrSubscriber?.stop();
     if (hookRt) {

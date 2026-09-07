@@ -55,15 +55,30 @@ zellij has no daemon mode. The server process starts on first client attach and 
 - `workspace`: zellij session name (e.g. `"azito"`)
 - `window`: zellij tab name (e.g. `"win--abc"`)
 
-## Headless limitations
+## Headless limitations and resident client
 
-In headless sessions (no client attached), `new-tab` creates an empty tab with zero terminal panes (even with `--layout-string`). `openWindow` uses `--layout-string 'layout { pane; }'` as best-effort, but panes may only materialize when a client is attached. Tabs without panes:
+In headless sessions (no client attached), `new-tab` creates an empty tab with zero terminal panes (even with `--layout-string`). Tabs without panes:
 
 - Are invisible to `list-panes --all --json`
 - Can appear in `query-tab-names` but with unreliable tab_id correlation
 - Cannot be operated on (capture, send-keys, split) until a pane exists
 
-The `resolveTabId` fallback uses `query-tab-names` index as tab_id (works for fresh sessions where position == id). For production use with headless tab creation, a persistent attached client (e.g. `zellij attach` via node-pty) would be needed.
+### Resident client approach (introduced in stage 7-G)
+
+`ZellijResidentClient` holds a single `zellij attach <session>` process via node-pty (200x50), keeping the session in "client attached" state so tab/pane creation works correctly.
+
+| Test | Result |
+|------|--------|
+| (a) `new-tab --name X` creates panes | **Works** — one terminal pane created |
+| (b) `--layout-string 'layout { pane; }'` | **Works** — equivalent to (a) |
+| (c) `go-to-tab-name X` then `new-pane` targets X | **Works** — resident client focus moves, pane created in correct tab |
+| (d) Resident terminal size affects new pane size | **Yes** — pane dimensions match the resident client viewport. node-pty 200x50 provides sufficient initial size |
+| (e) `mirror_session false` independent focus | **Works** — `go-to-tab-name` only changes the resident client's focus. CLI `action` commands operate on the resident client's focus |
+| (extra) `new-pane -- env KEY=VAL /bin/bash` | **Works** — environment variables correctly passed to pane |
+
+**Important**: `new-pane` has no `--tab-id` flag. Targeting a specific tab for pane creation requires `go-to-tab-name` followed by `new-pane` (serialized via `withSessionLock`).
+
+The `resolveTabId` fallback uses `query-tab-names` index as tab_id (works for fresh sessions where position == id).
 
 ## Registering with AZITO
 

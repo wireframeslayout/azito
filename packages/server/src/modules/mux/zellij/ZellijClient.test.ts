@@ -21,8 +21,9 @@ function lastArgs(args: string[]): string {
 }
 
 function makeClient(handler: (args: string[]) => string) {
-  const execMux = vi.fn(async (req: { kind: string; args: string[] }) => {
-    const result = handler(req.args);
+  const execMux = vi.fn(async (req: { kind: string; args?: string[] }) => {
+    if (req.kind === 'zellij-ctl') return { stdout: 'ok', stderr: '', code: 0 };
+    const result = handler(req.args ?? []);
     return { stdout: result, stderr: '', code: 0 };
   });
   const factory = {
@@ -83,19 +84,43 @@ describe('ZellijClient', () => {
   });
 
   describe('openWindow', () => {
-    it('calls new-tab with --layout-string and --name, returns ref', async () => {
+    const EDITOR_PANES_JSON = JSON.stringify([
+      ...JSON.parse(LIST_PANES_JSON),
+      { id: 3, is_plugin: false, is_focused: false, is_fullscreen: false, is_floating: false, is_suppressed: false, title: 'bash', exited: false, exit_status: null, is_held: false, pane_x: 0, pane_content_x: 0, pane_y: 0, pane_content_y: 0, pane_rows: 50, pane_content_rows: 50, pane_columns: 120, pane_content_columns: 120, cursor_coordinates_in_pane: [0, 0], terminal_command: null, plugin_url: null, is_selectable: true, index_in_pane_group: {}, default_fg: null, default_bg: null, tab_id: 2, tab_position: 2, tab_name: 'editor', pane_command: '/bin/bash', pane_cwd: '/home/user/project' },
+    ]);
+
+    it('calls ensureResident then new-tab, returns ref', async () => {
       const { client, execMux } = makeClient((args) => {
         const cmd = lastArgs(args);
         if (cmd.startsWith('new-tab')) return '3';
+        if (cmd.startsWith('list-panes')) return EDITOR_PANES_JSON;
         return defaultHandler(args);
       });
       const { ref } = await client.openWindow(server, 'azito', 'editor');
       expect(ref).toEqual({ kind: 'zellij', workspace: 'azito', window: 'editor' });
-      const newTabCall = execMux.mock.calls.find(([req]: any) => req.args.includes('new-tab'));
+      const ctlCall = execMux.mock.calls.find(([req]: any) => req.kind === 'zellij-ctl');
+      expect(ctlCall).toBeDefined();
+      expect(ctlCall![0]).toMatchObject({ kind: 'zellij-ctl', action: 'ensure-resident', session: 'azito' });
+      const newTabCall = execMux.mock.calls.find(([req]: any) => req.args?.includes('new-tab'));
       expect(newTabCall).toBeDefined();
-      expect(newTabCall![0].args).toContain('--layout-string');
-      expect(newTabCall![0].args).toContain('--name');
-      expect(newTabCall![0].args).toContain('editor');
+    });
+
+    it('falls back to go-to-tab-name + new-pane when pane missing', async () => {
+      const { client, execMux } = makeClient((args) => {
+        const cmd = lastArgs(args);
+        if (cmd.startsWith('new-tab')) return '3';
+        if (cmd.startsWith('new-pane')) return 'terminal_5';
+        return defaultHandler(args);
+      });
+      await client.openWindow(server, 'azito', 'editor');
+      const goToCall = execMux.mock.calls.find(([req]: any) => req.args?.includes('go-to-tab-name'));
+      expect(goToCall).toBeDefined();
+      expect(goToCall![0].args).toContain('editor');
+      const newPaneCall = execMux.mock.calls.find(([req]: any) => {
+        const a = req.args as string[] | undefined;
+        return a?.includes('new-pane') && !a?.includes('new-tab');
+      });
+      expect(newPaneCall).toBeDefined();
     });
   });
 

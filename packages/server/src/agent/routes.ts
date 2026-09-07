@@ -41,6 +41,7 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 import type { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { openBrowserTab } from '../modules/browser/openBrowserTab';
+import type { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
 
 export interface AgentRoutesOptions {
   agentVersion: string;
@@ -48,6 +49,7 @@ export interface AgentRoutesOptions {
   agentEventBus: EventEmitter;
   browserSessionManager: BrowserSessionManager;
   onHerdrMuxRequest?: () => void;
+  zellijResident?: ZellijResidentClient;
   /**
    * Address this agent listens on. tmux hooks are registered against it (see
    * agent/main.ts), so requests the agent makes to itself arrive with this as
@@ -140,9 +142,25 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
 
   // ── POST /api/mux ──
   fastify.post('/api/mux', async (request, reply) => {
-    const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number };
+    const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number; action?: string; session?: string };
     if (req.kind === 'herdr') opts.onHerdrMuxRequest?.();
-    const { timeoutMs, ...muxReq } = req;
+
+    if (req.kind === 'zellij-ctl') {
+      if (!opts.zellijResident) {
+        return reply.status(501).send({ error: 'ZellijResidentClient not available on this agent' });
+      }
+      if (req.action === 'ensure-resident' && req.session) {
+        await opts.zellijResident.ensureAttached(req.session);
+        return { stdout: 'ok', stderr: '', code: 0 };
+      }
+      if (req.action === 'detach-resident' && req.session) {
+        opts.zellijResident.detach(req.session);
+        return { stdout: 'ok', stderr: '', code: 0 };
+      }
+      return reply.status(400).send({ error: `Unknown zellij-ctl action: ${req.action}` });
+    }
+
+    const { timeoutMs, action: _a, session: _s, ...muxReq } = req;
     try {
       return await execMuxCommand(muxReq, timeoutMs ?? 15000);
     } catch (err: unknown) {
