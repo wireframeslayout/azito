@@ -126,7 +126,13 @@ export class RecoverStuckTasksUseCase {
       return;
     }
 
-    const probe = await driver.probePane(server, handle);
+    let probe: { alive: boolean; verified: boolean };
+    try {
+      probe = await driver.probePane(server, handle);
+    } catch {
+      this.logger.warn(`Recovery skip: probePane failed for task ${task.id} (${handle})`);
+      return;
+    }
     if (!probe.alive || !probe.verified) {
       this.logger.warn(`Recovery skip: pane ${!probe.alive ? 'dead' : 'unverified'} for task ${task.id} (${handle})`);
       return;
