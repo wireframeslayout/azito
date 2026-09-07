@@ -23,6 +23,14 @@ import { handleDevtoolsRelay } from '../modules/browser/devtools';
 import { HerdrEventSubscriber, type HerdrEvent, type HerdrSubscription } from '../modules/mux/herdr/HerdrEventSubscriber';
 import { herdrSocketPath } from '../modules/mux/herdr/HerdrSocketClient';
 
+/** `session.snapshot` arrives as `{ id, result: { type, snapshot } }` (or, from tests, already unwrapped). */
+function unwrapHerdrSnapshot(resp: unknown): unknown {
+  const env = (resp && typeof resp === 'object' && 'result' in (resp as Record<string, unknown>)) ? (resp as { result: unknown }).result : resp;
+  if (env && typeof env === 'object' && 'snapshot' in (env as Record<string, unknown>)) return (env as { snapshot: unknown }).snapshot;
+  return env;
+}
+
+
 // ─── Environment validation ───
 
 const bind = process.env.AZITO_AGENT_BIND;
@@ -133,7 +141,7 @@ async function main(): Promise<void> {
     const rebuildPaneCache = async (): Promise<void> => {
       try {
         const resp = await herdrRelaySocket!.call('session.snapshot');
-        const snap = (resp.result ?? resp) as {
+        const snap = unwrapHerdrSnapshot(resp) as {
           panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
           workspaces: Array<{ workspace_id: string; label: string }>;
           tabs: Array<{ tab_id: string; label: string }>;
@@ -180,7 +188,7 @@ async function main(): Promise<void> {
         void (async () => {
           try {
             const r = await herdrRelaySocket!.call('session.snapshot');
-            const s = (r.result ?? r) as {
+            const s = unwrapHerdrSnapshot(r) as {
               panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
               workspaces: Array<{ workspace_id: string; label: string }>;
               tabs: Array<{ tab_id: string; label: string }>;

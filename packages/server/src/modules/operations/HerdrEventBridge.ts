@@ -4,6 +4,14 @@ import type { AgentActivityMonitor, MuxAgentStatus } from './AgentActivityMonito
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { IServerRepository } from '../servers/Server';
 
+/** `session.snapshot` arrives as `{ id, result: { type, snapshot } }` (or, from tests, already unwrapped). */
+function unwrapHerdrSnapshot(resp: unknown): unknown {
+  const env = (resp && typeof resp === 'object' && 'result' in (resp as Record<string, unknown>)) ? (resp as { result: unknown }).result : resp;
+  if (env && typeof env === 'object' && 'snapshot' in (env as Record<string, unknown>)) return (env as { snapshot: unknown }).snapshot;
+  return env;
+}
+
+
 const STRUCTURE_EVENTS: HerdrSubscription[] = [
   { type: 'tab.created' },
   { type: 'tab.closed' },
@@ -101,7 +109,7 @@ export class HerdrEventBridge {
   private async rebuildCacheAndSubscribePanes(serverName: string, state: PerServerState): Promise<void> {
     try {
       const resp = await state.socketClient.call('session.snapshot');
-      const snapshot = (resp.result ?? resp) as {
+      const snapshot = unwrapHerdrSnapshot(resp) as {
         panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
         workspaces: Array<{ workspace_id: string; label: string }>;
         tabs: Array<{ tab_id: string; workspace_id: string; label: string }>;
@@ -193,7 +201,7 @@ export class HerdrEventBridge {
     try {
       // Resolve labels from a snapshot (the event only carries IDs).
       const resp = await state.socketClient.call('session.snapshot');
-      const snapshot = (resp.result ?? resp) as {
+      const snapshot = unwrapHerdrSnapshot(resp) as {
         workspaces: Array<{ workspace_id: string; label: string }>;
         tabs: Array<{ tab_id: string; label: string }>;
       };

@@ -68,3 +68,26 @@ describe('HerdrEventSubscriber', () => {
     expect(true).toBe(true);
   });
 });
+
+// Real herdr 0.8.2 stream lines (captured on server007): the ack is `{id, result}`, events are
+// `{event: 'tab_created', data: {type: 'tab_created', ...}}`. The old parser required a top-level
+// `type` and therefore never emitted anything.
+import { normaliseHerdrEventLine, herdrEventTypeToDotted } from './HerdrEventSubscriber';
+describe('normaliseHerdrEventLine (herdr 0.8.2 wire format)', () => {
+  it('drops the subscription ack and errors', () => {
+    expect(normaliseHerdrEventLine({ id: 'S', result: { type: 'subscription_started' } })).toBeNull();
+    expect(normaliseHerdrEventLine({ id: '', error: { code: 'invalid_request', message: 'x' } })).toBeNull();
+  });
+  it('flattens {event,data} into a dotted-type event', () => {
+    const ev = normaliseHerdrEventLine({ event: 'tab_created', data: { type: 'tab_created', tab: { tab_id: 'w1:t4', label: '4' } } });
+    expect(ev?.type).toBe('tab.created');
+    expect((ev as { tab?: { tab_id: string } }).tab?.tab_id).toBe('w1:t4');
+    const st = normaliseHerdrEventLine({ event: 'pane_agent_status_changed', data: { type: 'pane_agent_status_changed', pane_id: 'w1:p2', workspace_id: 'w1', agent_status: 'blocked' } });
+    expect(st?.type).toBe('pane.agent_status_changed');
+    expect((st as { agent_status?: string }).agent_status).toBe('blocked');
+  });
+  it('maps underscore names to the dotted vocabulary', () => {
+    expect(herdrEventTypeToDotted('workspace_metadata_updated')).toBe('workspace.metadata_updated');
+    expect(herdrEventTypeToDotted('pane.output_matched')).toBe('pane.output_matched');
+  });
+});
