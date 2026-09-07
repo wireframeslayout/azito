@@ -751,10 +751,11 @@ export class AgentActivityMonitor {
 
   /**
    * Record a mux-native agent state signal (herdr `pane.agent_status_changed`).
-   * Diagnostics only in this PoC — the signal is stored and surfaced through
-   * `diagnostics()` as `decidedBy: 'tier0_mux'`, but is NOT wired into the
-   * `collect()` ladder. Integration with the tier priority system is deferred to
-   * the post-#155 merge.
+   * Diagnostics only in this PoC — the signal is stored in `muxStates` and
+   * merged into `decisions` at the end of each `collect()` call, surfaced as
+   * `decidedBy: 'tier0_mux'`. NOT wired into the `collect()` ladder's tier
+   * priority. Integration with the tier priority system is deferred to the
+   * post-#155 merge.
    */
   recordMuxSignal(
     serverName: string,
@@ -763,14 +764,20 @@ export class AgentActivityMonitor {
   ): void {
     const key = windowKey(serverName, target);
     this.muxStates.set(key, { status, at: Date.now(), serverName, target });
-    const stateMap: Record<string, ActivityDecidedState> = { working: 'working', idle: 'idle', blocked: 'blocked' };
-    this.decisions.set(key, {
-      serverName,
-      target,
-      decidedBy: 'tier0_mux',
-      state: stateMap[status] ?? 'none',
-      evidenceAt: Date.now(),
-    });
+  }
+
+  private mergeMuxDecisions(decisions: Map<string, ActivityDecision>): void {
+    for (const [key, mux] of this.muxStates) {
+      if (decisions.has(key)) continue;
+      const stateMap: Record<string, ActivityDecidedState> = { working: 'working', idle: 'idle', blocked: 'blocked' };
+      decisions.set(key, {
+        serverName: mux.serverName,
+        target: mux.target,
+        decidedBy: 'tier0_mux',
+        state: stateMap[mux.status] ?? 'none',
+        evidenceAt: mux.at,
+      });
+    }
   }
 
   async tick(): Promise<void> {
@@ -1014,6 +1021,7 @@ export class AgentActivityMonitor {
 
     if (candidates.length === 0) {
       this.previousLiveKeys = liveKeys;
+      this.mergeMuxDecisions(decisions);
       return { next, reasons, deletedKeys, decisions };
     }
 
@@ -1377,6 +1385,7 @@ export class AgentActivityMonitor {
     }
 
     this.previousLiveKeys = liveKeys;
+    this.mergeMuxDecisions(decisions);
     return { next, reasons, deletedKeys, decisions };
   }
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { HerdrClient } from './HerdrClient';
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';

@@ -9,7 +9,7 @@ import type {
   MuxPaneInfo,
   MuxDriverKind,
 } from '@azito/shared';
-import { asPaneHandle, herdrMuxRef, herdrPaneHandle, parseHerdrPaneHandle } from '@azito/shared';
+import { herdrMuxRef, herdrPaneHandle, parseHerdrPaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';

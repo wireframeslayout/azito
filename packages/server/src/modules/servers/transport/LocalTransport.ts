@@ -123,9 +123,18 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     );
   }
 
-  private async openHerdrTerminal(ref: MuxRef, _ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+  private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     if (this.herdrSocket) {
       await this.herdrSocket.call('tab.focus', { tab_name: ref.window, workspace_name: ref.workspace }).catch(() => {});
+      const snap = await this.herdrSocket.call('session.snapshot').catch(() => null) as { workspaces?: Array<{ name: string; tabs: Array<{ name: string; panes: Array<{ id: string }> }> }> } | null;
+      if (snap) {
+        const ws = snap.workspaces?.find((w) => w.name === ref.workspace);
+        const tab = ws?.tabs.find((t) => t.name === ref.window);
+        const pane = tab?.panes[ordinal - 1];
+        if (pane) {
+          await this.herdrSocket.call('pane.focus', { pane_id: pane.id }).catch(() => {});
+        }
+      }
     }
     const argv = ['--session', ref.workspace];
     return this.spawnTerminal(argv, cols, rows, undefined, undefined, 'herdr');

@@ -107,16 +107,20 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   }
 
   // ─── Global error handler for mux capability errors ───
+  // Catches MuxCapabilityMissingError and MuxDriverUnavailableError from any
+  // route, returning structured 409/503 responses. All other errors are passed
+  // through to Fastify's default handler to preserve validation-error details,
+  // logging, and status-code inference.
 
-  app.setErrorHandler((err, _request, reply) => {
+  const defaultErrorHandler = app.errorHandler;
+  app.setErrorHandler((err, request, reply) => {
     if (err instanceof MuxCapabilityMissingError) {
       return reply.status(409).send({ error: 'mux_capability_missing', capability: err.capability });
     }
     if (err instanceof MuxDriverUnavailableError) {
       return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind });
     }
-    const status = (err as { statusCode?: number }).statusCode ?? 500;
-    reply.status(status).send({ error: (err as Error).message });
+    return defaultErrorHandler.call(app, err, request, reply);
   });
 
   // ─── UI token (resolved by main.ts, passed through wiring) ───
