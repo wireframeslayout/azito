@@ -100,7 +100,14 @@ export class HerdrClient implements IMuxClient {
       method,
       params,
     });
-    return JSON.parse(result.stdout) as Record<string, unknown>;
+    const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
+    // Transports relay the raw NDJSON envelope ({ id, result }) as produced by
+    // HerdrSocketClient.call(); callers here want the payload. Tolerate an
+    // already-unwrapped payload (unit-test mocks, future transports).
+    if (parsed && typeof parsed === 'object' && 'result' in parsed && !('type' in parsed)) {
+      return (parsed.result ?? {}) as Record<string, unknown>;
+    }
+    return parsed;
   }
 
   private async snapshot(server: ServerConfig): Promise<SessionSnapshot> {
