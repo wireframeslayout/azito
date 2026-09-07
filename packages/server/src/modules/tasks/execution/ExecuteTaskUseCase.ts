@@ -226,6 +226,10 @@ export class ExecuteTaskUseCase {
     );
   }
 
+  setActivitySource(source: { isKeyWorking(serverName: string, target: string): boolean }): void {
+    this.phaseLoopRunner.setActivitySource(source);
+  }
+
   // Bundled once per call (cheap object literal — `serverRepo`/`serverIsolationMutex`
   // themselves are the singletons) so createRotatedWindow/createSecondaryWindow
   // call sites below don't each re-spell the same two-field object. See

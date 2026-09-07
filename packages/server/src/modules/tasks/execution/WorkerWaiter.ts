@@ -148,6 +148,7 @@ export class WorkerWaiter {
     signalStream?: IPaneStream,
     completionProbe?: () => Promise<boolean>,
     supervisorTarget?: string,
+    options?: { stillWorkingLimit?: number; activitySource?: { isWorking(): boolean } },
   ): Promise<WaitResult> {
     const MAX_IDLE = 300_000;
     const IDLE_TIMEOUT = 120_000;
@@ -155,7 +156,7 @@ export class WorkerWaiter {
     const MARKER_ENABLE_DELAY = 3_000;
     const MAX_PHASE_DURATION = 30 * 60_000;
     const MAX_PHASE_DURATION_EXTENDED = 60 * 60_000;
-    const MAX_CONSECUTIVE_STILL_WORKING = 5;
+    const MAX_CONSECUTIVE_STILL_WORKING = options?.stillWorkingLimit ?? 5;
     const QUIESCENCE_MS = 2_000;
     const QUIESCENCE_MAX_WAIT_MS = 45_000;
 
@@ -354,14 +355,18 @@ export class WorkerWaiter {
                   return;
                 }
               }
-              consecutiveStillWorking++;
-              if (consecutiveStillWorking >= MAX_CONSECUTIVE_STILL_WORKING) {
-                this.appendLog(taskId, unitId, 'command', { type: 'still_working_limit', count: consecutiveStillWorking });
-                finishStoppedOrVerified();
-              } else {
-                // Defer MAX_IDLE while the classifier says still_working;
-                // bounded by the consecutive counter and MAX_PHASE_DURATION
+              if (options?.activitySource?.isWorking()) {
+                this.appendLog(taskId, unitId, 'command', { type: 'still_working_suppressed_by_activity' });
+                consecutiveStillWorking = 0;
                 lastDataTime = Date.now();
+              } else {
+                consecutiveStillWorking++;
+                if (consecutiveStillWorking >= MAX_CONSECUTIVE_STILL_WORKING) {
+                  this.appendLog(taskId, unitId, 'command', { type: 'still_working_limit', count: consecutiveStillWorking });
+                  finishStoppedOrVerified();
+                } else {
+                  lastDataTime = Date.now();
+                }
               }
             } else {
               const fullOutput = paneStream.getBuffer() || result.stdout;

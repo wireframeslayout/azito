@@ -684,6 +684,12 @@ export class AgentActivityMonitor {
     });
   }
 
+  isKeyWorking(serverName: string, target: string): boolean {
+    const key = windowKey(serverName, target);
+    const decision = this.decisions.get(key);
+    return decision?.state === 'working';
+  }
+
   /**
    * Record a Tier 1 hook signal against every manual agent window it
    * identifies (normally exactly one), then tick immediately so the UI

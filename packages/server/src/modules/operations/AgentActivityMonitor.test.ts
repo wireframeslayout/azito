@@ -2255,4 +2255,30 @@ describe('AgentActivityMonitor', () => {
       expect(entry?.decidedBy).not.toBe('tier0_mux');
     });
   });
+
+  describe('isKeyWorking()', () => {
+    it('returns true when the key is decided as working', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
+
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(monitor.isKeyWorking('local', 'azito:agent-1')).toBe(true);
+    });
+
+    it('returns false when the key is decided as idle', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'generic' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000)));
+
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'idle');
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(monitor.isKeyWorking('local', 'azito:agent-1')).toBe(false);
+    });
+
+    it('returns false for an unknown key', () => {
+      expect(monitor.isKeyWorking('unknown', 'nonexistent')).toBe(false);
+    });
+  });
 });
