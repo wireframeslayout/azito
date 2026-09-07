@@ -1076,7 +1076,8 @@ export class AgentActivityMonitor {
     await Promise.all([...servers.entries()].map(async ([serverName, server]) => {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
-        if (muxKindForRuntime(server.muxRuntime) === 'tmux') {
+        const kind = muxKindForRuntime(server.muxRuntime ?? 'system');
+        if (kind === 'tmux') {
           sessionsByServer.set(serverName, await this.tmux.listSessions(server));
         } else if (this.muxDriverRegistry) {
           const driver = this.muxDriverRegistry.resolve(server);

@@ -231,7 +231,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const driverKind = muxKindForRuntime(srv.muxRuntime);
+      const driverKind = muxKindForRuntime(srv.muxRuntime ?? 'system');
 
       // Non-tmux drivers: delegate to IMuxClient.listWorkspaces via registry
       if (driverKind !== 'tmux' && opts.muxDriverRegistry) {
@@ -271,8 +271,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   function requireTmuxDriver(srv: ServerConfig, reply: any): boolean {
-    if (muxKindForRuntime(srv.muxRuntime) !== 'tmux') {
-      reply.status(400).send({ error: `Not supported for ${muxKindForRuntime(srv.muxRuntime)} driver. Use /mux/windows/:ref routes instead.` });
+    const kind = muxKindForRuntime(srv.muxRuntime ?? 'system');
+    if (kind !== 'tmux') {
+      reply.status(400).send({ error: `Not supported for ${kind} driver. Use /mux/windows/:ref routes instead.` });
       return false;
     }
     return true;
