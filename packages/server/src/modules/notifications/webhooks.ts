@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
 import type { AgentHookSignal } from '../operations/AgentActivityMonitor';
 import type { InteractionSignal, InteractionContent, InteractionQuestion, InteractionQuestionOption } from './InteractionMonitor';
+import { isPaneHandleLike } from '@azito/shared';
 
 export interface WebhookRouteOptions {
   taskRepo: SqliteTaskRepository;
@@ -138,7 +139,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       return reply.status(400).send({ error: 'event must be "start" or "stop"' });
     }
 
-    const muxPaneRef = typeof body.muxPaneRef === 'string' && /^%\d+$/.test(body.muxPaneRef)
+    const muxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef)
       ? body.muxPaneRef : undefined;
 
     recordAgentActivity({
@@ -201,7 +202,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
     }
 
     const content = parseInteractionContent(body.content);
-    const interactionMuxPaneRef = typeof body.muxPaneRef === 'string' && /^%\d+$/.test(body.muxPaneRef)
+    const interactionMuxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef)
       ? body.muxPaneRef : undefined;
 
     recordInteractionSignal({

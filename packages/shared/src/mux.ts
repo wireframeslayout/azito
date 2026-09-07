@@ -129,6 +129,17 @@ export function parseHerdrPaneHandle(handle: PaneHandle): { workspaceId: string;
   return { workspaceId: s.slice(0, idx), paneId: s.slice(idx + 1) };
 }
 
+/**
+ * Returns true when `s` looks like a mux-native pane identifier from any
+ * supported multiplexer: tmux `%N`, herdr `w<N>:p<N>`, zellij `terminal_<N>`.
+ * Used to validate `muxPaneRef` values at system boundaries (supervisor
+ * register, webhook payloads) so they pass through to PaneHandleResolver.
+ */
+const PANE_HANDLE_LIKE_RE = /^(%\d+|w\d+:p\d+|terminal_\d+)$/;
+export function isPaneHandleLike(s: string): boolean {
+  return PANE_HANDLE_LIKE_RE.test(s);
+}
+
 /** herdr MuxRef: workspace = workspace label, window = tab label. */
 export function herdrMuxRef(workspaceName: string, tabName: string): MuxRef {
   return { kind: 'herdr', workspace: workspaceName, window: tabName };

@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { SupervisorRegistry } from '../SupervisorRegistry';
 import type { RegisterMessage, SupervisorToHubMessage } from '../protocol';
+import { isPaneHandleLike } from '@azito/shared';
 
 /**
  * Hand-rolled shape validation for the `register` message, matching the
@@ -34,7 +35,7 @@ function validateRegisterMessage(raw: Record<string, unknown>): RegisterMessage 
     ...(typeof raw.launchId === 'string' ? { launchId: raw.launchId } : {}),
     ...(typeof raw.bootstrapToken === 'string' ? { bootstrapToken: raw.bootstrapToken } : {}),
     ...(typeof raw.sessionToken === 'string' ? { sessionToken: raw.sessionToken } : {}),
-    ...(typeof raw.muxPaneRef === 'string' && /^%\d+$/.test(raw.muxPaneRef) ? { muxPaneRef: raw.muxPaneRef } : {}),
+    ...(typeof raw.muxPaneRef === 'string' && isPaneHandleLike(raw.muxPaneRef) ? { muxPaneRef: raw.muxPaneRef } : {}),
   };
 }
 

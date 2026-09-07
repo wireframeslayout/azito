@@ -47,6 +47,7 @@ export interface AgentRoutesOptions {
   startedAt: number;
   agentEventBus: EventEmitter;
   browserSessionManager: BrowserSessionManager;
+  onHerdrMuxRequest?: () => void;
   /**
    * Address this agent listens on. tmux hooks are registered against it (see
    * agent/main.ts), so requests the agent makes to itself arrive with this as
@@ -140,6 +141,7 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
   // ── POST /api/mux ──
   fastify.post('/api/mux', async (request, reply) => {
     const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number };
+    if (req.kind === 'herdr') opts.onHerdrMuxRequest?.();
     const { timeoutMs, ...muxReq } = req;
     try {
       return await execMuxCommand(muxReq, timeoutMs ?? 15000);
