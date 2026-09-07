@@ -444,6 +444,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
         agentVersion: (row.agent_version as string) ?? null,
         sshHost: (row.ssh_host as string) ?? null,
         muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+        herdrNavigationLock: (row.herdr_navigation_lock as 'locked' | 'free') ?? 'locked',
         sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
         isolationIntent: false,
         isolationVerifiedAt: null,

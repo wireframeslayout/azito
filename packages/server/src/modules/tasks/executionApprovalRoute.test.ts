@@ -131,7 +131,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -351,7 +351,7 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
       // isolationReport (Issue #29 review Step 3a, Critical finding 1
       // follow-up defense-in-depth check in resolveEffectiveInputPolicy).
       isolationReport: JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() }),
-      isolationCleanupReport: null, createdAt: '',
+      isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '',
     }));
     opts.scopedAuthEnabled = true;
     const app = Fastify();
@@ -1057,7 +1057,7 @@ describe('GET fingerprint satisfies POST (Issue #328 fourteenth-round review —
     // Distribution required (isolated server) so `resolveExecutionRepositoryEntry`
     // (current config) and `resolveRecordedDistributionRepositoryEntry`
     // (task's recorded value) can actually disagree.
-    opts.serverRepo.findByName = vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' }));
+    opts.serverRepo.findByName = vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' }));
     // The project server has since been re-pointed at repository B —
     // task.distributionRepositoryId (above) still names A.
     const projectServerAtB = { projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 2 };

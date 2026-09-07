@@ -15,6 +15,7 @@ import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
 import { HerdrSocketClient } from '../../mux/herdr/HerdrSocketClient';
+import { herdrClientConfigPath } from '../../mux/herdr/herdrClientConfig';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 
 function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
@@ -84,9 +85,9 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     return execLocal(this.rt.bin, [...this.rt.baseArgs, ...req.args]);
   }
 
-  async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+  async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('./ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
     if (ref.kind === 'herdr') {
-      return this.openHerdrTerminal(ref, ordinal, cols, rows);
+      return this.openHerdrTerminal(ref, ordinal, cols, rows, opts);
     }
     if (ref.kind === 'zellij') {
       return this.openZellijTerminal(ref, ordinal, cols, rows);
@@ -141,7 +142,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     return sock;
   }
 
-  private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+  private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('./ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
     const sock = this.getOrCreateHerdrSocket(ref.workspace);
     try {
       const resp = await sock.call('session.snapshot');
@@ -159,7 +160,10 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
         }
       }
     } catch { /* best-effort focus */ }
-    const env = { HERDR_SESSION: ref.workspace };
+    const env: Record<string, string> = { HERDR_SESSION: ref.workspace };
+    if (opts?.herdrLock) {
+      env.HERDR_CONFIG_PATH = herdrClientConfigPath(opts.herdrLock);
+    }
     return this.spawnTerminal([], cols, rows, { ...process.env as Record<string, string>, ...env }, undefined, 'herdr');
   }
 

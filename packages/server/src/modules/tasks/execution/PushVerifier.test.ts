@@ -14,6 +14,7 @@ function makeAgentServer(): ServerConfig {
     agentVersion: '1.0.0',
     sshHost: null,
     muxRuntime: 'system',
+    herdrNavigationLock: 'locked' as const,
     sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,

@@ -474,8 +474,8 @@ export class HerdrClient implements IMuxClient {
 
   // ─── Terminal / Change Hooks ───
 
-  async openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
-    return this.transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows);
+  async openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('../../servers/transport/ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
+    return this.transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows, opts);
   }
 
   async installChangeHooks(_server: ServerConfig): Promise<void> {

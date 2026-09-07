@@ -19,6 +19,7 @@ const LOCAL_SERVER: ServerConfig = {
   agentVersion: null,
   sshHost: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -46,6 +47,7 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
+    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };

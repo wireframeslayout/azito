@@ -109,3 +109,33 @@ _Not yet run_ — Also check empty text issue when no client is attached.
 
 ### 5. Tab bar visibility
 _Not yet run_
+
+## Client Configuration and Navigation Lock
+
+### Overview
+
+AZITO generates two herdr client configuration files and applies a dedicated configuration to terminals opened through AZITO.
+
+- `~/.azito/herdr/client-locked.toml` — disables workspace/tab navigation keybindings
+- `~/.azito/herdr/client-free.toml` — recommended UI settings only (no keybinding restrictions)
+
+### Lock Scope
+
+**The lock only affects clients opened through AZITO.** Clients opened directly on the server via the `herdr` command are not affected. AZITO specifies the client configuration file via the `HERDR_CONFIG_PATH` environment variable when opening a terminal, so regular herdr clients without that variable use the server's default configuration (`~/.config/herdr/config.toml`).
+
+### Resolution Order
+
+1. Window's `herdrNavigationLock` (`'locked'` / `'free'` / `null`)
+2. Server's `herdrNavigationLock` (`'locked'` / `'free'`, default `'locked'`)
+
+When the window value is `null` (follow server default), the server's value is used.
+
+### UI Recommended Value Diagnostics
+
+Settings → Servers checks the server's `~/.config/herdr/config.toml` and shows warnings when the following recommended values differ (no auto-correction):
+
+| Key | Recommended |
+|-----|-------------|
+| `hide_tab_bar_when_single_tab` | `true` |
+| `sidebar_collapsed_mode` | `"hidden"` |
+| `mouse_capture` | `true` |

@@ -17,6 +17,7 @@ export interface Server {
   agentVersion?: string;
   sshHost?: string;
   muxRuntime?: 'system' | 'managed' | 'herdr' | 'zellij';
+  herdrNavigationLock?: 'locked' | 'free';
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
   isolationIntent?: boolean;

@@ -115,11 +115,12 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
   }
 
-  openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+  openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('./ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
     const target = tmuxTargetFromMuxRef(ref);
     const refParam = `&ref=${encodeURIComponent(formatMuxRef(ref))}&pane=${ordinal}`;
+    const herdrLockParam = opts?.herdrLock ? `&herdrLock=${opts.herdrLock}` : '';
     return new Promise((resolve, reject) => {
-      const url = `${this.wsBaseUrl}/ws?mode=terminal&target=${encodeURIComponent(target)}${refParam}&cols=${cols}&rows=${rows}&mux=${this.muxRuntime}`;
+      const url = `${this.wsBaseUrl}/ws?mode=terminal&target=${encodeURIComponent(target)}${refParam}&cols=${cols}&rows=${rows}&mux=${this.muxRuntime}${herdrLockParam}`;
       const ws = new WebSocket(url, { headers: { authorization: this.authHeader } });
 
       const timer = setTimeout(() => {

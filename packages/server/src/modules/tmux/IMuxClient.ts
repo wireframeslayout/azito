@@ -1,5 +1,5 @@
 import type { MuxDriverKind, MuxRef, PaneHandle, PaneOrdinal, MuxCapabilities, MuxWorkspace, MuxPaneInfo } from '@azito/shared';
-import type { ExecResult, ITerminalStream } from '../servers/transport/ServerTransport';
+import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
 
 export interface IMuxClient {
@@ -54,7 +54,7 @@ export interface IMuxClient {
 
   // ─── Terminal / Change Hooks (stage 3-B migration) ───
 
-  openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
+  openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: OpenTerminalOpts): Promise<ITerminalStream>;
   installChangeHooks(server: ServerConfig): Promise<void>;
   uninstallChangeHooks(server: ServerConfig): Promise<void>;
 }

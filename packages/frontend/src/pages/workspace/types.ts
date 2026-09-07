@@ -33,6 +33,7 @@ export interface Window {
   launchCommand?: string;
   workingDirectory?: string;
   paneLayout?: WindowPaneLayout;
+  herdrNavigationLock?: 'locked' | 'free' | null;
   sleeping?: boolean;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }

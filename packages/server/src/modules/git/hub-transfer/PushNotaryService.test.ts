@@ -38,6 +38,7 @@ const makeServer = (overrides: Record<string, any> = {}): import('../../servers/
   agentVersion: null,
   sshHost: 'user@host',
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
   sshHostFingerprint: null,
   isolationIntent: true,
   isolationVerifiedAt: null,

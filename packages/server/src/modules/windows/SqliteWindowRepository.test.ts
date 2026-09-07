@@ -136,6 +136,7 @@ function baseWindow(overrides: Partial<Omit<Window, 'id' | 'createdAt'>> = {}): 
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    herdrNavigationLock: null,
     sleeping: false,
     ...overrides,
   };

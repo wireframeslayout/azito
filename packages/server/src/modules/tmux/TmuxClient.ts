@@ -854,7 +854,7 @@ export class TmuxClient implements IMuxClient {
     return Array.from(seen.values());
   }
 
-  async openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+  async openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, _opts?: import('../servers/transport/ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
     return this.transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows);
   }
 

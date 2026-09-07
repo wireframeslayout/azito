@@ -1,6 +1,7 @@
-import type { MuxRuntime as SharedMuxRuntime } from '@azito/shared';
+import type { MuxRuntime as SharedMuxRuntime, HerdrNavigationLock as SharedHerdrNavigationLock } from '@azito/shared';
 
 export type MuxRuntime = SharedMuxRuntime;
+export type HerdrNavigationLock = SharedHerdrNavigationLock;
 
 /**
  * The `isolation_report` value `updateIsolationIntent` atomically writes on a
@@ -22,6 +23,7 @@ export interface ServerConfig {
   agentVersion: string | null;
   sshHost: string | null;
   muxRuntime: MuxRuntime;
+  herdrNavigationLock: HerdrNavigationLock;
   sshHostFingerprint: string | null;
   /**
    * Declared isolation intent (Issue #29 design v2 "隔離実行プロファイル",
@@ -109,8 +111,8 @@ export interface IServerRepository {
    * out (no query issued).
    */
   findMetaByNames(names: string[]): ServerMeta[];
-  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
-  update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
+  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, herdrNavigationLock?: HerdrNavigationLock): void;
+  update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, herdrNavigationLock?: HerdrNavigationLock): void;
   /**
    * Issue #29 review, Important finding 1: atomically combines `update()`
    * (connection info) and the isolation-intent auto-clear (`isolationIntent
@@ -125,7 +127,7 @@ export interface IServerRepository {
    * two-call fallback for callers that only implement `update` +
    * `updateIsolationIntent`).
    */
-  updateWithIsolationClear?(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void;
+  updateWithIsolationClear?(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, herdrNavigationLock?: HerdrNavigationLock): void;
   updateAgentVersion(name: string, version: string): void;
   updateFingerprint(name: string, fingerprint: string): void;
   clearFingerprint(name: string): void;

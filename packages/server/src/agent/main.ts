@@ -20,6 +20,7 @@ import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
+import { ensureHerdrClientConfigs } from '../modules/mux/herdr/herdrClientConfig';
 import { HerdrEventSubscriber, type HerdrEvent, type HerdrSubscription } from '../modules/mux/herdr/HerdrEventSubscriber';
 import { herdrSocketPath } from '../modules/mux/herdr/HerdrSocketClient';
 import { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
@@ -118,6 +119,8 @@ async function main(): Promise<void> {
     : undefined;
 
   const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '', herdrSocket);
+
+  ensureHerdrClientConfigs();
 
   // herdr event relay: detect herdr socket presence (regardless of AZITO_MUX_RUNTIME)
   // and subscribe to structural + agent_status events, relaying them to the hub
@@ -252,8 +255,10 @@ async function main(): Promise<void> {
           return;
         }
         const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+        const herdrLockParam = url.searchParams.get('herdrLock');
+        const terminalOpts = herdrLockParam === 'locked' || herdrLockParam === 'free' ? { herdrLock: herdrLockParam as 'locked' | 'free' } : undefined;
 
-        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
+        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport, terminalOpts);
         return;
       }
 
