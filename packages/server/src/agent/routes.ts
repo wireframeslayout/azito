@@ -78,6 +78,21 @@ function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): P
 
 let herdrSocket: HerdrSocketClient | null = null;
 
+function resolveZellijBin(): string {
+  const userBin = path.join(os.homedir(), '.local', 'bin', 'zellij');
+  try { fs.accessSync(userBin, fs.constants.X_OK); return userBin; } catch { return 'zellij'; }
+}
+
+function execZellijCommand(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    execFile(resolveZellijBin(), args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      const raw = (err as { code?: unknown } | null)?.code;
+      const code = err ? (typeof raw === 'number' ? raw : 1) : 0;
+      resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
+    });
+  });
+}
+
 function execMuxCommand(req: { kind: string; args?: string[]; method?: string; params?: unknown }, timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
   if (req.kind === 'tmux') {
     return execTmuxCommand(req.args ?? [], timeoutMs, mux);
@@ -92,6 +107,9 @@ function execMuxCommand(req: { kind: string; args?: string[]; method?: string; p
       stderr: '',
       code: 0,
     }));
+  }
+  if (req.kind === 'zellij') {
+    return execZellijCommand(req.args ?? [], timeoutMs);
   }
   return Promise.reject({ statusCode: 501, message: `Mux kind "${req.kind}" not implemented on this agent` });
 }

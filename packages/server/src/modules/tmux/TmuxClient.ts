@@ -129,6 +129,7 @@ export class TmuxClient implements IMuxClient {
     outputStream: true, changeEvents: true, agentState: false,
     independentClients: true, envInjection: true, zoom: true,
     copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true,
+    stablePaneHandle: true,
   };
 
   constructor(

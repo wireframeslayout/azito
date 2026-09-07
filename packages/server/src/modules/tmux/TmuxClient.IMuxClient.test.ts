@@ -203,6 +203,7 @@ describe('TmuxClient IMuxClient', () => {
       expect(client.caps.outputStream).toBe(true);
       expect(client.caps.agentState).toBe(false);
       expect(client.caps.layoutSnapshot).toBe(true);
+      expect(client.caps.stablePaneHandle).toBe(true);
     });
   });
 });

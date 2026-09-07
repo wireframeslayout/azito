@@ -34,4 +34,5 @@ export {
   herdrPaneHandle,
   parseHerdrPaneHandle,
   herdrMuxRef,
+  zellijMuxRef,
 } from './mux';

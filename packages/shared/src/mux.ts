@@ -37,6 +37,7 @@ export interface MuxCapabilities {
   paneTitle: boolean;
   activityCounter: boolean;
   layoutSnapshot: boolean;
+  stablePaneHandle: boolean;
 }
 
 export interface MuxPane {
@@ -130,4 +131,8 @@ export function parseHerdrPaneHandle(handle: PaneHandle): { workspaceId: string;
 
 export function herdrMuxRef(workspaceName: string, tabName: string): MuxRef {
   return { kind: 'herdr', workspace: workspaceName, window: tabName };
+}
+
+export function zellijMuxRef(session: string, tabName: string): MuxRef {
+  return { kind: 'zellij', workspace: session, window: tabName };
 }
