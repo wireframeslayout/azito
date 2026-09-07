@@ -29,6 +29,7 @@ function makeSupervisor(overrides: Partial<SupervisorEntry> = {}): SupervisorEnt
     lastActivityFrameAt: null,
     lastReportedState: null,
     lastReportedStatus: null,
+    lastReportedDecidedBy: null,
     muxPaneRef: null,
     ...overrides,
   };

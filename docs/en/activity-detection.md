@@ -59,13 +59,25 @@ title-only observer reports idle.
 `tui-supervisor` launches the agent wrapped in a PTY and holds a persistent WebSocket to the
 hub (`/ws/supervisor`) with a 10s heartbeat and unbounded exponential-backoff reconnection.
 
-### Judgment inside the supervisor
+### Three-tier detector inside the supervisor (S1 → S2 → S3)
 
-| Detector | Behavior |
-|---|---|
-| Title tracking | Parses OSC 0/2 titles in the PTY output. Switches to title-authoritative mode **only after observing a recognized marker** (working `⠀-⣿ ◐◑◒◓ ✻✶✽✢∗` / idle `✳ ` / `Action Required`). All titles within one chunk are judged cumulatively (independent of chunk boundaries) |
-| Byte-volume tracking | Decides active/idle from output volume in a 3s window. Stays in effect before title-authoritative mode (a generic TUI whose titles are never recognized) |
-| Sending | An activity frame is sent **on transition**, plus a 15s keepalive resend while active. Child process exit is sent explicitly as `child_exit` |
+The supervisor classifies agent state through a three-tier priority ladder: screen rules, title,
+and byte volume. Once a higher tier returns a non-`unknown` result, the lower tiers are skipped.
+
+| Tier | Detector | Behavior |
+|------|----------|----------|
+| S1 screen | Screen rules | PTY output is fed into `@xterm/headless`; the prompt box (two `─` rule lines with `❯`) and the block above it are evaluated by `classifyScreen()`. Rules match in priority order: blocked > working > idle. `skip` (transcript viewer etc.) preserves the previous state |
+| S2 title | Title tracking | Parses OSC 0/2 titles in the PTY output. Switches to title-authoritative mode **only after observing a recognized marker** (working `⠀-⣿ ◐◑◒◓ ✻✶✽✢∗` / idle `✳ ` / `Action Required`). Under tmux, Claude Code ≥2.1.236 fixes the title to `✳`, so S1 takes precedence |
+| S3 bytes | Byte-volume tracking | Decides active/idle from output volume in a 3s window. Active only when S1 and S2 both return `unknown` (a generic TUI whose titles and screen are not recognized) |
+
+Screen rules (`classifyScreen` / `classifyTitle` / `splitPromptBox`) are centralized in
+`@azito/shared` (`packages/shared/src/agentScreenRules.ts`) and shared with server-side Tier 2.
+
+Activity frames carry `decidedBy: 'screen' | 'title' | 'bytes'`, shown in the activity
+diagnostics panel.
+
+Sending: an activity frame is sent **on transition**, plus a 15s keepalive resend while active.
+Child process exit is sent explicitly as `child_exit`.
 
 ### How the hub treats it
 
@@ -107,30 +119,36 @@ This follows the same `AZITO_PREFIX` convention as Tier 1's "Atomic destination-
 resolution" (§3 below). The env file written by `harness/setup.sh --prefix <name>` is selected
 by both hooks and the supervisor using the same convention.
 
-### Combined mode (hybrid detection)
+### S3: Byte-volume heuristic (combined mode)
 
-Starting with Claude Code v2.1.236, pane titles under tmux are written only when the text
-actually changes (CHANGELOG: "Fixed terminal tab titles jumping in tmux"). As a result, the
-working spinner glyph (◐◑◒◓ etc.) no longer appears in the title, which stays fixed at
-`✳ <topic>`.
-
-`ActivityTracker` addresses this with two detection modes:
-
-| Mode | Entry condition | Detection method |
-|------|----------------|-----------------|
-| **title-authoritative** | A `working` or `blocked` title observed at least once | Title only (byte volume disabled). Codex / Claude ≤2.1.234 enter this mode |
-| **combined** | Otherwise (including initial state) | Byte-volume heuristic + title promotion. Claude ≥2.1.236 on tmux stays here |
-
-In combined mode:
+Active only when S1 and S2 both return `unknown`. With Claude Code ≥2.1.236 on tmux, S1
+(screen rules) decides first, so S3 is normally not reached. It remains as a fallback for
+pre-S1 supervisors or generic TUIs whose titles and screen yield no classification.
 
 - The byte-volume heuristic determines idle/active
 - Echo filtering: the threshold must be exceeded **with fresh output in that tick** for
   `ACTIVE_CONSECUTIVE_TICKS` (2) consecutive ticks before transitioning idle→active (a single
   keystroke echo burst does not trigger a transition)
-- Observing a `working` / `blocked` title instantly promotes the tracker to
-  title-authoritative mode
-- Active frames emitted in combined mode carry no `status` (allowing the hub to distinguish
-  byte-derived activity)
+- Observing a `working` / `blocked` title instantly promotes the tracker to S2
+  (title-authoritative mode)
+- S3 frames carry `decidedBy: 'bytes'` and no `status`
+
+### S1 working → idle hold
+
+When S1 (screen rules) detects a working → idle transition, the tracker requires
+`IDLE_CONFIRMATIONS` (3) consecutive confirmations at `IDLE_RECHECK_MS` (100ms) intervals,
+capped at `IDLE_HOLD_CAP_MS` (700ms). This prevents false idle signals during the transient
+frames when Claude Code's spinner line is cleared before the prompt box appears.
+idle → working / blocked transitions are immediate.
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | S3: consecutive above-threshold ticks needed for idle→active |
+| `DEBOUNCE_MS` | 120 | S1: per-chunk screen evaluation debounce |
+| `MAX_DEBOUNCE_MS` | 300 | S1: max debounce from first pending chunk |
+| `IDLE_RECHECK_MS` | 100 | S1: working→idle confirmation interval |
+| `IDLE_CONFIRMATIONS` | 3 | S1: working→idle confirmation count |
+| `IDLE_HOLD_CAP_MS` | 700 | S1: working→idle confirmation time cap |
 
 | Constant | Value | Description |
 |----------|-------|-------------|

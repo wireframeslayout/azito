@@ -64,12 +64,15 @@ export type ActivityState = 'active' | 'idle';
  */
 export type AgentStatus = 'working' | 'blocked';
 
+export type ActivityDecidedBy = 'screen' | 'title' | 'bytes';
+
 export interface ActivityMessage {
   type: 'activity';
   state: ActivityState;
   bytesInWindow: number;
   ts: number;
   status?: AgentStatus;
+  decidedBy?: ActivityDecidedBy;
 }
 
 export interface ChildExitMessage {

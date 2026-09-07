@@ -22,6 +22,7 @@ export interface ActivityDiagnosticRow extends ActivityDiagnosticEntry {
     lastActivityFrameAt: number | null;
     lastReportedState: 'active' | 'idle' | null;
     lastReportedStatus: 'working' | 'blocked' | null;
+    lastReportedDecidedBy: 'screen' | 'title' | 'bytes' | null;
     /**
      * Issue #28 Phase C: whether this connection's identity was verified against a
      * persisted `supervisor_launches` row. An `unbound` connection is display-only —
@@ -151,6 +152,7 @@ export function buildActivityDiagnostics(
         lastActivityFrameAt: supervisor.lastActivityFrameAt,
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
+        lastReportedDecidedBy: supervisor.lastReportedDecidedBy ?? null,
         bound: supervisor.bound,
         muxPaneRef: supervisor.muxPaneRef,
       },
@@ -174,6 +176,7 @@ export function buildActivityDiagnostics(
         lastActivityFrameAt: supervisor.lastActivityFrameAt,
         lastReportedState: supervisor.lastReportedState,
         lastReportedStatus: supervisor.lastReportedStatus ?? null,
+        lastReportedDecidedBy: supervisor.lastReportedDecidedBy ?? null,
         bound: supervisor.bound,
         muxPaneRef: supervisor.muxPaneRef,
       },
