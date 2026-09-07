@@ -31,4 +31,7 @@ export {
   tmuxTargetFromMuxRef,
   windowKeyForRef,
   muxKindForRuntime,
+  herdrPaneHandle,
+  parseHerdrPaneHandle,
+  herdrMuxRef,
 } from './mux';

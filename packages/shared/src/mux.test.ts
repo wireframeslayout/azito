@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, type MuxRef } from './mux';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, herdrPaneHandle, parseHerdrPaneHandle, herdrMuxRef, type MuxRef } from './mux';
 import { windowKey } from './windowKey';
 
 describe('formatMuxRef / parseMuxRef', () => {
@@ -62,5 +62,27 @@ describe('muxKindForRuntime', () => {
   });
   it('maps zellij to zellij', () => {
     expect(muxKindForRuntime('zellij')).toBe('zellij');
+  });
+});
+
+describe('herdrPaneHandle / parseHerdrPaneHandle', () => {
+  it('creates a branded handle', () => {
+    const h = herdrPaneHandle('ws1', 'p1');
+    expect(h as string).toBe('ws1:p1');
+  });
+  it('round-trips', () => {
+    const h = herdrPaneHandle('ws1', 'p2');
+    expect(parseHerdrPaneHandle(h)).toEqual({ workspaceId: 'ws1', paneId: 'p2' });
+  });
+  it('throws on missing colon', () => {
+    expect(() => parseHerdrPaneHandle('nocolon' as any)).toThrow('missing ":"');
+  });
+});
+
+describe('herdrMuxRef', () => {
+  it('creates a herdr MuxRef', () => {
+    expect(herdrMuxRef('myworkspace', 'mytab')).toEqual({
+      kind: 'herdr', workspace: 'myworkspace', window: 'mytab',
+    });
   });
 });
