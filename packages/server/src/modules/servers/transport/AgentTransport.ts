@@ -88,6 +88,10 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return this.token === token;
   }
 
+  matchesMuxRuntime(runtime: MuxRuntime): boolean {
+    return this.muxRuntime === runtime;
+  }
+
   async exec(command: string, timeoutMs?: number): Promise<ExecResult> {
     return this.post('/api/exec', { command, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
   }
@@ -95,7 +99,10 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   async execMux(req: MuxExecRequest): Promise<ExecResult> {
     if (!this.useLegacyMuxRoute) {
       try {
-        return await this.post('/api/mux', req as Record<string, unknown>);
+        const body = req.kind === 'tmux'
+          ? { ...req, mux: this.muxRuntime }
+          : req;
+        return await this.post('/api/mux', body as Record<string, unknown>);
       } catch (err) {
         if (req.kind === 'tmux' && (err as Error).message.includes('failed (404)')) {
           this.useLegacyMuxRoute = true;

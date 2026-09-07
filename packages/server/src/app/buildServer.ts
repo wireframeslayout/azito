@@ -474,6 +474,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(serversRoutes, {
     serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     onMuxRuntimeChanged: (serverName) => {
+      transportFactory.invalidate(serverName);
       paneHandleResolver.clearServer(serverName);
       supervisorRegistry.clearServerPaneRefs(serverName);
     },

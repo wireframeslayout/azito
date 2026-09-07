@@ -142,7 +142,7 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
 
   // ── POST /api/mux ──
   fastify.post('/api/mux', async (request, reply) => {
-    const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number; action?: string; session?: string };
+    const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number; action?: string; session?: string; mux?: MuxRuntime };
     if (req.kind === 'herdr') opts.onHerdrMuxRequest?.();
 
     if (req.kind === 'zellij-ctl') {
@@ -160,9 +160,9 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
       return reply.status(400).send({ error: `Unknown zellij-ctl action: ${req.action}` });
     }
 
-    const { timeoutMs, action: _a, session: _s, ...muxReq } = req;
+    const { timeoutMs, action: _a, session: _s, mux, ...muxReq } = req;
     try {
-      return await execMuxCommand(muxReq, timeoutMs ?? 15000);
+      return await execMuxCommand(muxReq, timeoutMs ?? 15000, mux);
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'statusCode' in err) {
         const e = err as Record<string, unknown>;
