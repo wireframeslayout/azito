@@ -15,7 +15,7 @@ import type { ExecResult, ITerminalStream } from '../../servers/transport/Server
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
-import { tmuxKeysToHerdr } from './herdrKeyMap';
+import { tmuxKeyToHerdr, isTmuxSpecialKey } from './herdrKeyMap';
 
 interface SnapshotWorkspace {
   workspace_id: string;
@@ -336,9 +336,14 @@ export class HerdrClient implements IMuxClient {
   }
 
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
-    const herdrKeys = tmuxKeysToHerdr(keys);
-    for (const key of herdrKeys) {
-      await this.rpc(server, 'pane.send_keys', { pane_id: handle as string, key });
+    // tmux callers interleave literal text and key names (`[cmd, 'Enter']`). herdr splits the
+    // two: `pane.send_text` for text, `pane.send_keys { keys: [...] }` for key combos.
+    for (const key of keys) {
+      if (isTmuxSpecialKey(key)) {
+        await this.rpc(server, 'pane.send_keys', { pane_id: handle as string, keys: [tmuxKeyToHerdr(key)] });
+      } else {
+        await this.rpc(server, 'pane.send_text', { pane_id: handle as string, text: key });
+      }
     }
   }
 

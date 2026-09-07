@@ -38,3 +38,12 @@ export function tmuxKeyToHerdr(key: string): string {
 export function tmuxKeysToHerdr(keys: string[]): string[] {
   return keys.map(tmuxKeyToHerdr);
 }
+
+/**
+ * True when a tmux send-keys token names a key (Enter, C-c, Up, F5 …) rather than literal
+ * text. herdr's `pane.send_keys` only accepts key-combo names; literal text must go through
+ * `pane.send_text` or herdr answers `invalid_key` (observed for the worker launch command).
+ */
+export function isTmuxSpecialKey(key: string): boolean {
+  return key in SPECIAL_KEYS || CTRL_RE.test(key) || META_RE.test(key);
+}

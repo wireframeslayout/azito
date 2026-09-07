@@ -4,6 +4,9 @@ import type { IWindowRepository } from './Window';
 import { isPrimaryTaskWindow } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
+import type { ServerConfig } from '../servers/Server';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { IMuxClient } from '../tmux/IMuxClient';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { WindowRespawnService } from './WindowRespawnService';
@@ -25,6 +28,8 @@ export interface WindowsRouteOptions {
   projectRepo: IProjectRepository;
   taskRepo: ITaskRepository;
   tmux: TmuxClient;
+  /** Per-server mux driver (herdr / zellij windows); falls back to `tmux` when absent. */
+  muxDriverRegistry?: MuxDriverRegistry;
   serverRepo: IServerRepository;
   respawnService: WindowRespawnService;
   sleepService: WindowSleepService;
@@ -40,6 +45,7 @@ export interface WindowsRouteOptions {
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
   const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
+  const driverFor = (srv: ServerConfig): IMuxClient => (opts.muxDriverRegistry ? opts.muxDriverRegistry.resolve(srv) : tmux);
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -132,7 +138,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const sessions = await tmux.listSessions(srv);
+      const sessions = await driverFor(srv).listWorkspaces(srv);
       const targetSession = sessions.find((s) => s.name === session);
       if (!targetSession)
         return reply.status(404).send({ error: `Session '${session}' not found on server '${serverName}'` });
@@ -325,7 +331,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType);
-      const paneHandle = await tmux.resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
+      const paneHandle = await driverFor(srv).resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
@@ -338,7 +344,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (supervised) {
         supervisorRegistry.clearExitMarker(srv.name, win.tmuxTarget);
       }
-      await tmux.sendKeysToHandle(srv, paneHandle, [cmd, 'Enter']);
+      await driverFor(srv).sendKeysToHandle(srv, paneHandle, [cmd, 'Enter']);
       return { ok: true, supervised };
     },
   );
@@ -505,7 +511,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
-      await tmux.renameWindowByRef(srv, ref, name);
+      await driverFor(srv).renameWindowByRef(srv, ref, name);
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },
@@ -530,8 +536,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const body = request.body as { ordinal?: number; direction?: string };
       const direction = (body.direction || 'v') as 'h' | 'v';
       const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
-      await tmux.splitPaneByHandle(srv, handle, direction);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+      await driverFor(srv).splitPaneByHandle(srv, handle, direction);
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },
@@ -546,15 +552,15 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
       const startLine = request.query.start != null ? parseInt(request.query.start, 10) : undefined;
       const endLine = request.query.end != null ? parseInt(request.query.end, 10) : undefined;
       if (startLine == null && endLine == null && request.query.history) {
         const h = parseInt(request.query.history, 10);
-        const { stdout } = await tmux.captureScreen(srv, handle, -h, undefined);
+        const { stdout } = await driverFor(srv).captureScreen(srv, handle, -h, undefined);
         return { content: stdout };
       }
-      const { stdout } = await tmux.captureScreen(srv, handle, startLine, endLine);
+      const { stdout } = await driverFor(srv).captureScreen(srv, handle, startLine, endLine);
       return { content: stdout };
     },
   );
@@ -568,11 +574,11 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
       const { keys } = request.body as { keys?: string[] };
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
-      await tmux.sendKeysToHandle(srv, handle, keys);
+      await driverFor(srv).sendKeysToHandle(srv, handle, keys);
       return { ok: true };
     },
   );
@@ -586,8 +592,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
-      await tmux.zoomPaneByHandle(srv, handle);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+      await driverFor(srv).zoomPaneByHandle(srv, handle);
       return { ok: true };
     },
   );
@@ -601,8 +607,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
-      await tmux.unzoomPaneByHandle(srv, handle);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+      await driverFor(srv).unzoomPaneByHandle(srv, handle);
       return { ok: true };
     },
   );
@@ -616,10 +622,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
-      await tmux.setPaneTitle(srv, handle, name);
+      await driverFor(srv).setPaneTitle(srv, handle, name);
       return { ok: true };
     },
   );
@@ -633,8 +639,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(tmux, srv, ref, ordinal);
-      await tmux.closePane(srv, handle);
+      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+      await driverFor(srv).closePane(srv, handle);
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },
