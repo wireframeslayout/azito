@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, herdrPaneHandle, parseHerdrPaneHandle, herdrMuxRef, zellijMuxRef, type MuxRef } from './mux';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, herdrPaneHandle, parseHerdrPaneHandle, herdrMuxRef, zellijMuxRef, isPaneHandleLike, type MuxRef } from './mux';
 import { windowKey } from './windowKey';
 
 describe('formatMuxRef / parseMuxRef', () => {
@@ -106,5 +106,31 @@ describe('zellijMuxRef', () => {
   });
   it('produces stable key order', () => {
     expect(formatMuxRef(zellijMuxRef('sess', 'tab1'))).toBe('{"kind":"zellij","workspace":"sess","window":"tab1"}');
+  });
+});
+
+describe('isPaneHandleLike', () => {
+  it('accepts tmux pane handles (%N)', () => {
+    expect(isPaneHandleLike('%0')).toBe(true);
+    expect(isPaneHandleLike('%42')).toBe(true);
+    expect(isPaneHandleLike('%999')).toBe(true);
+  });
+  it('accepts herdr pane handles (w<N>:p<N>)', () => {
+    expect(isPaneHandleLike('w1:p1')).toBe(true);
+    expect(isPaneHandleLike('w1:p2')).toBe(true);
+    expect(isPaneHandleLike('w99:p123')).toBe(true);
+  });
+  it('accepts zellij pane handles (terminal_<N>)', () => {
+    expect(isPaneHandleLike('terminal_0')).toBe(true);
+    expect(isPaneHandleLike('terminal_42')).toBe(true);
+  });
+  it('rejects non-pane-handle strings', () => {
+    expect(isPaneHandleLike('')).toBe(false);
+    expect(isPaneHandleLike('random')).toBe(false);
+    expect(isPaneHandleLike('%')).toBe(false);
+    expect(isPaneHandleLike('w:p')).toBe(false);
+    expect(isPaneHandleLike('w1:p')).toBe(false);
+    expect(isPaneHandleLike('terminal_')).toBe(false);
+    expect(isPaneHandleLike('w1:p1:extra')).toBe(false);
   });
 });

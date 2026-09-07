@@ -148,7 +148,10 @@ async function main(): Promise<void> {
     if (srv.type === 'agent' && srv.host && srv.agentPort && srv.agentToken) {
       const wsBase = `ws://${srv.host}:${srv.agentPort}`;
       const auth = `Bearer ${srv.agentToken}`;
-      const stream = new AgentEventStream(srv.name, wsBase, auth, wiring.notificationBus, invalidateSessionCache);
+      const onMuxEvent = srv.muxRuntime === 'herdr'
+        ? (_sn: string, event: unknown) => wiring.herdrEventBridge.handleAgentMuxEvent(srv.name, event)
+        : undefined;
+      const stream = new AgentEventStream(srv.name, wsBase, auth, wiring.notificationBus, invalidateSessionCache, onMuxEvent);
       stream.start();
       agentEventStreams.push(stream);
     }
