@@ -3,9 +3,10 @@ import { TmuxClient } from './TmuxClient';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { MuxRef } from '@azito/shared';
 
-function makeClient(execMux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>) {
+function makeClient(handler: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>) {
+  const execMux = vi.fn((req: { kind: string; args: string[] }) => handler(req.args));
   const factory = {
-    getTransport: () => ({ execMux: vi.fn(execMux) }),
+    getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, '', '', '');
 }
@@ -181,17 +182,17 @@ describe('TmuxClient IMuxClient', () => {
 
   describe('applyLayout', () => {
     it('calls select-layout via runTmuxCommand', async () => {
-      const calls: string[][] = [];
+      const captured: string[][] = [];
       const client = makeClient(async (args) => {
-        calls.push(args);
+        captured.push(args);
         return { stdout: '', stderr: '', code: 0 };
       });
       const ref: MuxRef = { kind: 'tmux', workspace: 'sess', window: 'win' };
       await client.applyLayout(server, ref, 'layout-string');
 
-      expect(calls[0]).toContain('select-layout');
-      expect(calls[0]).toContain('sess:win');
-      expect(calls[0]).toContain('layout-string');
+      expect(captured[0]).toContain('select-layout');
+      expect(captured[0]).toContain('sess:win');
+      expect(captured[0]).toContain('layout-string');
     });
   });
 

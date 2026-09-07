@@ -5,9 +5,10 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
 
-function makeClient(execMux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>): TmuxClient {
+function makeClient(handler: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>): TmuxClient {
+  const execMux = vi.fn((req: { kind: string; args: string[] }) => handler(req.args));
   const factory = {
-    getTransport: () => ({ execMux: vi.fn(execMux) }),
+    getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, 'http://localhost:3001', '', 'http://127.0.0.1:3001');
 }
@@ -40,6 +41,6 @@ describe('TmuxClient.cancelPaneMode', () => {
     const factory = { getTransport: () => ({ execMux }) } as unknown as TransportFactory;
     const client = new TmuxClient(factory, 'http://localhost:3001', '', 'http://127.0.0.1:3001');
     await client.cancelPaneMode(srv, '%1');
-    expect(execMux).toHaveBeenCalledWith(['send-keys', '-X', '-t', '%1', 'cancel']);
+    expect(execMux).toHaveBeenCalledWith({ kind: 'tmux', args: ['send-keys', '-X', '-t', '%1', 'cancel'] });
   });
 });

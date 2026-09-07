@@ -61,6 +61,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: vi.fn(), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     repoDiscovery: {
       checkPathStatus: vi.fn(async () => ({ exists: true, isGitRepository: false })),
       discover: vi.fn(async () => []),

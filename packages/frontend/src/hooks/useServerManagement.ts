@@ -16,7 +16,7 @@ export interface Server {
   hasAgentToken?: boolean;
   agentVersion?: string;
   sshHost?: string;
-  muxRuntime?: 'system' | 'managed';
+  muxRuntime?: 'system' | 'managed' | 'herdr' | 'zellij';
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
   isolationIntent?: boolean;
@@ -85,7 +85,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [addHost, setAddHost] = useState('');
   const [addPort, setAddPort] = useState('3002');
   const [addToken, setAddToken] = useState('');
-  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed' | 'herdr' | 'zellij'>('system');
   const [addInstallSteps, setAddInstallSteps] = useState<InstallStep[]>([]);
   const [addLoading, setAddLoading] = useState(false);
 
@@ -94,7 +94,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed' | 'herdr' | 'zellij'>('system');
   // Issue #29 review (3rd pass), Important finding 4: mirrors
   // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
   // distinct from ServerDetailPage's).

@@ -4,6 +4,8 @@ import os from 'os';
 import fs from 'fs';
 import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
 import type { TmuxClient, TmuxSession } from '../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { muxKindForRuntime } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -162,13 +164,14 @@ export interface ServersRouteOptions {
   // to compile/start rather than silently accept every isolation
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
+  muxDriverRegistry: MuxDriverRegistry;
   onMuxRuntimeChanged?: (serverName: string) => void;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery, onMuxRuntimeChanged } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxRuntimeChanged } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -352,7 +355,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     if (!srv) return reply.status(404).send({ error: 'Server not found' });
     const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
     const { agentToken, ...rest } = srv;
-    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash };
+    const kind = muxKindForRuntime(srv.muxRuntime);
+    const driverAvailable = muxDriverRegistry.has(kind);
+    const caps = driverAvailable ? muxDriverRegistry.resolve(srv).caps : null;
+    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash, mux: { runtime: srv.muxRuntime, kind, driverAvailable, caps } };
   });
 
   // ── POST /api/servers ──
@@ -376,8 +382,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       muxRuntime?: string;
     };
     const validMuxRuntime = muxRuntime || undefined;
-    if (validMuxRuntime && validMuxRuntime !== 'system' && validMuxRuntime !== 'managed')
-      return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+    if (validMuxRuntime && !['system', 'managed', 'herdr', 'zellij'].includes(validMuxRuntime))
+      return reply.status(400).send({ error: 'muxRuntime must be "system", "managed", "herdr", or "zellij"' });
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
@@ -433,8 +439,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; isolationIntent?: boolean;
       };
       const validPutMux = putMux || undefined;
-      if (validPutMux && validPutMux !== 'system' && validPutMux !== 'managed')
-        return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+      if (validPutMux && !['system', 'managed', 'herdr', 'zellij'].includes(validPutMux))
+        return reply.status(400).send({ error: 'muxRuntime must be "system", "managed", "herdr", or "zellij"' });
       // Issue #29 review, Important finding 2: isolationIntent must be an
       // actual boolean, not merely truthy — `"false"` (a string) is truthy
       // in JS and would otherwise be persisted as `true` by
