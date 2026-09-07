@@ -3780,11 +3780,8 @@ describe('ExecuteTaskUseCase.followUp state-machine continuation uses the task-r
     await flushMicrotasks();
 
     expect(stateMachineLoop).toHaveBeenCalledWith(
-      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
+      expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(), expect.anything(),
       expect.objectContaining({ id: 1 }),
-      // isolationIntent alone (server-level) requires distribution,
-      // regardless of the current project-server's distributeCode — see
-      // isDistributionRequired's doc comment (DistributionHelper.ts).
       true,
     );
     expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(1, 'failed');
