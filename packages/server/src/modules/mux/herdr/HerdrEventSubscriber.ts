@@ -2,8 +2,15 @@ import { EventEmitter } from 'events';
 import { createConnection, type Socket } from 'net';
 
 export interface HerdrEvent {
-  event: string;
-  data: Record<string, unknown>;
+  type: string;
+  [key: string]: unknown;
+}
+
+export interface HerdrSubscription {
+  type: string;
+  pane_id?: string;
+  pattern?: string;
+  [key: string]: unknown;
 }
 
 export class HerdrEventSubscriber extends EventEmitter {
@@ -12,11 +19,10 @@ export class HerdrEventSubscriber extends EventEmitter {
   private stopped = false;
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private subscriptionId: number | null = null;
 
   constructor(
     private socketPath: string,
-    private events: string[],
+    private subscriptions: HerdrSubscription[],
   ) {
     super();
   }
@@ -38,7 +44,6 @@ export class HerdrEventSubscriber extends EventEmitter {
       this.socket = null;
     }
     this.buffer = '';
-    this.subscriptionId = null;
   }
 
   private connect(): void {
@@ -60,7 +65,6 @@ export class HerdrEventSubscriber extends EventEmitter {
     sock.on('close', () => {
       this.socket = null;
       this.buffer = '';
-      this.subscriptionId = null;
       if (!this.stopped) this.scheduleReconnect();
     });
 
@@ -70,12 +74,10 @@ export class HerdrEventSubscriber extends EventEmitter {
   }
 
   private subscribe(sock: Socket): void {
-    const id = 1;
-    this.subscriptionId = id;
     const req = JSON.stringify({
-      id,
+      id: '1',
       method: 'events.subscribe',
-      params: { events: this.events },
+      params: { subscriptions: this.subscriptions },
     }) + '\n';
     sock.write(req);
   }
@@ -87,13 +89,12 @@ export class HerdrEventSubscriber extends EventEmitter {
       this.buffer = this.buffer.slice(idx + 1);
       if (!line.trim()) continue;
       try {
-        const msg = JSON.parse(line);
-        if (msg.id === this.subscriptionId && msg.result !== undefined) {
-          // subscription ack — ignore
+        const msg = JSON.parse(line) as Record<string, unknown>;
+        if (msg.id === '1' && (msg.type === 'subscribed' || msg.type === 'ok')) {
           continue;
         }
-        if (msg.event) {
-          this.emit('event', { event: msg.event, data: msg.data ?? {} } as HerdrEvent);
+        if (msg.type && typeof msg.type === 'string') {
+          this.emit('event', msg as HerdrEvent);
         }
       } catch {
         // skip malformed

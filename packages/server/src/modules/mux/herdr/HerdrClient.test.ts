@@ -5,32 +5,26 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import type { MuxRef } from '@azito/shared';
 
 const SNAPSHOT = {
-  session: 'azito',
+  focused_workspace_id: 'w1',
+  focused_tab_id: 'w1:t1',
+  focused_pane_id: 'w1:p1',
   workspaces: [
-    {
-      id: 'ws1',
-      name: 'default',
-      tabs: [
-        {
-          id: 'tab1',
-          name: 'main',
-          active: true,
-          panes: [
-            { id: 'p1', index: 0, command: 'bash', title: '', width: 120, height: 40, active: true, pid: 1001, cwd: '/home/user' },
-            { id: 'p2', index: 1, command: 'vim', title: 'file.ts', width: 60, height: 40, active: false, pid: 1002, cwd: '/home/user' },
-          ],
-        },
-        {
-          id: 'tab2',
-          name: 'build',
-          active: false,
-          panes: [
-            { id: 'p3', index: 0, command: 'npm', title: 'npm run dev', width: 120, height: 40, active: true, pid: 1003, cwd: '/home/user/proj' },
-          ],
-        },
-      ],
-    },
+    { workspace_id: 'w1', number: 1, label: 'default', focused: true, pane_count: 3, tab_count: 2, active_tab_id: 'w1:t1', agent_status: 'unknown' },
   ],
+  tabs: [
+    { tab_id: 'w1:t1', workspace_id: 'w1', number: 1, label: 'main', focused: true, pane_count: 2, agent_status: 'unknown' },
+    { tab_id: 'w1:t2', workspace_id: 'w1', number: 2, label: 'build', focused: false, pane_count: 1, agent_status: 'unknown' },
+  ],
+  panes: [
+    { pane_id: 'w1:p1', terminal_id: 1, workspace_id: 'w1', tab_id: 'w1:t1', focused: true, cwd: '/home/user', foreground_cwd: '/home/user', agent_status: 'unknown', revision: 5 },
+    { pane_id: 'w1:p2', terminal_id: 2, workspace_id: 'w1', tab_id: 'w1:t1', focused: false, cwd: '/home/user', foreground_cwd: '/home/user', agent_status: 'unknown', revision: 3 },
+    { pane_id: 'w1:p3', terminal_id: 3, workspace_id: 'w1', tab_id: 'w1:t2', focused: true, cwd: '/home/user/proj', foreground_cwd: '/home/user/proj', agent_status: 'unknown', revision: 1 },
+  ],
+  layouts: [
+    { workspace_id: 'w1', tab_id: 'w1:t1', zoomed: false, focused_pane_id: 'w1:p1', panes: [{ pane_id: 'w1:p1', focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }, { pane_id: 'w1:p2', focused: false, rect: { x: 0, y: 40, width: 60, height: 20 } }], splits: [] },
+    { workspace_id: 'w1', tab_id: 'w1:t2', zoomed: false, focused_pane_id: 'w1:p3', panes: [{ pane_id: 'w1:p3', focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }], splits: [] },
+  ],
+  agents: [],
 };
 
 function makeClient(handler: (method: string, params: unknown) => unknown) {
@@ -53,14 +47,16 @@ describe('HerdrClient', () => {
     it('outputStream is false', () => expect(client.caps.outputStream).toBe(false));
     it('agentState is true', () => expect(client.caps.agentState).toBe(true));
     it('changeEvents is true', () => expect(client.caps.changeEvents).toBe(true));
-    it('zoom is false', () => expect(client.caps.zoom).toBe(false));
-    it('layoutSnapshot is false', () => expect(client.caps.layoutSnapshot).toBe(false));
+    it('zoom is true', () => expect(client.caps.zoom).toBe(true));
+    it('paneTitle is true', () => expect(client.caps.paneTitle).toBe(true));
+    it('layoutSnapshot is true', () => expect(client.caps.layoutSnapshot).toBe(true));
+    it('copyMode is false', () => expect(client.caps.copyMode).toBe(false));
   });
 
   describe('listWorkspaces', () => {
     it('returns MuxWorkspace array from snapshot', async () => {
       const client = makeClient((method) => {
-        if (method === 'session.snapshot') return SNAPSHOT;
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
         return null;
       });
       const workspaces = await client.listWorkspaces(server);
@@ -74,43 +70,49 @@ describe('HerdrClient', () => {
   });
 
   describe('openWorkspace', () => {
-    it('calls workspace.create and returns ref', async () => {
+    it('calls workspace.create, workspace.rename, tab.rename and returns ref', async () => {
+      const calls: string[] = [];
       const client = makeClient((method) => {
-        if (method === 'workspace.create') return { id: 'ws2', name: 'new-ws', tab: { id: 'tab3', name: 'default' } };
+        calls.push(method);
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'azito' }, tab: { tab_id: 'w2:t1', label: '1' }, root_pane: { pane_id: 'w2:p1' } };
+        if (method === 'workspace.rename') return { type: 'ok' };
+        if (method === 'tab.rename') return { type: 'ok' };
         return null;
       });
       const { ref } = await client.openWorkspace(server, 'new-ws');
       expect(ref).toEqual({ kind: 'herdr', workspace: 'new-ws', window: 'default' });
+      expect(calls).toEqual(['workspace.create', 'workspace.rename', 'tab.rename']);
     });
   });
 
   describe('openWindow', () => {
-    it('calls tab.create with workspace_id', async () => {
-      let capturedParams: unknown;
+    it('calls tab.create + tab.rename with workspace_id', async () => {
+      let tabCreateParams: unknown;
       const client = makeClient((method, params) => {
-        if (method === 'session.snapshot') return SNAPSHOT;
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
         if (method === 'tab.create') {
-          capturedParams = params;
-          return { id: 'tab4', name: 'new-tab' };
+          tabCreateParams = params;
+          return { type: 'tab_created', tab: { tab_id: 'w1:t3', label: '3' }, root_pane: { pane_id: 'w1:p4' } };
         }
+        if (method === 'tab.rename') return { type: 'ok' };
         return null;
       });
       const { ref } = await client.openWindow(server, 'default', 'new-tab', { extraEnv: { FOO: 'bar' } });
       expect(ref).toEqual({ kind: 'herdr', workspace: 'default', window: 'new-tab' });
-      expect(capturedParams).toEqual({ workspace_id: 'ws1', name: 'new-tab', env: { FOO: 'bar' } });
+      expect(tabCreateParams).toEqual({ workspace_id: 'w1', env: { FOO: 'bar' } });
     });
   });
 
   describe('resolvePane', () => {
     it('returns handle for ordinal 1', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const ref: MuxRef = { kind: 'herdr', workspace: 'default', window: 'main' };
       const handle = await client.resolvePane(server, ref, 1);
-      expect(handle as string).toBe('ws1:p1');
+      expect(handle as string).toBe('w1:p1');
     });
 
     it('throws for out-of-range ordinal', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const ref: MuxRef = { kind: 'herdr', workspace: 'default', window: 'main' };
       await expect(client.resolvePane(server, ref, 5)).rejects.toThrow('out of range');
     });
@@ -118,8 +120,8 @@ describe('HerdrClient', () => {
 
   describe('refFromPaneHandle', () => {
     it('resolves a pane handle back to ref+ordinal', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
-      const result = await client.refFromPaneHandle(server, 'ws1:p2' as any);
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
+      const result = await client.refFromPaneHandle(server, 'w1:p2' as any);
       expect(result).toEqual({
         ref: { kind: 'herdr', workspace: 'default', window: 'main' },
         ordinal: 2,
@@ -127,32 +129,31 @@ describe('HerdrClient', () => {
     });
 
     it('returns null for unknown pane', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
-      const result = await client.refFromPaneHandle(server, 'ws1:p999' as any);
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
+      const result = await client.refFromPaneHandle(server, 'w1:p999' as any);
       expect(result).toBeNull();
     });
   });
 
   describe('sendKeysToHandle', () => {
-    it('converts tmux keys to herdr keys', async () => {
-      let sentKeys: unknown;
+    it('converts tmux keys to herdr keys and sends one per call', async () => {
+      const sentKeys: string[] = [];
       const client = makeClient((method, params) => {
-        if (method === 'session.snapshot') return SNAPSHOT;
-        if (method === 'pane.send_keys') { sentKeys = (params as any).keys; return null; }
-        return null;
+        if (method === 'pane.send_keys') { sentKeys.push((params as any).key); return { type: 'ok' }; }
+        return { type: 'ok' };
       });
-      await client.sendKeysToHandle(server, 'ws1:p1' as any, ['C-c', 'Enter']);
+      await client.sendKeysToHandle(server, 'w1:p1' as any, ['C-c', 'Enter']);
       expect(sentKeys).toEqual(['ctrl+c', 'enter']);
     });
   });
 
   describe('captureScreen', () => {
-    it('returns pane content as stdout', async () => {
+    it('returns pane text as stdout', async () => {
       const client = makeClient((method) => {
-        if (method === 'pane.read') return { content: 'hello world\n' };
-        return null;
+        if (method === 'pane.read') return { type: 'pane_read', read: { pane_id: 'w1:p1', source: 'recent', format: 'text', text: 'hello world\n', revision: 5, truncated: false } };
+        return { type: 'ok' };
       });
-      const result = await client.captureScreen(server, 'ws1:p1' as any);
+      const result = await client.captureScreen(server, 'w1:p1' as any);
       expect(result.stdout).toBe('hello world\n');
       expect(result.code).toBe(0);
     });
@@ -162,85 +163,98 @@ describe('HerdrClient', () => {
     it('calls tab.close with resolved tab_id', async () => {
       let closedTabId: string | undefined;
       const client = makeClient((method, params) => {
-        if (method === 'session.snapshot') return SNAPSHOT;
-        if (method === 'tab.close') { closedTabId = (params as any).tab_id; return null; }
-        return null;
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
+        if (method === 'tab.close') { closedTabId = (params as any).tab_id; return { type: 'ok' }; }
+        return { type: 'ok' };
       });
       await client.closeWindow(server, { kind: 'herdr', workspace: 'default', window: 'main' });
-      expect(closedTabId).toBe('tab1');
+      expect(closedTabId).toBe('w1:t1');
     });
   });
 
   describe('splitPaneByHandle', () => {
     it('returns new pane handle', async () => {
       const client = makeClient((method) => {
-        if (method === 'pane.split') return { id: 'p4' };
-        return null;
+        if (method === 'pane.split') return { type: 'pane_split', pane: { pane_id: 'w1:p4' } };
+        return { type: 'ok' };
       });
-      const { handle } = await client.splitPaneByHandle(server, 'ws1:p1' as any, 'v');
-      expect(handle as string).toBe('ws1:p4');
+      const { handle } = await client.splitPaneByHandle(server, 'w1:p1' as any, 'v');
+      expect(handle as string).toBe('w1:p4');
     });
   });
 
   describe('panePidByHandle', () => {
-    it('returns pid from snapshot', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
-      expect(await client.panePidByHandle(server, 'ws1:p1' as any)).toBe(1001);
+    it('returns pid from pane.process_info', async () => {
+      const client = makeClient((method) => {
+        if (method === 'pane.process_info') return { type: 'process_info', pid: 1001, foreground_pid: 1002, foreground_command: 'vim' };
+        return { type: 'ok' };
+      });
+      expect(await client.panePidByHandle(server, 'w1:p1' as any)).toBe(1002);
     });
 
-    it('returns null for unknown pane', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
-      expect(await client.panePidByHandle(server, 'ws1:p999' as any)).toBeNull();
+    it('returns null on error', async () => {
+      const client = makeClient((method) => {
+        if (method === 'pane.process_info') throw new Error('not found');
+        return { type: 'ok' };
+      });
+      expect(await client.panePidByHandle(server, 'w1:p999' as any)).toBeNull();
     });
   });
 
-  describe('capability-gated methods throw MuxCapabilityMissingError', () => {
-    const client = makeClient(() => null);
+  describe('zoomPaneByHandle', () => {
+    it('calls pane.zoom', async () => {
+      let zoomed = false;
+      const client = makeClient((method) => {
+        if (method === 'pane.zoom') { zoomed = true; return { type: 'ok' }; }
+        return { type: 'ok' };
+      });
+      await client.zoomPaneByHandle(server, 'w1:p1' as any);
+      expect(zoomed).toBe(true);
+    });
+  });
+
+  describe('setPaneTitle', () => {
+    it('calls pane.rename', async () => {
+      let renamed: unknown;
+      const client = makeClient((method, params) => {
+        if (method === 'pane.rename') { renamed = params; return { type: 'ok' }; }
+        return { type: 'ok' };
+      });
+      await client.setPaneTitle(server, 'w1:p1' as any, 'my-title');
+      expect(renamed).toEqual({ pane_id: 'w1:p1', label: 'my-title' });
+    });
+  });
+
+  describe('capability-gated methods that still throw MuxCapabilityMissingError', () => {
+    const client = makeClient(() => ({ type: 'ok' }));
     const ref: MuxRef = { kind: 'herdr', workspace: 'ws', window: 'w' };
 
     it('startOutputStream', () => expect(client.startOutputStream(server, 'h' as any, '/tmp/x')).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('stopOutputStream', () => expect(client.stopOutputStream(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('zoomPaneByHandle', () => expect(client.zoomPaneByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('unzoomPaneByHandle', () => expect(client.unzoomPaneByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('isPaneInModeByHandle', () => expect(client.isPaneInModeByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('cancelPaneModeByHandle', () => expect(client.cancelPaneModeByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('setPaneTitle', () => expect(client.setPaneTitle(server, 'h' as any, 'x')).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('windowActivity', () => expect(client.windowActivity(server, ref)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('captureLayout', () => expect(client.captureLayout(server, ref)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('applyLayout', () => expect(client.applyLayout(server, ref, '')).rejects.toBeInstanceOf(MuxCapabilityMissingError));
 
     it('MuxCapabilityMissingError carries correct capability name', async () => {
       try { await client.startOutputStream(server, 'h' as any, '/tmp'); } catch (e) {
         expect((e as MuxCapabilityMissingError).capability).toBe('outputStream');
       }
-      try { await client.zoomPaneByHandle(server, 'h' as any); } catch (e) {
-        expect((e as MuxCapabilityMissingError).capability).toBe('zoom');
-      }
-    });
-  });
-
-  describe('measurePanePids', () => {
-    it('collects all pane PIDs', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
-      const pids = await client.measurePanePids(server);
-      expect(pids).toHaveLength(3);
-      expect(pids.map(p => p.pid)).toEqual([1001, 1002, 1003]);
     });
   });
 
   describe('listAllPanes', () => {
     it('returns all panes across workspaces', async () => {
-      const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const panes = await client.listAllPanes(server);
       expect(panes).toHaveLength(3);
-      expect(panes[0].paneId).toBe('ws1:p1');
+      expect(panes[0].paneId).toBe('w1:p1');
       expect(panes[0].sessionName).toBe('default');
       expect(panes[0].windowName).toBe('main');
     });
   });
 
   describe('windowExists', () => {
-    const client = makeClient((method) => method === 'session.snapshot' ? SNAPSHOT : null);
+    const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
     it('returns true for existing tab', async () => {
       expect(await client.windowExists(server, { kind: 'herdr', workspace: 'default', window: 'main' })).toBe(true);
     });

@@ -1,84 +1,79 @@
 # herdr Driver (PoC)
 
-Setup guide and constraints for using herdr v0.8.2 as an AZITO mux driver.
+Guide for using herdr v0.8.2 as an AZITO mux driver.
 
 ## Prerequisites
 
-- herdr v0.8.2 (Rust-based, agent-aware terminal multiplexer)
+- herdr v0.8.2 (Rust-based, agent-aware terminal multiplexer, herdrdev/herdr)
 - No root access required (user-space install)
 - Official docs: https://herdr.dev/docs/
+- API schema: `docs/ja/mux-herdr.schema.json` (protocol 20, schema_version 1)
 
-## Installation
+## Install
 
 ```bash
-# Use the bundled install script
 bash harness/mux/herdr/install.sh
-# → Installs to ~/.local/bin/herdr (with sha256 verification)
+# → Installs to ~/.local/bin/herdr (sha256-verified)
 ```
 
-## Starting
+## Start
 
 ```bash
-# Start herdr server in headless mode
 bash harness/mux/herdr/start.sh
-# Uses systemd --user unit if available, otherwise nohup
+# Runs HERDR_SESSION=azito herdr server in headless mode
+# Uses systemd user unit if available, otherwise nohup
 ```
 
-The config file (`harness/mux/herdr/azito.toml`) automatically disables:
-- Sidebar (hidden)
-- Tab bar (hidden when single tab)
-- Pane borders, gaps, and scrollbars
-- Mouse capture
-- Close confirmation dialogs
+Socket: `~/.config/herdr/sessions/azito/herdr.sock`
 
-## Registering in AZITO
+Config (`harness/mux/herdr/azito.toml`) disables: sidebar, tab bar (single tab), pane borders/gaps/scrollbars, mouse capture, close confirmation.
 
-Select `herdr` as `mux_runtime` when adding a server.
+## Registering with AZITO
 
-- Register under a separate name from any existing tmux server (e.g. `server007-herdr`)
-- The herdr server must be running
+Select `herdr` as `mux_runtime` when adding a server. Register with a distinct name (e.g., `server007-herdr`).
 
-## Capabilities
+## Protocol characteristics
 
-| Capability | Supported | Notes |
-|------------|-----------|-------|
-| outputStream | **No** | No pipe-pane equivalent. Task execution unavailable |
-| changeEvents | Yes | Built-in events via `events.subscribe` |
-| agentState | Yes | `pane.agent_status_changed` provides agent activity state |
-| independentClients | Yes | Multiple clients with independent focus |
-| envInjection | Yes | `env` parameter on `workspace.create`/`tab.create`/`pane.split` |
-| zoom | No | |
-| copyMode | No | |
-| paneTitle | No | |
-| activityCounter | No | No `window_activity` equivalent |
-| layoutSnapshot | No | |
+- **One connection per request**: Server closes the connection after sending one response line. Only `events.subscribe` keeps the connection open for streaming.
+- ID format: workspace `w1`, tab `w1:t1`, pane `w1:p1`
+- `workspace.create` / `tab.create` `name` param does not set the `label` — call `workspace.rename` / `tab.rename` immediately after creation.
 
-## Known Limitations
+## Capabilities (caps)
 
-- **No task execution**: `outputStream=false` means the `AZITO_DONE_*` marker detection via pane output streaming is unavailable. Attempting task execution returns 409 `mux_capability_missing`
-- **pane.read polling**: Polling `pane.read` as an output stream alternative is under investigation (verification item 4)
-- **Activity detection**: Shown in the diagnostics panel (`GET /api/debug/activity`) as `decidedBy: 'tier0_mux'`, but not yet integrated into the priority ladder (pending post-#155 merge)
+| Capability | Supported | herdr API | Notes |
+|------------|-----------|-----------|-------|
+| outputStream | **No** | — | No pipe-pane equivalent. Task execution returns 409. |
+| changeEvents | Yes | `events.subscribe` | Built-in events |
+| agentState | Yes | `pane.agent_status_changed` | Mux-native agent state |
+| independentClients | Yes | — | Pending verification |
+| envInjection | Yes | `workspace.create` / `tab.create` / `pane.split` `env` param | |
+| zoom | Yes | `pane.zoom` | |
+| copyMode | No | — | |
+| paneTitle | Yes | `pane.rename` | |
+| activityCounter | No | — | No `window_activity` equivalent |
+| layoutSnapshot | Yes | `layout.export` / `layout.apply` | |
 
-## Verification Results
+## Known limitations
 
-> Results from `scripts/poc/herdr-verify.ts` to be transcribed below.
+- **No task execution**: `outputStream=false` prevents `AZITO_DONE_*` marker detection. Returns 409 `mux_capability_missing`.
+- **Empty pane.read**: When no client is attached, `pane.read` may return empty `text` with `revision` 0 (PTY size undetermined).
+- **Activity detection**: Shown in diagnostics panel as `decidedBy: 'tier0_mux'` only. Not integrated into the detection tier priority.
 
-### 1. Independent Client Focus
+## Verification results
 
+> Results from `scripts/poc/herdr-verify.ts`.
+
+### 1. Independent client focus
 _Not yet run_
 
-### 2. Env Injection
-
+### 2. Environment injection
 _Not yet run_
 
-### 3. pane.send_text Size Limit
-
+### 3. pane.send_text size limits
 _Not yet run_
 
-### 4. Output Stream Alternative
+### 4. Output stream alternative (pane.read polling + pane.wait_for_output)
+_Not yet run_ — Also check empty text issue when no client is attached.
 
-_Not yet run_
-
-### 5. Tab Bar Visibility
-
+### 5. Tab bar visibility
 _Not yet run_

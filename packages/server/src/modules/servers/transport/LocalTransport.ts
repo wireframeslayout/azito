@@ -125,19 +125,25 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
 
   private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     if (this.herdrSocket) {
-      await this.herdrSocket.call('tab.focus', { tab_name: ref.window, workspace_name: ref.workspace }).catch(() => {});
-      const snap = await this.herdrSocket.call('session.snapshot').catch(() => null) as { workspaces?: Array<{ name: string; tabs: Array<{ name: string; panes: Array<{ id: string }> }> }> } | null;
-      if (snap) {
-        const ws = snap.workspaces?.find((w) => w.name === ref.workspace);
-        const tab = ws?.tabs.find((t) => t.name === ref.window);
-        const pane = tab?.panes[ordinal - 1];
-        if (pane) {
-          await this.herdrSocket.call('pane.focus', { pane_id: pane.id }).catch(() => {});
+      try {
+        const resp = await this.herdrSocket.call('session.snapshot');
+        const snap = (resp as Record<string, unknown>).snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
+        if (snap) {
+          const ws = snap.workspaces.find((w) => w.label === ref.workspace);
+          const tab = ws ? snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window) : undefined;
+          if (tab) {
+            await this.herdrSocket.call('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
+            const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+            const target = panesInTab[ordinal - 1];
+            if (target) {
+              await this.herdrSocket.call('pane.focus', { pane_id: target.pane_id }).catch(() => {});
+            }
+          }
         }
-      }
+      } catch { /* best-effort focus */ }
     }
-    const argv = ['--session', ref.workspace];
-    return this.spawnTerminal(argv, cols, rows, undefined, undefined, 'herdr');
+    const env = { HERDR_SESSION: ref.workspace };
+    return this.spawnTerminal([], cols, rows, { ...process.env as Record<string, string>, ...env }, undefined, 'herdr');
   }
 
   spawnTerminal(

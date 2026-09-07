@@ -26,13 +26,12 @@ describe('HerdrEventSubscriber', () => {
         const line = buf.slice(0, idx);
         buf = buf.slice(idx + 1);
         const req = JSON.parse(line);
-        // Send subscription ack
-        conn.write(JSON.stringify({ id: req.id, result: { subscribed: true } }) + '\n');
-        // Then send an event
+        conn.write(JSON.stringify({ id: req.id, type: 'subscribed' }) + '\n');
         setTimeout(() => {
           conn.write(JSON.stringify({
-            event: 'pane.agent_status_changed',
-            data: { pane_id: 'ws1:p1', status: 'working' },
+            type: 'pane.agent_status_changed',
+            pane_id: 'w1:p1',
+            agent_status: 'working',
           }) + '\n');
         }, 50);
       });
@@ -40,7 +39,7 @@ describe('HerdrEventSubscriber', () => {
     server.listen(sockPath);
     cleanup.push(() => { server.close(); try { rmSync(dir, { recursive: true }); } catch {} });
 
-    const sub = new HerdrEventSubscriber(sockPath, ['pane.agent_status_changed']);
+    const sub = new HerdrEventSubscriber(sockPath, [{ type: 'pane.agent_status_changed', pane_id: '*' }]);
     cleanup.push(() => sub.stop());
 
     const received: HerdrEvent[] = [];
@@ -49,8 +48,9 @@ describe('HerdrEventSubscriber', () => {
 
     await new Promise((r) => setTimeout(r, 300));
     expect(received).toHaveLength(1);
-    expect(received[0].event).toBe('pane.agent_status_changed');
-    expect(received[0].data).toEqual({ pane_id: 'ws1:p1', status: 'working' });
+    expect(received[0].type).toBe('pane.agent_status_changed');
+    expect(received[0].pane_id).toBe('w1:p1');
+    expect(received[0].agent_status).toBe('working');
   });
 
   it('stop prevents reconnection', async () => {
@@ -61,11 +61,10 @@ describe('HerdrEventSubscriber', () => {
     server.listen(sockPath);
     cleanup.push(() => { server.close(); try { rmSync(dir, { recursive: true }); } catch {} });
 
-    const sub = new HerdrEventSubscriber(sockPath, ['pane.agent_status_changed']);
+    const sub = new HerdrEventSubscriber(sockPath, [{ type: 'pane.agent_status_changed', pane_id: '*' }]);
     sub.start();
     await new Promise((r) => setTimeout(r, 50));
     sub.stop();
-    // No error expected — just verifying it doesn't throw
     expect(true).toBe(true);
   });
 });

@@ -2,13 +2,11 @@
 set -euo pipefail
 
 HERDR_VERSION="0.8.2"
-# TODO: replace with the real sha256 from the GitHub release page
-# https://github.com/herdr/herdr/releases/tag/v0.8.2
-HERDR_SHA256="PLACEHOLDER_REPLACE_WITH_REAL_SHA256_FROM_GITHUB_RELEASE"
+HERDR_SHA256="976150a14d490c94b243ea2e1a7eb2dfb67f12e36b182db90936f6728e6aecf4"
 
 INSTALL_DIR="${HOME}/.local/bin"
 BINARY="${INSTALL_DIR}/herdr"
-DOWNLOAD_URL="https://github.com/herdr/herdr/releases/download/v${HERDR_VERSION}/herdr-linux-x86_64"
+DOWNLOAD_URL="https://github.com/herdrdev/herdr/releases/download/v${HERDR_VERSION}/herdr-linux-x86_64"
 
 if [ -x "${BINARY}" ]; then
   current="$("${BINARY}" --version 2>/dev/null | grep -oP '\d+\.\d+\.\d+' || true)"

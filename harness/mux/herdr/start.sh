@@ -11,19 +11,12 @@ if [ ! -x "${HERDR_BIN}" ]; then
   exit 1
 fi
 
-if [ ! -f "${CONFIG}" ]; then
-  echo "ERROR: config not found at ${CONFIG}" >&2
-  exit 1
-fi
-
-# Check if already running by probing the socket
 SOCKET_PATH="${HOME}/.config/herdr/sessions/${SESSION_NAME}/herdr.sock"
 if [ -S "${SOCKET_PATH}" ]; then
-  if "${HERDR_BIN}" --session "${SESSION_NAME}" ping >/dev/null 2>&1; then
+  if HERDR_SESSION="${SESSION_NAME}" "${HERDR_BIN}" status server >/dev/null 2>&1; then
     echo "herdr session '${SESSION_NAME}' already running"
     exit 0
   fi
-  # Stale socket — remove it
   rm -f "${SOCKET_PATH}"
 fi
 
@@ -39,7 +32,8 @@ Description=herdr server (session: ${SESSION_NAME})
 
 [Service]
 Type=simple
-ExecStart=${HERDR_BIN} server --session ${SESSION_NAME} --config ${CONFIG}
+Environment=HERDR_SESSION=${SESSION_NAME}
+ExecStart=${HERDR_BIN} server
 Restart=on-failure
 RestartSec=3
 
@@ -53,12 +47,12 @@ UNIT
 }
 
 start_with_nohup() {
-  local log_dir="${HOME}/.local/share/herdr"
+  local log_dir="${HOME}/.local/state/herdr"
   mkdir -p "${log_dir}"
-  nohup "${HERDR_BIN}" server --session "${SESSION_NAME}" --config "${CONFIG}" \
-    > "${log_dir}/${SESSION_NAME}.log" 2>&1 &
+  HERDR_SESSION="${SESSION_NAME}" nohup "${HERDR_BIN}" server \
+    > "${log_dir}/server-${SESSION_NAME}.log" 2>&1 &
   local pid=$!
-  echo "herdr started via nohup (pid=${pid}, log=${log_dir}/${SESSION_NAME}.log)"
+  echo "herdr started via nohup (pid=${pid}, log=${log_dir}/server-${SESSION_NAME}.log)"
 }
 
 if systemctl --user status >/dev/null 2>&1; then
