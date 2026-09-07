@@ -264,3 +264,18 @@ describe('HerdrClient', () => {
     });
   });
 });
+
+// rc.13 E2E regression: the real transports (LocalTransport / agent POST /api/mux) relay the
+// NDJSON envelope `{ id, result }` verbatim, while these tests historically mocked the bare
+// payload. `GET /api/servers/:name/sessions` on a herdr server crashed with
+// "Cannot read properties of undefined (reading 'workspaces')". rpc() must accept both shapes.
+describe('HerdrClient rpc envelope unwrapping', () => {
+  it('unwraps { id, result } envelopes relayed by the transport', async () => {
+    const SNAP = { version: '0.8.2', protocol: 20, workspaces: [{ workspace_id: 'w1', number: 1, label: 'azito', focused: true, pane_count: 1, tab_count: 1, active_tab_id: 'w1:t1', agent_status: 'unknown' }], tabs: [{ tab_id: 'w1:t1', workspace_id: 'w1', number: 1, label: '1', focused: true, pane_count: 1, agent_status: 'unknown' }], panes: [{ pane_id: 'w1:p1', terminal_id: 't', workspace_id: 'w1', tab_id: 'w1:t1', focused: true, cwd: '/', foreground_cwd: '/', agent_status: 'unknown', scroll: { offset_from_bottom: 0, max_offset_from_bottom: 0, viewport_rows: 1 }, revision: 0 }], layouts: [], agents: [] };
+    const transport = { execMux: async () => ({ stdout: JSON.stringify({ id: '1', result: { type: 'session_snapshot', snapshot: SNAP } }), stderr: '', code: 0 }) };
+    const client = new HerdrClient({ getTransport: () => transport } as never);
+    const ws = await client.listWorkspaces({ name: 's', type: 'agent', muxRuntime: 'herdr' } as never);
+    expect(ws.map((w) => w.name)).toEqual(['azito']);
+    expect(ws[0].windows.map((w) => w.name)).toEqual(['1']);
+  });
+});
