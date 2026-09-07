@@ -27,9 +27,9 @@ export class ZellijClient implements IMuxClient {
     agentState: false,
     independentClients: true,
     envInjection: true,
-    zoom: false,
+    zoom: true,
     copyMode: false,
-    paneTitle: false,
+    paneTitle: true,
     activityCounter: false,
     layoutSnapshot: true,
     stablePaneHandle: true,
@@ -70,10 +70,20 @@ export class ZellijClient implements IMuxClient {
   }
 
   private async resolveTabId(server: ServerConfig, tabName: string): Promise<number> {
+    // Primary: resolve via list-panes (returns tab_id for tabs with panes)
     const panes = await this.allPanes(server);
     const pane = panes.find((p) => p.tabName === tabName);
-    if (!pane) throw new Error(`Tab "${tabName}" not found in session "${this.sessionName}"`);
-    return pane.tabId;
+    if (pane) return pane.tabId;
+
+    // Fallback: for pane-less tabs (headless new-tab), query-tab-names returns
+    // names in tab_position order. In a fresh session tab_position == tab_id,
+    // but they can diverge after tab close/reorder. This is best-effort.
+    const result = await this.execAction(server, ['query-tab-names']);
+    const tabNames = parseQueryTabNames(result.stdout);
+    const idx = tabNames.indexOf(tabName);
+    if (idx >= 0) return idx;
+
+    throw new Error(`Tab "${tabName}" not found in session "${this.sessionName}"`);
   }
 
   private locks = new Map<string, Promise<void>>();
@@ -162,7 +172,10 @@ export class ZellijClient implements IMuxClient {
     baseName?: string,
     opts?: { exactName?: boolean; extraEnv?: Record<string, string> },
   ): Promise<{ ref: MuxRef; result: ExecResult }> {
-    const args = ['new-tab'];
+    // Use --layout-string to ensure the new tab has at least one pane.
+    // Plain `new-tab` in a headless session (no client attached) creates
+    // an empty tab with zero panes, invisible to list-panes.
+    const args = ['new-tab', '--layout-string', 'layout { pane; }'];
     if (baseName) args.push('--name', baseName);
     const result = await this.execAction(server, args);
     const tabId = result.stdout.trim();
@@ -352,12 +365,14 @@ export class ZellijClient implements IMuxClient {
     throw new MuxCapabilityMissingError('outputStream');
   }
 
-  async zoomPaneByHandle(_server: ServerConfig, _handle: PaneHandle): Promise<ExecResult> {
-    throw new MuxCapabilityMissingError('zoom');
+  async zoomPaneByHandle(server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {
+    await this.execAction(server, ['toggle-fullscreen', '--pane-id', handle as string]);
+    return this.okResult();
   }
 
-  async unzoomPaneByHandle(_server: ServerConfig, _handle: PaneHandle): Promise<ExecResult> {
-    throw new MuxCapabilityMissingError('zoom');
+  async unzoomPaneByHandle(server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {
+    await this.execAction(server, ['toggle-fullscreen', '--pane-id', handle as string]);
+    return this.okResult();
   }
 
   async isPaneInModeByHandle(_server: ServerConfig, _handle: PaneHandle): Promise<boolean> {
@@ -368,8 +383,9 @@ export class ZellijClient implements IMuxClient {
     throw new MuxCapabilityMissingError('copyMode');
   }
 
-  async setPaneTitle(_server: ServerConfig, _handle: PaneHandle, _title: string): Promise<ExecResult> {
-    throw new MuxCapabilityMissingError('paneTitle');
+  async setPaneTitle(server: ServerConfig, handle: PaneHandle, title: string): Promise<ExecResult> {
+    await this.execAction(server, ['rename-pane', '--pane-id', handle as string, title]);
+    return this.okResult();
   }
 
   async windowActivity(_server: ServerConfig, _ref: MuxRef): Promise<number | null> {
