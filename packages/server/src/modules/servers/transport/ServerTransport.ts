@@ -23,6 +23,5 @@ export interface IServerTransport {
 export interface IMuxTransport {
   execMux(req: MuxExecRequest): Promise<ExecResult>;
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream>;
-  spawnTerminal?(argv: string[], cols: number, rows: number, env?: Record<string, string>, cleanup?: () => void): ITerminalStream;
   createPaneStream(handle: PaneHandle): IPaneStream;
 }

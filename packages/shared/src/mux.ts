@@ -80,12 +80,6 @@ export type MuxExecRequest =
   | { kind: 'herdr'; method: string; params: unknown }
   | { kind: 'zellij'; args: string[] };
 
-export interface AttachSpec {
-  argv: string[];
-  env?: Record<string, string>;
-  cleanup?: () => Promise<void>;
-}
-
 export function asPaneHandle(s: string): PaneHandle {
   return s as PaneHandle;
 }

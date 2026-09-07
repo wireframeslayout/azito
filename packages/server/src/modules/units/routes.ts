@@ -248,6 +248,17 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       const { taskId, force } = request.body as { taskId?: number; force?: boolean };
       if (!taskId) return reply.status(400).send({ error: 'taskId required' });
       try {
+        const task = taskRepo.findById(taskId);
+        if (task) {
+          const sn = resolveTaskServerName(task, projectServerRepo);
+          if (sn) {
+            const srv = serverRepo.findByName(sn);
+            if (srv) {
+              const driver = muxDriverRegistry.resolve(srv);
+              if (!driver.caps.outputStream) throw new MuxCapabilityMissingError('outputStream');
+            }
+          }
+        }
         await executeTaskUseCase.execute(id, taskId, { force: force === true });
         return { ok: true };
       } catch (err: unknown) {

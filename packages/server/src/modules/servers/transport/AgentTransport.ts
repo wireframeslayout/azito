@@ -70,6 +70,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   private baseUrl: string;
   private wsBaseUrl: string;
   private authHeader: string;
+  private useLegacyMuxRoute = false;
 
   private token: string;
 
@@ -92,14 +93,19 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   }
 
   async execMux(req: MuxExecRequest): Promise<ExecResult> {
-    try {
-      return await this.post('/api/mux', req as Record<string, unknown>);
-    } catch (err) {
-      if (req.kind === 'tmux' && (err as Error).message.includes('404')) {
-        return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
+    if (!this.useLegacyMuxRoute) {
+      try {
+        return await this.post('/api/mux', req as Record<string, unknown>);
+      } catch (err) {
+        if (req.kind === 'tmux' && (err as Error).message.includes('failed (404)')) {
+          this.useLegacyMuxRoute = true;
+          return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
+        }
+        throw err;
       }
-      throw err;
     }
+    if (req.kind !== 'tmux') throw new Error(`Legacy agent does not support mux kind "${req.kind}"`);
+    return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
   }
 
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {

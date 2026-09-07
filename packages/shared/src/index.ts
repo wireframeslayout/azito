@@ -11,7 +11,6 @@ export {
   type MuxWorkspace,
   type MuxPaneInfo,
   type MuxExecRequest,
-  type AttachSpec,
   asPaneHandle,
   formatMuxRef,
   parseMuxRef,
