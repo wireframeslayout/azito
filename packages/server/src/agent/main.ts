@@ -125,7 +125,7 @@ async function main(): Promise<void> {
   let herdrSubscriber: HerdrEventSubscriber | undefined;
   let herdrProbeTimer: ReturnType<typeof setInterval> | null = null;
   const herdrSockPath = herdrSocketPath(herdrSession);
-  const herdrRelayPaneCache = new Map<string, { workspace_label: string; tab_label: string }>();
+  const herdrRelayPaneCache = new Map<string, { workspace_label: string }>();
   let herdrRelaySocket: HerdrSocketClient | undefined;
 
   function startHerdrRelay(): boolean {
@@ -152,13 +152,11 @@ async function main(): Promise<void> {
         };
         herdrRelayPaneCache.clear();
         const wsLabels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]));
-        const tabLabels = new Map(snap.tabs.map(t => [t.tab_id, t.label]));
         const paneIds: string[] = [];
         for (const p of snap.panes) {
           const wl = wsLabels.get(p.workspace_id);
-          const tl = tabLabels.get(p.tab_id);
-          if (wl && tl) {
-            herdrRelayPaneCache.set(p.pane_id, { workspace_label: wl, tab_label: tl });
+          if (wl) {
+            herdrRelayPaneCache.set(p.pane_id, { workspace_label: wl });
             paneIds.push(p.pane_id);
           }
         }
@@ -179,7 +177,7 @@ async function main(): Promise<void> {
         if (!paneId) return;
         const mapping = herdrRelayPaneCache.get(paneId);
         if (!mapping) return;
-        agentEventBus.emit('mux-event', { ...event, workspace_label: mapping.workspace_label, tab_label: mapping.tab_label });
+        agentEventBus.emit('mux-event', { ...event, workspace_label: mapping.workspace_label, tab_label: 'main' });
         return;
       }
       agentEventBus.emit('mux-event', event);
@@ -195,13 +193,11 @@ async function main(): Promise<void> {
             const s = unwrapHerdrSnapshot(r) as {
               panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
               workspaces: Array<{ workspace_id: string; label: string }>;
-              tabs: Array<{ tab_id: string; label: string }>;
             };
             const pane = s.panes.find(p => p.pane_id === event.pane_id);
             if (!pane) return;
             const wl = s.workspaces.find(w => w.workspace_id === pane.workspace_id)?.label;
-            const tl = s.tabs.find(t => t.tab_id === pane.tab_id)?.label;
-            if (wl && tl) herdrRelayPaneCache.set(event.pane_id as string, { workspace_label: wl, tab_label: tl });
+            if (wl) herdrRelayPaneCache.set(event.pane_id as string, { workspace_label: wl });
           } catch { /* non-fatal */ }
         })();
       }

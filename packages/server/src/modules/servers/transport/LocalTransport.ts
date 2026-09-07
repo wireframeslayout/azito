@@ -148,7 +148,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
       const snap = (resp as Record<string, unknown>).snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
       if (snap) {
         const ws = snap.workspaces.find((w) => w.label === ref.workspace);
-        const tab = ws ? snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window) : undefined;
+        const tab = ws ? snap.tabs.find((t) => t.workspace_id === ws.workspace_id) : undefined;
         if (tab) {
           await sock.call('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
           const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);

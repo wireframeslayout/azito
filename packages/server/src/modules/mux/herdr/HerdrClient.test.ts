@@ -55,7 +55,7 @@ describe('HerdrClient', () => {
   });
 
   describe('listWorkspaces', () => {
-    it('returns MuxWorkspace array from snapshot', async () => {
+    it('returns one window per workspace (first tab only)', async () => {
       const client = makeClient((method) => {
         if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
         return null;
@@ -63,49 +63,69 @@ describe('HerdrClient', () => {
       const workspaces = await client.listWorkspaces(server);
       expect(workspaces).toHaveLength(1);
       expect(workspaces[0].name).toBe('default');
-      expect(workspaces[0].windowCount).toBe(2);
-      expect(workspaces[0].windows).toHaveLength(2);
+      expect(workspaces[0].windowCount).toBe(1);
+      expect(workspaces[0].windows).toHaveLength(1);
       expect(workspaces[0].windows[0].name).toBe('main');
       expect(workspaces[0].windows[0].panes).toHaveLength(2);
+    });
+
+    it('warns when workspace has multiple tabs', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const differentServer = { name: 'server-warn-test', type: 'agent' as const, muxRuntime: 'herdr' as const } as any;
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
+        return null;
+      });
+      await client.listWorkspaces(differentServer);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('has 2 tabs'));
+      warn.mockRestore();
     });
   });
 
   describe('openWorkspace', () => {
-    it('calls workspace.create, workspace.rename, tab.rename and returns ref', async () => {
+    it('calls workspace.create and workspace.rename only (no tab.rename)', async () => {
       const calls: string[] = [];
       const client = makeClient((method) => {
         calls.push(method);
         if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'azito' }, tab: { tab_id: 'w2:t1', label: '1' }, root_pane: { pane_id: 'w2:p1' } };
         if (method === 'workspace.rename') return { type: 'ok' };
-        if (method === 'tab.rename') return { type: 'ok' };
         return null;
       });
       const { ref } = await client.openWorkspace(server, 'new-ws');
-      expect(ref).toEqual({ kind: 'herdr', workspace: 'new-ws', window: 'default' });
-      expect(calls).toEqual(['workspace.create', 'workspace.rename', 'tab.rename']);
+      expect(ref).toEqual({ kind: 'herdr', workspace: 'new-ws', window: 'main' });
+      expect(calls).toEqual(['workspace.create', 'workspace.rename']);
     });
   });
 
   describe('openWindow', () => {
-    it('calls tab.create + tab.rename with workspace_id', async () => {
-      let tabCreateParams: unknown;
+    it('creates a workspace (not a tab) and returns ref with window=main', async () => {
+      const calls: Array<{ method: string; params: unknown }> = [];
       const client = makeClient((method, params) => {
-        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
-        if (method === 'tab.create') {
-          tabCreateParams = params;
-          return { type: 'tab_created', tab: { tab_id: 'w1:t3', label: '3' }, root_pane: { pane_id: 'w1:p4' } };
-        }
-        if (method === 'tab.rename') return { type: 'ok' };
+        calls.push({ method, params });
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w3', label: 'new-tab' }, tab: { tab_id: 'w3:t1', label: '1' }, root_pane: { pane_id: 'w3:p1' } };
+        if (method === 'workspace.rename') return { type: 'ok' };
         return null;
       });
       const { ref } = await client.openWindow(server, 'default', 'new-tab', { extraEnv: { FOO: 'bar' } });
-      expect(ref).toEqual({ kind: 'herdr', workspace: 'default', window: 'new-tab' });
-      expect(tabCreateParams).toEqual({ workspace_id: 'w1', env: { FOO: 'bar' } });
+      expect(ref).toEqual({ kind: 'herdr', workspace: 'new-tab', window: 'main' });
+      expect(calls[0].method).toBe('workspace.create');
+      expect(calls[0].params).toEqual({ name: 'new-tab', env: { FOO: 'bar' } });
+    });
+
+    it('skips rename when workspace.create label already matches', async () => {
+      const calls: string[] = [];
+      const client = makeClient((method) => {
+        calls.push(method);
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w3', label: 'my-ws' }, tab: { tab_id: 'w3:t1', label: '1' }, root_pane: { pane_id: 'w3:p1' } };
+        return null;
+      });
+      await client.openWindow(server, 'ignored', 'my-ws');
+      expect(calls).toEqual(['workspace.create']);
     });
   });
 
   describe('resolvePane', () => {
-    it('returns handle for ordinal 1', async () => {
+    it('returns handle for ordinal 1 (first tab of workspace)', async () => {
       const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const ref: MuxRef = { kind: 'herdr', workspace: 'default', window: 'main' };
       const handle = await client.resolvePane(server, ref, 1);
@@ -117,10 +137,20 @@ describe('HerdrClient', () => {
       const ref: MuxRef = { kind: 'herdr', workspace: 'default', window: 'main' };
       await expect(client.resolvePane(server, ref, 5)).rejects.toThrow('out of range');
     });
+
+    it('resolves via legacy ref fallback when workspace label does not match but tab label does', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
+      const legacyRef: MuxRef = { kind: 'herdr', workspace: 'nonexist', window: 'build' };
+      const handle = await client.resolvePane(server, legacyRef, 1);
+      expect(handle as string).toBe('w1:p3');
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('Legacy ref fallback'));
+      warn.mockRestore();
+    });
   });
 
   describe('refFromPaneHandle', () => {
-    it('resolves a pane handle back to ref+ordinal', async () => {
+    it('resolves a pane handle back to ref with window=main', async () => {
       const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const result = await client.refFromPaneHandle(server, 'w1:p2' as any);
       expect(result).toEqual({
@@ -132,6 +162,12 @@ describe('HerdrClient', () => {
     it('returns null for unknown pane', async () => {
       const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const result = await client.refFromPaneHandle(server, 'w1:p999' as any);
+      expect(result).toBeNull();
+    });
+
+    it('returns null for pane in non-first tab', async () => {
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
+      const result = await client.refFromPaneHandle(server, 'w1:p3' as any);
       expect(result).toBeNull();
     });
   });
@@ -161,15 +197,28 @@ describe('HerdrClient', () => {
   });
 
   describe('closeWindow', () => {
-    it('calls tab.close with resolved tab_id', async () => {
-      let closedTabId: string | undefined;
+    it('calls workspace.close (not tab.close)', async () => {
+      let closedWorkspaceId: string | undefined;
       const client = makeClient((method, params) => {
         if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
-        if (method === 'tab.close') { closedTabId = (params as any).tab_id; return { type: 'ok' }; }
+        if (method === 'workspace.close') { closedWorkspaceId = (params as any).workspace_id; return { type: 'ok' }; }
         return { type: 'ok' };
       });
       await client.closeWindow(server, { kind: 'herdr', workspace: 'default', window: 'main' });
-      expect(closedTabId).toBe('w1:t1');
+      expect(closedWorkspaceId).toBe('w1');
+    });
+  });
+
+  describe('renameWindowByRef', () => {
+    it('calls workspace.rename (not tab.rename)', async () => {
+      let renameParams: unknown;
+      const client = makeClient((method, params) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
+        if (method === 'workspace.rename') { renameParams = params; return { type: 'ok' }; }
+        return { type: 'ok' };
+      });
+      await client.renameWindowByRef(server, { kind: 'herdr', workspace: 'default', window: 'main' }, 'new-name');
+      expect(renameParams).toEqual({ workspace_id: 'w1', label: 'new-name' });
     });
   });
 
@@ -244,23 +293,25 @@ describe('HerdrClient', () => {
   });
 
   describe('listAllPanes', () => {
-    it('returns all panes across workspaces', async () => {
+    it('returns panes from first tab only', async () => {
       const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
       const panes = await client.listAllPanes(server);
-      expect(panes).toHaveLength(3);
+      expect(panes).toHaveLength(2);
       expect(panes[0].paneId).toBe('w1:p1');
       expect(panes[0].sessionName).toBe('default');
       expect(panes[0].windowName).toBe('main');
+      expect(panes[1].paneId).toBe('w1:p2');
     });
   });
 
   describe('windowExists', () => {
     const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: SNAPSHOT } : { type: 'ok' });
-    it('returns true for existing tab', async () => {
+    it('returns true for existing workspace (ignores ref.window)', async () => {
       expect(await client.windowExists(server, { kind: 'herdr', workspace: 'default', window: 'main' })).toBe(true);
+      expect(await client.windowExists(server, { kind: 'herdr', workspace: 'default', window: 'anything' })).toBe(true);
     });
-    it('returns false for missing tab', async () => {
-      expect(await client.windowExists(server, { kind: 'herdr', workspace: 'default', window: 'nonexist' })).toBe(false);
+    it('returns false for missing workspace', async () => {
+      expect(await client.windowExists(server, { kind: 'herdr', workspace: 'nonexist', window: 'main' })).toBe(false);
     });
   });
 });
@@ -276,7 +327,7 @@ describe('HerdrClient rpc envelope unwrapping', () => {
     const client = new HerdrClient({ getTransport: () => transport } as never);
     const ws = await client.listWorkspaces({ name: 's', type: 'agent', muxRuntime: 'herdr' } as never);
     expect(ws.map((w) => w.name)).toEqual(['azito']);
-    expect(ws[0].windows.map((w) => w.name)).toEqual(['1']);
+    expect(ws[0].windows.map((w) => w.name)).toEqual(['main']);
   });
 });
 

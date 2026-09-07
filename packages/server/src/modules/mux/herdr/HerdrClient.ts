@@ -17,6 +17,8 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
 import { tmuxKeyToHerdr, isTmuxSpecialKey } from './herdrKeyMap';
 
+const DEFAULT_TAB_NAME = 'main';
+
 interface SnapshotWorkspace {
   workspace_id: string;
   label: string;
@@ -70,6 +72,8 @@ interface SessionSnapshot {
   agents: unknown[];
 }
 
+const warnedMultiTab = new Set<string>();
+
 export class HerdrClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'herdr';
 
@@ -101,9 +105,6 @@ export class HerdrClient implements IMuxClient {
       params,
     });
     const parsed = JSON.parse(result.stdout) as Record<string, unknown>;
-    // Transports relay the raw NDJSON envelope ({ id, result }) as produced by
-    // HerdrSocketClient.call(); callers here want the payload. Tolerate an
-    // already-unwrapped payload (unit-test mocks, future transports).
     if (parsed && typeof parsed === 'object' && 'result' in parsed && !('type' in parsed)) {
       return (parsed.result ?? {}) as Record<string, unknown>;
     }
@@ -120,17 +121,27 @@ export class HerdrClient implements IMuxClient {
   }
 
   // ─── Workspace / Window ───
+  // AZITO window = herdr workspace (each workspace has exactly one tab exposed).
 
   async listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]> {
     const snap = await this.snapshot(server);
     return snap.workspaces.map((ws) => {
       const tabs = snap.tabs.filter((t) => t.workspace_id === ws.workspace_id);
+      if (tabs.length > 1) {
+        const key = `${server.name}:${ws.label}`;
+        if (!warnedMultiTab.has(key)) {
+          warnedMultiTab.add(key);
+          console.warn(`[herdr] workspace "${ws.label}" has ${tabs.length} tabs; only the first is exposed to AZITO`);
+        }
+      }
+      const firstTab = tabs[0];
+      if (!firstTab) return { name: ws.label, windowCount: 1, attached: ws.focused, created: 0, windows: [] };
       return {
         name: ws.label,
-        windowCount: ws.tab_count,
+        windowCount: 1,
         attached: ws.focused,
         created: 0,
-        windows: tabs.map((tab, i) => this.toMuxWindowInfo(snap, tab, i)),
+        windows: [this.toMuxWindowInfo(snap, firstTab, 0)],
       };
     });
   }
@@ -149,43 +160,35 @@ export class HerdrClient implements IMuxClient {
       ...(opts?.extraEnv ? { env: opts.extraEnv } : {}),
     });
     const ws = resp.workspace as { workspace_id: string; label: string };
-    const tab = resp.tab as { tab_id: string; label: string };
-
     await this.rpc(server, 'workspace.rename', { workspace_id: ws.workspace_id, label: name });
-    const windowName = opts?.windowName ?? 'default';
-    await this.rpc(server, 'tab.rename', { tab_id: tab.tab_id, label: windowName });
 
-    const ref = herdrMuxRef(name, windowName);
+    const ref = herdrMuxRef(name);
     return { ref, result: this.okResult() };
   }
 
   async openWindow(
     server: ServerConfig,
-    workspace: string,
+    _workspace: string,
     baseName?: string,
     opts?: { exactName?: boolean; extraEnv?: Record<string, string> },
   ): Promise<{ ref: MuxRef; result: ExecResult }> {
-    const snap = await this.snapshot(server);
-    const ws = snap.workspaces.find((w) => w.label === workspace);
-    if (!ws) throw new Error(`Workspace "${workspace}" not found`);
-
-    const resp = await this.rpc(server, 'tab.create', {
-      workspace_id: ws.workspace_id,
+    const windowName = baseName ?? 'default';
+    const resp = await this.rpc(server, 'workspace.create', {
+      name: windowName,
       ...(opts?.extraEnv ? { env: opts.extraEnv } : {}),
     });
-    const tab = resp.tab as { tab_id: string; label: string };
-    const windowName = baseName ?? tab.label;
-    if (baseName) {
-      await this.rpc(server, 'tab.rename', { tab_id: tab.tab_id, label: baseName });
+    const ws = resp.workspace as { workspace_id: string; label: string };
+    if (ws.label !== windowName) {
+      await this.rpc(server, 'workspace.rename', { workspace_id: ws.workspace_id, label: windowName });
     }
 
-    const ref = herdrMuxRef(workspace, windowName);
+    const ref = herdrMuxRef(windowName);
     return { ref, result: this.okResult() };
   }
 
   async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
-    const tabId = await this.resolveTabId(server, ref);
-    await this.rpc(server, 'tab.close', { tab_id: tabId });
+    const wsId = await this.resolveWorkspaceId(server, ref.workspace);
+    await this.rpc(server, 'workspace.close', { workspace_id: wsId });
     return this.okResult();
   }
 
@@ -198,8 +201,8 @@ export class HerdrClient implements IMuxClient {
   }
 
   async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult> {
-    const tabId = await this.resolveTabId(server, ref);
-    await this.rpc(server, 'tab.rename', { tab_id: tabId, label: name });
+    const wsId = await this.resolveWorkspaceId(server, ref.workspace);
+    await this.rpc(server, 'workspace.rename', { workspace_id: wsId, label: name });
     return this.okResult();
   }
 
@@ -214,9 +217,7 @@ export class HerdrClient implements IMuxClient {
   async windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean> {
     try {
       const snap = await this.snapshot(server);
-      const ws = snap.workspaces.find((w) => w.label === ref.workspace);
-      if (!ws) return false;
-      return snap.tabs.some((t) => t.workspace_id === ws.workspace_id && t.label === ref.window);
+      return snap.workspaces.some((w) => w.label === ref.workspace);
     } catch {
       return false;
     }
@@ -224,10 +225,9 @@ export class HerdrClient implements IMuxClient {
 
   async resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null> {
     const sep = target.indexOf(':');
-    if (sep === -1) return null;
-    const [wsName, tabName] = [target.slice(0, sep), target.slice(sep + 1)];
-    if (await this.windowExists(server, herdrMuxRef(wsName, tabName))) {
-      return herdrMuxRef(wsName, tabName);
+    const wsName = sep === -1 ? target : target.slice(0, sep);
+    if (await this.windowExists(server, herdrMuxRef(wsName))) {
+      return herdrMuxRef(wsName);
     }
     return null;
   }
@@ -248,10 +248,25 @@ export class HerdrClient implements IMuxClient {
   ): Promise<Array<{ ordinal: PaneOrdinal; handle: PaneHandle; title: string; command: string; active: boolean }>> {
     const snap = await this.snapshot(server);
     const ws = snap.workspaces.find((w) => w.label === ref.workspace);
-    if (!ws) return [];
-    const tab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window);
-    if (!tab) return [];
-    const panes = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+    if (!ws) {
+      // Legacy fallback: try matching ref.window as a tab label across all workspaces.
+      const tab = snap.tabs.find((t) => t.label === ref.window);
+      if (tab) {
+        console.warn(`[herdr] Legacy ref fallback: resolved tab "${ref.window}" by tab label (workspace not found for "${ref.workspace}")`);
+        const panes = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+        return panes.map((p, i) => ({
+          ordinal: (i + 1) as PaneOrdinal,
+          handle: asPaneHandle(p.pane_id),
+          title: '',
+          command: '',
+          active: p.focused,
+        }));
+      }
+      return [];
+    }
+    const firstTab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id);
+    if (!firstTab) return [];
+    const panes = snap.panes.filter((p) => p.tab_id === firstTab.tab_id);
     return panes.map((p, i) => ({
       ordinal: (i + 1) as PaneOrdinal,
       handle: asPaneHandle(p.pane_id),
@@ -263,21 +278,24 @@ export class HerdrClient implements IMuxClient {
 
   async listAllPanes(server: ServerConfig): Promise<MuxPaneInfo[]> {
     const snap = await this.snapshot(server);
-    return snap.panes.map((pane) => {
-      const ws = snap.workspaces.find((w) => w.workspace_id === pane.workspace_id);
-      const tab = snap.tabs.find((t) => t.tab_id === pane.tab_id);
-      const tabIdx = tab ? snap.tabs.filter((t) => t.workspace_id === pane.workspace_id).indexOf(tab) : 0;
-      const panesInTab = snap.panes.filter((p) => p.tab_id === pane.tab_id);
-      return {
-        paneId: pane.pane_id,
-        sessionName: ws?.label ?? '',
-        windowIndex: tabIdx,
-        windowName: tab?.label ?? '',
-        paneIndex: panesInTab.indexOf(pane),
-        currentPath: pane.cwd,
-        currentCommand: '',
-      };
-    });
+    const result: MuxPaneInfo[] = [];
+    for (const ws of snap.workspaces) {
+      const firstTab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id);
+      if (!firstTab) continue;
+      const panesInTab = snap.panes.filter((p) => p.tab_id === firstTab.tab_id);
+      for (let i = 0; i < panesInTab.length; i++) {
+        result.push({
+          paneId: panesInTab[i].pane_id,
+          sessionName: ws.label,
+          windowIndex: 0,
+          windowName: DEFAULT_TAB_NAME,
+          paneIndex: i,
+          currentPath: panesInTab[i].cwd,
+          currentCommand: '',
+        });
+      }
+    }
+    return result;
   }
 
   async refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null> {
@@ -286,11 +304,13 @@ export class HerdrClient implements IMuxClient {
     const pane = snap.panes.find((p) => p.pane_id === paneId);
     if (!pane) return null;
     const ws = snap.workspaces.find((w) => w.workspace_id === pane.workspace_id);
-    const tab = snap.tabs.find((t) => t.tab_id === pane.tab_id);
-    if (!ws || !tab) return null;
-    const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+    if (!ws) return null;
+    const firstTab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id);
+    if (!firstTab) return null;
+    const panesInTab = snap.panes.filter((p) => p.tab_id === firstTab.tab_id);
     const idx = panesInTab.findIndex((p) => p.pane_id === paneId);
-    return { ref: herdrMuxRef(ws.label, tab.label), ordinal: (idx + 1) as PaneOrdinal };
+    if (idx === -1) return null;
+    return { ref: herdrMuxRef(ws.label), ordinal: (idx + 1) as PaneOrdinal };
   }
 
   async probePane(server: ServerConfig, handle: PaneHandle): Promise<{ alive: boolean; verified: boolean }> {
@@ -336,8 +356,6 @@ export class HerdrClient implements IMuxClient {
   }
 
   async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
-    // tmux callers interleave literal text and key names (`[cmd, 'Enter']`). herdr splits the
-    // two: `pane.send_text` for text, `pane.send_keys { keys: [...] }` for key combos.
     for (const key of keys) {
       if (isTmuxSpecialKey(key)) {
         await this.rpc(server, 'pane.send_keys', { pane_id: handle as string, keys: [tmuxKeyToHerdr(key)] });
@@ -411,7 +429,7 @@ export class HerdrClient implements IMuxClient {
   // ─── Layout / Resource ───
 
   async captureLayout(server: ServerConfig, ref: MuxRef): Promise<{ layout: string; panes: Array<{ index: number; ordinal: PaneOrdinal; command: string | null; path: string | null; title: string | null }> }> {
-    const tabId = await this.resolveTabId(server, ref);
+    const tabId = await this.resolveFirstTabId(server, ref.workspace);
     const resp = await this.rpc(server, 'layout.export', { tab_id: tabId });
     const layout = resp.layout ?? resp;
     const snap = await this.snapshot(server);
@@ -429,7 +447,7 @@ export class HerdrClient implements IMuxClient {
   }
 
   async applyLayout(server: ServerConfig, ref: MuxRef, layout: string): Promise<ExecResult> {
-    const tabId = await this.resolveTabId(server, ref);
+    const tabId = await this.resolveFirstTabId(server, ref.workspace);
     await this.rpc(server, 'layout.apply', { tab_id: tabId, layout: JSON.parse(layout) });
     return this.okResult();
   }
@@ -437,17 +455,19 @@ export class HerdrClient implements IMuxClient {
   async measurePanePids(server: ServerConfig): Promise<Array<{ ref: MuxRef; pid: number }>> {
     const snap = await this.snapshot(server);
     const result: Array<{ ref: MuxRef; pid: number }> = [];
-    for (const pane of snap.panes) {
-      const ws = snap.workspaces.find((w) => w.workspace_id === pane.workspace_id);
-      const tab = snap.tabs.find((t) => t.tab_id === pane.tab_id);
-      if (!ws || !tab) continue;
-      try {
-        const resp = await this.rpc(server, 'pane.process_info', { pane_id: pane.pane_id });
-        const info = resp as { pid?: number };
-        if (info.pid) {
-          result.push({ ref: herdrMuxRef(ws.label, tab.label), pid: info.pid });
-        }
-      } catch { /* skip panes where process info fails */ }
+    for (const ws of snap.workspaces) {
+      const firstTab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id);
+      if (!firstTab) continue;
+      const panesInTab = snap.panes.filter((p) => p.tab_id === firstTab.tab_id);
+      for (const pane of panesInTab) {
+        try {
+          const resp = await this.rpc(server, 'pane.process_info', { pane_id: pane.pane_id });
+          const info = resp as { pid?: number };
+          if (info.pid) {
+            result.push({ ref: herdrMuxRef(ws.label), pid: info.pid });
+          }
+        } catch { /* skip panes where process info fails */ }
+      }
     }
     return result;
   }
@@ -468,12 +488,19 @@ export class HerdrClient implements IMuxClient {
 
   // ─── Private helpers ───
 
-  private async resolveTabId(server: ServerConfig, ref: MuxRef): Promise<string> {
+  private async resolveWorkspaceId(server: ServerConfig, workspaceLabel: string): Promise<string> {
     const snap = await this.snapshot(server);
-    const ws = snap.workspaces.find((w) => w.label === ref.workspace);
-    if (!ws) throw new Error(`Workspace "${ref.workspace}" not found`);
-    const tab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window);
-    if (!tab) throw new Error(`Tab "${ref.window}" not found in workspace "${ref.workspace}"`);
+    const ws = snap.workspaces.find((w) => w.label === workspaceLabel);
+    if (!ws) throw new Error(`Workspace "${workspaceLabel}" not found`);
+    return ws.workspace_id;
+  }
+
+  private async resolveFirstTabId(server: ServerConfig, workspaceLabel: string): Promise<string> {
+    const snap = await this.snapshot(server);
+    const ws = snap.workspaces.find((w) => w.label === workspaceLabel);
+    if (!ws) throw new Error(`Workspace "${workspaceLabel}" not found`);
+    const tab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id);
+    if (!tab) throw new Error(`No tabs found in workspace "${workspaceLabel}"`);
     return tab.tab_id;
   }
 
@@ -482,7 +509,7 @@ export class HerdrClient implements IMuxClient {
     const layout = snap.layouts.find((l) => l.tab_id === tab.tab_id);
     return {
       index,
-      name: tab.label,
+      name: DEFAULT_TAB_NAME,
       active: tab.focused,
       panes: panes.map((p, i) => {
         const layoutPane = layout?.panes.find((lp) => lp.pane_id === p.pane_id);
