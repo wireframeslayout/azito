@@ -491,7 +491,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const deps: KillWindowDeps = {
-        muxClient: tmux,
+        muxClient: driverFor(srv),
         windowRepo,
         destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
         notifySessionsChanged: notifyWindowsChanged,

@@ -173,6 +173,20 @@ supervisor が無いキーでは mux が Tier 1（hooks）より上位として�
 | `done` | idle | セッション終了。完了遷移を発行し、mux 状態をクリア（以後は下位層にフォールスルー） |
 | `unknown` | (判定に使わない) | 下位層にフォールスルー |
 
+### done→idle のティア遷移
+
+`done` を受信した tick では `tier0_mux` として idle 判定が行われ、`running: false, reason: 'completed'`
+の完了遷移が発行されます。**同じ tick の末尾で `done` エントリは `muxStates` から消去されます**。
+これにより次回以降の tick ではこのキーの mux 状態が存在しなくなり、下位ティア（通常は
+`tier3_heuristic`）にフォールスルーして idle と判定されます。
+
+診断パネルで `done` 後に `decidedBy: 'tier3_heuristic'` と表示されるのはこの設計によるものです。
+判定結果（idle）自体は正しく、`tier0_mux` → `tier3_heuristic` への帰属の移行は意図的です。
+
+消去の理由: エージェントセッション終了後も mux が idle をオーナーシップし続けると、同じウィンドウが
+別のエージェントに再利用された場合に、新しい working シグナルと古い idle が競合します。セッション
+完了後は mux の状態は権威を失うため、下位層に委譲するのが正しい動作です。
+
 ### blocked 精緻化
 
 mux が idle を報告したキーには、supervisor idle と同じ blocked 精緻化が適用されます

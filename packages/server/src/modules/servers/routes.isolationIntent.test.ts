@@ -933,12 +933,13 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 
-  // Issue #29 review (7th pass), Important finding 2: `type` (local->agent)
-  // and `muxRuntime` (system->managed) changes are just as much an "endpoint
-  // the check/cleanup could disagree about" as host/sshHost/agentPort/
-  // agentToken — missing them let a false->true transition slip past this
-  // guard while switching the very endpoint the risky-window/live-session
-  // checks and the cleanup purge are each looking at.
+  // Issue #29 review (7th pass), Important finding 2: a `type` (local->agent)
+  // change is just as much an "endpoint the check/cleanup could disagree
+  // about" as host/sshHost/agentPort/agentToken — missing it let a
+  // false->true transition slip past this guard while switching the very
+  // endpoint the risky-window/live-session checks and the cleanup purge are
+  // each looking at. (muxRuntime is NOT guarded — it's a local runtime
+  // setting, not connection info; see tests below.)
   it('rejects with 400 when type changes from local to agent alongside isolationIntent: false->true', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
@@ -957,7 +958,9 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  it('rejects with 400 when muxRuntime changes alongside isolationIntent: false->true', async () => {
+  // Issue #394 (7-H): muxRuntime is a runtime configuration (which local mux
+  // driver to talk to), not connection info. Changing it while isolated is safe.
+  it('allows muxRuntime change alongside isolationIntent: false->true', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
       makeServer({ type: 'agent', isolationIntent: false, muxRuntime: 'system' }),
@@ -970,9 +973,42 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
       payload: { muxRuntime: 'managed', isolationIntent: true },
     });
 
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
-    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('allows muxRuntime change on an already-isolated server', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, muxRuntime: 'system' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { muxRuntime: 'herdr' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.update).toHaveBeenCalled();
+  });
+
+  it('allows muxRuntime change alongside isolationIntent: true->false in the same request', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, muxRuntime: 'system' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { muxRuntime: 'herdr', isolationIntent: false },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
   });
 
   // Issue #29 review (8th pass), Critical finding 1: a true->true PUT used

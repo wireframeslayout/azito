@@ -159,6 +159,7 @@ interface Mocks {
   tmuxClient: {
     captureScreen: ReturnType<typeof vi.fn>;
     sendKeysToHandle: ReturnType<typeof vi.fn>;
+    probePane: ReturnType<typeof vi.fn>;
     [key: string]: unknown;
   };
   executeTaskUseCase: {
@@ -214,10 +215,12 @@ function createMocks(): Mocks {
       findByUnit: vi.fn(),
     },
     tmuxClient: {
+      kind: 'tmux',
       resolvePaneId: vi.fn().mockResolvedValue('%0'),
       resolvePane: vi.fn().mockResolvedValue('%0'),
       captureScreen: vi.fn().mockResolvedValue({ stdout: 'pane content', code: 0 }),
       sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
+      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
     },
     executeTaskUseCase: {
       getRunning: vi.fn().mockReturnValue({}),
@@ -237,7 +240,7 @@ function createMocks(): Mocks {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createUseCase(mocks: Mocks): RecoverStuckTasksUseCase {
+function createUseCase(mocks: Mocks, muxDriverRegistry: any = null): RecoverStuckTasksUseCase {
   return new RecoverStuckTasksUseCase(
     mocks.taskRepo as any,
     mocks.unitRepo as any,
@@ -245,6 +248,7 @@ function createUseCase(mocks: Mocks): RecoverStuckTasksUseCase {
     mocks.projectRepo as any,
     mocks.projectServerRepo as any,
     mocks.logRepo as any,
+    muxDriverRegistry,
     mocks.tmuxClient as any,
     mocks.executeTaskUseCase as any,
     mocks.turnRepo as any,
@@ -404,13 +408,13 @@ describe('RecoverStuckTasksUseCase', () => {
     mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
       status === 'running' ? [task] : [],
     );
-    mocks.tmuxClient.captureScreen.mockRejectedValue(new Error('pane not found'));
+    mocks.tmuxClient.probePane.mockResolvedValue({ alive: false, verified: true });
 
     const useCase = createUseCase(mocks);
     await useCase.run();
 
     expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
-    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('pane dead'));
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('dead'));
   });
 
   it('should not detect terminal statuses as stuck', async () => {
@@ -823,5 +827,84 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.taskRepo.update).not.toHaveBeenCalled();
     expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalledWith(33, 'waiting_input');
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 33);
+  });
+
+  it('should use MuxDriverRegistry to resolve driver for herdr server recovery', async () => {
+    const task = makeTask({ id: 40 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.serverRepo.findByName.mockReturnValue(makeServer({ type: 'agent', muxRuntime: 'herdr' }));
+    mocks.turnRepo.findLatestByTaskPhase.mockReturnValue(
+      makeAgentTurn({ id: 20, taskId: 40, phase: 'implementing', status: 'completed' }),
+    );
+
+    const mockDriver = {
+      kind: 'herdr' as const,
+      resolvePane: vi.fn().mockResolvedValue('herdr-pane-1'),
+      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
+    };
+    const registry = { resolve: vi.fn().mockReturnValue(mockDriver) };
+    const useCase = createUseCase(mocks, registry);
+    await useCase.run();
+
+    expect(registry.resolve).toHaveBeenCalled();
+    expect(mockDriver.resolvePane).toHaveBeenCalled();
+    expect(mockDriver.probePane).toHaveBeenCalledWith(expect.anything(), 'herdr-pane-1');
+    expect(mockDriver.sendKeysToHandle).toHaveBeenCalledWith(expect.anything(), 'herdr-pane-1', ['Escape']);
+    expect(mocks.tmuxClient.resolvePane).not.toHaveBeenCalled();
+    expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 40);
+  });
+
+  it('should fall back to tmuxClient when muxDriverRegistry is null', async () => {
+    const task = makeTask({ id: 41 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.turnRepo.findLatestByTaskPhase.mockReturnValue(
+      makeAgentTurn({ id: 21, taskId: 41, phase: 'implementing', status: 'completed' }),
+    );
+
+    const useCase = createUseCase(mocks, null);
+    await useCase.run();
+
+    expect(mocks.tmuxClient.resolvePane).toHaveBeenCalled();
+    expect(mocks.tmuxClient.probePane).toHaveBeenCalled();
+    expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 41);
+  });
+
+  it('should skip recovery when probePane returns verified: false (unverified pane state)', async () => {
+    mocks = createMocks();
+    const task = makeTask({ id: 42 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.tmuxClient.probePane.mockResolvedValue({ alive: true, verified: false });
+
+    const useCase = createUseCase(mocks);
+    await useCase.run();
+
+    expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('unverified'));
+  });
+
+  it('should skip recovery when probePane returns alive: false', async () => {
+    mocks = createMocks();
+    const task = makeTask({ id: 43 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.tmuxClient.probePane.mockResolvedValue({ alive: false, verified: true });
+
+    const useCase = createUseCase(mocks);
+    await useCase.run();
+
+    expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('dead'));
   });
 });

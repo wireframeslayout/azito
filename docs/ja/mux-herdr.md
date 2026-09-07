@@ -76,6 +76,39 @@ herdr は内部 ID（`w1`, `w1:t1`）ではなくラベルベースでアドレ�
 - **タスク実行不可**: `outputStream=false` → `AZITO_DONE_*` マーカー検出のストリーミングが不可。409 `mux_capability_missing`
 - **pane.read の空 text**: クライアント未 attach 時、`pane.read` で `text` が空・`revision` 0 のケースがある（PTY サイズ未確定の可能性）
 - **稼働検知**: 診断パネルに `decidedBy: 'tier0_mux'` 表示のみ。判定経路への組み込みは未実装
+- **done→idle のティア帰属**: herdr が `done` を報告した tick では `tier0_mux` で idle 判定されるが、done エントリは即座に消去され、以後の tick は `tier3_heuristic` に帰属する。これは意図的な設計（ウィンドウ再利用時の競合防止）。詳細は `docs/ja/activity-detection.md`「done→idle のティア遷移」を参照
+
+## TmuxClient 直結モジュール棚卸し
+
+herdr / zellij サーバーで `TmuxClient` 具象に依存するモジュールの一覧と縮退動作。
+`IMuxClient` 経由（`MuxDriverRegistry.resolve()`）で呼ばれる箇所は herdr/zellij ドライバが透過的に処理するため問題なし。
+`TmuxClient.execCommand()` は tmux 固有のシェルコマンド実行であり、herdr/zellij には等価 API がない。
+
+| モジュール | 使用メソッド | 縮退動作 |
+|---|---|---|
+| `operations/AgentActivityMonitor` | `listSessions`, `captureScreen` | `listSessions`: MuxDriverRegistry 経由で解決済み。`captureScreen`: Tier 2 画面取得で使用、herdr は `IMuxClient.captureScreen` で対応 |
+| `windows/WindowSleepService` | `closeWindow` | tmux 直結。herdr サーバーではスリープ機能未対応（要対応） |
+| `windows/WindowRespawnService` | `listSessions`, `createSession`, `createWindow`, `resolvePane`, `closeWindow`, `sendKeysToHandle`, `captureLayout`, `splitPaneByHandle`, `applyLayout`, `listPanesByRef` | tmux 直結。herdr サーバーでは respawn 未対応（要対応） |
+| `git/RepoDiscoveryService` | `execCommand` | tmux 固有。herdr/zellij では `execCommand` 不可。agent サーバーは `AgentTransport.exec()` 経由で動作するため影響なし |
+| `files/FileBrowseService` | `execCommand` | 同上。agent サーバーは transport 経由 |
+| `tasks/execution/GitInfoCollector` | `execCommand` | 同上 |
+| `tasks/execution/PushVerifier` | `execCommand` | 同上 |
+| `tasks/execution/WorkerInputService` | `getPaneCurrentCommand`, `sendKeysToHandle` | MuxDriverRegistry fallback で解決済み |
+| `tasks/execution/WindowRotation` | `closeWindow`, `closePane`, `uiTokenEnvForServer` | IMuxClient 経由で解決済み |
+| `tasks/TaskRestoreService` | `createWindow`, `resolvePane`, `sendKeysToHandle`, `closeWindow` | tmux 直結。herdr サーバーでのタスク復元は未対応（要対応） |
+| `tasks/recovery/RecoverStuckTasksUseCase` | `resolvePane`, `probePane`, `sendKeysToHandle` | **7-H で MuxDriverRegistry 経由に修正済み** |
+| `tasks/TaskCleanupService` | `closeWindow` | MuxDriverRegistry fallback 済み |
+| `transcripts/WindowSessionResolver` | `execCommand`, `getPanePid`, `listAllPanes`, `listSessions` | tmux 固有。herdr サーバーでは縮退（セッション解決不可、機能低下） |
+| `transcripts/WindowInputService` | `sendLiteralText`, `sendKeysToHandle`, `isPaneInMode`, `cancelPaneMode`, `listAllPanes` | tmux 直結。herdr サーバーでは入力送信が低下（要対応） |
+| `transcripts/TranscriptPaneService` | `listAllPanes`, `checkPaneExists`, `sendLiteralText`, `sendKeysToHandle` | tmux 直結。herdr サーバーでは縮退 |
+| `servers/routes` | `listSessionsForSecurityGate`, `execCommand` | `listSessionsForSecurityGate`: 隔離ゲートで使用、herdr サーバーでは MuxDriverRegistry 経由の `listWorkspaces` に要移行。`execCommand`: tmux バージョン確認用、herdr では不要 |
+| `tasks/routes` | `windowExists`, `closeWindow` | tmux 直結。MuxDriverRegistry 経由への移行が望ましい |
+
+### 分類
+
+- **(a) IMuxClient / MuxDriverRegistry 経由で解決済み**: AgentActivityMonitor, WorkerInputService, WindowRotation, TaskCleanupService, RecoverStuckTasksUseCase
+- **(b) `execCommand` 依存（tmux 固有コマンド実行）**: RepoDiscoveryService, FileBrowseService, GitInfoCollector, PushVerifier — agent サーバーは `AgentTransport.exec()` で動作するため herdr/zellij でも無害
+- **(c) 未対応（herdr/zellij 本格対応時に要移行）**: WindowSleepService, WindowRespawnService, TaskRestoreService, WindowSessionResolver, WindowInputService, TranscriptPaneService, servers/routes (一部), tasks/routes (一部)
 
 ## 検証結果
 

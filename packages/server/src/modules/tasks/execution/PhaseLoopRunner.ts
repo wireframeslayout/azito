@@ -114,7 +114,12 @@ export class PhaseLoopRunner {
     private scopedAuthEnabled: boolean,
     private pushNotaryService: PushNotaryService | null,
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
+    private activitySource: { isKeyWorking(serverName: string, target: string): boolean } | null = null,
   ) {}
+
+  setActivitySource(source: { isKeyWorking(serverName: string, target: string): boolean }): void {
+    this.activitySource = source;
+  }
 
   // Takes the already-resolved repository entry rather than re-deriving it
   // from `task.projectId` (Issue #87 13th-round review, Important finding):
@@ -584,7 +589,10 @@ export class PhaseLoopRunner {
         }
       }
 
-      const waitResult = await this.workerWaiter.waitForWorker(server, handle, task.id, unit.id, signal, phaseStream, doneMarker, phaseSignalStream, pushingProbe, supervisorTarget);
+      const waitResult = await this.workerWaiter.waitForWorker(server, handle, task.id, unit.id, signal, phaseStream, doneMarker, phaseSignalStream, pushingProbe, supervisorTarget, {
+        stillWorkingLimit: phaseDef.stillWorkingLimit,
+        activitySource: this.activitySource ? { isWorking: () => this.activitySource!.isKeyWorking(serverName, supervisorTarget) } : undefined,
+      });
       const output = waitResult.output;
       let classification = waitResult.classification;
       let httpSignalFinalTurn: AgentTurn | null = httpSignalTurn;
