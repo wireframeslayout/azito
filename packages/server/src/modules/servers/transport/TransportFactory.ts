@@ -17,7 +17,7 @@ export class TransportFactory {
     const existing = this.cache.get(key);
     if (existing && server.type === 'agent') {
       const current = existing as AgentTransport;
-      if (!current.matchesToken(server.agentToken!)) {
+      if (!current.matchesToken(server.agentToken!) || !current.matchesMuxRuntime(server.muxRuntime)) {
         this.cache.delete(key);
       } else {
         return existing;
