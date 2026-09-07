@@ -141,3 +141,38 @@ describe('HerdrPaneStream', () => {
     expect(stream.getBuffer()).toBe(bufAfterFirst);
   });
 });
+
+// rc.15 E2E: a pane.read failure with no 'error' listener was an uncaught EventEmitter error
+// that terminated the hub process. The stream must log and (for pane_not_found) stop instead.
+describe('HerdrPaneStream error handling', () => {
+  it('does not throw without an error listener and stops on pane_not_found', async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const rpc: HerdrRpcFn = vi.fn(async () => { throw new Error('herdr error pane_not_found: pane 389-1 not found'); });
+    const stream = new HerdrPaneStream('389-1', rpc);
+    stream.start();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(warn).toHaveBeenCalled();
+    const calls = (rpc as unknown as { mock: { calls: unknown[] } }).mock.calls.length;
+    await vi.advanceTimersByTimeAsync(2000);
+    expect((rpc as unknown as { mock: { calls: unknown[] } }).mock.calls.length).toBe(calls); // stopped polling
+    stream.stop();
+    warn.mockRestore();
+    vi.useRealTimers();
+  });
+
+  it('keeps polling through transient errors and emits to a listener when present', async () => {
+    vi.useFakeTimers();
+    let n = 0;
+    const rpc: HerdrRpcFn = vi.fn(async () => { n += 1; if (n === 1) throw new Error('herdr call timed out'); return makeRead('x\n', n); });
+    const stream = new HerdrPaneStream('w1:p1', rpc);
+    const errors: unknown[] = [];
+    stream.on('error', (e) => errors.push(e));
+    stream.start();
+    await vi.advanceTimersByTimeAsync(1200);
+    expect(errors.length).toBe(1);
+    expect(n).toBeGreaterThan(1);
+    stream.stop();
+    vi.useRealTimers();
+  });
+});

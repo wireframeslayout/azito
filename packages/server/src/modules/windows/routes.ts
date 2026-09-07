@@ -15,7 +15,7 @@ import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { isSameWindowTarget } from '@azito/shared';
-import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type PaneOrdinal } from '@azito/shared';
+import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -68,10 +68,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
-      if (refJson && !tmuxTarget) {
+      // Keep the driver kind of a supplied ref: deriving mux_ref from tmux_target later would
+      // record a herdr / zellij window as `kind: 'tmux'` and break findByServerAndRef.
+      let givenRef: MuxRef | undefined;
+      if (refJson) {
         try {
-          const parsed = parseMuxRef(refJson);
-          tmuxTarget = tmuxTargetFromMuxRef(parsed);
+          givenRef = parseMuxRef(refJson);
+          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
@@ -96,6 +99,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         taskId: null,
         serverName,
         tmuxTarget,
+        ...(givenRef ? { muxRef: givenRef } : {}),
         label: (body['label'] as string) || null,
         isPrimary: false,
         windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',
@@ -188,10 +192,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
-      if (refJson && !tmuxTarget) {
+      // Keep the driver kind of a supplied ref: deriving mux_ref from tmux_target later would
+      // record a herdr / zellij window as `kind: 'tmux'` and break findByServerAndRef.
+      let givenRef: MuxRef | undefined;
+      if (refJson) {
         try {
-          const parsed = parseMuxRef(refJson);
-          tmuxTarget = tmuxTargetFromMuxRef(parsed);
+          givenRef = parseMuxRef(refJson);
+          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
@@ -212,6 +219,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         taskId: id,
         serverName: serverName as string,
         tmuxTarget: tmuxTarget as string,
+        ...(givenRef ? { muxRef: givenRef } : {}),
         label: (body['label'] as string) || null,
         isPrimary: false,
         windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',

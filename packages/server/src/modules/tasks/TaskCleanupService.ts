@@ -1,6 +1,7 @@
 import { readdirSync, unlinkSync } from 'fs';
 import type { Task } from './Task';
 import type { IServerRepository } from '../servers/Server';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -33,6 +34,8 @@ export interface TaskCleanupDeps {
   transportFactory: TransportFactory;
   projectServerRepo: IProjectServerRepository;
   projectRepo: IProjectRepository;
+  /** Optional: resolve the mux driver per server so herdr / zellij task windows are closed too. */
+  muxDriverRegistry?: MuxDriverRegistry;
 }
 
 export class TaskCleanupService {
@@ -46,8 +49,9 @@ export class TaskCleanupService {
 
     if (task.tmuxWindow && resolvedServerName && server) {
       const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, projectServerRepo);
-      const ref = muxRefFromTmuxTarget(`${muxWorkspace}:${task.tmuxWindow}`);
-      tmux.closeWindow(server, ref).catch((e) => {
+      const driver = this.deps.muxDriverRegistry?.resolve(server) ?? tmux;
+      const ref = { ...muxRefFromTmuxTarget(`${muxWorkspace}:${task.tmuxWindow}`), kind: driver.kind };
+      driver.closeWindow(server, ref).catch((e) => {
         log.warn(`[task-cleanup] Failed to kill tmux window ${muxWorkspace}:${task.tmuxWindow}: ${(e as Error).message}`);
       });
     }
