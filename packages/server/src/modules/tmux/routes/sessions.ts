@@ -1007,6 +1007,63 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     },
   );
 
+  // ═══════════════════════════════════════════════════════════════════
+  // Driver-based workspace/window creation routes.
+  // Work for ALL mux drivers (tmux, herdr, zellij) via MuxDriverRegistry.
+  // ═══════════════════════════════════════════════════════════════════
+
+  // ── POST /api/servers/:name/mux/workspaces ──
+  fastify.post<{ Params: { name: string } }>(
+    '/api/servers/:name/mux/workspaces',
+    async (request, reply) => {
+      const { name, windowName, force } = request.body as { name?: string; windowName?: string; force?: boolean };
+      if (!name) return reply.status(400).send({ error: 'Workspace name required' });
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        if (opts.resourceGuard && force !== true) {
+          const status = await opts.resourceGuard.check(freshSrv);
+          if (!status.ok)
+            return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+        }
+        try {
+          const { ref } = await driver.openWorkspace(freshSrv, name, { windowName });
+          notifySessionsChanged(request.params.name);
+          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
+        } catch (err: unknown) {
+          return reply.status(500).send({ error: (err as Error).message });
+        }
+      });
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/workspaces/:workspace/windows ──
+  fastify.post<{ Params: { name: string; workspace: string } }>(
+    '/api/servers/:name/mux/workspaces/:workspace/windows',
+    async (request, reply) => {
+      const { name, force } = (request.body as { name?: string; force?: boolean } | null) || {};
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        if (opts.resourceGuard && force !== true) {
+          const status = await opts.resourceGuard.check(freshSrv);
+          if (!status.ok)
+            return reply.status(409).send({ error: 'insufficient_resources', resources: status });
+        }
+        try {
+          const workspace = decodeURIComponent(request.params.workspace);
+          const { ref } = await driver.openWindow(freshSrv, workspace, name);
+          notifySessionsChanged(request.params.name);
+          return { ok: true, ref: formatMuxRef(ref), windowName: ref.window };
+        } catch (err: unknown) {
+          return reply.status(500).send({ error: (err as Error).message });
+        }
+      });
+    },
+  );
+
   done();
 };
 

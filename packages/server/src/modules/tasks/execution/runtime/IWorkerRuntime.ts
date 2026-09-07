@@ -1,4 +1,5 @@
 import type { PaneHandle } from '@azito/shared';
+import type { IMuxClient } from '../../../tmux/IMuxClient';
 import type { ServerConfig } from '../../../servers/Server';
 import type { WorkerExecutionMode } from '../../../units/Unit';
 import type { IPaneStream } from '../../../tmux/PaneStream';
@@ -8,6 +9,7 @@ import type { PhaseSignalCapability } from '../../../prompt/executionEnvelope';
 export interface WorkerLaunchContext {
   server: ServerConfig;
   handle: PaneHandle;
+  driver: IMuxClient;
   supervisorTarget: string;
   taskId: number;
   unitId: number;
@@ -20,6 +22,7 @@ export interface WorkerLaunchContext {
 export interface WorkerContext {
   server: ServerConfig;
   handle: PaneHandle;
+  driver: IMuxClient;
   supervisorTarget: string;
   taskId: number;
   unitId: number;

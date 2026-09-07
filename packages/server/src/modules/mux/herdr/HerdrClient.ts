@@ -74,7 +74,7 @@ export class HerdrClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'herdr';
 
   readonly caps: MuxCapabilities = {
-    outputStream: false,
+    outputStream: true,
     changeEvents: true,
     agentState: true,
     independentClients: true,
@@ -369,11 +369,11 @@ export class HerdrClient implements IMuxClient {
   // ─── Capability-gated ───
 
   async startOutputStream(_server: ServerConfig, _handle: PaneHandle, _outputPath: string): Promise<void> {
-    throw new MuxCapabilityMissingError('outputStream');
+    // No-op: HerdrPaneStream captures output via pane.read polling, not pipe-pane.
   }
 
   async stopOutputStream(_server: ServerConfig, _handle: PaneHandle): Promise<void> {
-    throw new MuxCapabilityMissingError('outputStream');
+    // No-op: HerdrPaneStream manages its own lifecycle.
   }
 
   async zoomPaneByHandle(server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {

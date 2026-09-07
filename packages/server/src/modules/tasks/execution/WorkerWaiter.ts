@@ -1,6 +1,8 @@
 import type { PaneHandle } from '@azito/shared';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { IMuxClient } from '../../tmux/IMuxClient';
+import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ServerConfig } from '../../servers/Server';
+import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { PaneClassifier, PaneClassification } from '../../llm/PaneClassifier';
 import type { IContentExtractor } from '../../llm/ContentExtractor';
 import type { IPaneStream, IPaneStreamFactory } from '../../tmux/PaneStream';
@@ -44,7 +46,8 @@ const CONFIRMATION_PATTERNS = [
  */
 export class WorkerWaiter {
   constructor(
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
+    private transportFactory: TransportFactory,
     private paneClassifier: PaneClassifier,
     private contentExtractor: IContentExtractor,
     private paneStreamFactory: IPaneStreamFactory,
@@ -52,6 +55,10 @@ export class WorkerWaiter {
     private touchTask: (taskId: number) => void,
     private workerInput: WorkerInputService,
   ) {}
+
+  private resolveDriver(server: ServerConfig): IMuxClient {
+    return this.muxDriverRegistry.resolve(server);
+  }
 
   startPaneStream(
     server: ServerConfig,
@@ -62,9 +69,13 @@ export class WorkerWaiter {
     const paneId = `${taskId}-${Date.now()}`;
     const paneStream = this.paneStreamFactory.create(paneId, server);
     paneStream.start();
-    this.tmux.startPipePane(server, handle, paneStream.getFilePath()).catch((err) => {
-      this.appendLog(taskId, unitId, 'command', { type: 'pipe_pane_error', message: (err as Error).message });
-    });
+    const filePath = paneStream.getFilePath();
+    if (filePath) {
+      const driver = this.resolveDriver(server);
+      driver.startOutputStream(server, handle, filePath).catch((err) => {
+        this.appendLog(taskId, unitId, 'command', { type: 'pipe_pane_error', message: (err as Error).message });
+      });
+    }
     return paneStream;
   }
 
@@ -86,8 +97,9 @@ export class WorkerWaiter {
     outputFilePath: string,
   ): Promise<string | null> {
     try {
-      const result = await this.tmux.execCommand(server, `cat ${outputFilePath} 2>/dev/null`);
-      void this.tmux.execCommand(server, `rm -f ${outputFilePath}`).catch(() => {});
+      const transport = this.transportFactory.getTransport(server);
+      const result = await transport.exec(`cat ${outputFilePath} 2>/dev/null`);
+      void transport.exec(`rm -f ${outputFilePath}`).catch(() => {});
       const content = result.stdout.trim();
       return content.length > 0 ? content : null;
     } catch {
@@ -100,7 +112,8 @@ export class WorkerWaiter {
     handle: PaneHandle,
   ): Promise<string> {
     try {
-      const result = await this.tmux.captureScreen(server, handle, -3000);
+      const driver = this.resolveDriver(server);
+      const result = await driver.captureScreen(server, handle, -3000);
       return result.stdout;
     } catch {
       return '';
@@ -183,7 +196,7 @@ export class WorkerWaiter {
         if (autoConfirmTimer) clearInterval(autoConfirmTimer);
         if (phaseMaxTimer) clearTimeout(phaseMaxTimer);
         if (quiescenceTimer) clearInterval(quiescenceTimer);
-        try { this.tmux.stopPipePane(server, handle).catch(() => {}); } catch {}
+        try { this.resolveDriver(server).stopOutputStream(server, handle).catch(() => {}); } catch {}
         paneStream.stop();
         if (signalStream) signalStream.stop();
       };
@@ -297,7 +310,14 @@ export class WorkerWaiter {
         if (resolved) return;
         try { this.touchTask(taskId); } catch {}
 
-        const activity = await this.tmux.getWindowActivity(server, handle);
+        let activity: number | null = null;
+        const heartbeatDriver = this.resolveDriver(server);
+        if (heartbeatDriver.caps.activityCounter) {
+          try {
+            const paneInfo = await heartbeatDriver.refFromPaneHandle(server, handle);
+            if (paneInfo) activity = await heartbeatDriver.windowActivity(server, paneInfo.ref);
+          } catch { /* best effort */ }
+        }
         if (resolved) return;
         if (activity !== null) {
           const activityAgeSec = Math.floor(Date.now() / 1000) - activity;
@@ -320,7 +340,7 @@ export class WorkerWaiter {
         if (now - lastDataTime > IDLE_TIMEOUT && now - lastClassifyTime > IDLE_TIMEOUT) {
           lastClassifyTime = now;
           this.appendLog(taskId, unitId, 'command', { type: 'pipe_idle_timeout', idleMs: now - lastDataTime });
-          this.tmux.captureScreen(server, handle, -200).then(async (result) => {
+          this.resolveDriver(server).captureScreen(server, handle, -200).then(async (result) => {
             if (resolved) return;
             const bl = { phaseComplete: 0, question: 0 };
             const classification = await this.paneClassifier.classify(result.stdout, bl, doneMarker);

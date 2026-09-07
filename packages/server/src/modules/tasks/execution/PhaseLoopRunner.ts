@@ -1,5 +1,6 @@
 import { randomBytes } from 'crypto';
 import type { PaneHandle } from '@azito/shared';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { ITaskRepository, Task } from '../Task';
 import { extractPhaseSummary } from '../extractPhaseSummary';
 import type { TaskStatus } from '../TaskStatus';
@@ -311,6 +312,7 @@ export class PhaseLoopRunner {
     task: { id: number; projectId: number; title: string; description: string | null; status: TaskStatus; currentPhase: string | null; sleepAfterPush: boolean | null },
     server: ServerConfig,
     handle: PaneHandle,
+    driver: IMuxClient,
     signal: AbortSignal,
     supervisorTarget: string,
     // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
@@ -513,7 +515,7 @@ export class PhaseLoopRunner {
 
       this.appendLog(task.id, unit.id, 'command', { type: 'phase_prompt', phase, text: markerizedPromptWithSignal, doneMarker, questionsMarker, outputFilePath });
 
-      const workerContext: WorkerContext = { server, handle, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+      const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
       try {
         await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
       } catch (err: unknown) {

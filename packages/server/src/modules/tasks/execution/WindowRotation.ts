@@ -2,6 +2,7 @@ import type { MuxRef, PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import type { Task } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -165,7 +166,7 @@ export function runExclusiveForTasks<T>(taskIds: number[], fn: () => Promise<T>)
  * caller.
  */
 export async function confirmOldWindowGone(
-  tmux: Pick<TmuxClient, 'closeWindow' | 'closePane'>,
+  tmux: Pick<IMuxClient, 'closeWindow' | 'closePane'>,
   server: ServerConfig,
   killTarget: KillTarget | null,
   taskId: number | null,

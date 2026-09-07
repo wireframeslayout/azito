@@ -44,7 +44,7 @@ describe('HerdrClient', () => {
   describe('kind and caps', () => {
     const client = makeClient(() => null);
     it('kind is herdr', () => expect(client.kind).toBe('herdr'));
-    it('outputStream is false', () => expect(client.caps.outputStream).toBe(false));
+    it('outputStream is true', () => expect(client.caps.outputStream).toBe(true));
     it('agentState is true', () => expect(client.caps.agentState).toBe(true));
     it('changeEvents is true', () => expect(client.caps.changeEvents).toBe(true));
     it('zoom is true', () => expect(client.caps.zoom).toBe(true));
@@ -230,15 +230,15 @@ describe('HerdrClient', () => {
     const client = makeClient(() => ({ type: 'ok' }));
     const ref: MuxRef = { kind: 'herdr', workspace: 'ws', window: 'w' };
 
-    it('startOutputStream', () => expect(client.startOutputStream(server, 'h' as any, '/tmp/x')).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('stopOutputStream', () => expect(client.stopOutputStream(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
+    it('startOutputStream is no-op', async () => { await expect(client.startOutputStream(server, 'h' as any, '/tmp/x')).resolves.toBeUndefined(); });
+    it('stopOutputStream is no-op', async () => { await expect(client.stopOutputStream(server, 'h' as any)).resolves.toBeUndefined(); });
     it('isPaneInModeByHandle', () => expect(client.isPaneInModeByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('cancelPaneModeByHandle', () => expect(client.cancelPaneModeByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('windowActivity', () => expect(client.windowActivity(server, ref)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
 
     it('MuxCapabilityMissingError carries correct capability name', async () => {
-      try { await client.startOutputStream(server, 'h' as any, '/tmp'); } catch (e) {
-        expect((e as MuxCapabilityMissingError).capability).toBe('outputStream');
+      try { await client.windowActivity(server, ref); } catch (e) {
+        expect((e as MuxCapabilityMissingError).capability).toBe('activityCounter');
       }
     });
   });
