@@ -109,12 +109,8 @@ export class HerdrEventSubscriber extends EventEmitter {
       if (!line.trim()) continue;
       try {
         const msg = JSON.parse(line) as Record<string, unknown>;
-        if (msg.id === '1' && (msg.type === 'subscribed' || msg.type === 'ok')) {
-          continue;
-        }
-        if (msg.type && typeof msg.type === 'string') {
-          this.emit('event', msg as HerdrEvent);
-        }
+        const normalised = normaliseHerdrEventLine(msg);
+        if (normalised) this.emit('event', normalised);
       } catch {
         // skip malformed
       }
@@ -130,4 +126,37 @@ export class HerdrEventSubscriber extends EventEmitter {
       this.connect();
     }, delay);
   }
+}
+
+const HERDR_EVENT_PREFIXES = ['workspace', 'tab', 'pane', 'worktree', 'layout'] as const;
+
+/** `tab_created` → `tab.created`, `pane_agent_status_changed` → `pane.agent_status_changed`. */
+export function herdrEventTypeToDotted(name: string): string {
+  if (name.includes('.')) return name;
+  for (const prefix of HERDR_EVENT_PREFIXES) {
+    if (name.startsWith(prefix + '_')) return prefix + '.' + name.slice(prefix.length + 1);
+  }
+  return name;
+}
+
+/**
+ * herdr 0.8.2 streams subscription events as `{"event":"tab_created","data":{"type":"tab_created",...}}`
+ * (underscore names, payload under `data`); the request ack is `{"id":..,"result":{"type":"subscription_started"}}`
+ * and errors are `{"id":..,"error":{...}}`. Returns the flattened event with a dotted `type`
+ * (the vocabulary used by subscriptions and consumers), or null for acks / errors / noise.
+ */
+export function normaliseHerdrEventLine(msg: Record<string, unknown>): HerdrEvent | null {
+  if (msg && typeof msg === 'object' && 'event' in msg) {
+    const data = (msg.data && typeof msg.data === 'object') ? (msg.data as Record<string, unknown>) : {};
+    const raw = typeof data.type === 'string' ? data.type : String(msg.event);
+    return { ...data, type: herdrEventTypeToDotted(raw) } as HerdrEvent;
+  }
+  if (msg && typeof msg === 'object' && 'result' in msg) return null; // request ack
+  if (msg && typeof msg === 'object' && 'error' in msg) return null;
+  // Legacy / mock ack shapes: `{ id, type: 'subscribed' | 'ok' | 'subscription_started' }`.
+  if (msg && 'id' in msg && (msg.type === 'subscribed' || msg.type === 'ok' || msg.type === 'subscription_started')) return null;
+  if (msg && typeof msg.type === 'string') {
+    return { ...msg, type: herdrEventTypeToDotted(msg.type as string) } as HerdrEvent;
+  }
+  return null;
 }
