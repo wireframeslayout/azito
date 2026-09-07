@@ -73,6 +73,7 @@ import * as m069 from './069_window_mux_ref';
 import * as m070 from './070_supervisor_launch_pane_ref_and_watch_normalize';
 import * as m071 from './071_agent_watches_window_id';
 import * as m072 from './072_fix_herdr_mux_ref_kind';
+import * as m073 from './073_restore_tmux_mux_ref_kind';
 
 interface Migration {
   version: number;
@@ -87,7 +88,7 @@ const PRIOR_MIGRATIONS: Migration[] = [
   m041, m042, m043, m044, m045, m046, m047, m048, m049, m050,
   m051, m052, m053, m054, m055, m056, m057, m058, m059, m060,
   m061, m062, m063, m064, m065, m066, m067, m068, m069, m070,
-  m071,
+  m071, m072,
 ];
 
 const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
@@ -124,100 +125,90 @@ function insertWindow(db: Database.Database, serverName: string, tmuxTarget: str
   );
 }
 
-describe('migration 072: fix herdr/zellij mux_ref kind', () => {
+describe('migration 073: restore tmux mux_ref kind', () => {
   let db: Database.Database;
   beforeEach(() => { db = buildSeededDb(); });
 
-  it('corrects kind from tmux to herdr for non-tmux-managed windows', () => {
+  it('restores task windows incorrectly marked as herdr back to tmux', () => {
     insertServer(db, 'herdr-srv', 'herdr');
-    insertWindow(db, 'herdr-srv', 'azito:herdr-e2e', '{"kind":"tmux","workspace":"azito","window":"herdr-e2e"}');
+    insertWindow(db, 'herdr-srv', 'azito:task-42', '{"kind":"herdr","workspace":"azito","window":"task-42"}');
 
-    db.transaction(() => m072.up(db))();
+    db.transaction(() => m073.up(db))();
 
     const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('herdr-srv') as { mux_ref: string };
-    expect(row.mux_ref).toBe('{"kind":"herdr","workspace":"azito","window":"herdr-e2e"}');
+    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"task-42"}');
   });
 
-  it('corrects kind from tmux to zellij for non-tmux-managed windows', () => {
-    insertServer(db, 'zellij-srv', 'zellij');
-    insertWindow(db, 'zellij-srv', 'azito:zellij-e2e', '{"kind":"tmux","workspace":"azito","window":"zellij-e2e"}');
+  it('restores manual windows incorrectly marked as herdr back to tmux', () => {
+    insertServer(db, 'herdr-srv', 'herdr');
+    insertWindow(db, 'herdr-srv', 'azito:win--qvp6', '{"kind":"herdr","workspace":"azito","window":"win--qvp6"}');
 
-    db.transaction(() => m072.up(db))();
+    db.transaction(() => m073.up(db))();
+
+    const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('herdr-srv') as { mux_ref: string };
+    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"win--qvp6"}');
+  });
+
+  it('restores windows incorrectly marked as zellij back to tmux', () => {
+    insertServer(db, 'zellij-srv', 'zellij');
+    insertWindow(db, 'zellij-srv', 'azito:task-99', '{"kind":"zellij","workspace":"azito","window":"task-99"}');
+
+    db.transaction(() => m073.up(db))();
 
     const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('zellij-srv') as { mux_ref: string };
-    expect(row.mux_ref).toBe('{"kind":"zellij","workspace":"azito","window":"zellij-e2e"}');
+    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"task-99"}');
   });
 
-  it('does not modify windows on tmux (system) servers', () => {
-    insertServer(db, 'tmux-srv', 'system');
-    insertWindow(db, 'tmux-srv', 'azito:tmux-win', '{"kind":"tmux","workspace":"azito","window":"tmux-win"}');
-
-    db.transaction(() => m072.up(db))();
-
-    const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('tmux-srv') as { mux_ref: string };
-    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"tmux-win"}');
-  });
-
-  it('skips tmux-managed task windows on herdr server', () => {
+  it('restores custom-baseName windows incorrectly marked as herdr back to tmux', () => {
     insertServer(db, 'herdr-srv', 'herdr');
-    insertWindow(db, 'herdr-srv', 'azito:task-123', '{"kind":"tmux","workspace":"azito","window":"task-123"}');
+    insertWindow(db, 'herdr-srv', 'azito:editor--ab12', '{"kind":"herdr","workspace":"azito","window":"editor--ab12"}');
 
-    db.transaction(() => m072.up(db))();
-
-    const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('herdr-srv') as { mux_ref: string };
-    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"task-123"}');
-  });
-
-  it('skips tmux-managed manual windows on herdr server', () => {
-    insertServer(db, 'herdr-srv', 'herdr');
-    insertWindow(db, 'herdr-srv', 'azito:win--abc4', '{"kind":"tmux","workspace":"azito","window":"win--abc4"}');
-
-    db.transaction(() => m072.up(db))();
-
-    const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('herdr-srv') as { mux_ref: string };
-    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"win--abc4"}');
-  });
-
-  it('skips tmux windows with custom baseName (generateWindowName pattern)', () => {
-    insertServer(db, 'herdr-srv', 'herdr');
-    insertWindow(db, 'herdr-srv', 'azito:editor--ab12', '{"kind":"tmux","workspace":"azito","window":"editor--ab12"}');
-
-    db.transaction(() => m072.up(db))();
+    db.transaction(() => m073.up(db))();
 
     const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('herdr-srv') as { mux_ref: string };
     expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"editor--ab12"}');
   });
 
-  it('converts herdr windows but skips tmux windows on same server', () => {
+  it('preserves correctly marked herdr windows', () => {
     insertServer(db, 'herdr-srv', 'herdr');
-    const herdrWinId = insertWindow(db, 'herdr-srv', 'azito:herdr-e2e', '{"kind":"tmux","workspace":"azito","window":"herdr-e2e"}');
-    const taskWinId = insertWindow(db, 'herdr-srv', 'azito:task-42', '{"kind":"tmux","workspace":"azito","window":"task-42"}');
-    const manualWinId = insertWindow(db, 'herdr-srv', 'azito:win--qvp6', '{"kind":"tmux","workspace":"azito","window":"win--qvp6"}');
+    insertWindow(db, 'herdr-srv', 'azito:herdr-e2e', '{"kind":"herdr","workspace":"azito","window":"herdr-e2e"}');
 
-    db.transaction(() => m072.up(db))();
-
-    const herdrRow = db.prepare('SELECT mux_ref FROM windows WHERE id = ?').get(herdrWinId) as { mux_ref: string };
-    const taskRow = db.prepare('SELECT mux_ref FROM windows WHERE id = ?').get(taskWinId) as { mux_ref: string };
-    const manualRow = db.prepare('SELECT mux_ref FROM windows WHERE id = ?').get(manualWinId) as { mux_ref: string };
-
-    expect(herdrRow.mux_ref).toBe('{"kind":"herdr","workspace":"azito","window":"herdr-e2e"}');
-    expect(taskRow.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"task-42"}');
-    expect(manualRow.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"win--qvp6"}');
-  });
-
-  it('is idempotent — already correct kind is unchanged', () => {
-    insertServer(db, 'herdr-srv', 'herdr');
-    insertWindow(db, 'herdr-srv', 'azito:correct', '{"kind":"herdr","workspace":"azito","window":"correct"}');
-
-    db.transaction(() => m072.up(db))();
+    db.transaction(() => m073.up(db))();
 
     const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('herdr-srv') as { mux_ref: string };
-    expect(row.mux_ref).toBe('{"kind":"herdr","workspace":"azito","window":"correct"}');
+    expect(row.mux_ref).toBe('{"kind":"herdr","workspace":"azito","window":"herdr-e2e"}');
+  });
+
+  it('does not touch tmux kind windows (idempotent)', () => {
+    insertServer(db, 'srv', 'system');
+    insertWindow(db, 'srv', 'azito:task-1', '{"kind":"tmux","workspace":"azito","window":"task-1"}');
+
+    db.transaction(() => m073.up(db))();
+
+    const row = db.prepare('SELECT mux_ref FROM windows WHERE server_name = ?').get('srv') as { mux_ref: string };
+    expect(row.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"task-1"}');
+  });
+
+  it('handles mixed correct and incorrect rows', () => {
+    insertServer(db, 'herdr-srv', 'herdr');
+    const taskId = insertWindow(db, 'herdr-srv', 'azito:task-50', '{"kind":"herdr","workspace":"azito","window":"task-50"}');
+    const herdrId = insertWindow(db, 'herdr-srv', 'azito:herdr-e2e', '{"kind":"herdr","workspace":"azito","window":"herdr-e2e"}');
+    const winId = insertWindow(db, 'herdr-srv', 'azito:win--3v5i', '{"kind":"herdr","workspace":"azito","window":"win--3v5i"}');
+
+    db.transaction(() => m073.up(db))();
+
+    const taskRow = db.prepare('SELECT mux_ref FROM windows WHERE id = ?').get(taskId) as { mux_ref: string };
+    const herdrRow = db.prepare('SELECT mux_ref FROM windows WHERE id = ?').get(herdrId) as { mux_ref: string };
+    const winRow = db.prepare('SELECT mux_ref FROM windows WHERE id = ?').get(winId) as { mux_ref: string };
+
+    expect(taskRow.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"task-50"}');
+    expect(herdrRow.mux_ref).toBe('{"kind":"herdr","workspace":"azito","window":"herdr-e2e"}');
+    expect(winRow.mux_ref).toBe('{"kind":"tmux","workspace":"azito","window":"win--3v5i"}');
   });
 
   it('handles empty windows table', () => {
     insertServer(db, 'herdr-srv', 'herdr');
 
-    expect(() => db.transaction(() => m072.up(db))()).not.toThrow();
+    expect(() => db.transaction(() => m073.up(db))()).not.toThrow();
   });
 });
