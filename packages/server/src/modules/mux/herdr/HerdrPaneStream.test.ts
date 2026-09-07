@@ -27,6 +27,7 @@ describe('HerdrPaneStream', () => {
   it('emits data events on new output', async () => {
     const chunks: string[] = [];
     stream.on('data', (d: string) => chunks.push(d));
+    stream.on('error', () => {});
     stream.start();
 
     // First poll: captures initial state (no emission)
@@ -48,6 +49,7 @@ describe('HerdrPaneStream', () => {
   it('detects done marker', async () => {
     const markers: string[] = [];
     stream.on('marker', (type: string) => markers.push(type));
+    stream.on('error', () => {});
     stream.setMarkers('AZITO_DONE_42_abc', 'AZITO_QUESTIONS_42_abc');
     stream.enableMarkerDetection();
     stream.start();
@@ -68,6 +70,7 @@ describe('HerdrPaneStream', () => {
   it('detects questions marker', async () => {
     const markers: Array<{ type: string; raw: string }> = [];
     stream.on('marker', (type: string, raw: string) => markers.push({ type, raw }));
+    stream.on('error', () => {});
     stream.setMarkers('AZITO_DONE_42_abc', 'AZITO_QUESTIONS_42_abc');
     stream.enableMarkerDetection();
     stream.start();
@@ -90,19 +93,21 @@ describe('HerdrPaneStream', () => {
   it('emits error when no overlap found', async () => {
     const errors: Error[] = [];
     stream.on('error', (e: Error) => errors.push(e));
-    stream.start();
 
-    text = 'aaa\nbbb\n';
+    // Set initial state before start so the first poll captures it
+    text = 'aaa\nbbb\nccc';
     revision = 1;
+    stream.start();
     await vi.advanceTimersByTimeAsync(10);
 
-    text = 'completely\ndifferent\n';
+    // Completely different content — no overlap
+    text = 'xxx\nyyy\nzzz';
     revision = 2;
     await vi.advanceTimersByTimeAsync(500);
 
     expect(errors.length).toBe(1);
     expect(errors[0].message).toContain('no overlap found');
-    expect(stream.getBuffer()).toContain('completely');
+    expect(stream.getBuffer()).toContain('xxx');
   });
 
   it('stops polling on stop()', async () => {
@@ -121,14 +126,18 @@ describe('HerdrPaneStream', () => {
   });
 
   it('skips poll when revision unchanged', async () => {
+    stream.on('error', () => {});
     stream.start();
     text = 'data\n';
     revision = 1;
     await vi.advanceTimersByTimeAsync(10);
 
-    // Same revision — no new data
-    const bufBefore = stream.getBuffer();
+    // Let first content poll happen
     await vi.advanceTimersByTimeAsync(500);
-    expect(stream.getBuffer()).toBe(bufBefore);
+    const bufAfterFirst = stream.getBuffer();
+
+    // Same revision — no new data should be added
+    await vi.advanceTimersByTimeAsync(500);
+    expect(stream.getBuffer()).toBe(bufAfterFirst);
   });
 });

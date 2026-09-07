@@ -153,9 +153,13 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     tmux: {
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [] }]),
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
+      listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: true, created: 0, windows: [] }]),
+      openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      openWindow: vi.fn(async (_srv: unknown, ws: string, name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: name ?? 'task-1' }, result: { stdout: '', stderr: '', code: 0 } })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       resolvePaneId: vi.fn(async () => '%0'),
       resolvePane: vi.fn(async () => '%0'),
       sendKeys: vi.fn(async () => {}),
@@ -655,7 +659,9 @@ describe('TaskRestoreService', () => {
       tmux: {
         ...deps.tmux,
         listSessions: vi.fn(async () => []),
+        listWorkspaces: vi.fn(async () => []),
         createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
+        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
         createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       } as unknown as TaskRestoreDeps['tmux'],
     });
@@ -663,7 +669,7 @@ describe('TaskRestoreService', () => {
 
     await service.restore(task, log);
 
-    expect(deps.tmux.createSession).toHaveBeenCalledWith(
+    expect(deps.tmux.openWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
       { extraEnv: {} },
@@ -699,7 +705,9 @@ describe('TaskRestoreService', () => {
       tmux: {
         ...deps.tmux,
         listSessions: vi.fn(async () => []),
+        listWorkspaces: vi.fn(async () => []),
         createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
+        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
         createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
       } as unknown as TaskRestoreDeps['tmux'],
     });
@@ -710,9 +718,9 @@ describe('TaskRestoreService', () => {
     // findByName is called once at the top of restore() (serverAtStart),
     // once inside resolveExecutionManifest() for the execution-gate
     // manifest, then once per lock-and-refetch span below — so
-    // createSession/resolvePane/getTransport must each see whichever
+    // openWorkspace/resolvePane/getTransport must each see whichever
     // generation its OWN span produced, never an earlier one.
-    const createSessionServer = (deps.tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (deps.tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (deps.tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const getTransportServer = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 

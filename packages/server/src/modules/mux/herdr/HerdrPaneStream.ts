@@ -93,8 +93,8 @@ export class HerdrPaneStream extends BasePaneStream implements IPaneStream {
     if (!prev) return next;
     if (prev === next) return '';
 
-    const prevLines = prev.split('\n');
-    const nextLines = next.split('\n');
+    const prevLines = prev.split('\n').filter((l, i, a) => i < a.length - 1 || l !== '');
+    const nextLines = next.split('\n').filter((l, i, a) => i < a.length - 1 || l !== '');
 
     const maxOverlap = Math.min(prevLines.length, nextLines.length);
     let bestOverlap = 0;

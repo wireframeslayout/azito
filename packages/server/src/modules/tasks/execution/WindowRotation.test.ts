@@ -5,6 +5,7 @@ import type { ITaskTokenRepository, IssuedTaskToken } from '../tokens/TaskToken'
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
 import type { TmuxClient, TmuxSession } from '../../tmux/TmuxClient';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 
 // Issue #29 review (7th pass), Important finding 1: createRotatedWindow now
@@ -159,12 +160,12 @@ function makeGate<T>(): { promise: Promise<T>; release: (value: T) => void; fail
 // every other window-(re)creation helper in this file uses, against a
 // server row re-read only once the lock is held.
 describe('ensureSessionWithLock', () => {
-  type MockTmux = Pick<TmuxClient, 'listSessions' | 'createSession'>;
-  function makeTmux(overrides: { listSessions?: MockTmux['listSessions'] } = {}): MockTmux {
+  type MockMux = Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'>;
+  function makeTmux(overrides: { listWorkspaces?: MockMux['listWorkspaces'] } = {}): MockMux {
     return {
-      listSessions: overrides.listSessions ?? vi.fn(async (_server: ServerConfig): Promise<TmuxSession[]> => []),
-      createSession: vi.fn(async (_server: ServerConfig, _name: string, _opts?: unknown) => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
-    } as unknown as MockTmux;
+      listWorkspaces: overrides.listWorkspaces ?? vi.fn(async (_server: ServerConfig) => []),
+      openWorkspace: vi.fn(async (_server: ServerConfig, name: string, _opts?: unknown) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+    } as unknown as MockMux;
   }
 
   // Issue #29 review (11th pass), Critical finding 1: `ensureSessionWithLock`
@@ -181,7 +182,7 @@ describe('ensureSessionWithLock', () => {
 
     expect(result.created).toBe(true);
     expect(result.server).toBe(server);
-    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: {} });
+    expect(tmux.openWorkspace).toHaveBeenCalledWith(server, 'azito', { extraEnv: {} });
   });
 
   it('creates an isolated server session with the shared ISOLATION_MASKED_ENV mask', async () => {
@@ -192,18 +193,18 @@ describe('ensureSessionWithLock', () => {
     const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
 
     expect(result.created).toBe(true);
-    expect(tmux.createSession).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
+    expect(tmux.openWorkspace).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
   });
 
   it('does not create a session when one of that name already exists, and returns created: false', async () => {
     const server = makeServer();
-    const tmux = makeTmux({ listSessions: vi.fn(async () => [{ name: 'azito', windows: [] }]) as unknown as MockTmux['listSessions'] });
+    const tmux = makeTmux({ listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: true, created: 0, windows: [] }]) as unknown as MockMux['listWorkspaces'] });
     const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => server } };
 
     const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
 
     expect(result.created).toBe(false);
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 
   it('re-reads the server from serverRepo INSIDE the lock and uses that row for both listSessions and createSession, never the caller-supplied argument', async () => {
@@ -215,10 +216,10 @@ describe('ensureSessionWithLock', () => {
     const result = await ensureSessionWithLock(tmux, lock, staleServer, 'azito');
 
     expect(result.server).toBe(freshServer);
-    expect(tmux.listSessions).toHaveBeenCalledWith(freshServer);
-    expect(tmux.createSession).toHaveBeenCalledWith(freshServer, 'azito', expect.anything());
-    expect(tmux.listSessions).not.toHaveBeenCalledWith(staleServer);
-    expect(tmux.createSession).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
+    expect(tmux.listWorkspaces).toHaveBeenCalledWith(freshServer);
+    expect(tmux.openWorkspace).toHaveBeenCalledWith(freshServer, 'azito', expect.anything());
+    expect(tmux.listWorkspaces).not.toHaveBeenCalledWith(staleServer);
+    expect(tmux.openWorkspace).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
   });
 
   it('throws (never falls back to the stale argument) when the server was deleted between resolution and lock acquisition', async () => {
@@ -227,7 +228,7 @@ describe('ensureSessionWithLock', () => {
     const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => null } };
 
     await expect(ensureSessionWithLock(tmux, lock, server, 'azito')).rejects.toThrow(/was not found/);
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 
   // Issue #29 review (12th pass), Critical finding 1: a PUT /api/servers/:name
@@ -241,7 +242,7 @@ describe('ensureSessionWithLock', () => {
     const lock: ServerIsolationLock = { serverIsolationMutex: new KeyedMutex(), serverRepo: { findByName: () => fresh } };
 
     await expect(ensureSessionWithLock(tmux, lock, expected, 'azito')).rejects.toBeInstanceOf(ServerSnapshotMismatchError);
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 
   it('does NOT throw on a security-field mismatch when enforceSnapshot is explicitly false (projects/routes.ts bootstrap opt-out)', async () => {
@@ -277,8 +278,8 @@ describe('ensureSessionWithLock', () => {
       return { promise, release };
     })();
     const tmux = makeTmux({
-      listSessions: vi.fn(async () => {
-        order.push('ensureSession-listSessions');
+      listWorkspaces: vi.fn(async () => {
+        order.push('ensureSession-listWorkspaces');
         await gate.promise;
         return [];
       }),
@@ -303,13 +304,13 @@ describe('ensureSessionWithLock', () => {
     // createRotatedWindow must not have started its own span yet — it's
     // queued behind ensureSessionWithLock's still-gated listSessions call.
     await Promise.resolve();
-    expect(order).toEqual(['ensureSession-listSessions']);
+    expect(order).toEqual(['ensureSession-listWorkspaces']);
 
     gate.release();
     await sessionPromise;
     await rotatedPromise;
 
-    expect(order).toEqual(['ensureSession-listSessions', 'createRotatedWindow-create']);
+    expect(order).toEqual(['ensureSession-listWorkspaces', 'createRotatedWindow-create']);
   });
 });
 
