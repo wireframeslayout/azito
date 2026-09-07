@@ -91,3 +91,44 @@ describe('normaliseHerdrEventLine (herdr 0.8.2 wire format)', () => {
     expect(herdrEventTypeToDotted('pane.output_matched')).toBe('pane.output_matched');
   });
 });
+
+// herdr 0.8.2 resets the socket when a second events.subscribe arrives on an open stream
+// (observed on server007), so growing the subscription set must reconnect with the merged
+// list instead of writing another request.
+describe('HerdrEventSubscriber.addSubscriptions (reconnect with merged list)', () => {
+  it('opens a new connection carrying the full subscription list and never writes twice on one socket', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'herdr-resub-'));
+    const sockPath = join(dir, 'herdr.sock');
+    const requestsPerConn: string[][] = [];
+    const server = createServer((conn) => {
+      const mine: string[] = []; requestsPerConn.push(mine);
+      let buf = '';
+      conn.on('data', (chunk) => {
+        buf += chunk.toString();
+        let idx: number;
+        while ((idx = buf.indexOf('\n')) !== -1) {
+          const line = buf.slice(0, idx); buf = buf.slice(idx + 1);
+          mine.push(line);
+          const req = JSON.parse(line);
+          conn.write(JSON.stringify({ id: req.id, result: { type: 'subscription_started' } }) + '\n');
+        }
+      });
+    });
+    server.listen(sockPath);
+    const sub = new HerdrEventSubscriber(sockPath, [{ type: 'tab.created' }]);
+    try {
+      sub.start();
+      await new Promise((r) => setTimeout(r, 120));
+      sub.addSubscriptions([{ type: 'pane.agent_status_changed', pane_id: 'w1:p2' } as never]);
+      sub.addSubscriptions([{ type: 'pane.agent_status_changed', pane_id: 'w1:p2' } as never]); // duplicate → no extra reconnect
+      await new Promise((r) => setTimeout(r, 400));
+      expect(requestsPerConn.length).toBe(2);
+      expect(requestsPerConn.every((reqs) => reqs.length === 1)).toBe(true);
+      const second = JSON.parse(requestsPerConn[1][0]);
+      expect(second.params.subscriptions).toEqual([{ type: 'tab.created' }, { type: 'pane.agent_status_changed', pane_id: 'w1:p2' }]);
+      expect(sub.connected).toBe(true);
+    } finally {
+      sub.stop(); server.close(); try { rmSync(dir, { recursive: true }); } catch {}
+    }
+  });
+});
