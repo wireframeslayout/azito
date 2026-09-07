@@ -161,9 +161,8 @@ export class HerdrEventBridge {
         // New pane — add to cache and subscribe to its agent_status.
         const paneId = event.pane_id as string | undefined;
         const wsId = event.workspace_id as string | undefined;
-        const tabId = event.tab_id as string | undefined;
-        if (paneId && wsId && tabId) {
-          void this.addPaneSubscription(serverName, state, paneId, wsId, tabId);
+        if (paneId && wsId) {
+          void this.addPaneSubscription(serverName, state, paneId, wsId);
         }
       }
       this.emitSessionsUpdated(serverName);
@@ -194,7 +193,6 @@ export class HerdrEventBridge {
     state: PerServerState,
     paneId: string,
     wsId: string,
-    tabId: string,
   ): Promise<void> {
     try {
       // Resolve labels from a snapshot (the event only carries IDs).
