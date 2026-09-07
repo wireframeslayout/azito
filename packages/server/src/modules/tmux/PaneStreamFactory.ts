@@ -4,13 +4,21 @@ import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { HerdrPaneStream } from '../mux/herdr/HerdrPaneStream';
 
+export function isHerdrPaneId(handle: string): boolean {
+  return /^w\d+:p\d+$/.test(handle);
+}
+
 export class PaneStreamFactory implements IPaneStreamFactory {
   constructor(private transportFactory: TransportFactory) {}
 
   create(handle: PaneHandle | string, server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IPaneStream {
     const paneHandle = typeof handle === 'string' ? asPaneHandle(handle) : handle;
 
-    if (muxKindForRuntime((server.muxRuntime ?? 'system') as MuxRuntime) === 'herdr') {
+    // Only a real herdr pane id (`w<N>:p<N>`) is served by HerdrPaneStream. Callers also
+    // create file-backed streams on the same server (the `<taskId>-sig` completion-signal
+    // tail in WorkerWaiter); routing those through pane.read made herdr answer
+    // `pane_not_found`, and the unhandled 'error' took the whole hub down (rc.15 E2E).
+    if (muxKindForRuntime((server.muxRuntime ?? 'system') as MuxRuntime) === 'herdr' && isHerdrPaneId(paneHandle as string)) {
       const transport = this.transportFactory.getTransport(server);
       const rpc = async (method: string, params: unknown) => {
         const result = await transport.execMux({ kind: 'herdr', method, params });

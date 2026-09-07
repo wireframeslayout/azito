@@ -536,6 +536,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver });
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
+    muxDriverRegistry,
     taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo, scopedAuthEnabled,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2 — see the identical

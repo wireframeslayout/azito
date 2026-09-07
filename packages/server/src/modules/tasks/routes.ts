@@ -15,6 +15,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
@@ -80,6 +81,8 @@ export function validateGitFields(body: Record<string, unknown>): string | null 
 
 export interface TasksRouteOptions {
   taskRepo: ITaskRepository;
+  /** Per-server mux driver resolution for task cleanup (herdr / zellij task windows). */
+  muxDriverRegistry?: MuxDriverRegistry;
   projectRepo: IProjectRepository;
   projectServerRepo: IProjectServerRepository;
   logRepo: IExecutionLogRepository;
@@ -209,7 +212,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled } = opts;
-  const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
+  const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry: opts.muxDriverRegistry });
 
   // ── GET /api/tasks ──
   fastify.get<{
