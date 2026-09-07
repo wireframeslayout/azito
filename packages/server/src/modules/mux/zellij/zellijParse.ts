@@ -27,6 +27,7 @@ export function parseListSessions(stdout: string): string[] {
     });
 }
 
+/** Returns tab names in tab_position order (0-based index = position). */
 export function parseQueryTabNames(stdout: string): string[] {
   return stdout
     .split('\n')

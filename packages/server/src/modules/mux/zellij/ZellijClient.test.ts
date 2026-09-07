@@ -50,9 +50,9 @@ describe('ZellijClient', () => {
     it('agentState is false', () => expect(client.caps.agentState).toBe(false));
     it('independentClients is true', () => expect(client.caps.independentClients).toBe(true));
     it('envInjection is true', () => expect(client.caps.envInjection).toBe(true));
-    it('zoom is false', () => expect(client.caps.zoom).toBe(false));
+    it('zoom is true', () => expect(client.caps.zoom).toBe(true));
     it('copyMode is false', () => expect(client.caps.copyMode).toBe(false));
-    it('paneTitle is false', () => expect(client.caps.paneTitle).toBe(false));
+    it('paneTitle is true', () => expect(client.caps.paneTitle).toBe(true));
     it('activityCounter is false', () => expect(client.caps.activityCounter).toBe(false));
     it('layoutSnapshot is true', () => expect(client.caps.layoutSnapshot).toBe(true));
     it('stablePaneHandle is true', () => expect(client.caps.stablePaneHandle).toBe(true));
@@ -83,7 +83,7 @@ describe('ZellijClient', () => {
   });
 
   describe('openWindow', () => {
-    it('calls new-tab --name and returns ref', async () => {
+    it('calls new-tab with --layout-string and --name, returns ref', async () => {
       const { client, execMux } = makeClient((args) => {
         const cmd = lastArgs(args);
         if (cmd.startsWith('new-tab')) return '3';
@@ -93,6 +93,7 @@ describe('ZellijClient', () => {
       expect(ref).toEqual({ kind: 'zellij', workspace: 'azito', window: 'editor' });
       const newTabCall = execMux.mock.calls.find(([req]: any) => req.args.includes('new-tab'));
       expect(newTabCall).toBeDefined();
+      expect(newTabCall![0].args).toContain('--layout-string');
       expect(newTabCall![0].args).toContain('--name');
       expect(newTabCall![0].args).toContain('editor');
     });
@@ -335,17 +336,68 @@ describe('ZellijClient', () => {
     });
   });
 
+  describe('zoomPaneByHandle', () => {
+    it('calls toggle-fullscreen --pane-id', async () => {
+      const { client, execMux } = makeClient(() => '');
+      await client.zoomPaneByHandle(server, 'terminal_0' as any);
+      const call = execMux.mock.calls.find(([req]: any) => req.args.includes('toggle-fullscreen'));
+      expect(call).toBeDefined();
+      expect(call![0].args).toContain('--pane-id');
+      expect(call![0].args).toContain('terminal_0');
+    });
+  });
+
+  describe('unzoomPaneByHandle', () => {
+    it('calls toggle-fullscreen --pane-id (toggle)', async () => {
+      const { client, execMux } = makeClient(() => '');
+      await client.unzoomPaneByHandle(server, 'terminal_1' as any);
+      const call = execMux.mock.calls.find(([req]: any) => req.args.includes('toggle-fullscreen'));
+      expect(call).toBeDefined();
+      expect(call![0].args).toContain('--pane-id');
+      expect(call![0].args).toContain('terminal_1');
+    });
+  });
+
+  describe('setPaneTitle', () => {
+    it('calls rename-pane --pane-id with title', async () => {
+      const { client, execMux } = makeClient(() => '');
+      await client.setPaneTitle(server, 'terminal_0' as any, 'my-title');
+      const call = execMux.mock.calls.find(([req]: any) => req.args.includes('rename-pane'));
+      expect(call).toBeDefined();
+      expect(call![0].args).toContain('--pane-id');
+      expect(call![0].args).toContain('terminal_0');
+      expect(call![0].args).toContain('my-title');
+    });
+  });
+
+  describe('resolveTabId fallback via query-tab-names', () => {
+    it('resolves pane-less tab via query-tab-names index', async () => {
+      const { client, execMux } = makeClient((args) => {
+        const cmd = lastArgs(args);
+        // list-panes returns only panes for "main" — "empty-tab" has none
+        if (cmd.startsWith('list-panes')) return LIST_PANES_JSON;
+        if (cmd.startsWith('query-tab-names')) return 'main\nempty-tab\nbuild\n';
+        if (cmd.startsWith('close-tab')) return '';
+        return defaultHandler(args);
+      });
+      // closeWindow internally calls resolveTabId; "empty-tab" is not in list-panes
+      // but is index 1 in query-tab-names
+      await client.closeWindow(server, { kind: 'zellij', workspace: 'azito', window: 'empty-tab' });
+      const closeCall = execMux.mock.calls.find(([req]: any) => req.args.includes('close-tab'));
+      expect(closeCall).toBeDefined();
+      expect(closeCall![0].args).toContain('--tab-id');
+      expect(closeCall![0].args).toContain('1');
+    });
+  });
+
   describe('capability-gated methods throw MuxCapabilityMissingError', () => {
     const { client } = makeClient(() => '');
     const ref: MuxRef = { kind: 'zellij', workspace: 'azito', window: 'main' };
 
     it('startOutputStream', () => expect(client.startOutputStream(server, 'h' as any, '/tmp/x')).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('stopOutputStream', () => expect(client.stopOutputStream(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('zoomPaneByHandle', () => expect(client.zoomPaneByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('unzoomPaneByHandle', () => expect(client.unzoomPaneByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('isPaneInModeByHandle', () => expect(client.isPaneInModeByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('cancelPaneModeByHandle', () => expect(client.cancelPaneModeByHandle(server, 'h' as any)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
-    it('setPaneTitle', () => expect(client.setPaneTitle(server, 'h' as any, 'x')).rejects.toBeInstanceOf(MuxCapabilityMissingError));
     it('windowActivity', () => expect(client.windowActivity(server, ref)).rejects.toBeInstanceOf(MuxCapabilityMissingError));
   });
 });

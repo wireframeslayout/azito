@@ -504,6 +504,7 @@ function buildAgentActivityMonitor(
   sessionCaptureService: SessionCaptureService,
   processProbe: WindowActivityStatusService,
   paneHandleResolver: PaneHandleResolver,
+  muxDriverRegistry: MuxDriverRegistry,
 ): AgentActivityMonitor {
   return new AgentActivityMonitor(
     executeTaskUseCase,
@@ -524,6 +525,7 @@ function buildAgentActivityMonitor(
       }
     },
     paneHandleResolver,
+    muxDriverRegistry,
   );
 }
 
@@ -591,7 +593,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
   const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, harnessPrefix);
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
-  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver);
+  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 

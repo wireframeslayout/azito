@@ -46,6 +46,25 @@ zellij --session azito --new-session
 
 zellij has no daemon mode. The server process starts on first client attach and persists after all clients disconnect.
 
+## MuxRef format
+
+```json
+{"kind":"zellij","workspace":"<session name>","window":"<tab name>"}
+```
+
+- `workspace`: zellij session name (e.g. `"azito"`)
+- `window`: zellij tab name (e.g. `"win--abc"`)
+
+## Headless limitations
+
+In headless sessions (no client attached), `new-tab` creates an empty tab with zero terminal panes (even with `--layout-string`). `openWindow` uses `--layout-string 'layout { pane; }'` as best-effort, but panes may only materialize when a client is attached. Tabs without panes:
+
+- Are invisible to `list-panes --all --json`
+- Can appear in `query-tab-names` but with unreliable tab_id correlation
+- Cannot be operated on (capture, send-keys, split) until a pane exists
+
+The `resolveTabId` fallback uses `query-tab-names` index as tab_id (works for fresh sessions where position == id). For production use with headless tab creation, a persistent attached client (e.g. `zellij attach` via node-pty) would be needed.
+
 ## Registering with AZITO
 
 Select `zellij` as `mux_runtime` when adding a server. Register with a distinct name (e.g., `server007-zellij`).
@@ -59,7 +78,7 @@ Select `zellij` as `mux_runtime` when adding a server. Register with a distinct 
 | agentState | **No** | -- | No agent detection (Tier 2 screen classification works via `captureScreen`) |
 | independentClients | Yes | `mirror_session false` | Independent tab focus per client |
 | envInjection | Yes | `new-pane -- env KEY=VAL cmd` | |
-| zoom | **No** | -- | `toggle-fullscreen-pane` lacks `--pane-id` |
+| zoom | Yes | `toggle-fullscreen --pane-id` | Toggle fullscreen by pane ID |
 | copyMode | **No** | -- | |
 | paneTitle | Yes | `rename-pane --pane-id` | |
 | activityCounter | **No** | -- | No `window_activity` equivalent |

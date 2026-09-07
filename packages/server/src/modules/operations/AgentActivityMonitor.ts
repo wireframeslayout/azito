@@ -8,9 +8,34 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, type PaneHandle } from '@azito/shared';
+import { windowKey, asPaneHandle, muxKindForRuntime, type PaneHandle, type MuxWorkspace } from '@azito/shared';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
+
+function workspacesToTmuxSessions(workspaces: MuxWorkspace[]): TmuxSession[] {
+  return workspaces.map(ws => ({
+    name: ws.name,
+    attached: ws.attached,
+    windowCount: ws.windowCount,
+    created: ws.created,
+    windows: ws.windows.map(win => ({
+      index: win.index,
+      name: win.name,
+      active: win.active,
+      panes: win.panes.map(p => ({
+        index: p.index,
+        command: p.command,
+        title: p.title,
+        width: p.width,
+        height: p.height,
+        active: p.active,
+        pid: p.pid,
+      })),
+      activity: win.activity,
+    })),
+  }));
+}
 
 /** Split a stored `session:windowSpec[.pane]` target into its session and window parts. */
 export function parseWindowTarget(target: string): { sessionName: string; windowSpec: string } {
@@ -595,6 +620,7 @@ export class AgentActivityMonitor {
     private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
     private paneHandleResolver?: PaneHandleResolver,
+    private muxDriverRegistry?: MuxDriverRegistry,
   ) {}
 
   start(): void {
@@ -1050,7 +1076,16 @@ export class AgentActivityMonitor {
     await Promise.all([...servers.entries()].map(async ([serverName, server]) => {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
-        sessionsByServer.set(serverName, await this.tmux.listSessions(server));
+        const kind = muxKindForRuntime(server.muxRuntime ?? 'system');
+        if (kind === 'tmux') {
+          sessionsByServer.set(serverName, await this.tmux.listSessions(server));
+        } else if (this.muxDriverRegistry) {
+          const driver = this.muxDriverRegistry.resolve(server);
+          const workspaces = await driver.listWorkspaces(server);
+          sessionsByServer.set(serverName, workspacesToTmuxSessions(workspaces));
+        } else {
+          sessionsByServer.set(serverName, []);
+        }
       } catch {
         sessionsByServer.set(serverName, []);
         sessionErrors.add(serverName);

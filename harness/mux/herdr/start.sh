@@ -11,10 +11,21 @@ if [ ! -x "${HERDR_BIN}" ]; then
   exit 1
 fi
 
-SOCKET_PATH="${HOME}/.config/herdr/sessions/${SESSION_NAME}/herdr.sock"
+# Deploy azito.toml to herdr's config directory
+HERDR_CONFIG_DIR="${HOME}/.config/herdr"
+mkdir -p "${HERDR_CONFIG_DIR}"
+if [ -f "${HERDR_CONFIG_DIR}/config.toml" ] && ! cmp -s "${CONFIG}" "${HERDR_CONFIG_DIR}/config.toml"; then
+  cp "${HERDR_CONFIG_DIR}/config.toml" "${HERDR_CONFIG_DIR}/config.toml.bak"
+fi
+cp "${CONFIG}" "${HERDR_CONFIG_DIR}/config.toml"
+
+SOCKET_PATH="${HERDR_CONFIG_DIR}/sessions/${SESSION_NAME}/herdr.sock"
 if [ -S "${SOCKET_PATH}" ]; then
   if HERDR_SESSION="${SESSION_NAME}" "${HERDR_BIN}" status server >/dev/null 2>&1; then
-    echo "herdr session '${SESSION_NAME}' already running"
+    # Reload config on already-running server
+    echo '{"jsonrpc":"2.0","method":"server.reload_config","params":{},"id":1}' \
+      | socat - UNIX-CONNECT:"${SOCKET_PATH}" 2>/dev/null || true
+    echo "herdr session '${SESSION_NAME}' already running (config reloaded)"
     exit 0
   fi
   rm -f "${SOCKET_PATH}"

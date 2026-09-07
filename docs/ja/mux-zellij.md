@@ -46,6 +46,25 @@ zellij --session azito --new-session
 
 zellij はデーモンモードを持たない。最初のクライアント attach 時にサーバープロセスが起動し、全クライアントが切断しても一定時間残る。
 
+## MuxRef 形式
+
+```json
+{"kind":"zellij","workspace":"<session 名>","window":"<tab 名>"}
+```
+
+- `workspace`: zellij セッション名（例: `"azito"`）
+- `window`: zellij タブ名（例: `"win--abc"`）
+
+## ヘッドレス制約
+
+ヘッドレスセッション（クライアント未接続）では `new-tab` が空タブ（ターミナルペイン 0 個）を作成する（`--layout-string` 指定時も同様）。`openWindow` は `--layout-string 'layout { pane; }'` をベストエフォートで使用するが、ペインはクライアント接続時にのみ生成される場合がある。ペインのないタブ:
+
+- `list-panes --all --json` に出現しない
+- `query-tab-names` には表示されるが tab_id の相関が不安定
+- ペインが存在するまで操作不可（capture, send-keys, split）
+
+`resolveTabId` のフォールバックは `query-tab-names` のインデックスを tab_id として使用する（新規セッションで position == id の場合のみ正確）。ヘッドレスでの本格的なタブ作成には常駐クライアント（`zellij attach` を node-pty で保持）が必要。
+
 ## AZITO への登録
 
 サーバー追加画面で `mux_runtime` に `zellij` を選択。既存 tmux サーバーとは別名で登録 (例: `server007-zellij`)。
@@ -59,7 +78,7 @@ zellij はデーモンモードを持たない。最初のクライアント att
 | agentState | **非対応** | -- | 稼働検知なし (Tier 2 画面分類は `captureScreen` 経由で有効) |
 | independentClients | 対応 | `mirror_session false` | クライアントごとに独立したタブフォーカス |
 | envInjection | 対応 | `new-pane -- env KEY=VAL cmd` | |
-| zoom | **非対応** | -- | `toggle-fullscreen-pane` は `--pane-id` 非対応 |
+| zoom | 対応 | `toggle-fullscreen --pane-id` | pane ID 指定でフルスクリーントグル |
 | copyMode | **非対応** | -- | |
 | paneTitle | 対応 | `rename-pane --pane-id` | |
 | activityCounter | **非対応** | -- | `window_activity` 相当なし |

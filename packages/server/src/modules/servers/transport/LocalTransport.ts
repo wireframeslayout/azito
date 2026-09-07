@@ -14,7 +14,7 @@ import type { IPaneStream } from '../../tmux/PaneStream';
 import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
-import type { HerdrSocketClient } from '../../mux/herdr/HerdrSocketClient';
+import { HerdrSocketClient } from '../../mux/herdr/HerdrSocketClient';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 
 function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
@@ -131,25 +131,31 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     );
   }
 
+  private getOrCreateHerdrSocket(sessionName: string): HerdrSocketClient {
+    if (this.herdrSocket) return this.herdrSocket;
+    const sock = new HerdrSocketClient(sessionName);
+    this.herdrSocket = sock;
+    return sock;
+  }
+
   private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
-    if (this.herdrSocket) {
-      try {
-        const resp = await this.herdrSocket.call('session.snapshot');
-        const snap = (resp as Record<string, unknown>).snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
-        if (snap) {
-          const ws = snap.workspaces.find((w) => w.label === ref.workspace);
-          const tab = ws ? snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window) : undefined;
-          if (tab) {
-            await this.herdrSocket.call('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
-            const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);
-            const target = panesInTab[ordinal - 1];
-            if (target) {
-              await this.herdrSocket.call('pane.focus', { pane_id: target.pane_id }).catch(() => {});
-            }
+    const sock = this.getOrCreateHerdrSocket(ref.workspace);
+    try {
+      const resp = await sock.call('session.snapshot');
+      const snap = (resp as Record<string, unknown>).snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
+      if (snap) {
+        const ws = snap.workspaces.find((w) => w.label === ref.workspace);
+        const tab = ws ? snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window) : undefined;
+        if (tab) {
+          await sock.call('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
+          const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+          const target = panesInTab[ordinal - 1];
+          if (target) {
+            await sock.call('pane.focus', { pane_id: target.pane_id }).catch(() => {});
           }
         }
-      } catch { /* best-effort focus */ }
-    }
+      }
+    } catch { /* best-effort focus */ }
     const env = { HERDR_SESSION: ref.workspace };
     return this.spawnTerminal([], cols, rows, { ...process.env as Record<string, string>, ...env }, undefined, 'herdr');
   }

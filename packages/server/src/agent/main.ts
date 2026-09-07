@@ -7,6 +7,7 @@ import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import { LocalTransport } from '../modules/servers/transport/LocalTransport';
+import { HerdrSocketClient } from '../modules/mux/herdr/HerdrSocketClient';
 import type { MuxRuntime } from '../modules/servers/Server';
 import type { WebSocket } from 'ws';
 
@@ -92,9 +93,14 @@ async function main(): Promise<void> {
   const isTmuxDriver = muxKind === 'tmux';
   const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
   const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
-  const agentTransport = (isTmuxDriver || muxKind === 'zellij')
-    ? new LocalTransport(transportRt, process.env.AZITO_URL ?? '')
-    : null;
+
+  // Build herdr socket for LocalTransport when running under herdr
+  const herdrSession = process.env.HERDR_SESSION || 'azito';
+  const herdrSocket = muxKind === 'herdr'
+    ? new HerdrSocketClient(herdrSession)
+    : undefined;
+
+  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '', herdrSocket);
 
   // WebSocket routes
   await app.register(async (fastify) => {
@@ -127,11 +133,6 @@ async function main(): Promise<void> {
         }
         const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
 
-        if (!agentTransport) {
-          socket.send(JSON.stringify({ error: 'Terminal not available for this mux driver' }));
-          socket.close();
-          return;
-        }
         handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
         return;
       }

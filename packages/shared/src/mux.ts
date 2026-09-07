@@ -129,10 +129,12 @@ export function parseHerdrPaneHandle(handle: PaneHandle): { workspaceId: string;
   return { workspaceId: s.slice(0, idx), paneId: s.slice(idx + 1) };
 }
 
+/** herdr MuxRef: workspace = workspace label, window = tab label. */
 export function herdrMuxRef(workspaceName: string, tabName: string): MuxRef {
   return { kind: 'herdr', workspace: workspaceName, window: tabName };
 }
 
+/** zellij MuxRef: workspace = session name, window = tab name. */
 export function zellijMuxRef(session: string, tabName: string): MuxRef {
   return { kind: 'zellij', workspace: session, window: tabName };
 }
