@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
-import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, type TerminalRef } from '../../../lib/terminalRef';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
+import { stripPaneSuffix } from '@azito/shared';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -31,6 +32,13 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
   }, [sessions, server.name]);
 
   const activeRef = selectedRef ?? firstRef;
+
+  const activeLabel = useMemo(() => {
+    if (!activeRef) return null;
+    const resolved = resolveTerminalTarget(activeRef, sessions);
+    if (resolved) return stripPaneSuffix(resolved);
+    return terminalRefDisplayLabel(activeRef);
+  }, [activeRef, sessions]);
 
   const handleSelect = useCallback((ref: TerminalRef) => {
     setSelectedRef(ref);
@@ -106,7 +114,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
             cursor: 'pointer',
           }}
         >
-          {activeRef ? terminalRefDisplayLabel(activeRef) : 'Select window'}
+          {activeLabel ?? 'Select window'}
           <span style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-dim)' }}>
             <Icon name="chevron-down" size={14} rotate={showTree ? 180 : 0} />
           </span>
@@ -119,7 +127,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
           <TerminalContainer
             key={terminalTabId(activeRef)}
             serverName={server.name}
-            target={terminalRefDisplayLabel(activeRef)}
+            target={activeLabel ?? ''}
             terminalRef={activeRef}
             sessions={sessions}
             onWindowChanged={refresh}

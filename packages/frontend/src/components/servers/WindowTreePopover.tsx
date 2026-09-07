@@ -32,6 +32,7 @@ export default function WindowTreePopover({
   };
 
   const totalWindows = sessions.reduce((sum, s) => sum + s.windows.length, 0);
+  const selectedId = selectedRef ? terminalTabId(selectedRef) : null;
 
   const content = (
     <>
@@ -71,7 +72,6 @@ export default function WindowTreePopover({
             {expanded && sess.windows.map((win) => {
               const winRef = terminalRefFromWindow(serverName, win.windowId, win.ref, 1);
               const winRefId = terminalTabId(winRef);
-              const selectedId = selectedRef ? terminalTabId(selectedRef) : null;
               return (
                 <div key={win.index}>
                   <TreeRow
