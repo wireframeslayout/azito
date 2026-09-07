@@ -37,7 +37,7 @@ function CompactSupervisorCell({ row }: { row: ActivityDiagnosticRow }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', ...DIM, fontSize: 'var(--font-xs)' }}>
       <StateDot tone={sv.ready ? 'var(--success)' : 'var(--warning)'} />
-      {reported} · {frame}
+      {reported}{sv.lastReportedDecidedBy ? ` (${sv.lastReportedDecidedBy})` : ''} · {frame}
     </span>
   );
 }

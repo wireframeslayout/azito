@@ -35,6 +35,7 @@ export interface ActivityDiagnosticRow {
     lastActivityFrameAt: number | null;
     lastReportedState: 'active' | 'idle' | null;
     lastReportedStatus: 'working' | 'blocked' | null;
+    lastReportedDecidedBy: 'screen' | 'title' | 'bytes' | null;
     /** Issue #28 Phase C: false = display-only, this connection never drove Tier 0. */
     bound: boolean;
   };

@@ -1,0 +1,8 @@
+# synthetic — composed from known Claude Code 2.1.263 layout; replace with tmux capture-pane output
+
+  Done! I've implemented the changes you requested. The test suite passes
+  and the types check out.
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -4,6 +4,7 @@ import type { WebSocket } from 'ws';
 
 import {
   SUPERVISOR_PROTOCOL_VERSION,
+  type ActivityDecidedBy,
   type ActivityState,
   type AgentStatus,
   type HubToSupervisorMessage,
@@ -99,6 +100,7 @@ interface SupervisorConnection {
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
+  lastReportedDecidedBy: ActivityDecidedBy | null;
   muxPaneRef: string | null;
   windowId?: number;
 }
@@ -118,6 +120,7 @@ export interface SupervisorEntry {
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
+  lastReportedDecidedBy: ActivityDecidedBy | null;
   muxPaneRef: string | null;
   windowId?: number;
 }
@@ -137,6 +140,7 @@ export interface SupervisorActivityEvent {
   childCommand: string;
   /** See SupervisorConnection.bound's doc comment — false means "display only, do not drive Tier 0 / turn idle refresh". */
   bound: boolean;
+  decidedBy?: ActivityDecidedBy;
 }
 
 export interface SupervisorReadyEvent {
@@ -567,6 +571,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: null,
       lastReportedState: null,
       lastReportedStatus: null,
+      lastReportedDecidedBy: null,
       muxPaneRef: info.muxPaneRef ?? null,
       windowId: undefined,
     };
@@ -607,6 +612,7 @@ export class SupervisorRegistry extends EventEmitter {
         conn.lastActivityFrameAt = Date.now();
         conn.lastReportedState = msg.state;
         conn.lastReportedStatus = msg.status ?? null;
+        conn.lastReportedDecidedBy = msg.decidedBy ?? null;
         this.emit('activity', {
           serverName: conn.serverName,
           target: conn.target,
@@ -616,6 +622,7 @@ export class SupervisorRegistry extends EventEmitter {
           status: msg.status,
           childCommand: conn.childCommand,
           bound: conn.bound,
+          decidedBy: msg.decidedBy,
         } satisfies SupervisorActivityEvent);
         break;
 
@@ -789,6 +796,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: conn.lastActivityFrameAt,
       lastReportedState: conn.lastReportedState,
       lastReportedStatus: conn.lastReportedStatus,
+      lastReportedDecidedBy: conn.lastReportedDecidedBy,
       muxPaneRef: conn.muxPaneRef,
     };
   }
@@ -821,6 +829,7 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: conn.lastActivityFrameAt,
       lastReportedState: conn.lastReportedState,
       lastReportedStatus: conn.lastReportedStatus,
+      lastReportedDecidedBy: conn.lastReportedDecidedBy,
       muxPaneRef: conn.muxPaneRef,
       windowId: conn.windowId,
     }));

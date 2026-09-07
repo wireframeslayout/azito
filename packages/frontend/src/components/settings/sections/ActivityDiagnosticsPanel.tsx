@@ -41,6 +41,9 @@ function SupervisorCell({ row }: { row: ActivityDiagnosticRow }) {
             {sv.lastReportedStatus === 'blocked' ? t('activityDiagnostics.stateBlocked') : sv.lastReportedState}
           </Chip>
         )}
+        {sv.lastReportedDecidedBy && (
+          <Chip tone="default">{sv.lastReportedDecidedBy}</Chip>
+        )}
         {!sv.bound && <Chip tone="orange">{t('activityDiagnostics.unbound')}</Chip>}
       </span>
       <span style={{ ...DIM, fontSize: 'var(--font-2xs)', whiteSpace: 'nowrap' }}>

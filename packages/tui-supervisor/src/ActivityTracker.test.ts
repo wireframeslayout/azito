@@ -381,4 +381,96 @@ describe('ActivityTracker', () => {
     expect(tracker.getState()).toBe('idle');
     expect(transitions.map((t) => t.state)).toEqual(['active', 'idle']);
   });
+
+  describe('screen mode (S1 — screen state takes priority over title and bytes)', () => {
+    let detailedLog: Array<{ state: string; status?: string; decidedBy?: string }>;
+
+    beforeEach(() => {
+      detailedLog = [];
+      tracker.on('transition', (state: string, _bytes: number, status?: string, decidedBy?: string) => {
+        detailedLog.push({ state, status, decidedBy });
+      });
+    });
+
+    it('goes active with status working and decidedBy screen immediately on screen working', () => {
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      expect(detailedLog).toEqual([{ state: 'active', status: 'working', decidedBy: 'screen' }]);
+    });
+
+    it('goes active with status blocked on screen blocked', () => {
+      tracker.setScreenState('blocked');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      expect(detailedLog).toEqual([{ state: 'active', status: 'blocked', decidedBy: 'screen' }]);
+    });
+
+    it('emits on a working↔blocked flip while staying active', () => {
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      tracker.setScreenState('blocked');
+      vi.advanceTimersByTime(1_000);
+      expect(detailedLog).toEqual([
+        { state: 'active', status: 'working', decidedBy: 'screen' },
+        { state: 'active', status: 'blocked', decidedBy: 'screen' },
+      ]);
+    });
+
+    it('holds working→idle until confirmed (idle hold)', () => {
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      detailedLog.length = 0;
+
+      // Set screen to idle — should hold, not transition immediately
+      tracker.setScreenState('idle');
+      vi.advanceTimersByTime(50); // not yet confirmed
+      expect(tracker.getState()).toBe('active');
+
+      // Advance past the hold cap (700ms)
+      vi.advanceTimersByTime(700);
+      expect(tracker.getState()).toBe('idle');
+      expect(detailedLog.at(-1)).toEqual({ state: 'idle', status: undefined, decidedBy: 'screen' });
+    });
+
+    it('cancels idle hold if working returns', () => {
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      detailedLog.length = 0;
+
+      tracker.setScreenState('idle');
+      vi.advanceTimersByTime(50);
+      expect(tracker.getState()).toBe('active');
+
+      // Working returns before hold completes
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+    });
+
+    it('screen unknown falls through to title (S2)', () => {
+      tracker.setTitleState('working');
+      tracker.setScreenState('unknown');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      expect(detailedLog).toEqual([{ state: 'active', status: 'working', decidedBy: 'title' }]);
+    });
+
+    it('screen takes priority over title when both are non-unknown', () => {
+      tracker.setTitleState('idle');
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      expect(tracker.getState()).toBe('active');
+      expect(detailedLog).toEqual([{ state: 'active', status: 'working', decidedBy: 'screen' }]);
+    });
+
+    it('getSnapshot includes decidedBy', () => {
+      tracker.setScreenState('working');
+      vi.advanceTimersByTime(1_000);
+      const snap = tracker.getSnapshot();
+      expect(snap.decidedBy).toBe('screen');
+      expect(snap.status).toBe('working');
+    });
+  });
 });

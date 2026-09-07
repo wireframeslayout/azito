@@ -1,0 +1,14 @@
+# synthetic — composed from known Claude Code 2.1.263 layout; replace with tmux capture-pane output
+
+  What is your favorite color?
+
+  ❯ 1. Red
+    2. Blue
+    3. Green
+    4. Other
+
+  enter to select · esc to cancel
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

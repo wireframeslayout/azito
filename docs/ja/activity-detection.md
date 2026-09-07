@@ -56,13 +56,25 @@ supervisor は idle を報告します。
 `tui-supervisor` はエージェントの PTY を包んで起動し、ハブへ永続 WebSocket（`/ws/supervisor`）で
 接続します（10秒ハートビート、切断時は指数バックオフで無期限再接続）。
 
-### supervisor 内部の判定
+### supervisor 内部の 3 段判定器（S1 → S2 → S3）
 
-| 判定器 | 内容 |
-|---|---|
-| タイトル追跡 | PTY 出力中の OSC 0/2 タイトルを解析。**認識済みマーカー**（稼働 `⠀-⣿ ◐◑◒◓ ✻✶✽✢∗` / idle `✳ ` / `Action Required`）を**一度観測した後のみ**タイトル権威モードに移行。1チャンク内の全タイトルを累積判定（チャンク境界に非依存） |
-| バイト量追跡 | 3秒窓の出力バイト量で active/idle を判定。タイトル権威モード移行前（未認識タイトルのみの generic TUI 等）はこちらが有効なまま |
-| 送信 | 状態**遷移時**に activity フレームを送信＋active 中は15秒ごとに再送（keepalive）。子プロセス終了は `child_exit` として明示送信 |
+supervisor は画面規則・タイトル・バイト量の 3 段ラダーで判定する。上位の段が `unknown` 以外を
+返した時点で下位は参照されない。
+
+| 段 | 判定器 | 内容 |
+|---|---|---|
+| S1 screen | 画面規則 | `@xterm/headless` に PTY 出力を流し込み、プロンプト箱（`─` 罫線 2 本と `❯`）の上のブロックを `classifyScreen()` で規則評価。blocked > working > idle の優先順位で最初にマッチしたルールが勝つ。`skip`（transcript viewer 等）は直前の状態を維持 |
+| S2 title | タイトル追跡 | PTY 出力中の OSC 0/2 タイトルを解析。**認識済みマーカー**（稼働 `⠀-⣿ ◐◑◒◓ ✻✶✽✢∗` / idle `✳ ` / `Action Required`）を**一度観測した後のみ**タイトル権威モードに移行。1チャンク内の全タイトルを累積判定（チャンク境界に非依存）。tmux 配下の Claude Code ≥2.1.236 ではタイトルが `✳` 固定のため S1 に劣後する |
+| S3 bytes | バイト量追跡 | 3秒窓の出力バイト量で active/idle を判定。S1・S2 が `unknown` の場合のみ有効（タイトル権威モード移行前の generic TUI 等） |
+
+画面規則（`classifyScreen` / `classifyTitle` / `splitPromptBox`）は `@azito/shared`
+（`packages/shared/src/agentScreenRules.ts`）に集約され、server 側 Tier 2 と共用する。
+
+activity フレームには `decidedBy: 'screen' | 'title' | 'bytes'` が付与され、ハブ側の稼働検知
+診断に表示される。
+
+送信: 状態**遷移時**に activity フレームを送信＋active 中は15秒ごとに再送（keepalive）。
+子プロセス終了は `child_exit` として明示送信。
 
 ### ハブ側の扱い
 
@@ -100,31 +112,33 @@ prefix 未設定時は従来どおり `~/.azito/azitoctl.env` を読みます。
 従います。`harness/setup.sh --prefix <name>` が書いた env ファイルを、hook と supervisor が
 同じ規約で選択します。
 
-### Combined mode（ハイブリッド判定）
+### S3: バイト量ヒューリスティック（Combined mode）
 
-Claude Code v2.1.236 以降、tmux 配下ではペインタイトルが「文言変化時のみ書き込み」に変更された
-（CHANGELOG: "Fixed terminal tab titles jumping in tmux"）。結果、作業中スピナーグリフ
-（◐◑◒◓ 等）がタイトルに出現しなくなり、タイトルは常に `✳ <topic>` で固定される。
-
-`ActivityTracker` はこの状況に対応するため、2つの判定モードを持つ:
-
-| モード | 進入条件 | 判定方式 |
-|--------|---------|---------|
-| **title-authoritative** | `working` または `blocked` タイトルを一度でも観測 | タイトルのみ（バイト量無効）。codex / claude ≤2.1.234 がここに入る |
-| **combined** | 上記以外（初期状態含む） | バイト量ヒューリスティック + タイトル昇格。claude ≥2.1.236 on tmux がここに入る |
-
-Combined mode では:
+S1・S2 が `unknown` の場合にのみ有効。Claude Code ≥2.1.236 on tmux では S1（画面規則）が先に
+判定するため、通常はここに到達しない。S1 対応以前の supervisor や、タイトル・画面いずれも判定
+できない generic TUI のフォールバックとして残る。
 
 - バイト量ヒューリスティックで idle/active を判定する
 - エコー緩和: **当該 tick に新規出力がある**閾値超過が `ACTIVE_CONSECUTIVE_TICKS`（2）tick 連続
   した場合のみ idle→active に遷移する（単発のキーストロークエコーでは遷移しない）
-- `working` / `blocked` タイトルが観測された瞬間に title-authoritative mode に昇格する
-- Combined mode で emit される active frame には `status` を付けない（バイト由来であることを
-  ハブが区別可能）
+- `working` / `blocked` タイトルが観測された瞬間に S2（title-authoritative mode）に昇格する
+- S3 で emit される active frame は `decidedBy: 'bytes'`、`status` なし
+
+### S1 の working → idle 確認
+
+S1（画面規則）で working → idle に遷移する際のみ、`IDLE_CONFIRMATIONS`（3）回の連続確認を行う
+（各 `IDLE_RECHECK_MS`（100ms）間隔、上限 `IDLE_HOLD_CAP_MS`（700ms））。Claude Code の
+スピナー行消去 → プロンプト箱描画の過渡状態で一瞬 idle に見える誤判定を防ぐ。idle → working /
+blocked は即時遷移する。
 
 | 定数 | 値 | 説明 |
 |------|---|------|
-| `ACTIVE_CONSECUTIVE_TICKS` | 2 | idle→active 遷移に必要な連続閾値超過 tick 数（新規出力ありの tick のみカウント） |
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | S3: idle→active 遷移に必要な連続閾値超過 tick 数 |
+| `DEBOUNCE_MS` | 120 | S1: 画面評価のデバウンス（個別チャンク） |
+| `MAX_DEBOUNCE_MS` | 300 | S1: 画面評価のデバウンス上限（初回ペンディングからの最大遅延） |
+| `IDLE_RECHECK_MS` | 100 | S1: working→idle 確認の間隔 |
+| `IDLE_CONFIRMATIONS` | 3 | S1: working→idle 確認の回数 |
+| `IDLE_HOLD_CAP_MS` | 700 | S1: working→idle 確認の上限時間 |
 
 ### 登録時のスナップショット frame
 

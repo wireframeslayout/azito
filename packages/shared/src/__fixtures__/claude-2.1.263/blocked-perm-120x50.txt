@@ -1,0 +1,16 @@
+# synthetic — composed from known Claude Code 2.1.263 layout; replace with tmux capture-pane output
+
+  Claude wants to run the following command:
+
+    echo hi
+
+  Do you want to proceed?
+
+  ❯ 1. Yes
+    2. No
+
+  enter to confirm · esc to cancel
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ❯
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
