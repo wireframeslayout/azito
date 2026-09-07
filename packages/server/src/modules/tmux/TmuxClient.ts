@@ -156,7 +156,7 @@ export class TmuxClient implements IMuxClient {
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).execMux(args);
+    return this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {
@@ -864,14 +864,14 @@ export class TmuxClient implements IMuxClient {
     const token = this.webhookToken ?? this.uiToken;
     for (const event of HOOK_EVENTS) {
       const hookValue = buildHookValue(base, event, { token, serverName: server.name });
-      await transport.execMux(buildHookSetArgs(event, hookValue));
+      await transport.execMux({ kind: 'tmux', args: buildHookSetArgs(event, hookValue) });
     }
   }
 
   async uninstallChangeHooks(server: ServerConfig): Promise<void> {
     const transport = this.transportFactory.getTransport(server);
     for (const event of HOOK_EVENTS) {
-      await transport.execMux(buildHookUnsetArgs(event));
+      await transport.execMux({ kind: 'tmux', args: buildHookUnsetArgs(event) });
     }
   }
 }

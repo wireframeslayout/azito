@@ -9,7 +9,7 @@ import type {
 import type { IPaneStream } from '../../tmux/PaneStream';
 import { AgentPaneStream } from './AgentPaneStream';
 import type { MuxRuntime } from '../Server';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
 
@@ -91,8 +91,15 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return this.post('/api/exec', { command, ...(timeoutMs !== undefined ? { timeoutMs } : {}) });
   }
 
-  async execMux(args: string[]): Promise<ExecResult> {
-    return this.post('/api/tmux', { args, mux: this.muxRuntime });
+  async execMux(req: MuxExecRequest): Promise<ExecResult> {
+    try {
+      return await this.post('/api/mux', req as Record<string, unknown>);
+    } catch (err) {
+      if (req.kind === 'tmux' && (err as Error).message.includes('404')) {
+        return this.post('/api/tmux', { args: req.args, mux: this.muxRuntime });
+      }
+      throw err;
+    }
   }
 
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
