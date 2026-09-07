@@ -88,9 +88,13 @@ async function main(): Promise<void> {
   });
 
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  const isTmuxDriver = muxKindForRuntime(muxRuntime) === 'tmux';
+  const muxKind = muxKindForRuntime(muxRuntime);
+  const isTmuxDriver = muxKind === 'tmux';
   const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
-  const agentTransport = hookRt ? new LocalTransport(hookRt, process.env.AZITO_URL ?? '') : null;
+  const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
+  const agentTransport = (isTmuxDriver || muxKind === 'zellij')
+    ? new LocalTransport(transportRt, process.env.AZITO_URL ?? '')
+    : null;
 
   // WebSocket routes
   await app.register(async (fastify) => {

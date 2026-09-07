@@ -76,6 +76,7 @@ import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGr
 
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
 import { HerdrClient } from '../modules/mux/herdr/HerdrClient';
+import { ZellijClient } from '../modules/mux/zellij/ZellijClient';
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
@@ -106,6 +107,7 @@ export interface SharedInfra {
   tmuxClient: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
   herdrClient: HerdrClient;
+  zellijClient: ZellijClient;
   llmClient: ILlmClient;
   agentRegistry: AgentRegistry;
   paneClassifier: PaneClassifier;
@@ -226,6 +228,8 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   muxDriverRegistry.register('tmux', tmuxClient);
   const herdrClient = new HerdrClient(transportFactory);
   muxDriverRegistry.register('herdr', herdrClient);
+  const zellijClient = new ZellijClient(transportFactory);
+  muxDriverRegistry.register('zellij', zellijClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
@@ -272,6 +276,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     tmuxClient,
     muxDriverRegistry,
     herdrClient,
+    zellijClient,
     llmClient,
     agentRegistry,
     paneClassifier,

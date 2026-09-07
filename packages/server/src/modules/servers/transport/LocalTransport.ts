@@ -1,5 +1,8 @@
 import { EventEmitter } from 'events';
 import { execFile } from 'child_process';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as os from 'os';
 import * as pty from 'node-pty';
 import type {
   ExecResult,
@@ -72,13 +75,18 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
       const result = await this.herdrSocket.call(req.method, req.params);
       return { stdout: JSON.stringify(result), stderr: '', code: 0 };
     }
-    if (req.kind !== 'tmux') throw new Error(`LocalTransport: unsupported mux kind "${req.kind}"`);
+    if (req.kind === 'zellij') {
+      return execLocal(resolveZellijBin(), req.args);
+    }
     return execLocal(this.rt.bin, [...this.rt.baseArgs, ...req.args]);
   }
 
   async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     if (ref.kind === 'herdr') {
       return this.openHerdrTerminal(ref, ordinal, cols, rows);
+    }
+    if (ref.kind === 'zellij') {
+      return this.openZellijTerminal(ref, ordinal, cols, rows);
     }
     const tmuxTarget = tmuxTargetFromMuxRef(ref);
     const colonIdx = tmuxTarget.indexOf(':');
@@ -168,7 +176,28 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     }
   }
 
+  private async openZellijTerminal(ref: MuxRef, _ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    const zellijBin = resolveZellijBin();
+    try {
+      await execLocal(zellijBin, ['--session', ref.workspace, 'action', 'go-to-tab-name', ref.window]);
+    } catch { /* best-effort tab focus */ }
+    return this.spawnTerminal(
+      ['attach', ref.workspace],
+      cols,
+      rows,
+      undefined,
+      undefined,
+      zellijBin,
+    );
+  }
+
   createPaneStream(handle: PaneHandle): IPaneStream {
     return new PaneOutputStream(handle as string);
   }
+}
+
+function resolveZellijBin(): string {
+  const userBin = path.join(os.homedir(), '.local', 'bin', 'zellij');
+  if (fs.existsSync(userBin)) return userBin;
+  return 'zellij';
 }

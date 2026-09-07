@@ -37,7 +37,7 @@ export class TransportFactory {
           this.herdrSockets.set(sessionName, herdrSocket);
         }
       }
-      const tmuxRuntime = server.muxRuntime === 'herdr' ? 'system' as const : server.muxRuntime;
+      const tmuxRuntime = (server.muxRuntime === 'herdr' || server.muxRuntime === 'zellij') ? 'system' as const : server.muxRuntime;
       transport = new LocalTransport(resolveTmuxRuntime(tmuxRuntime, os.homedir()), this.publicUrl, herdrSocket);
     } else if (server.type === 'agent') {
       transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime);
