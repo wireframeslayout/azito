@@ -21,6 +21,11 @@ Tier 0  tui-supervisor (event-driven, highest priority)
         WebSocket. Latency ~1s. Lower tiers are bypassed entirely for a connected key
    |  if not connected / no frame received yet
    v
+Tier 0  mux (herdr agent_status, event-driven)
+        Receives pane.agent_status_changed via Unix socket subscription. Below
+        supervisor, above Tier 1. herdr servers only. Latency ~1s
+   |  if not herdr / unknown status
+   v
 Tier 1  Claude Code hooks (event-driven)
         UserPromptSubmit sends "start", Stop sends "stop" via webhook. Latency: immediate.
         On a crash the state lapses when the foreground reverts to a bare shell
@@ -160,6 +165,58 @@ On receiving a `registered` message, `HubClient` sends the `ActivityTracker`'s c
 as a single activity frame (at the same point as the `ready` re-send). This ensures the hub
 receives a known baseline even when activity transitions that occurred before registration
 were dropped. This also fires on reconnect.
+
+## 2b. Tier 0 -- mux (herdr agent_status)
+
+herdr delivers each pane's agent state as a real-time `pane.agent_status_changed` event.
+AZITO's `HerdrEventBridge` opens one Unix socket subscription per herdr server at hub startup
+and relays these events to `AgentActivityMonitor.recordMuxSignal()`.
+
+### Priority
+
+When both a supervisor and a mux signal exist for the same key, **the supervisor wins**
+(because AZITO controls the screen rules on the supervisor side). While a supervisor is
+connected, the mux signal is not consulted. For keys without a supervisor, the mux signal
+sits above Tier 1 (hooks) in the ladder.
+
+### State mapping
+
+| herdr status | AZITO state | Notes |
+|---|---|---|
+| `working` | working | Agent is active |
+| `blocked` | blocked | Waiting for user (herdr's blocked detection is unverified, so a screen check is additionally applied for claude workers) |
+| `idle` | idle | Agent at rest |
+| `done` | idle | Session ended. A completion transition is emitted, and the mux state is cleared (lower tiers take over on subsequent ticks) |
+| `unknown` | (not used for verdict) | Falls through to lower tiers |
+
+### Blocked refinement
+
+Keys where mux reports idle undergo the same blocked refinement as supervisor idle
+(`refineTier0IdleKeys`). If an AskUserQuestion prompt is on screen, the key is refined to
+blocked and the completion transition is suppressed.
+
+For claude workers where mux reports working, a screen check is also performed (same
+pattern as the supervisor running path) to catch blocked states that herdr may not detect.
+
+### Persistent subscription
+
+- Local servers: `HerdrEventBridge` subscribes directly via `HerdrEventSubscriber` (Unix socket)
+- Agent servers: the agent process subscribes to herdr events locally and relays them as
+  `mux-event` WebSocket messages; the hub's `AgentEventStream.onMuxEvent` receives them
+- On disconnect, the existing exponential backoff (1s–30s) reconnects automatically
+- Structural events (`tab.created/closed/renamed`, `workspace.*`, `pane.created/closed`) are
+  emitted as `sessions:updated` on the `NotificationBus`, enabling real-time session list updates
+
+### pane_id subscription constraint
+
+herdr's `events.subscribe` requires a specific `pane_id` for `pane.agent_status_changed`
+(wildcard `*` is not supported). Therefore `HerdrEventBridge`:
+
+1. Fetches the pane list via `session.snapshot` on connect and builds a `pane_id` → workspace/tab
+   label cache
+2. Subscribes to `pane.agent_status_changed` for each pane individually
+3. Adds subscriptions for new panes on `pane.created`, removes cache entries on `pane.closed`
+4. Rebuilds the cache on structural events (`tab.*`, `workspace.*`)
 
 ## 3. Tier 1 -- Claude Code hooks
 
@@ -372,6 +429,7 @@ Settings → System → **Activity detection diagnostics** (3s refresh, read-onl
 | Display | Meaning |
 |---|---|
 | `tier0_supervisor` | A frame from the *current* supervisor connection decides this state (evidence generation already checked) -- objective proof that the supervisor really is detecting it |
+| `tier0_mux` | A herdr `pane.agent_status_changed` event decides this state (herdr servers only). The primary detection source for herdr panes without a supervisor |
 | Supervisor column "no frame received" | The connection is alive but no activity frame has arrived yet (an old supervisor build, or right after a reconnect). A lower tier is deciding in the meantime |
 | `tier1_hook` … `tier4_probe` | That tier's fallback decided the state. A lot of `tier4_probe` rows means the supervisor / hook wiring is worth checking |
 | `none` (while running) | Running by execution-run registration (registered = running; not a detection tier's verdict) |

@@ -59,6 +59,10 @@ function makeSessions(
   }];
 }
 
+function nowSec(): number {
+  return Math.floor(Date.now() / 1000);
+}
+
 describe('AgentActivityMonitor', () => {
   let getRunning: ReturnType<typeof vi.fn>;
   let findAll: ReturnType<typeof vi.fn>;
@@ -2107,5 +2111,148 @@ describe('AgentActivityMonitor', () => {
     // to confirm running, but it must at least be enumerated).
     const agent2 = diag.find((d: { target: string }) => d.target.includes('agent-2'));
     expect(agent2).toBeDefined();
+  });
+
+  // ─── Tier 0 mux (herdr agent_status) ───
+
+  describe('Tier 0 mux (herdr agent_status)', () => {
+    // recordMuxSignal calls void tick() internally, so we need to let that
+    // complete before checking results. Helper to drain the microtask queue.
+    const drain = () => new Promise<void>(r => setTimeout(r, 10));
+
+    it('mux working makes a candidate running with decidedBy tier0_mux', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent:activity',
+        payload: expect.objectContaining({ running: true, target: 'azito:agent-1' }),
+      }));
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
+      expect(entry?.decidedBy).toBe('tier0_mux');
+      expect(entry?.state).toBe('working');
+    });
+
+    it('mux blocked makes a candidate running with blocked status', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'blocked');
+      await drain();
+
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent:activity',
+        payload: expect.objectContaining({ running: true, status: 'blocked' }),
+      }));
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
+      expect(entry?.decidedBy).toBe('tier0_mux');
+      expect(entry?.state).toBe('blocked');
+    });
+
+    it('mux idle stops a previously-running candidate', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      emit.mockClear();
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+      await drain();
+
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent:activity',
+        payload: expect.objectContaining({ running: false, target: 'azito:agent-1' }),
+      }));
+    });
+
+    it('mux done stops a candidate with completed reason', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      emit.mockClear();
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'done');
+      await drain();
+
+      expect(emit).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'agent:activity',
+        payload: expect.objectContaining({ running: false, target: 'azito:agent-1', reason: 'completed' }),
+      }));
+    });
+
+    it('mux unknown falls through to lower tiers', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'unknown');
+      await drain();
+
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
+      expect(entry?.decidedBy).not.toBe('tier0_mux');
+    });
+
+    it('supervisor takes priority over mux for the same key', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+      monitor.recordSupervisorSignal('local', 'azito:agent-1', 'active');
+      await drain();
+
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
+      expect(entry?.decidedBy).toBe('tier0_supervisor');
+    });
+
+    it('mux takes priority over tier 2 and tier 3', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
+      expect(entry?.decidedBy).toBe('tier0_mux');
+    });
+
+    it('mux applies to operation runs when supervisor is absent', async () => {
+      getRunning.mockReturnValue({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] });
+
+      monitor.recordMuxSignal('local', 'azito:task-10', 'blocked');
+      await drain();
+
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:task-10');
+      expect(entry?.decidedBy).toBe('tier0_mux');
+      expect(entry?.state).toBe('blocked');
+    });
+
+    it('done clears mux state so lower tiers take over on next tick', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      emit.mockClear();
+
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'done');
+      await drain();
+      emit.mockClear();
+
+      await monitor.tick();
+      const diag = monitor.diagnostics();
+      const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
+      expect(entry?.decidedBy).not.toBe('tier0_mux');
+    });
   });
 });

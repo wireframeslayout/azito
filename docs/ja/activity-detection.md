@@ -19,6 +19,11 @@ Tier 0  tui-supervisor（イベント駆動・最優先）
         反映 〜1秒。接続中のキーでは下位層を完全にバイパス
    |  未接続 / フレーム未受信なら
    v
+Tier 0  mux（herdr agent_status、イベント駆動）
+        herdr の pane.agent_status_changed を Unix socket 購読で受信。supervisor より下位、
+        Tier 1 より上位。herdr サーバーのみ有効。反映 〜1秒
+   |  herdr 以外 / unknown なら
+   v
 Tier 1  Claude Code hooks（イベント駆動）
         UserPromptSubmit で start、Stop で stop を webhook 送信。反映 即時。
         クラッシュ時は「前面が素のシェルに戻った」ことで失効
@@ -145,6 +150,57 @@ blocked は即時遷移する。
 `HubClient` は `registered` メッセージ受信時に `ActivityTracker` の現在状態をスナップショット
 として activity frame を1枚送信する（`ready` 再送と同じ位置）。これにより、登録前に発生した
 状態遷移が失われても、接続直後にハブが最新状態を認識できる。再接続時も同様に発火する。
+
+## 2b. Tier 0 -- mux（herdr agent_status）
+
+herdr は各ペインのエージェント状態を `pane.agent_status_changed` イベントとしてリアルタイムに
+配信します。AZITO の `HerdrEventBridge` が hub 起動時にサーバーごとに Unix socket 購読を 1 本
+張り、このイベントを `AgentActivityMonitor.recordMuxSignal()` に中継します。
+
+### 優先順位
+
+supervisor と mux が同一キーに存在する場合、**supervisor が優先**です（AZITO 側で
+`agentScreenRules` を更新できるため）。supervisor が接続中のキーでは mux は参照されません。
+supervisor が無いキーでは mux が Tier 1（hooks）より上位として判定します。
+
+### 状態写像
+
+| herdr status | AZITO state | 備考 |
+|---|---|---|
+| `working` | working | 稼働中 |
+| `blocked` | blocked | 応答待ち（herdr の blocked 判定は未検証のため、claude ワーカーでは追加の screen check を適用） |
+| `idle` | idle | 非稼働 |
+| `done` | idle | セッション終了。完了遷移を発行し、mux 状態をクリア（以後は下位層にフォールスルー） |
+| `unknown` | (判定に使わない) | 下位層にフォールスルー |
+
+### blocked 精緻化
+
+mux が idle を報告したキーには、supervisor idle と同じ blocked 精緻化が適用されます
+（`refineTier0IdleKeys`）。herdr が idle を報告しているが実際には AskUserQuestion 画面が
+表示されている場合、screen check で blocked に精緻化され、完了遷移は抑制されます。
+
+mux が working を報告した claude ワーカーに対しても、supervisor running と同じ screen check を
+行い、blocked の見逃しを防ぎます。
+
+### 購読の常駐化
+
+- local サーバー: `HerdrEventBridge` が `HerdrEventSubscriber` で直接 Unix socket を購読
+- agent サーバー: agent プロセス内の `HerdrEventSubscriber` が herdr イベントを購読し、
+  `mux-event` WS メッセージとして hub に中継。hub 側の `AgentEventStream.onMuxEvent` が受信
+- 切断時は既存の指数バックオフ（1s〜30s）で自動再接続
+- 構造変更イベント（`tab.created/closed/renamed`、`workspace.*`、`pane.created/closed`）は
+  `sessions:updated` として `NotificationBus` に流し、herdr サーバーのセッション一覧を即時更新
+
+### pane_id 購読の制約
+
+herdr の `events.subscribe` は `pane.agent_status_changed` に対して具体的な `pane_id` を要求
+します（ワイルドカード `*` は使用不可）。そのため `HerdrEventBridge` は:
+
+1. 接続時に `session.snapshot` でペイン一覧を取得し、各ペインの `pane_id` → workspace/tab
+   ラベルのキャッシュを構築
+2. 各ペインに対して個別に `pane.agent_status_changed` を購読
+3. `pane.created` イベントで新ペインの購読を追加、`pane.closed` でキャッシュから削除
+4. 構造変更イベント（`tab.*`、`workspace.*`）でキャッシュを再構築
 
 ## 3. Tier 1 -- Claude Code hooks
 
@@ -348,6 +404,7 @@ Settings → System → **稼働検知診断**（3秒更新・読み取り専用
 | 表示 | 意味 |
 |---|---|
 | `tier0_supervisor` | 現在の supervisor 接続から受信したフレームがこの状態を決めている（証拠世代チェック済み）-- 「supervisor が実際に検知している」客観的根拠 |
+| `tier0_mux` | herdr の `pane.agent_status_changed` イベントがこの状態を決めている（herdr サーバーのみ）。supervisor が無い herdr ペインの主要な検知源 |
 | supervisor 列「フレーム未受信」 | 接続は生きているが activity フレームがまだ来ていない（旧ビルド supervisor／再接続直後）。判定は下位層が代行中 |
 | `tier1_hook` 〜 `tier4_probe` | その層のフォールバックが判定した状態。`tier4_probe` 表示が多い場合は supervisor / hook の配線を確認 |
 | `none`（稼働中） | 実行ラン登録による稼働（登録 = 稼働。検知層の判定ではない） |
