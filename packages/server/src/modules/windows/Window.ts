@@ -121,6 +121,12 @@ export interface IWindowRepository {
    */
   now(): string;
   findByServerAndRef(serverName: string, ref: MuxRef): Window | undefined;
+  /**
+   * Re-own an existing (project-owned) window row for a task. Since migration 068 one
+   * physical window is one row, so "attach this window to task N" must convert the row
+   * instead of inserting a second one. Keeps project_id (allowed for task rows since 068).
+   */
+  adoptForTask(id: number, taskId: number): void;
   update(id: number, data: Partial<Pick<Window,
     'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
   >>): void;

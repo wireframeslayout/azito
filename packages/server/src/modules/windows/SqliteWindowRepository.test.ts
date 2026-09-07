@@ -268,3 +268,30 @@ describe('SqliteWindowRepository.updateAgentSessionIdByWindow', () => {
     expect(repo.findById(winId)?.agentSessionId).toBeNull();
   });
 });
+
+// Attaching an existing project window to a task must convert the single row (068: one
+// physical window = one row) instead of leaving it project-owned (win--qvp6 / task 368).
+describe('SqliteWindowRepository.adoptForTask', () => {
+  let db: Database.Database;
+  let repo: SqliteWindowRepository;
+  let projectId: number;
+
+  beforeEach(() => {
+    db = buildSeededDb();
+    repo = new SqliteWindowRepository(db);
+    projectId = insertProject(db, 'Test Project');
+  });
+
+
+  it('converts a project-owned row into a task-owned row and keeps project_id', () => {
+    const taskA = insertTask(db, projectId, 'Task A');
+    const id = repo.add(baseWindow({ projectId, tmuxTarget: 'azito:win--qvp6' }));
+    repo.adoptForTask(id, taskA);
+    const w = repo.findById(id)!;
+    expect(w.ownerType).toBe('task');
+    expect(w.taskId).toBe(taskA);
+    expect(w.projectId).toBe(projectId);
+    expect(repo.findByTask(taskA).map((x) => x.id)).toEqual([id]);
+    expect(repo.findByServerAndTarget('local-server', 'azito:win--qvp6')?.id).toBe(id);
+  });
+});
