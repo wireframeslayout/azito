@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MuxDriverRegistry } from './MuxDriverRegistry';
-import { MuxDriverUnavailableError } from './MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxCapabilityMissingError } from './MuxCapabilityError';
 import type { IMuxClient } from './IMuxClient';
 import type { MuxRuntime } from '@azito/shared';
 
@@ -61,5 +61,12 @@ describe('MuxDriverRegistry', () => {
     registry.register('tmux', first);
     registry.register('tmux', second);
     expect(registry.resolve(serverWith('system'))).toBe(second);
+  });
+
+  it('MuxCapabilityMissingError carries the capability name', () => {
+    const err = new MuxCapabilityMissingError('outputStream');
+    expect(err).toBeInstanceOf(Error);
+    expect(err.capability).toBe('outputStream');
+    expect(err.message).toContain('outputStream');
   });
 });

@@ -416,6 +416,30 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     }
   });
 
+  it('skips split/applyLayout when caps.layoutSnapshot is false', async () => {
+    const win = makeWindow({
+      id: 1,
+      taskId: 5,
+      windowType: 'agent',
+      workerType: 'claude',
+      paneLayout: {
+        layout: 'some-layout',
+        panes: [
+          { index: 0, command: null, workingDirectory: null, title: null },
+          { index: 1, command: null, workingDirectory: null, title: null },
+        ],
+      },
+    });
+    const { service, tmux } = buildService({ window: win, task: makeTask({ id: 5 }) });
+    (tmux as any).caps = { ...(tmux as any).caps, layoutSnapshot: false };
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
+    expect(tmux.applyLayout).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).toHaveBeenCalled();
+  });
+
   it('passes the legacy uiTokenEnvForServer() to splitPane calls for a non-task multi-pane window', async () => {
     const win = makeWindow({
       id: 1,
