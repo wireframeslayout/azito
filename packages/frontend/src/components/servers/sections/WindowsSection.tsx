@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
-import { tmuxTargetFromMuxRef, parseMuxRef } from '@azito/shared';
-import type { Server, Session, TmuxWindow } from '../../../hooks/useServerManagement';
+import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, type TerminalRef } from '../../../lib/terminalRef';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -19,21 +19,21 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
-  const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
+  const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
 
-  const firstTarget = useMemo(() => {
+  const firstRef = useMemo<TerminalRef | null>(() => {
     for (const sess of sessions) {
       for (const win of sess.windows) {
-        try { return tmuxTargetFromMuxRef(parseMuxRef(win.ref)); } catch { return `${sess.name}:${win.name ?? win.index}`; }
+        return terminalRefFromWindow(server.name, win.windowId, win.ref, 1);
       }
     }
     return null;
-  }, [sessions]);
+  }, [sessions, server.name]);
 
-  const activeTarget = selectedTarget ?? firstTarget;
+  const activeRef = selectedRef ?? firstRef;
 
-  const handleSelect = useCallback((target: string) => {
-    setSelectedTarget(target);
+  const handleSelect = useCallback((ref: TerminalRef) => {
+    setSelectedRef(ref);
     setShowTree(false);
   }, []);
 
@@ -106,7 +106,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
             cursor: 'pointer',
           }}
         >
-          {activeTarget ?? 'Select window'}
+          {activeRef ? terminalRefDisplayLabel(activeRef) : 'Select window'}
           <span style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-dim)' }}>
             <Icon name="chevron-down" size={14} rotate={showTree ? 180 : 0} />
           </span>
@@ -115,11 +115,12 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {activeTarget ? (
+        {activeRef ? (
           <TerminalContainer
-            key={`${server.name}:${activeTarget}`}
+            key={terminalTabId(activeRef)}
             serverName={server.name}
-            target={activeTarget}
+            target={terminalRefDisplayLabel(activeRef)}
+            terminalRef={activeRef}
             sessions={sessions}
             onWindowChanged={refresh}
           />
@@ -132,7 +133,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
         <WindowTreePopover
           sessions={sessions}
           serverName={server.name}
-          selectedTarget={activeTarget}
+          selectedRef={activeRef}
           onSelect={handleSelect}
           onClose={() => setShowTree(false)}
           onCreateSession={handleCreateSession}
