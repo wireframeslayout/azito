@@ -311,6 +311,7 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
 /** Which rung of the ladder decided a key's state on the last tick. */
 export type ActivityDecidedBy =
   | 'tier0_supervisor'
+  | 'tier0_mux'
   | 'tier1_hook'
   | 'tier2_title'
   | 'tier3_heuristic'
@@ -529,6 +530,10 @@ export class AgentActivityMonitor {
   // inferring exit from a foreground-command fallback to a bare shell — so
   // Tier 0 needs no such fallback and bypasses Tier 1/2 entirely for its keys.
   private supervisorStates = new Map<string, SupervisorState>();
+  // Mux-native agent state (herdr pane.agent_status_changed events). Diagnostics
+  // only in this PoC — not wired into the collect() ladder yet (deferred to the
+  // #155 integration Issue). Keyed by windowKey(serverName, target).
+  private muxStates = new Map<string, { status: 'working' | 'idle' | 'blocked'; at: number; serverName: string; target: string }>();
   // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
@@ -742,6 +747,37 @@ export class AgentActivityMonitor {
       });
     }
     void this.tick();
+  }
+
+  /**
+   * Record a mux-native agent state signal (herdr `pane.agent_status_changed`).
+   * Diagnostics only in this PoC — the signal is stored in `muxStates` and
+   * merged into `decisions` at the end of each `collect()` call, surfaced as
+   * `decidedBy: 'tier0_mux'`. NOT wired into the `collect()` ladder's tier
+   * priority. Integration with the tier priority system is deferred to the
+   * post-#155 merge.
+   */
+  recordMuxSignal(
+    serverName: string,
+    target: string,
+    status: 'working' | 'idle' | 'blocked',
+  ): void {
+    const key = windowKey(serverName, target);
+    this.muxStates.set(key, { status, at: Date.now(), serverName, target });
+  }
+
+  private mergeMuxDecisions(decisions: Map<string, ActivityDecision>): void {
+    for (const [key, mux] of this.muxStates) {
+      if (decisions.has(key)) continue;
+      const stateMap: Record<string, ActivityDecidedState> = { working: 'working', idle: 'idle', blocked: 'blocked' };
+      decisions.set(key, {
+        serverName: mux.serverName,
+        target: mux.target,
+        decidedBy: 'tier0_mux',
+        state: stateMap[mux.status] ?? 'none',
+        evidenceAt: mux.at,
+      });
+    }
   }
 
   async tick(): Promise<void> {
@@ -985,6 +1021,7 @@ export class AgentActivityMonitor {
 
     if (candidates.length === 0) {
       this.previousLiveKeys = liveKeys;
+      this.mergeMuxDecisions(decisions);
       return { next, reasons, deletedKeys, decisions };
     }
 
@@ -1348,6 +1385,7 @@ export class AgentActivityMonitor {
     }
 
     this.previousLiveKeys = liveKeys;
+    this.mergeMuxDecisions(decisions);
     return { next, reasons, deletedKeys, decisions };
   }
 

@@ -7,6 +7,7 @@ import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
 import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
+import { HerdrSocketClient } from '../modules/mux/herdr/HerdrSocketClient';
 
 const EXT_LANG: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescript',
@@ -75,9 +76,22 @@ function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): P
   });
 }
 
+let herdrSocket: HerdrSocketClient | null = null;
+
 function execMuxCommand(req: { kind: string; args?: string[]; method?: string; params?: unknown }, timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
   if (req.kind === 'tmux') {
     return execTmuxCommand(req.args ?? [], timeoutMs, mux);
+  }
+  if (req.kind === 'herdr') {
+    if (!herdrSocket) {
+      const sessionName = process.env.HERDR_SESSION ?? 'azito';
+      herdrSocket = new HerdrSocketClient(sessionName);
+    }
+    return herdrSocket.call(req.method!, req.params).then((result) => ({
+      stdout: JSON.stringify(result),
+      stderr: '',
+      code: 0,
+    }));
   }
   return Promise.reject({ statusCode: 501, message: `Mux kind "${req.kind}" not implemented on this agent` });
 }

@@ -71,6 +71,7 @@ import { RepoDiscoveryService } from '../modules/git/RepoDiscoveryService';
 import { LocalRepoCloneService } from '../modules/git/LocalRepoCloneService';
 import { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver';
+import { MuxDriverUnavailableError, MuxCapabilityMissingError } from '../modules/tmux/MuxCapabilityError';
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
@@ -104,6 +105,23 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     console.log(`[webhook] Auto-generated token: ${webhookToken}`);
     console.log('[webhook] Set AZITO_WEBHOOK_TOKEN env to use a fixed token');
   }
+
+  // ─── Global error handler for mux capability errors ───
+  // Catches MuxCapabilityMissingError and MuxDriverUnavailableError from any
+  // route, returning structured 409/503 responses. All other errors are passed
+  // through to Fastify's default handler to preserve validation-error details,
+  // logging, and status-code inference.
+
+  const defaultErrorHandler = app.errorHandler;
+  app.setErrorHandler((err, request, reply) => {
+    if (err instanceof MuxCapabilityMissingError) {
+      return reply.status(409).send({ error: 'mux_capability_missing', capability: err.capability });
+    }
+    if (err instanceof MuxDriverUnavailableError) {
+      return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind });
+    }
+    return defaultErrorHandler.call(app, err, request, reply);
+  });
 
   // ─── UI token (resolved by main.ts, passed through wiring) ───
 

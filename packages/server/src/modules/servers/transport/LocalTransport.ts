@@ -11,6 +11,7 @@ import type { IPaneStream } from '../../tmux/PaneStream';
 import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
+import type { HerdrSocketClient } from '../../mux/herdr/HerdrSocketClient';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 
 function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
@@ -59,18 +60,26 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
 export class LocalTransport implements IServerTransport, IMuxTransport {
   private sessionCounter = 0;
 
-  constructor(private rt: TmuxRuntime, private publicUrl: string) {}
+  constructor(private rt: TmuxRuntime, private publicUrl: string, private herdrSocket?: HerdrSocketClient) {}
 
   exec(command: string, timeoutMs?: number): Promise<ExecResult> {
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
   }
 
-  execMux(req: MuxExecRequest): Promise<ExecResult> {
+  async execMux(req: MuxExecRequest): Promise<ExecResult> {
+    if (req.kind === 'herdr') {
+      if (!this.herdrSocket) throw new Error('LocalTransport: herdr socket not configured');
+      const result = await this.herdrSocket.call(req.method, req.params);
+      return { stdout: JSON.stringify(result), stderr: '', code: 0 };
+    }
     if (req.kind !== 'tmux') throw new Error(`LocalTransport: unsupported mux kind "${req.kind}"`);
     return execLocal(this.rt.bin, [...this.rt.baseArgs, ...req.args]);
   }
 
   async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    if (ref.kind === 'herdr') {
+      return this.openHerdrTerminal(ref, ordinal, cols, rows);
+    }
     const tmuxTarget = tmuxTargetFromMuxRef(ref);
     const colonIdx = tmuxTarget.indexOf(':');
     const sessionName = tmuxTarget.slice(0, colonIdx);
@@ -114,15 +123,39 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
     );
   }
 
+  private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    if (this.herdrSocket) {
+      try {
+        const resp = await this.herdrSocket.call('session.snapshot');
+        const snap = (resp as Record<string, unknown>).snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
+        if (snap) {
+          const ws = snap.workspaces.find((w) => w.label === ref.workspace);
+          const tab = ws ? snap.tabs.find((t) => t.workspace_id === ws.workspace_id && t.label === ref.window) : undefined;
+          if (tab) {
+            await this.herdrSocket.call('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
+            const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);
+            const target = panesInTab[ordinal - 1];
+            if (target) {
+              await this.herdrSocket.call('pane.focus', { pane_id: target.pane_id }).catch(() => {});
+            }
+          }
+        }
+      } catch { /* best-effort focus */ }
+    }
+    const env = { HERDR_SESSION: ref.workspace };
+    return this.spawnTerminal([], cols, rows, { ...process.env as Record<string, string>, ...env }, undefined, 'herdr');
+  }
+
   spawnTerminal(
     argv: string[],
     cols: number,
     rows: number,
     env?: Record<string, string>,
     cleanup?: () => void,
+    bin?: string,
   ): ITerminalStream {
     try {
-      const ptyProcess = pty.spawn(this.rt.bin, argv, {
+      const ptyProcess = pty.spawn(bin ?? this.rt.bin, argv, {
         name: 'xterm-256color',
         cols,
         rows,

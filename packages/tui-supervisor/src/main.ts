@@ -1,6 +1,6 @@
 import { parseArgs, resolveLaunchBinding } from './cli';
 import { ActivityTracker } from './ActivityTracker';
-import { resolveHubEnv } from './env';
+import { resolveHubEnv, resolveMuxPaneRef } from './env';
 import { HubClient } from './HubClient';
 import { PtyProxy, type PtyExitInfo } from './PtyProxy';
 import { ReadinessGate } from './ReadinessGate';
@@ -51,7 +51,7 @@ proxy.on('input', () => {
 
 screenTracker?.onChange((s) => tracker.setScreenState(s));
 
-const muxPaneRef = /^%\d+$/.test(process.env.TMUX_PANE ?? '') ? process.env.TMUX_PANE : undefined;
+const muxPaneRef = resolveMuxPaneRef();
 
 if (hubEnv) {
   const hub = new HubClient({

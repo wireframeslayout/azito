@@ -116,3 +116,18 @@ export function tmuxTargetFromMuxRef(ref: MuxRef): string {
 export function windowKeyForRef(serverName: string, ref: MuxRef): string {
   return windowKey(serverName, tmuxTargetFromMuxRef(ref));
 }
+
+export function herdrPaneHandle(workspaceId: string, paneId: string): PaneHandle {
+  return `${workspaceId}:${paneId}` as PaneHandle;
+}
+
+export function parseHerdrPaneHandle(handle: PaneHandle): { workspaceId: string; paneId: string } {
+  const s = handle as string;
+  const idx = s.indexOf(':');
+  if (idx === -1) throw new Error(`Invalid herdr PaneHandle (missing ":"): ${s}`);
+  return { workspaceId: s.slice(0, idx), paneId: s.slice(idx + 1) };
+}
+
+export function herdrMuxRef(workspaceName: string, tabName: string): MuxRef {
+  return { kind: 'herdr', workspace: workspaceName, window: tabName };
+}
