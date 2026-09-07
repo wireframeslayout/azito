@@ -485,6 +485,7 @@ function buildExecuteTaskUseCase(
     pushNotaryService,
     fetchDistributionService,
     distributionStateRepo,
+    infra.muxDriverRegistry,
     harnessPrefix,
   );
 }

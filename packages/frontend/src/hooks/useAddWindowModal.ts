@@ -1,7 +1,7 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
-import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
+import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { useAgentDefinitions } from './useAgentDefinitions';
@@ -271,34 +271,64 @@ export function useAddWindowModal(
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
         const sessionExists = beforeSessions.some((s) => s.name === sessionName);
+        const serverInfo = servers.find((s) => s.name === awServer);
+        const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
+        const useMuxRoutes = muxKind !== 'tmux';
         let createdWindowName: string;
-        if (!sessionExists) {
-          const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions`, {
-            method: 'POST',
-            body: JSON.stringify({ name: sessionName, command: awNewCommand.trim() || undefined, windowName: awNewWindowName.trim() || undefined, force }),
-          });
-          if (isInsufficientResources(res)) {
-            setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
-            return;
+        let createdRef: string | undefined;
+        if (useMuxRoutes) {
+          if (!sessionExists) {
+            const res = await api<{ ok: boolean; ref: string; windowName: string }>(`/servers/${awServer}/mux/workspaces`, {
+              method: 'POST',
+              body: JSON.stringify({ name: sessionName, windowName: awNewWindowName.trim() || undefined, force }),
+            });
+            if (isInsufficientResources(res)) {
+              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
+              return;
+            }
+            createdWindowName = res.windowName;
+            createdRef = res.ref;
+          } else {
+            const res = await api<{ ok: boolean; ref: string; windowName: string }>(`/servers/${awServer}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, {
+              method: 'POST',
+              body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
+            });
+            if (isInsufficientResources(res)) {
+              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
+              return;
+            }
+            createdWindowName = res.windowName;
+            createdRef = res.ref;
           }
-          createdWindowName = res.windowName;
         } else {
-          const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions/${sessionName}/windows`, {
-            method: 'POST',
-            body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
-          });
-          if (isInsufficientResources(res)) {
-            setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
-            return;
+          if (!sessionExists) {
+            const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions`, {
+              method: 'POST',
+              body: JSON.stringify({ name: sessionName, command: awNewCommand.trim() || undefined, windowName: awNewWindowName.trim() || undefined, force }),
+            });
+            if (isInsufficientResources(res)) {
+              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
+              return;
+            }
+            createdWindowName = res.windowName;
+          } else {
+            const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions/${sessionName}/windows`, {
+              method: 'POST',
+              body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
+            });
+            if (isInsufficientResources(res)) {
+              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
+              return;
+            }
+            createdWindowName = res.windowName;
           }
-          createdWindowName = res.windowName;
         }
 
         const target = `${sessionName}:${createdWindowName}`;
         const label = awLabel.trim() || awNewWindowName.trim() || '';
-        let newRef: string | undefined;
-        try { newRef = formatMuxRef(muxRefFromTmuxTarget(target)); } catch { /* keep undefined */ }
-        const windowBody: Record<string, unknown> = { server_name: awServer, tmux_target: target, ...(newRef ? { ref: newRef } : {}), label };
+        let newRef: string | undefined = createdRef;
+        if (!newRef) { try { newRef = formatMuxRef(muxRefFromTmuxTarget(target)); } catch { /* keep undefined */ } }
+        const windowBody: Record<string, unknown> = { server_name: awServer, ...(useMuxRoutes ? { ref: newRef } : { tmux_target: target, ...(newRef ? { ref: newRef } : {}) }), label };
         if (awAgent !== 'none') {
           windowBody['window_type'] = 'agent';
           windowBody['worker_type'] = awAgent === 'custom' ? 'generic' : awAgent;

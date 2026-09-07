@@ -1,5 +1,5 @@
 import type { PaneHandle } from '@azito/shared';
-import type { TmuxClient } from '../../../tmux/TmuxClient';
+import type { IMuxClient } from '../../../tmux/IMuxClient';
 import type { WorkerInputService } from '../WorkerInputService';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
@@ -41,7 +41,6 @@ function isTuiReady(output: string): boolean {
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
-    private tmux: TmuxClient,
     private workerInput: WorkerInputService,
     private workerWaiter: WorkerWaiter,
     private httpSignalCoordinator: HttpSignalTurnCoordinator,
@@ -70,20 +69,20 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
           }),
         })
       : ctx.effectiveLaunchCommand;
-    await this.tmux.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
+    await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
     const isClaudeWorker = isClaudeLaunchCommand(ctx.effectiveLaunchCommand);
-    await this.waitForTuiReady(ctx.server, ctx.handle, isClaudeWorker);
+    await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, isClaudeWorker);
     return sendCommand;
   }
 
-  private async waitForTuiReady(server: ServerConfig, handle: PaneHandle, strict: boolean): Promise<void> {
+  private async waitForTuiReady(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, strict: boolean): Promise<void> {
     await sleep(3000);
 
     if (!strict) return;
 
     const deadline = Date.now() + 27000;
     while (Date.now() < deadline) {
-      const result = await this.tmux.captureScreen(server, handle, -50);
+      const result = await driver.captureScreen(server, handle, -50);
       if (isTuiReady(result.stdout)) return;
       await sleep(1000);
     }
