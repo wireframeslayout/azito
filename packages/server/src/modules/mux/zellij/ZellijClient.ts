@@ -158,7 +158,7 @@ export class ZellijClient implements IMuxClient {
     if (sessions.includes(name)) {
       await this.transportFactory.getTransport(server).execMux({
         kind: 'zellij',
-        args: ['--session', name, 'action', 'new-tab', '--name', windowName],
+        args: ['--session', name, 'action', 'new-tab', '--layout-string', 'layout { pane; }', '--name', windowName],
       });
       return { ref: zellijMuxRef(name, windowName), result: this.okResult() };
     }
