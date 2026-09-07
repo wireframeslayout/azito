@@ -1,7 +1,6 @@
-import type { MuxDriverKind, MuxRef, PaneHandle, PaneOrdinal, MuxCapabilities } from '@azito/shared';
+import type { MuxDriverKind, MuxRef, PaneHandle, PaneOrdinal, MuxCapabilities, MuxWorkspace, MuxPaneInfo } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
-import type { TmuxSession, TmuxPaneInfo } from './types';
 
 export interface IMuxClient {
   readonly kind: MuxDriverKind;
@@ -9,8 +8,8 @@ export interface IMuxClient {
 
   // ─── Workspace / Window ───
 
-  listWorkspaces(server: ServerConfig): Promise<TmuxSession[]>;
-  listWorkspacesStrict(server: ServerConfig): Promise<TmuxSession[]>;
+  listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
+  listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
   openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult }>;
   openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult }>;
   closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
@@ -24,7 +23,7 @@ export interface IMuxClient {
 
   resolvePane(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal): Promise<PaneHandle>;
   listPanesByRef(server: ServerConfig, ref: MuxRef): Promise<Array<{ ordinal: PaneOrdinal; handle: PaneHandle; title: string; command: string; active: boolean }>>;
-  listAllPanes(server: ServerConfig): Promise<TmuxPaneInfo[]>;
+  listAllPanes(server: ServerConfig): Promise<MuxPaneInfo[]>;
   refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null>;
   probePane(server: ServerConfig, handle: PaneHandle): Promise<{ alive: boolean; verified: boolean }>;
   splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }>;
@@ -48,6 +47,7 @@ export interface IMuxClient {
 
   // ─── Layout / Resource ───
 
+  /** Driver-opaque layout string. Only valid with the same driver's applyLayout. */
   captureLayout(server: ServerConfig, ref: MuxRef): Promise<{ layout: string; panes: Array<{ index: number; ordinal: PaneOrdinal; command: string | null; path: string | null; title: string | null }> }>;
   applyLayout(server: ServerConfig, ref: MuxRef, layout: string): Promise<ExecResult>;
   measurePanePids(server: ServerConfig): Promise<Array<{ ref: MuxRef; pid: number }>>;

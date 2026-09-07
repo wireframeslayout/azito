@@ -6,10 +6,10 @@ import { generateWindowName, extractWindowId } from './windowNameUtils';
 import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 import type { IMuxClient } from './IMuxClient';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
-import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo } from './types';
+import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
-export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo };
+export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
 
 // ─── Special keys for send-keys ───
 
@@ -128,7 +128,7 @@ export class TmuxClient implements IMuxClient {
   readonly caps: MuxCapabilities = {
     outputStream: true, changeEvents: true, agentState: false,
     independentClients: true, envInjection: true, zoom: true,
-    copyMode: true, paneTitle: true, activityCounter: true,
+    copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true,
   };
 
   constructor(

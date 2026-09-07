@@ -12,7 +12,9 @@ function makeMuxDriverRegistry(refResult: { ref: MuxRef; ordinal: PaneOrdinal } 
     refFromPaneHandle: vi.fn().mockResolvedValue(refResult),
   };
   return {
-    resolve: () => driver,
+    resolve: vi.fn().mockReturnValue(driver),
+    register: vi.fn(),
+    has: vi.fn().mockReturnValue(true),
     _driver: driver,
   } as any;
 }

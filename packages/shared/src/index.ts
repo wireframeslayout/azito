@@ -1,14 +1,22 @@
 export { stripPaneSuffix, isSameWindowTarget, windowKey } from './windowKey';
 export {
   type MuxDriverKind,
+  type MuxRuntime,
   type MuxRef,
   type PaneHandle,
   type PaneOrdinal,
   type MuxCapabilities,
+  type MuxPane,
+  type MuxWindowInfo,
+  type MuxWorkspace,
+  type MuxPaneInfo,
+  type MuxExecRequest,
+  type AttachSpec,
   asPaneHandle,
   formatMuxRef,
   parseMuxRef,
   muxRefFromTmuxTarget,
   tmuxTargetFromMuxRef,
   windowKeyForRef,
+  muxKindForRuntime,
 } from './mux';
