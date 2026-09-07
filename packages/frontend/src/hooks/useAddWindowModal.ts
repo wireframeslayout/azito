@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
+import type { TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions } from './useAgentDefinitions';
 import { useToast } from './useToast';
 
@@ -44,8 +45,8 @@ export function useAddWindowModal(
   projectServers: { serverName: string; workingDirectory?: string }[],
   refreshWorkspace: () => void,
   refreshSessions?: () => Promise<void>,
-  onConnect?: (serverName: string, target: string, projectId?: number) => void,
-  onTaskWindowAdded?: (taskId: number, serverName: string, tmuxTarget: string, label: string, activate: boolean, extra?: TaskWindowExtra) => Promise<void>,
+  onConnect?: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void,
+  onTaskWindowAdded?: (taskId: number, serverName: string, tmuxTarget: string, label: string, activate: boolean, extra?: TaskWindowExtra & { ref?: string }) => Promise<void>,
 ) {
   const [addWindowOpen, setAddWindowOpen] = useState(false);
   const [awMode, setAwMode] = useState<'existing' | 'session' | 'new'>('existing');
@@ -340,9 +341,10 @@ export function useAddWindowModal(
           ? { windowType: 'agent' as const, workerType: awAgent === 'custom' ? 'generic' : awAgent, workerModel: awAgentModel || undefined, workingDirectory: awWorkDir.trim() || undefined }
           : undefined;
         if (awTaskId != null) {
-          await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, extra);
+          await onTaskWindowAdded?.(awTaskId, awServer, target, label, true, { ...extra, ref: newRef });
         } else {
-          onConnect?.(awServer, `${target}.1`, numericProjectId);
+          const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: created.id, pane: 1 };
+          onConnect?.(termRef, numericProjectId);
         }
 
         const paneTarget = `${target}.1`;
