@@ -56,6 +56,8 @@ export interface MuxWindowInfo {
   active: boolean;
   panes: MuxPane[];
   activity: number;
+  /** Driver-precomputed ref. When set, workspacesToSessions uses it instead of constructing one from workspace/window names. */
+  ref?: MuxRef;
 }
 
 export interface MuxWorkspace {

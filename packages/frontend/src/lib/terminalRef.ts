@@ -199,6 +199,7 @@ export function terminalRefDisplayLabel(r: TerminalRef): string {
   if (r.kind === 'windowId') return `w${r.windowId}`;
   try {
     const parsed = parseMuxRef(r.ref);
+    if (parsed.kind === 'herdr') return parsed.workspace;
     return `${parsed.workspace}:${parsed.window}`;
   } catch {
     return r.ref;

@@ -125,7 +125,8 @@ export class HerdrClient implements IMuxClient {
 
   async listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]> {
     const snap = await this.snapshot(server);
-    return snap.workspaces.map((ws) => {
+    const windows: MuxWindowInfo[] = [];
+    for (const ws of snap.workspaces) {
       const tabs = snap.tabs.filter((t) => t.workspace_id === ws.workspace_id);
       if (tabs.length > 1) {
         const key = `${server.name}:${ws.label}`;
@@ -135,15 +136,17 @@ export class HerdrClient implements IMuxClient {
         }
       }
       const firstTab = tabs[0];
-      if (!firstTab) return { name: ws.label, windowCount: 1, attached: ws.focused, created: 0, windows: [] };
-      return {
-        name: ws.label,
-        windowCount: 1,
-        attached: ws.focused,
-        created: 0,
-        windows: [this.toMuxWindowInfo(snap, firstTab, 0)],
-      };
-    });
+      if (!firstTab) continue;
+      const winInfo = this.toMuxWindowInfo(snap, firstTab, windows.length);
+      windows.push({ ...winInfo, name: ws.label, ref: herdrMuxRef(ws.label) });
+    }
+    return [{
+      name: this.sessionName,
+      windowCount: windows.length,
+      attached: snap.workspaces.some((ws) => ws.focused),
+      created: 0,
+      windows,
+    }];
   }
 
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> {
@@ -171,7 +174,7 @@ export class HerdrClient implements IMuxClient {
     _workspace: string,
     baseName?: string,
     opts?: { exactName?: boolean; extraEnv?: Record<string, string> },
-  ): Promise<{ ref: MuxRef; result: ExecResult }> {
+  ): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     const windowName = baseName ?? 'default';
     const resp = await this.rpc(server, 'workspace.create', {
       name: windowName,
@@ -183,7 +186,7 @@ export class HerdrClient implements IMuxClient {
     }
 
     const ref = herdrMuxRef(windowName);
-    return { ref, result: this.okResult() };
+    return { ref, result: this.okResult(), windowName };
   }
 
   async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {

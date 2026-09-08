@@ -11,6 +11,7 @@ import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxWorkspace } from '@azito/shared';
 import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
+import type { IMuxClient } from '../IMuxClient';
 
 // ─── Types ───
 
@@ -196,7 +197,7 @@ function workspacesToSessions(workspaces: MuxWorkspace[], serverName: string, dr
     attached: ws.attached,
     windowCount: ws.windowCount,
     windows: ws.windows.map(win => {
-      const ref: MuxRef = { kind: driverKind, workspace: ws.name, window: win.name };
+      const ref: MuxRef = win.ref ?? { kind: driverKind, workspace: ws.name, window: win.name };
       const dbWin = windowRepo?.findByServerAndRef(serverName, ref);
       return {
         index: win.index,
@@ -1050,7 +1051,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
@@ -1058,9 +1059,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         try {
           const workspace = decodeURIComponent(request.params.workspace);
-          const { ref } = await driver.openWindow(freshSrv, workspace, name);
+          const created = await driver.openWindow(freshSrv, workspace, name);
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(ref), windowName: ref.window };
+          return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
           return reply.status(500).send({ error: (err as Error).message });
         }
