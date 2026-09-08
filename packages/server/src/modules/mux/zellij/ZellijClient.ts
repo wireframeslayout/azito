@@ -151,7 +151,7 @@ export class ZellijClient implements IMuxClient {
         name,
         active: tabPanes.some((p) => p.isFocused),
         panes: tabPanes.map((p, j) => ({
-          index: j,
+          index: j + 1,
           command: p.paneCommand ?? '',
           title: p.title,
           width: p.paneColumns,
@@ -470,7 +470,7 @@ export class ZellijClient implements IMuxClient {
     return {
       layout: layoutResult.stdout,
       panes: tabPanes.map((p, i) => ({
-        index: i,
+        index: i + 1,
         ordinal: (i + 1) as PaneOrdinal,
         command: p.paneCommand,
         path: p.paneCwd,

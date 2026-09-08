@@ -474,7 +474,7 @@ export class HerdrClient implements IMuxClient {
     return {
       layout: JSON.stringify(layout),
       panes: panes.map((p, i) => ({
-        index: i,
+        index: i + 1,
         ordinal: (i + 1) as PaneOrdinal,
         command: null,
         path: p.cwd,
@@ -551,7 +551,7 @@ export class HerdrClient implements IMuxClient {
       panes: panes.map((p, i) => {
         const layoutPane = layout?.panes.find((lp) => lp.pane_id === p.pane_id);
         return {
-          index: i,
+          index: i + 1,
           command: '',
           title: '',
           width: layoutPane?.rect.width ?? 80,
