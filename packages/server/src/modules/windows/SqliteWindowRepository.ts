@@ -33,6 +33,7 @@ interface WindowRow {
   launch_command: string | null;
   working_directory: string | null;
   pane_layout: string | null;
+  herdr_navigation_lock: string | null;
   sleeping: number;
   created_at: string;
 }
@@ -53,8 +54,8 @@ export class SqliteWindowRepository implements IWindowRepository {
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
-      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout, herdr_navigation_lock)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.findAllStmt = db.prepare('SELECT * FROM windows');
     this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
@@ -106,6 +107,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       window.launchCommand,
       window.workingDirectory,
       window.paneLayout ? JSON.stringify(window.paneLayout) : null,
+      window.herdrNavigationLock ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -189,7 +191,7 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId' | 'herdrNavigationLock'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
@@ -215,6 +217,7 @@ export class SqliteWindowRepository implements IWindowRepository {
     if (data.windowType !== undefined) { fields.push('window_type = ?'); values.push(data.windowType); }
     if (data.workerType !== undefined) { fields.push('worker_type = ?'); values.push(data.workerType); }
     if (data.sleeping !== undefined) { fields.push('sleeping = ?'); values.push(data.sleeping ? 1 : 0); }
+    if ('herdrNavigationLock' in data) { fields.push('herdr_navigation_lock = ?'); values.push(data.herdrNavigationLock ?? null); }
 
     if (fields.length === 0) return;
     values.push(id);
@@ -272,6 +275,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       launchCommand: row.launch_command,
       workingDirectory: row.working_directory,
       paneLayout,
+      herdrNavigationLock: (row.herdr_navigation_lock as Window['herdrNavigationLock']) ?? null,
       sleeping: row.sleeping === 1,
       createdAt: row.created_at,
     };

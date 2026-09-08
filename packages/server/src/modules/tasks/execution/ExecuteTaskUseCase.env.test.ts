@@ -81,6 +81,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     sshHost: null,
     sshHostFingerprint: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,

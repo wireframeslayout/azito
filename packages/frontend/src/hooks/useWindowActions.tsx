@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
 import type { Task } from '../pages/workspace/types';
+import type { Server } from './useServerManagement';
 import { useToast } from './useToast';
 import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
@@ -25,6 +26,7 @@ interface WindowActionDeps {
   refreshSessions?: () => Promise<void>;
   togglePin?: (tabId: string) => void;
   connectPane?: (serverName: string, target: string, projectId?: number, opts?: { reconnect?: boolean }) => void;
+  servers?: Server[];
 }
 
 export function useWindowActions(
@@ -39,7 +41,7 @@ export function useWindowActions(
   const [respawnResourceWarning, setRespawnResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
   const { showToast } = useToast();
 
-  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, connectPane } = deps;
+  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, connectPane, servers } = deps;
 
   const handleDetachWindow = useCallback(async (windowId: number) => {
     setConfirmDialog({
@@ -185,7 +187,12 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+  const handleSetHerdrLock = useCallback(async (windowId: number, value: 'locked' | 'free' | null) => {
+    await api(`/windows/${windowId}`, { method: 'PUT', body: JSON.stringify({ herdr_navigation_lock: value }) });
+    refreshWorkspace();
+  }, [refreshWorkspace]);
+
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; herdrNavigationLock?: 'locked' | 'free' | null }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [
       { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
     ];
@@ -209,12 +216,24 @@ export function useWindowActions(
     if (linkedTask) {
       items.push({ label: t('windows.showTask'), icon: <Icon name="tasks" size={16} />, onClick: () => openTask(linkedTask.id, linkedTask.title) });
     }
+    const srv = servers?.find((s) => s.name === w.serverName);
+    if (srv?.muxRuntime === 'herdr') {
+      const effectiveLock = w.herdrNavigationLock ?? srv.herdrNavigationLock ?? 'locked';
+      items.push(
+        { label: '', separator: true, onClick: () => {} },
+        { label: 'herdr 移動を禁止', selected: effectiveLock === 'locked', onClick: () => handleSetHerdrLock(w.id, 'locked') },
+        { label: 'herdr 移動を許可', selected: effectiveLock === 'free', onClick: () => handleSetHerdrLock(w.id, 'free') },
+      );
+      if (w.herdrNavigationLock != null) {
+        items.push({ label: 'サーバー既定に戻す', onClick: () => handleSetHerdrLock(w.id, null) });
+      }
+    }
     items.push(
       { label: t('windows.detachFromProject'), icon: <Icon name="external-link" size={16} />, onClick: () => handleDetachWindow(w.id) },
       { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, handleSetHerdrLock, findTaskByTarget, openTask, servers]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => {
     showContextMenu(e, getWindowMenuItems(w, extra));

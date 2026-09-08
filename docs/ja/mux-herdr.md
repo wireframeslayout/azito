@@ -145,3 +145,33 @@ _未実施_ — pane.read の空 text 問題（クライアント未 attach 時�
 
 ### ⑤タブバー非表示
 _未実施_
+
+## クライアント設定とナビゲーションロック
+
+### 概要
+
+AZITO は herdr のクライアント設定ファイルを 2 種類生成し、AZITO から開くターミナルに専用の設定を適用する。
+
+- `~/.azito/herdr/client-locked.toml` — workspace/tab 移動系キーバインドを無効化
+- `~/.azito/herdr/client-free.toml` — UI 推奨値のみ（キーバインド制限なし）
+
+### ロックの範囲
+
+**ロックは AZITO が張ったクライアントにのみ効く。** サーバーで直接 `herdr` コマンドを実行して開くクライアントには影響しない。AZITO はターミナル接続時に `HERDR_CONFIG_PATH` 環境変数でクライアント設定ファイルを指定するため、その環境変数が設定されていない通常の herdr クライアントはサーバーの既定設定（`~/.config/herdr/config.toml`）を使用する。
+
+### 設定の優先順位
+
+1. 窓（Window）の `herdrNavigationLock`（`'locked'` / `'free'` / `null`）
+2. サーバーの `herdrNavigationLock`（`'locked'` / `'free'`、既定 `'locked'`）
+
+窓の値が `null`（サーバー既定に従う）の場合、サーバーの値が使われる。
+
+### UI 推奨値の診断
+
+Settings → Servers でサーバーの `~/.config/herdr/config.toml` を確認し、以下の推奨値と異なる場合に警告を表示する（自動修正はしない）:
+
+| キー | 推奨値 |
+|------|--------|
+| `hide_tab_bar_when_single_tab` | `true` |
+| `sidebar_collapsed_mode` | `"hidden"` |
+| `mouse_capture` | `true` |

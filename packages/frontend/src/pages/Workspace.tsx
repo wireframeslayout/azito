@@ -733,7 +733,7 @@ function WorkspaceInner() {
     // the pane TabBar via buildPaneTabMenuItems' base and mobile's single
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
-    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane,
+    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane, servers,
   });
 
   const handleWindowAddedToTask = useCallback(async (

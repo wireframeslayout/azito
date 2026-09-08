@@ -12,6 +12,7 @@ const server: ServerConfig = {
   agentVersion: null,
   sshHost: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,

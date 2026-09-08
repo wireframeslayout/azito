@@ -115,6 +115,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         launchCommand: (body['launch_command'] as string) || null,
         workingDirectory,
         paneLayout: null,
+        herdrNavigationLock: null,
         sleeping: false,
       });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
@@ -167,6 +168,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           launchCommand: null,
           workingDirectory: null,
           paneLayout: null,
+          herdrNavigationLock: null,
           sleeping: false,
         });
         addedIds.push(winId);
@@ -249,6 +251,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         launchCommand: null,
         workingDirectory,
         paneLayout: null,
+        herdrNavigationLock: null,
         sleeping: false,
       });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
@@ -272,6 +275,13 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if ('launch_command' in body) data['launchCommand'] = body['launch_command'];
       if ('worker_model' in body) data['workerModel'] = body['worker_model'];
       if ('working_directory' in body) data['workingDirectory'] = body['working_directory'];
+
+      if ('herdr_navigation_lock' in body) {
+        const val = body['herdr_navigation_lock'] as string | null;
+        if (val !== null && val !== 'locked' && val !== 'free')
+          return reply.status(400).send({ error: 'herdr_navigation_lock must be "locked", "free", or null' });
+        data['herdrNavigationLock'] = val;
+      }
 
       if ('window_type' in body || 'worker_type' in body) {
         const windowType = ('window_type' in body ? body['window_type'] : win.windowType) as string;

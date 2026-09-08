@@ -73,6 +73,11 @@ import * as m066 from '../../shared/db/migrations/066_project_server_distributio
 import * as m067 from '../../shared/db/migrations/067_task_distribution_repository';
 import * as m068 from '../../shared/db/migrations/068_merge_duplicate_window_rows';
 import * as m069 from '../../shared/db/migrations/069_window_mux_ref';
+import * as m070 from '../../shared/db/migrations/070_supervisor_launch_pane_ref_and_watch_normalize';
+import * as m071 from '../../shared/db/migrations/071_agent_watches_window_id';
+import * as m072 from '../../shared/db/migrations/072_fix_herdr_mux_ref_kind';
+import * as m073 from '../../shared/db/migrations/073_restore_tmux_mux_ref_kind';
+import * as m074 from '../../shared/db/migrations/074_herdr_navigation_lock';
 
 import { SqliteWindowRepository } from './SqliteWindowRepository';
 import type { Window } from './Window';
@@ -90,6 +95,7 @@ const ALL_MIGRATIONS: Migration[] = [
   m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051,
   m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062,
   m063, m064, m065, m066, m067, m068, m069,
+  m070, m071, m072, m073, m074,
 ];
 
 const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
@@ -136,6 +142,7 @@ function baseWindow(overrides: Partial<Omit<Window, 'id' | 'createdAt'>> = {}): 
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    herdrNavigationLock: null,
     sleeping: false,
     ...overrides,
   };

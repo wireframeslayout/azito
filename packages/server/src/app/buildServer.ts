@@ -75,7 +75,8 @@ import { MuxDriverUnavailableError, MuxCapabilityMissingError } from '../modules
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
-import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { muxRefFromTmuxTarget, parseMuxRef, resolveHerdrLock, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import type { OpenTerminalOpts } from '../modules/servers/transport/ServerTransport';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
@@ -717,11 +718,13 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       let resolvedServer = serverName ? serverRepo.findByName(serverName) : null;
       const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
 
+      let resolvedWin: import('../modules/windows/Window').Window | undefined;
+
       if (windowIdParam) {
-        const win = windowRepo.findById(Number(windowIdParam));
-        if (win) {
-          resolvedRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
-          resolvedServer = serverRepo.findByName(win.serverName) ?? null;
+        resolvedWin = windowRepo.findById(Number(windowIdParam));
+        if (resolvedWin) {
+          resolvedRef = resolvedWin.muxRef ?? muxRefFromTmuxTarget(resolvedWin.tmuxTarget);
+          resolvedServer = serverRepo.findByName(resolvedWin.serverName) ?? null;
         }
       } else if (refParam) {
         try {
@@ -737,7 +740,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         return;
       }
 
-      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory);
+      const terminalOpts: OpenTerminalOpts = {};
+      if (resolvedServer.muxRuntime === 'herdr') {
+        terminalOpts.herdrLock = resolveHerdrLock(resolvedServer.herdrNavigationLock, resolvedWin?.herdrNavigationLock ?? null);
+      }
+
+      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory, terminalOpts);
     });
   });
 

@@ -124,7 +124,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
         })),
         create: vi.fn(),
@@ -158,7 +158,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           // isolationIntent declared, but never verified — still accepted at
           // the config boundary; the run-time gate (resolveEffectiveInputPolicy)
           // is what keeps 'allow' degraded until a doctor run verifies it.
@@ -301,7 +301,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
           return {
             name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null,
             agentVersion: `gen-${generation}`,
-            sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+            sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
             isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
           };
         }),
@@ -452,7 +452,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
         })),
         create: vi.fn(),
@@ -485,7 +485,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
         })),
         create: vi.fn(),

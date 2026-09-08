@@ -60,6 +60,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationReport: null,
     isolationCleanupReport: null,
     muxRuntime: 'system',
+    herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -1268,7 +1269,7 @@ describe('POST /api/servers/:name/agent/install — serialized via serverIsolati
 
     expect(res.statusCode).toBe(200);
     expect(install).toHaveBeenCalledWith('user@host', expect.any(Function), 'managed');
-    expect(opts.serverRepo.update).toHaveBeenCalledWith('srv', 'agent', '5.6.7.8', 5000, 'newtok', 'user@host', 'managed');
+    expect(opts.serverRepo.update).toHaveBeenCalledWith('srv', 'agent', '5.6.7.8', 5000, 'newtok', 'user@host', 'managed', 'locked');
   });
 
   it('serializes against a concurrent isolation-intent PUT on the same server (real KeyedMutex)', async () => {

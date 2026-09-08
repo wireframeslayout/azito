@@ -1,4 +1,4 @@
-import type { MuxRef } from '@azito/shared';
+import type { MuxRef, HerdrNavigationLock } from '@azito/shared';
 
 export type WindowType = 'terminal' | 'agent';
 export type OwnerType = 'project' | 'task';
@@ -20,6 +20,7 @@ export interface Window {
   launchCommand: string | null;
   workingDirectory: string | null;
   paneLayout: PaneLayout | null;
+  herdrNavigationLock: HerdrNavigationLock | null;
   sleeping: boolean;
   createdAt: string;
 }
@@ -128,7 +129,7 @@ export interface IWindowRepository {
    */
   adoptForTask(id: number, taskId: number): void;
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId'
+    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId' | 'herdrNavigationLock'
   >>): void;
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void;
   remove(id: number): void;

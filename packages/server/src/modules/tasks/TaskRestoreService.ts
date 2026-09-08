@@ -624,6 +624,7 @@ export class TaskRestoreService {
         launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs) : null,
         workingDirectory: effectiveDir || null,
         paneLayout: null,
+        herdrNavigationLock: null,
         sleeping: false,
       });
 

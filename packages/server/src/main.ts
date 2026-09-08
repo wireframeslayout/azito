@@ -13,6 +13,7 @@ import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
 import { writeHubCanary } from './modules/servers/hubCanary';
+import { ensureHerdrClientConfigs } from './modules/mux/herdr/herdrClientConfig';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
@@ -97,6 +98,8 @@ async function main(): Promise<void> {
   const localUrl = `http://127.0.0.1:${PORT}`;
   const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken);
   const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
+
+  ensureHerdrClientConfigs();
 
   app.log.info(`Public URL: ${publicUrl}`);
 

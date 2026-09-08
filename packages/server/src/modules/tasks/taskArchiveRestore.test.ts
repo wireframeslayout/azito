@@ -125,7 +125,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
     } as unknown as TasksRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -150,7 +150,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
-      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, projectId: null, createdAt: '' }]),
+      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, herdrNavigationLock: null, sleeping: false, projectId: null, createdAt: '' }]),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
       findByServerAndRef: vi.fn(() => undefined),

@@ -142,6 +142,12 @@ export function isPaneHandleLike(s: string): boolean {
 }
 
 /** herdr MuxRef: workspace = workspace label, window = fixed default tab name ('main'). */
+export type HerdrNavigationLock = 'locked' | 'free';
+
+export function resolveHerdrLock(serverLock: HerdrNavigationLock, windowLock: HerdrNavigationLock | null): HerdrNavigationLock {
+  return windowLock ?? serverLock;
+}
+
 export function herdrMuxRef(workspaceName: string, tabName: string = 'main'): MuxRef {
   return { kind: 'herdr', workspace: workspaceName, window: tabName };
 }

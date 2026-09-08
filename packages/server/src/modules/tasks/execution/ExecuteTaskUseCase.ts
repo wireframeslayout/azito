@@ -1244,6 +1244,7 @@ export class ExecuteTaskUseCase {
       launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
       workingDirectory: effectiveDir || null,
       paneLayout: null,
+      herdrNavigationLock: null,
       sleeping: false,
     });
 
