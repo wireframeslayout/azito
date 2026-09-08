@@ -139,3 +139,41 @@ Settings → Servers checks the server's `~/.config/herdr/config.toml` and shows
 | `hide_tab_bar_when_single_tab` | `true` |
 | `sidebar_collapsed_mode` | `"hidden"` |
 | `mouse_capture` | `true` |
+
+## Focus Sync
+
+When the user switches workspaces in a herdr client, the AZITO Web UI can bring the corresponding window (or task tab) to the foreground.
+
+### Event flow (herdr → Web UI)
+
+```
+herdr socket → workspace.focused event
+  → agent (relays as mux-event to hub, adds workspace_label)
+  → hub HerdrEventBridge
+    → mux_ref reverse lookup (windowRepo.findByServerAndRef)
+    → NotificationBus.emit('mux:focus', { serverName, windowId, taskId?, source })
+  → events WS → frontend
+    → useFocusSync → selectTaskTerminal / openTask / connectPane
+```
+
+- The agent's herdr subscription includes `workspace.focused`. It resolves `workspace_id` → `workspace_label` and relays.
+- Hub side: `HerdrEventBridge` uses `herdrMuxRef(label)` to look up the DB `windows.mux_ref` column and find `windowId` / `taskId`.
+- Unregistered windows (no matching mux_ref) are ignored.
+
+### Follow toggle
+
+The Objects sidebar has a "Follow herdr" toggle (`localStorage` key: `follow-herdr`, default OFF). When ON, `mux:focus` events bring the corresponding window to the foreground.
+
+### Reverse direction (Web UI → herdr)
+
+`POST /api/windows/:id/focus` issues the herdr `workspace.focus` RPC (or tmux `select-window`). The Web UI calls this when the user clicks a window row in the sidebar.
+
+`localStorage` key: `focus-sync-reverse` (default ON) controls this.
+
+### Loop prevention
+
+When the hub issues a `workspace.focus` RPC, it ignores any `workspace.focused` event for the same workspace arriving within 2 seconds. This prevents a Web UI → herdr → Web UI echo loop.
+
+### Multiple clients
+
+herdr 0.9 supports independent per-client display. If `workspace.focused` events do not carry a `client_id`, the event is treated as the server's active focus (no per-client distinction).

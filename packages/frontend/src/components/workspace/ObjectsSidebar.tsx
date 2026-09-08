@@ -104,6 +104,9 @@ interface ObjectsSidebarProps {
   /** オペレーションウィンドウ行の「オペレーションを停止」に接続する（Unit の POST /api/units/:id/stop）。
    * taskId を省略すると同じ Unit を使う他タスクの実行まで巻き添えで止まるため、対象タスクの id を必ず渡す。 */
   onStopOperation: (unitId: number | null, taskId: number) => void;
+  followHerdr?: boolean;
+  onFollowHerdrChange?: (v: boolean) => void;
+  onWindowFocus?: (windowId: number) => void;
 }
 
 type QuickAddAgent = 'claude' | 'codex' | 'terminal';
@@ -146,6 +149,9 @@ export default function ObjectsSidebar({
   showContextMenuAt,
   onCapturePanes,
   onStopOperation,
+  followHerdr,
+  onFollowHerdrChange,
+  onWindowFocus,
 }: ObjectsSidebarProps) {
   const { t } = useTranslation(['workspace', 'tasks', 'browser']);
   const { showToast } = useToast();
@@ -304,8 +310,9 @@ export default function ObjectsSidebar({
       ? { kind: 'windowId' as const, serverName, windowId, pane: paneOrdinal ?? 1 }
       : terminalRefFromTarget(serverName, target);
     connectPane(ref);
+    if (windowId != null) onWindowFocus?.(windowId);
     if (mobile) onCloseMobileSidebar();
-  }, [mobile, connectPane, onCloseMobileSidebar]);
+  }, [mobile, connectPane, onCloseMobileSidebar, onWindowFocus]);
 
   const handleOpenBrowser = useCallback((serverName: string, groupId?: string) => {
     openBrowser(serverName, groupId);
@@ -560,7 +567,23 @@ export default function ObjectsSidebar({
       <div style={{ marginBottom: 4 }}>
         <div style={{ fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-dim)', padding: '12px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>{t('objects.title')} <span style={{ fontWeight: 400, fontSize: 'var(--font-2xs)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{objectsLoading ? '—' : sections.totalCount}</span></span>
-          <button onClick={() => onOpenAddWindow()} title={t('windows.addWindow')} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}><Icon name="plus" size={16} /></button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {onFollowHerdrChange != null && (
+              <label
+                className="toggle"
+                title={t('objects.followHerdr')}
+                style={{ transform: 'scale(0.7)', transformOrigin: 'right center' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={followHerdr ?? false}
+                  onChange={(e) => onFollowHerdrChange(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            )}
+            <button onClick={() => onOpenAddWindow()} title={t('windows.addWindow')} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}><Icon name="plus" size={16} /></button>
+          </span>
         </div>
 
         {objectsLoading ? (

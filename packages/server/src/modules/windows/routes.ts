@@ -22,6 +22,7 @@ import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, t
 import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
+import type { HerdrEventBridge } from '../operations/HerdrEventBridge';
 
 export interface WindowsRouteOptions {
   windowRepo: IWindowRepository;
@@ -41,6 +42,7 @@ export interface WindowsRouteOptions {
   resourceGuard?: ResourceGuard;
   harnessPrefix?: string;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
+  herdrEventBridge?: HerdrEventBridge;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -537,6 +539,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!name) return reply.status(400).send({ error: 'New name required' });
       await driverFor(srv).renameWindowByRef(srv, ref, name);
       notifyWindowsChanged(win.serverName);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/windows/:id/focus ──
+  fastify.post<{ Params: { id: string } }>(
+    '/api/windows/:id/focus',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      const { window: win, ref } = resolveWindowById(windowRepo, id);
+      const srv = serverRepo.findByName(win.serverName);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      await driverFor(srv).focusWindow(srv, ref);
+      opts.herdrEventBridge?.recordFocusCommand(srv.name, ref.workspace);
       return { ok: true };
     },
   );

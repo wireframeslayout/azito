@@ -175,3 +175,44 @@ Settings → Servers でサーバーの `~/.config/herdr/config.toml` を確認�
 | `hide_tab_bar_when_single_tab` | `true` |
 | `sidebar_collapsed_mode` | `"hidden"` |
 | `mouse_capture` | `true` |
+
+## フォーカス同期
+
+herdr クライアントで workspace を切り替えたとき、AZITO の Web UI が対応する窓（またはタスクタブ）を前面に表示する仕組み。
+
+### イベントフロー（herdr → Web UI）
+
+```
+herdr socket → workspace.focused イベント
+  → agent (mux-event として hub へ中継、workspace_label を付加)
+  → hub HerdrEventBridge
+    → mux_ref 逆引き (windowRepo.findByServerAndRef)
+    → NotificationBus.emit('mux:focus', { serverName, windowId, taskId?, source })
+  → events WS → frontend
+    → useFocusSync → selectTaskTerminal / openTask / connectPane
+```
+
+- agent の herdr 購読に `workspace.focused` を追加。`workspace_id` → `workspace_label` を解決して中継
+- hub 側: `HerdrEventBridge` が `herdrMuxRef(label)` で DB の `windows.mux_ref` を照合し、一致する窓の `windowId` / `taskId` を特定
+- 窓が見つからない場合（未登録窓）は無視
+
+### 追従トグル
+
+Web UI の Objects サイドバーに「herdr に追従」トグルスイッチがある（`localStorage` key: `follow-herdr`、既定 OFF）。ON にすると `mux:focus` イベント受信時に対応する窓を前面に表示する。
+
+### 逆方向（Web UI → herdr）
+
+`POST /api/windows/:id/focus` が新設されている。Web UI で窓行をクリックしたとき、このエンドポイントを呼んで herdr 側の `workspace.focus` RPC（tmux では `select-window`）を発行する。
+
+`localStorage` key: `focus-sync-reverse`（既定 ON）で有効/無効を切り替えられる。
+
+### ループ防止
+
+hub が `workspace.focus` RPC を発行した直後 2 秒以内に同じ workspace の `workspace.focused` イベントが届いた場合、そのイベントは無視する。これにより Web UI → herdr → Web UI の循環を防ぐ。
+
+- `HerdrEventBridge.recordFocusCommand(serverName, workspaceLabel)` でタイムスタンプを記録
+- `workspace.focused` 受信時に 2 秒以内かどうかを確認
+
+### 複数クライアント
+
+herdr 0.9 はクライアントごとに独立表示を持つ。`workspace.focused` イベントに `client_id` が含まれない場合は「サーバーのアクティブフォーカス」として扱う（どのクライアントが切り替えたかは区別しない）。
