@@ -98,35 +98,21 @@ function checkWindowExistsByRef(sessions: Session[], ref: TerminalRef): WindowEx
 }
 
 function checkWindowExistsByTarget(sessions: Session[], target: string): WindowExistsResult {
-  const colonIdx = target.indexOf(':');
-  if (colonIdx < 0) return { found: false, paneFound: false };
-  const sessionName = target.slice(0, colonIdx);
-  const rest = target.slice(colonIdx + 1);
+  const match = resolveTmuxWindowMatch(sessions, target);
+  if (!match) return { found: false, paneFound: false };
 
-  const session = sessions.find(s => s.name === sessionName);
-  if (!session) return { found: false, paneFound: false };
-
-  const dotIdx = rest.lastIndexOf('.');
-  const winSpec = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest;
-  const paneSpec = dotIdx >= 0 ? rest.slice(dotIdx + 1) : null;
-
-  const winIdx = parseInt(winSpec, 10);
-  let tmuxWindow = Number.isNaN(winIdx)
-    ? session.windows.find(w => w.name === winSpec)
-    : session.windows.find(w => w.index === winIdx);
-
-  if (!tmuxWindow && dotIdx >= 0) {
-    const fullWin = session.windows.find(w => w.name === rest)
-      ?? session.windows.find(w => String(w.index) === rest);
-    if (fullWin) tmuxWindow = fullWin;
-  }
-
-  if (!tmuxWindow) return { found: false, paneFound: false };
-
-  if (paneSpec !== null && /^\d+$/.test(paneSpec)) {
-    const pIdx = parseInt(paneSpec, 10);
-    if (!tmuxWindow.panes.some(p => p.index === pIdx)) {
-      return { found: true, paneFound: false };
+  if (!match.matchedRaw) {
+    const colonIdx = target.indexOf(':');
+    const rest = colonIdx >= 0 ? target.slice(colonIdx + 1) : '';
+    const dotIdx = rest.lastIndexOf('.');
+    if (dotIdx >= 0) {
+      const suffix = rest.slice(dotIdx + 1);
+      if (/^\d+$/.test(suffix)) {
+        const pIdx = parseInt(suffix, 10);
+        if (!match.window.panes.some(p => p.index === pIdx)) {
+          return { found: true, paneFound: false };
+        }
+      }
     }
   }
 
