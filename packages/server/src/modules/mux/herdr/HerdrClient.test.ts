@@ -69,6 +69,18 @@ describe('HerdrClient', () => {
       expect(workspaces[0].windows[0].name).toBe('default');
       expect(workspaces[0].windows[0].ref).toEqual({ kind: 'herdr', workspace: 'default', window: 'main' });
       expect(workspaces[0].windows[0].panes).toHaveLength(2);
+      expect(workspaces[0].windows[0].panes[0].index).toBe(1);
+      expect(workspaces[0].windows[0].panes[1].index).toBe(2);
+    });
+
+    it('pane indices are 1-based (consistent with resolvePane ordinals)', async () => {
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
+        return null;
+      });
+      const workspaces = await client.listWorkspaces(server);
+      const indices = workspaces[0].windows[0].panes.map((p: { index: number }) => p.index);
+      expect(indices).toEqual([1, 2]);
     });
 
     it('lists multiple workspaces as windows under one session', async () => {
