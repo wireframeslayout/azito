@@ -12,6 +12,7 @@ import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, 
 import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
+import { WindowExistsError } from '../WindowExistsError';
 
 // ─── Types ───
 
@@ -1037,6 +1038,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
         } catch (err: unknown) {
+          if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return reply.status(500).send({ error: (err as Error).message });
         }
       });
@@ -1063,6 +1065,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
+          if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return reply.status(500).send({ error: (err as Error).message });
         }
       });

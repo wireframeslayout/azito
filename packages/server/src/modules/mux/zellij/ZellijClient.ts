@@ -15,6 +15,8 @@ import type { ExecResult, ITerminalStream } from '../../servers/transport/Server
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
+import { WindowExistsError } from '../../tmux/WindowExistsError';
+import { generateWindowName } from '../../tmux/windowNameUtils';
 import { parseListSessions, parseQueryTabNames, parseListPanes, formatZellijPaneId, parseZellijPaneId, type ZellijPaneInfo } from './zellijParse';
 import { tmuxKeysToZellij } from './zellijKeyMap';
 import type { ZellijResidentClient } from './ZellijResidentClient';
@@ -203,18 +205,21 @@ export class ZellijClient implements IMuxClient {
     workspace: string,
     baseName?: string,
     opts?: { exactName?: boolean; extraEnv?: Record<string, string> },
-  ): Promise<{ ref: MuxRef; result: ExecResult }> {
+  ): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
+    const windowName = baseName ? baseName : generateWindowName('win');
+
+    if (await this.windowExists(server, { kind: 'zellij', workspace, window: windowName })) {
+      throw new WindowExistsError(windowName);
+    }
+
     await this.ensureResident(server);
 
-    const args = ['new-tab', '--layout-string', 'layout { pane; }'];
-    if (baseName) args.push('--name', baseName);
-    const result = await this.execAction(server, args);
-    const tabId = result.stdout.trim();
-    const windowName = baseName ?? `tab-${tabId}`;
+    const args = ['new-tab', '--layout-string', 'layout { pane; }', '--name', windowName];
+    await this.execAction(server, args);
 
     await this.ensurePaneExists(server, windowName, opts?.extraEnv);
 
-    return { ref: zellijMuxRef(workspace, windowName), result: this.okResult() };
+    return { ref: zellijMuxRef(workspace, windowName), result: this.okResult(), windowName };
   }
 
   private async ensurePaneExists(

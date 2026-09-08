@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { ZellijClient } from './ZellijClient';
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
+import { WindowExistsError } from '../../tmux/WindowExistsError';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { MuxRef } from '@azito/shared';
 
@@ -121,6 +122,43 @@ describe('ZellijClient', () => {
         return a?.includes('new-pane') && !a?.includes('new-tab');
       });
       expect(newPaneCall).toBeDefined();
+    });
+
+    it('generates win--xxxx name when baseName is empty', async () => {
+      const GENERATED_PANES = JSON.stringify([
+        ...JSON.parse(LIST_PANES_JSON),
+        { id: 3, is_plugin: false, is_focused: false, is_fullscreen: false, is_floating: false, is_suppressed: false, title: 'bash', exited: false, exit_status: null, is_held: false, pane_x: 0, pane_content_x: 0, pane_y: 0, pane_content_y: 0, pane_rows: 50, pane_content_rows: 50, pane_columns: 120, pane_content_columns: 120, cursor_coordinates_in_pane: [0, 0], terminal_command: null, plugin_url: null, is_selectable: true, index_in_pane_group: {}, default_fg: null, default_bg: null, tab_id: 2, tab_position: 2, tab_name: 'placeholder', pane_command: '/bin/bash', pane_cwd: '/home/user/project' },
+      ]);
+      const { client } = makeClient((args) => {
+        const cmd = lastArgs(args);
+        if (cmd.startsWith('query-tab-names')) return QUERY_TAB_NAMES;
+        if (cmd.startsWith('new-tab')) return '3';
+        if (cmd.startsWith('list-panes')) return GENERATED_PANES;
+        return defaultHandler(args);
+      });
+      const result = await client.openWindow(server, 'azito');
+      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
+    });
+
+    it('uses explicit baseName as-is without suffix', async () => {
+      const { client } = makeClient((args) => {
+        const cmd = lastArgs(args);
+        if (cmd.startsWith('query-tab-names')) return QUERY_TAB_NAMES;
+        if (cmd.startsWith('new-tab')) return '3';
+        if (cmd.startsWith('list-panes')) return JSON.stringify([
+          ...JSON.parse(LIST_PANES_JSON),
+          { id: 3, is_plugin: false, is_focused: false, is_fullscreen: false, is_floating: false, is_suppressed: false, title: 'bash', exited: false, exit_status: null, is_held: false, pane_x: 0, pane_content_x: 0, pane_y: 0, pane_content_y: 0, pane_rows: 50, pane_content_rows: 50, pane_columns: 120, pane_content_columns: 120, cursor_coordinates_in_pane: [0, 0], terminal_command: null, plugin_url: null, is_selectable: true, index_in_pane_group: {}, default_fg: null, default_bg: null, tab_id: 2, tab_position: 2, tab_name: 'dev', pane_command: '/bin/bash', pane_cwd: '/home/user/project' },
+        ]);
+        return defaultHandler(args);
+      });
+      const result = await client.openWindow(server, 'azito', 'dev');
+      expect(result.windowName).toBe('dev');
+    });
+
+    it('throws WindowExistsError when tab name already exists', async () => {
+      const { client } = makeClient(defaultHandler);
+      await expect(client.openWindow(server, 'azito', 'main')).rejects.toBeInstanceOf(WindowExistsError);
+      await expect(client.openWindow(server, 'azito', 'main')).rejects.toMatchObject({ windowName: 'main' });
     });
   });
 

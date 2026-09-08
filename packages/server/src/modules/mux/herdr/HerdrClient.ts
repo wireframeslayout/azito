@@ -15,6 +15,8 @@ import type { ExecResult, ITerminalStream } from '../../servers/transport/Server
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
+import { WindowExistsError } from '../../tmux/WindowExistsError';
+import { generateWindowName } from '../../tmux/windowNameUtils';
 import { tmuxKeyToHerdr, isTmuxSpecialKey } from './herdrKeyMap';
 
 const DEFAULT_TAB_NAME = 'main';
@@ -73,6 +75,7 @@ interface SessionSnapshot {
 }
 
 const warnedMultiTab = new Set<string>();
+const warnedDupLabel = new Set<string>();
 
 export class HerdrClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'herdr';
@@ -126,6 +129,20 @@ export class HerdrClient implements IMuxClient {
   async listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]> {
     const snap = await this.snapshot(server);
     const windows: MuxWindowInfo[] = [];
+
+    const labelCount = new Map<string, number>();
+    for (const ws of snap.workspaces) labelCount.set(ws.label, (labelCount.get(ws.label) ?? 0) + 1);
+    for (const [label, count] of labelCount) {
+      if (count > 1) {
+        const key = `${server.name}:dup:${label}`;
+        if (!warnedDupLabel.has(key)) {
+          warnedDupLabel.add(key);
+          console.warn(`[herdr] ${count} workspaces share label "${label}" on ${server.name}; rename duplicates to avoid ambiguity`);
+        }
+      }
+    }
+
+    const labelSeen = new Map<string, number>();
     for (const ws of snap.workspaces) {
       const tabs = snap.tabs.filter((t) => t.workspace_id === ws.workspace_id);
       if (tabs.length > 1) {
@@ -137,8 +154,13 @@ export class HerdrClient implements IMuxClient {
       }
       const firstTab = tabs[0];
       if (!firstTab) continue;
+
+      const occurrence = (labelSeen.get(ws.label) ?? 0) + 1;
+      labelSeen.set(ws.label, occurrence);
+      const displayName = occurrence > 1 ? `${ws.label} (${occurrence})` : ws.label;
+
       const winInfo = this.toMuxWindowInfo(snap, firstTab, windows.length);
-      windows.push({ ...winInfo, name: ws.label, ref: herdrMuxRef(ws.label) });
+      windows.push({ ...winInfo, name: displayName, ref: herdrMuxRef(ws.label) });
     }
     return [{
       name: this.sessionName,
@@ -175,7 +197,13 @@ export class HerdrClient implements IMuxClient {
     baseName?: string,
     opts?: { exactName?: boolean; extraEnv?: Record<string, string> },
   ): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
-    const windowName = baseName ?? 'default';
+    const windowName = baseName ? baseName : generateWindowName('win');
+
+    const snap = await this.snapshot(server);
+    if (snap.workspaces.some((w) => w.label === windowName)) {
+      throw new WindowExistsError(windowName);
+    }
+
     const resp = await this.rpc(server, 'workspace.create', {
       name: windowName,
       ...(opts?.extraEnv ? { env: opts.extraEnv } : {}),
