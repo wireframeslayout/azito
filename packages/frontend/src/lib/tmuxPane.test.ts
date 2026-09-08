@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { paneDisplayName, resolveActivePane } from './tmuxPane';
+import { paneDisplayName, resolveActivePane, checkWindowExists, resolveActivePaneByRef } from './tmuxPane';
+import type { TerminalRef } from './terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 describe('paneDisplayName', () => {
@@ -143,5 +144,128 @@ describe('resolveActivePane', () => {
     }];
     const pane = resolveActivePane(noActive, 's:w');
     expect(pane).toEqual(noActive[0].windows[0].panes[0]);
+  });
+});
+
+describe('checkWindowExists', () => {
+  const sessions: Session[] = [{
+    name: 'azito',
+    windows: [
+      {
+        index: 0,
+        name: 'main',
+        ref: '{"kind":"herdr","workspace":"azito","window":"main"}',
+        windowId: 42,
+        panes: [
+          { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true },
+          { index: 1, title: 'vim', command: 'vim', width: 80, height: 24, active: false },
+        ],
+      },
+      {
+        index: 1,
+        name: 'editor',
+        ref: '{"kind":"tmux","workspace":"azito","window":"editor"}',
+        windowId: null,
+        panes: [
+          { index: 0, title: 'code', command: 'code', width: 80, height: 24, active: true },
+        ],
+      },
+    ],
+  }];
+
+  describe('windowId ref', () => {
+    it('finds window and pane by windowId', () => {
+      const ref: TerminalRef = { kind: 'windowId', serverName: 'srv', windowId: 42, pane: 0 };
+      expect(checkWindowExists(sessions, ref, '')).toEqual({ found: true, paneFound: true });
+    });
+
+    it('reports pane missing when pane index does not exist', () => {
+      const ref: TerminalRef = { kind: 'windowId', serverName: 'srv', windowId: 42, pane: 9 };
+      expect(checkWindowExists(sessions, ref, '')).toEqual({ found: true, paneFound: false });
+    });
+
+    it('reports not found when windowId is absent', () => {
+      const ref: TerminalRef = { kind: 'windowId', serverName: 'srv', windowId: 999, pane: 0 };
+      expect(checkWindowExists(sessions, ref, '')).toEqual({ found: false, paneFound: false });
+    });
+  });
+
+  describe('ref (herdr / mux)', () => {
+    it('finds window by ref string', () => {
+      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"herdr","workspace":"azito","window":"main"}', pane: 0 };
+      expect(checkWindowExists(sessions, ref, '')).toEqual({ found: true, paneFound: true });
+    });
+
+    it('reports not found for mismatched ref', () => {
+      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"herdr","workspace":"azito","window":"gone"}', pane: 0 };
+      expect(checkWindowExists(sessions, ref, '')).toEqual({ found: false, paneFound: false });
+    });
+  });
+
+  describe('legacy (no terminalRef)', () => {
+    it('finds window by target string', () => {
+      expect(checkWindowExists(sessions, undefined, 'azito:main.0')).toEqual({ found: true, paneFound: true });
+    });
+
+    it('reports not found for unknown session', () => {
+      expect(checkWindowExists(sessions, undefined, 'unknown:main')).toEqual({ found: false, paneFound: false });
+    });
+
+    it('reports not found for target without colon', () => {
+      expect(checkWindowExists(sessions, undefined, 'nocolon')).toEqual({ found: false, paneFound: false });
+    });
+
+    it('reports pane missing for non-existent pane index', () => {
+      expect(checkWindowExists(sessions, undefined, 'azito:main.9')).toEqual({ found: true, paneFound: false });
+    });
+  });
+});
+
+describe('resolveActivePaneByRef', () => {
+  const sessions: Session[] = [{
+    name: 'azito',
+    windows: [{
+      index: 0,
+      name: 'main',
+      ref: '{"kind":"herdr","workspace":"azito","window":"main"}',
+      windowId: 42,
+      panes: [
+        { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: false },
+        { index: 1, title: 'vim', command: 'vim', width: 80, height: 24, active: true },
+      ],
+    }],
+  }];
+
+  it('returns the active pane via windowId ref', () => {
+    const ref: TerminalRef = { kind: 'windowId', serverName: 'srv', windowId: 42, pane: 0 };
+    expect(resolveActivePaneByRef(sessions, ref)).toEqual(sessions[0].windows[0].panes[1]);
+  });
+
+  it('returns the active pane via mux ref', () => {
+    const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"herdr","workspace":"azito","window":"main"}', pane: 0 };
+    expect(resolveActivePaneByRef(sessions, ref)).toEqual(sessions[0].windows[0].panes[1]);
+  });
+
+  it('falls back to ref.pane when no active pane', () => {
+    const noActive: Session[] = [{
+      name: 'azito',
+      windows: [{
+        index: 0,
+        name: 'main',
+        ref: '{"kind":"herdr","workspace":"azito","window":"main"}',
+        windowId: 42,
+        panes: [
+          { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: false },
+          { index: 1, title: 'vim', command: 'vim', width: 80, height: 24, active: false },
+        ],
+      }],
+    }];
+    const ref: TerminalRef = { kind: 'windowId', serverName: 'srv', windowId: 42, pane: 1 };
+    expect(resolveActivePaneByRef(noActive, ref)).toEqual(noActive[0].windows[0].panes[1]);
+  });
+
+  it('returns null for non-existent window', () => {
+    const ref: TerminalRef = { kind: 'windowId', serverName: 'srv', windowId: 999, pane: 0 };
+    expect(resolveActivePaneByRef(sessions, ref)).toBeNull();
   });
 });

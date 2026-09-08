@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { findWindow, isTaskOwnedWindow } from './WindowStatusDropdown';
 import type { Project, Task, Window } from '../pages/workspace/types';
+import type { TerminalRef } from '../lib/terminalRef';
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
   return {
@@ -54,5 +55,23 @@ describe('findWindow', () => {
 
   it('一致しなければ null', () => {
     expect(findWindow('srv-a', 'sess:99', project, allTasks)).toBeNull();
+  });
+
+  it('windowId ref で Window.id と照合する', () => {
+    const ref: TerminalRef = { kind: 'windowId', serverName: 'srv-a', windowId: 10, pane: 1 };
+    expect(findWindow('srv-a', '', project, allTasks, ref)).toBe(taskWindow);
+  });
+
+  it('muxRef ref で Window.muxRef と照合する', () => {
+    const muxRef = '{"kind":"tmux","workspace":"sess","window":"1"}';
+    const winWithMuxRef = makeWindow({ id: 11, serverName: 'srv-a', tmuxTarget: 'sess:1', muxRef });
+    const proj = { windows: [winWithMuxRef] } as unknown as Project;
+    const ref: TerminalRef = { kind: 'ref', serverName: 'srv-a', ref: muxRef, pane: 1 };
+    expect(findWindow('srv-a', '', proj, [], ref)).toBe(winWithMuxRef);
+  });
+
+  it('terminalRef で見つからなくても tmuxTarget フォールバックで見つかる', () => {
+    const ref: TerminalRef = { kind: 'windowId', serverName: 'srv-a', windowId: 999, pane: 1 };
+    expect(findWindow('srv-a', 'sess:1', project, allTasks, ref)).toBe(projectWindow);
   });
 });

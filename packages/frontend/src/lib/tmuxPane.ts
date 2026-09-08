@@ -1,4 +1,5 @@
 import type { Pane, Session, TmuxWindow } from '../pages/workspace/types';
+import type { TerminalRef } from './terminalRef';
 
 export function paneDisplayName(pane: Pick<Pane, 'title' | 'command'>): string {
   return pane.title && pane.title !== pane.command ? pane.title : pane.command;
@@ -72,4 +73,82 @@ export function resolveActivePane(
   }
 
   return win.panes[0] ?? null;
+}
+
+export interface WindowExistsResult {
+  found: boolean;
+  paneFound: boolean;
+}
+
+function findWindowByRef(sessions: Session[], ref: TerminalRef): TmuxWindow | undefined {
+  for (const sess of sessions) {
+    const win = ref.kind === 'windowId'
+      ? sess.windows.find(w => w.windowId === ref.windowId)
+      : sess.windows.find(w => w.ref === ref.ref);
+    if (win) return win;
+  }
+  return undefined;
+}
+
+function checkWindowExistsByRef(sessions: Session[], ref: TerminalRef): WindowExistsResult {
+  const win = findWindowByRef(sessions, ref);
+  if (!win) return { found: false, paneFound: false };
+  const paneFound = win.panes.some(p => p.index === ref.pane);
+  return { found: true, paneFound };
+}
+
+function checkWindowExistsByTarget(sessions: Session[], target: string): WindowExistsResult {
+  const colonIdx = target.indexOf(':');
+  if (colonIdx < 0) return { found: false, paneFound: false };
+  const sessionName = target.slice(0, colonIdx);
+  const rest = target.slice(colonIdx + 1);
+
+  const session = sessions.find(s => s.name === sessionName);
+  if (!session) return { found: false, paneFound: false };
+
+  const dotIdx = rest.lastIndexOf('.');
+  const winSpec = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest;
+  const paneSpec = dotIdx >= 0 ? rest.slice(dotIdx + 1) : null;
+
+  const winIdx = parseInt(winSpec, 10);
+  let tmuxWindow = Number.isNaN(winIdx)
+    ? session.windows.find(w => w.name === winSpec)
+    : session.windows.find(w => w.index === winIdx);
+
+  if (!tmuxWindow && dotIdx >= 0) {
+    const fullWin = session.windows.find(w => w.name === rest)
+      ?? session.windows.find(w => String(w.index) === rest);
+    if (fullWin) tmuxWindow = fullWin;
+  }
+
+  if (!tmuxWindow) return { found: false, paneFound: false };
+
+  if (paneSpec !== null && /^\d+$/.test(paneSpec)) {
+    const pIdx = parseInt(paneSpec, 10);
+    if (!tmuxWindow.panes.some(p => p.index === pIdx)) {
+      return { found: true, paneFound: false };
+    }
+  }
+
+  return { found: true, paneFound: true };
+}
+
+export function checkWindowExists(
+  sessions: Session[],
+  terminalRef: TerminalRef | undefined,
+  target: string,
+): WindowExistsResult {
+  if (terminalRef) return checkWindowExistsByRef(sessions, terminalRef);
+  return checkWindowExistsByTarget(sessions, target);
+}
+
+export function resolveActivePaneByRef(
+  sessions: Session[],
+  ref: TerminalRef,
+): Pane | null {
+  const win = findWindowByRef(sessions, ref);
+  if (!win) return null;
+  return win.panes.find(p => p.active)
+    ?? win.panes.find(p => p.index === ref.pane)
+    ?? win.panes[0] ?? null;
 }
