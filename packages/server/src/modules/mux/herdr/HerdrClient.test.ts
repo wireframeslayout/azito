@@ -159,6 +159,48 @@ describe('HerdrClient', () => {
       expect(windowName).toBe('my-ws');
       expect(calls).toEqual(['session.snapshot', 'workspace.create']);
     });
+
+    it('generates win--xxxx name when baseName is empty', async () => {
+      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'win--abcd' } };
+        return { type: 'ok' };
+      });
+      const result = await client.openWindow(server, 'azito');
+      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
+    });
+
+    it('generates win--xxxx name when baseName is undefined', async () => {
+      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'auto' } };
+        return { type: 'ok' };
+      });
+      const result = await client.openWindow(server, 'azito', undefined);
+      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
+    });
+
+    it('uses explicit baseName as-is without suffix', async () => {
+      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'dev' } };
+        return { type: 'ok' };
+      });
+      const result = await client.openWindow(server, 'azito', 'dev');
+      expect(result.windowName).toBe('dev');
+    });
+
+    it('throws WindowExistsError when label already exists', async () => {
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
+        return { type: 'ok' };
+      });
+      await expect(client.openWindow(server, 'azito', 'default')).rejects.toBeInstanceOf(WindowExistsError);
+      await expect(client.openWindow(server, 'azito', 'default')).rejects.toMatchObject({ windowName: 'default' });
+    });
   });
 
   describe('resolvePane', () => {
@@ -349,50 +391,6 @@ describe('HerdrClient', () => {
     });
     it('returns false for missing workspace', async () => {
       expect(await client.windowExists(server, { kind: 'herdr', workspace: 'nonexist', window: 'main' })).toBe(false);
-    });
-  });
-
-  describe('openWindow', () => {
-    it('generates win--xxxx name when baseName is empty', async () => {
-      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
-      const client = makeClient((method) => {
-        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
-        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'win--abcd' } };
-        return { type: 'ok' };
-      });
-      const result = await client.openWindow(server, 'azito');
-      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
-    });
-
-    it('generates win--xxxx name when baseName is undefined', async () => {
-      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
-      const client = makeClient((method) => {
-        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
-        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'auto' } };
-        return { type: 'ok' };
-      });
-      const result = await client.openWindow(server, 'azito', undefined);
-      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
-    });
-
-    it('uses explicit baseName as-is without suffix', async () => {
-      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
-      const client = makeClient((method) => {
-        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
-        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'dev' } };
-        return { type: 'ok' };
-      });
-      const result = await client.openWindow(server, 'azito', 'dev');
-      expect(result.windowName).toBe('dev');
-    });
-
-    it('throws WindowExistsError when label already exists', async () => {
-      const client = makeClient((method) => {
-        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
-        return { type: 'ok' };
-      });
-      await expect(client.openWindow(server, 'azito', 'default')).rejects.toBeInstanceOf(WindowExistsError);
-      await expect(client.openWindow(server, 'azito', 'default')).rejects.toMatchObject({ windowName: 'default' });
     });
   });
 
