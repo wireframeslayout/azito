@@ -52,7 +52,7 @@ export function useFocusSync(
     const { serverName, windowId, taskId } = payload;
 
     const currentTab = activeTabIdRef.current ?? '';
-    if (currentTab.includes(`w${windowId}.`)) return;
+    if (currentTab.includes(`::w${windowId}.`)) return;
 
     if (taskId != null) {
       const task = allTasks.find((t) => t.id === taskId);
