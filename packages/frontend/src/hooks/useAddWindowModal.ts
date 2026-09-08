@@ -14,6 +14,12 @@ export function isInsufficientResources(res: unknown): res is { error: string; r
     && (res as Record<string, unknown>)['error'] === 'insufficient_resources';
 }
 
+/** 409 window_exists レスポンス */
+export function isWindowExists(res: unknown): res is { error: string; windowName: string } {
+  return typeof res === 'object' && res !== null
+    && (res as Record<string, unknown>)['error'] === 'window_exists';
+}
+
 export type AgentPreset = { command: string; label: string };
 
 /**
@@ -287,6 +293,7 @@ export function useAddWindowModal(
               setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
               return;
             }
+            if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
             createdWindowName = res.windowName;
             createdRef = res.ref;
           } else {
@@ -298,6 +305,7 @@ export function useAddWindowModal(
               setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
               return;
             }
+            if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
             createdWindowName = res.windowName;
             createdRef = res.ref;
           }

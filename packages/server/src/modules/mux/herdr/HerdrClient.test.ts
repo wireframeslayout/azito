@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { HerdrClient } from './HerdrClient';
 import { MuxCapabilityMissingError } from '../../tmux/MuxCapabilityError';
+import { WindowExistsError } from '../../tmux/WindowExistsError';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { MuxRef } from '@azito/shared';
 
@@ -134,6 +135,7 @@ describe('HerdrClient', () => {
       const calls: Array<{ method: string; params: unknown }> = [];
       const client = makeClient((method, params) => {
         calls.push({ method, params });
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
         if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w3', label: 'new-tab' }, tab: { tab_id: 'w3:t1', label: '1' }, root_pane: { pane_id: 'w3:p1' } };
         if (method === 'workspace.rename') return { type: 'ok' };
         return null;
@@ -141,20 +143,21 @@ describe('HerdrClient', () => {
       const { ref, windowName } = await client.openWindow(server, 'default', 'new-tab', { extraEnv: { FOO: 'bar' } });
       expect(ref).toEqual({ kind: 'herdr', workspace: 'new-tab', window: 'main' });
       expect(windowName).toBe('new-tab');
-      expect(calls[0].method).toBe('workspace.create');
-      expect(calls[0].params).toEqual({ name: 'new-tab', env: { FOO: 'bar' } });
+      const createCall = calls.find((c) => c.method === 'workspace.create');
+      expect(createCall?.params).toEqual({ name: 'new-tab', env: { FOO: 'bar' } });
     });
 
     it('skips rename when workspace.create label already matches', async () => {
       const calls: string[] = [];
       const client = makeClient((method) => {
         calls.push(method);
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
         if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w3', label: 'my-ws' }, tab: { tab_id: 'w3:t1', label: '1' }, root_pane: { pane_id: 'w3:p1' } };
         return null;
       });
       const { windowName } = await client.openWindow(server, 'ignored', 'my-ws');
       expect(windowName).toBe('my-ws');
-      expect(calls).toEqual(['workspace.create']);
+      expect(calls).toEqual(['session.snapshot', 'workspace.create']);
     });
   });
 
@@ -346,6 +349,94 @@ describe('HerdrClient', () => {
     });
     it('returns false for missing workspace', async () => {
       expect(await client.windowExists(server, { kind: 'herdr', workspace: 'nonexist', window: 'main' })).toBe(false);
+    });
+  });
+
+  describe('openWindow', () => {
+    it('generates win--xxxx name when baseName is empty', async () => {
+      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'win--abcd' } };
+        return { type: 'ok' };
+      });
+      const result = await client.openWindow(server, 'azito');
+      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
+    });
+
+    it('generates win--xxxx name when baseName is undefined', async () => {
+      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'auto' } };
+        return { type: 'ok' };
+      });
+      const result = await client.openWindow(server, 'azito', undefined);
+      expect(result.windowName).toMatch(/^win--[a-z0-9]{4}$/);
+    });
+
+    it('uses explicit baseName as-is without suffix', async () => {
+      const EMPTY_SNAP = { ...SNAPSHOT, workspaces: [] };
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: EMPTY_SNAP };
+        if (method === 'workspace.create') return { type: 'workspace_created', workspace: { workspace_id: 'w2', label: 'dev' } };
+        return { type: 'ok' };
+      });
+      const result = await client.openWindow(server, 'azito', 'dev');
+      expect(result.windowName).toBe('dev');
+    });
+
+    it('throws WindowExistsError when label already exists', async () => {
+      const client = makeClient((method) => {
+        if (method === 'session.snapshot') return { type: 'session_snapshot', snapshot: SNAPSHOT };
+        return { type: 'ok' };
+      });
+      await expect(client.openWindow(server, 'azito', 'default')).rejects.toBeInstanceOf(WindowExistsError);
+      await expect(client.openWindow(server, 'azito', 'default')).rejects.toMatchObject({ windowName: 'default' });
+    });
+  });
+
+  describe('listWorkspaces duplicate label rescue', () => {
+    const DUP_SNAPSHOT = {
+      ...SNAPSHOT,
+      workspaces: [
+        { workspace_id: 'w1', number: 1, label: 'default', focused: true, pane_count: 1, tab_count: 1, active_tab_id: 'w1:t1', agent_status: 'unknown' },
+        { workspace_id: 'w2', number: 2, label: 'default', focused: false, pane_count: 1, tab_count: 1, active_tab_id: 'w2:t1', agent_status: 'unknown' },
+        { workspace_id: 'w3', number: 3, label: 'other', focused: false, pane_count: 1, tab_count: 1, active_tab_id: 'w3:t1', agent_status: 'unknown' },
+      ],
+      tabs: [
+        { tab_id: 'w1:t1', workspace_id: 'w1', number: 1, label: 'main', focused: true, pane_count: 1, agent_status: 'unknown' },
+        { tab_id: 'w2:t1', workspace_id: 'w2', number: 1, label: 'main', focused: false, pane_count: 1, agent_status: 'unknown' },
+        { tab_id: 'w3:t1', workspace_id: 'w3', number: 1, label: 'main', focused: false, pane_count: 1, agent_status: 'unknown' },
+      ],
+      panes: [
+        { pane_id: 'w1:p1', terminal_id: 1, workspace_id: 'w1', tab_id: 'w1:t1', focused: true, cwd: '/', foreground_cwd: '/', agent_status: 'unknown', revision: 1 },
+        { pane_id: 'w2:p1', terminal_id: 2, workspace_id: 'w2', tab_id: 'w2:t1', focused: true, cwd: '/', foreground_cwd: '/', agent_status: 'unknown', revision: 1 },
+        { pane_id: 'w3:p1', terminal_id: 3, workspace_id: 'w3', tab_id: 'w3:t1', focused: true, cwd: '/', foreground_cwd: '/', agent_status: 'unknown', revision: 1 },
+      ],
+      layouts: [
+        { workspace_id: 'w1', tab_id: 'w1:t1', zoomed: false, focused_pane_id: 'w1:p1', panes: [{ pane_id: 'w1:p1', focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }], splits: [] },
+        { workspace_id: 'w2', tab_id: 'w2:t1', zoomed: false, focused_pane_id: 'w2:p1', panes: [{ pane_id: 'w2:p1', focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }], splits: [] },
+        { workspace_id: 'w3', tab_id: 'w3:t1', zoomed: false, focused_pane_id: 'w3:p1', panes: [{ pane_id: 'w3:p1', focused: true, rect: { x: 0, y: 0, width: 120, height: 40 } }], splits: [] },
+      ],
+    };
+
+    it('returns all entries with (N) suffix for duplicates', async () => {
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: DUP_SNAPSHOT } : { type: 'ok' });
+      const workspaces = await client.listWorkspaces(server);
+      const names = workspaces[0].windows.map((w: { name: string }) => w.name);
+      expect(names).toEqual(['default', 'default (2)', 'other']);
+      expect(workspaces[0].windowCount).toBe(3);
+    });
+
+    it('logs a warning for duplicate labels', async () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const client = makeClient((method) => method === 'session.snapshot' ? { type: 'session_snapshot', snapshot: DUP_SNAPSHOT } : { type: 'ok' });
+      const warnServer = { ...server, name: 'warn-test-herdr' };
+      await client.listWorkspaces(warnServer);
+      const dupWarn = warnSpy.mock.calls.find((c) => String(c[0]).includes('share label'));
+      expect(dupWarn).toBeDefined();
+      warnSpy.mockRestore();
     });
   });
 });
