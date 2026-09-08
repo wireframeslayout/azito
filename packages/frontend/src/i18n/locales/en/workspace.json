@@ -250,6 +250,7 @@
     "noOffline": "No offline windows",
     "noBrowsers": "No browsers open",
     "searchPlaceholder": "Search title, ID, branch…",
+    "followHerdr": "Follow herdr",
     "noSearchResults": "No matches for \"{{query}}\"",
     "openBrowser": "Open new",
     "closeBrowserGroup": "Close this browser group",

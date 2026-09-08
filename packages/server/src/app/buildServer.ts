@@ -555,7 +555,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
-    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix,
+    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, herdrEventBridge,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
       return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {

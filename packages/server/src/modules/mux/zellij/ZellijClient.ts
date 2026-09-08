@@ -274,6 +274,10 @@ export class ZellijClient implements IMuxClient {
     }
   }
 
+  async focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
+    return this.execAction(server, ['go-to-tab-name', ref.window]);
+  }
+
   async resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null> {
     const sep = target.indexOf(':');
     if (sep === -1) return null;

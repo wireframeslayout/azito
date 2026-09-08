@@ -717,6 +717,7 @@ export class TmuxClient implements IMuxClient {
   async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string) { return this.renameWindow(server, tmuxTargetFromMuxRef(ref), name); }
   async renameWorkspace(server: ServerConfig, from: string, to: string) { return this.renameSession(server, from, to); }
   async windowExists(server: ServerConfig, ref: MuxRef) { return this.checkPaneExists(server, tmuxTargetFromMuxRef(ref)); }
+  async focusWindow(server: ServerConfig, ref: MuxRef) { return this.runTmuxCommand(server, ['select-window', '-t', tmuxTargetFromMuxRef(ref)]); }
 
   async resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null> {
     const identity = await this.getWindowIdentity(server, target);

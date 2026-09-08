@@ -19,4 +19,5 @@ export type NotificationEvent =
   | { type: 'agent:activity'; payload: { serverName: string; target: string; running: boolean; source: 'operation' | 'manual' | 'supervised'; operation: boolean; taskId?: number; label?: string; projectId?: number; status?: 'working' | 'blocked'; paneName?: string; reason?: AgentActivityStopReason; windowId?: number } }
   | { type: 'supervisor:ready'; payload: { serverName: string; target: string; taskId?: number; windowId?: number } }
   | { type: 'browser:opened'; payload: { serverName: string; groupId: string; tabId: string; url: string | null; taskId?: number; label?: string } }
+  | { type: 'mux:focus'; payload: { serverName: string; windowId: number; taskId?: number; source: 'herdr' } }
   | { type: 'workspace:refresh'; payload: Record<string, never> };

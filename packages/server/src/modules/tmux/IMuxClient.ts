@@ -17,6 +17,7 @@ export interface IMuxClient {
   renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult>;
   renameWorkspace(server: ServerConfig, from: string, to: string): Promise<ExecResult>;
   windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean>;
+  focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
   resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null>;
 
   // ─── Pane ───

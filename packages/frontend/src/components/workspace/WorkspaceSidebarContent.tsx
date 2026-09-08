@@ -70,6 +70,9 @@ interface WorkspaceSidebarContentProps {
   taskWindows?: Array<{ tmuxTarget: string; taskId: number; serverName: string }>;
   allProjects?: Array<{ id: number; name: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>;
   onAddWindowToProject?: (projectId: number, serverName: string, tmuxTarget: string) => void;
+  followHerdr?: boolean;
+  onFollowHerdrChange?: (v: boolean) => void;
+  onWindowFocus?: (windowId: number) => void;
 }
 
 export default function WorkspaceSidebarContent({
@@ -117,6 +120,9 @@ export default function WorkspaceSidebarContent({
   onOpenDiff,
   respawningWindowIds,
   taskWindows,
+  followHerdr,
+  onFollowHerdrChange,
+  onWindowFocus,
 }: WorkspaceSidebarContentProps) {
   const { t } = useTranslation('workspace');
   const { t: tf } = useTranslation('files');
@@ -171,6 +177,9 @@ export default function WorkspaceSidebarContent({
           openBrowser={openBrowser}
           openTask={openTask}
           onOpenTaskWindow={onOpenTaskWindow}
+          followHerdr={followHerdr}
+          onFollowHerdrChange={onFollowHerdrChange}
+          onWindowFocus={onWindowFocus}
         />
       )}
       {sidebarMode === 'tasks' && project && (

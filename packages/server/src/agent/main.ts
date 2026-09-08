@@ -129,6 +129,7 @@ async function main(): Promise<void> {
   let herdrProbeTimer: ReturnType<typeof setInterval> | null = null;
   const herdrSockPath = herdrSocketPath(herdrSession);
   const herdrRelayPaneCache = new Map<string, { workspace_label: string }>();
+  const herdrRelayWsCache = new Map<string, string>();
   let herdrRelaySocket: HerdrSocketClient | undefined;
 
   function startHerdrRelay(): boolean {
@@ -144,6 +145,7 @@ async function main(): Promise<void> {
       { type: 'workspace.renamed' },
       { type: 'pane.created' },
       { type: 'pane.closed' },
+      { type: 'workspace.focused' },
     ];
     const rebuildPaneCache = async (): Promise<void> => {
       try {
@@ -154,7 +156,9 @@ async function main(): Promise<void> {
           tabs: Array<{ tab_id: string; label: string }>;
         };
         herdrRelayPaneCache.clear();
+        herdrRelayWsCache.clear();
         const wsLabels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]));
+        for (const [id, label] of wsLabels) herdrRelayWsCache.set(id, label);
         const paneIds: string[] = [];
         for (const p of snap.panes) {
           const wl = wsLabels.get(p.workspace_id);
@@ -181,6 +185,14 @@ async function main(): Promise<void> {
         const mapping = herdrRelayPaneCache.get(paneId);
         if (!mapping) return;
         agentEventBus.emit('mux-event', { ...event, workspace_label: mapping.workspace_label, tab_label: 'main' });
+        return;
+      }
+      if (event.type === 'workspace.focused') {
+        const wsId = event.workspace_id as string | undefined;
+        if (!wsId) return;
+        const label = herdrRelayWsCache.get(wsId);
+        if (!label) return;
+        agentEventBus.emit('mux-event', { ...event, workspace_label: label });
         return;
       }
       agentEventBus.emit('mux-event', event);

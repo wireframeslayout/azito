@@ -602,7 +602,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
-  const herdrEventBridge = new HerdrEventBridge(agentActivityMonitor, infra.notificationBus, repos.serverRepo);
+  const herdrEventBridge = new HerdrEventBridge(agentActivityMonitor, infra.notificationBus, repos.serverRepo, repos.windowRepo);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 

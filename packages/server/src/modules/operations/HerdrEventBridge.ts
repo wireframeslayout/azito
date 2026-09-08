@@ -1,8 +1,10 @@
 import { HerdrEventSubscriber, type HerdrEvent, type HerdrSubscription } from '../mux/herdr/HerdrEventSubscriber';
 import { HerdrSocketClient, herdrSocketPath } from '../mux/herdr/HerdrSocketClient';
+import { herdrMuxRef } from '@azito/shared';
 import type { AgentActivityMonitor, MuxAgentStatus } from './AgentActivityMonitor';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { IServerRepository } from '../servers/Server';
+import type { IWindowRepository } from '../windows/Window';
 
 /** `session.snapshot` arrives as `{ id, result: { type, snapshot } }` (or, from tests, already unwrapped). */
 function unwrapHerdrSnapshot(resp: unknown): unknown {
@@ -21,6 +23,7 @@ const STRUCTURE_EVENTS: HerdrSubscription[] = [
   { type: 'workspace.renamed' },
   { type: 'pane.created' },
   { type: 'pane.closed' },
+  { type: 'workspace.focused' },
 ];
 
 const DEFAULT_TAB_NAME = 'main';
@@ -34,17 +37,32 @@ const VALID_AGENT_STATUSES = new Set<string>(['working', 'idle', 'blocked', 'don
 interface PerServerState {
   subscriber: HerdrEventSubscriber;
   paneCache: Map<string, PaneMapping>;
+  workspaceCache: Map<string, string>;
   socketClient: HerdrSocketClient;
 }
 
+const FOCUS_ECHO_SUPPRESS_MS = 2000;
+
 export class HerdrEventBridge {
   private servers = new Map<string, PerServerState>();
+  private recentFocusCommands = new Map<string, number>();
 
   constructor(
     private agentActivityMonitor: AgentActivityMonitor,
     private notificationBus: NotificationBus,
     private serverRepo: IServerRepository,
+    private windowRepo: IWindowRepository,
   ) {}
+
+  recordFocusCommand(serverName: string, workspaceLabel: string): void {
+    const now = Date.now();
+    this.recentFocusCommands.set(`${serverName}:${workspaceLabel}`, now);
+    if (this.recentFocusCommands.size > 50) {
+      for (const [k, ts] of this.recentFocusCommands) {
+        if (now - ts >= FOCUS_ECHO_SUPPRESS_MS) this.recentFocusCommands.delete(k);
+      }
+    }
+  }
 
   startAll(): void {
     for (const srv of this.serverRepo.findAll()) {
@@ -94,7 +112,8 @@ export class HerdrEventBridge {
     const subs: HerdrSubscription[] = [...STRUCTURE_EVENTS];
     const subscriber = new HerdrEventSubscriber(sockPath, subs);
     const paneCache = new Map<string, PaneMapping>();
-    const state: PerServerState = { subscriber, paneCache, socketClient };
+    const workspaceCache = new Map<string, string>();
+    const state: PerServerState = { subscriber, paneCache, workspaceCache, socketClient };
     this.servers.set(serverName, state);
 
     subscriber.on('connected', () => {
@@ -116,8 +135,12 @@ export class HerdrEventBridge {
         tabs: Array<{ tab_id: string; workspace_id: string; label: string }>;
       };
       state.paneCache.clear();
+      state.workspaceCache.clear();
       const wsLabels = new Map<string, string>();
-      for (const ws of snapshot.workspaces) wsLabels.set(ws.workspace_id, ws.label);
+      for (const ws of snapshot.workspaces) {
+        wsLabels.set(ws.workspace_id, ws.label);
+        state.workspaceCache.set(ws.workspace_id, ws.label);
+      }
 
       const paneIds: string[] = [];
       for (const pane of snapshot.panes) {
@@ -153,6 +176,32 @@ export class HerdrEventBridge {
       if (!target) return;
 
       this.agentActivityMonitor.recordMuxSignal(serverName, target, rawStatus as MuxAgentStatus);
+      return;
+    }
+
+    if (type === 'workspace.focused') {
+      const wsLabel = state
+        ? this.resolveWorkspaceLabelFromEvent(event, state)
+        : (event.workspace_label as string | undefined) ?? null;
+      if (!wsLabel) return;
+
+      const key = `${serverName}:${wsLabel}`;
+      const last = this.recentFocusCommands.get(key);
+      if (last && Date.now() - last < FOCUS_ECHO_SUPPRESS_MS) return;
+
+      const ref = herdrMuxRef(wsLabel);
+      const win = this.windowRepo.findByServerAndRef(serverName, ref);
+      if (!win) return;
+
+      this.notificationBus.emit({
+        type: 'mux:focus',
+        payload: {
+          serverName,
+          windowId: win.id,
+          taskId: win.ownerType === 'task' ? (win.taskId ?? undefined) : undefined,
+          source: 'herdr',
+        },
+      });
       return;
     }
 
@@ -217,6 +266,14 @@ export class HerdrEventBridge {
   private resolveTarget(paneId: string, state: PerServerState): string | null {
     const mapping = state.paneCache.get(paneId);
     if (mapping) return `${mapping.workspaceLabel}:${DEFAULT_TAB_NAME}`;
+    return null;
+  }
+
+  private resolveWorkspaceLabelFromEvent(event: HerdrEvent, state: PerServerState): string | null {
+    const directLabel = event.workspace_label as string | undefined;
+    if (directLabel) return directLabel;
+    const wsId = event.workspace_id as string | undefined;
+    if (wsId) return state.workspaceCache.get(wsId) ?? null;
     return null;
   }
 

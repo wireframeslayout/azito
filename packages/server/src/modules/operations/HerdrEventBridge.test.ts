@@ -3,6 +3,7 @@ import { HerdrEventBridge } from './HerdrEventBridge';
 import type { AgentActivityMonitor } from './AgentActivityMonitor';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
+import type { IWindowRepository } from '../windows/Window';
 
 function makeBridge() {
   const recordMuxSignal = vi.fn();
@@ -17,9 +18,12 @@ function makeBridge() {
     findAll: vi.fn(() => servers),
     findByName: vi.fn((name: string) => servers.find(s => s.name === name) ?? null),
   } as unknown as IServerRepository;
+  const windowRepo = {
+    findByServerAndRef: vi.fn(),
+  } as unknown as IWindowRepository;
 
-  const bridge = new HerdrEventBridge(monitor, bus, serverRepo);
-  return { bridge, monitor, bus, serverRepo, recordMuxSignal, emitFn };
+  const bridge = new HerdrEventBridge(monitor, bus, serverRepo, windowRepo);
+  return { bridge, monitor, bus, serverRepo, windowRepo, recordMuxSignal, emitFn };
 }
 
 describe('HerdrEventBridge', () => {
@@ -141,6 +145,92 @@ describe('HerdrEventBridge', () => {
 
       expect(recordMuxSignal).not.toHaveBeenCalled();
       expect(emitFn).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('workspace.focused → mux:focus', () => {
+    it('emits mux:focus when window is found by mux_ref', () => {
+      const { bridge, emitFn, windowRepo } = makeBridge();
+      (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 42, ownerType: 'task', taskId: 7, serverName: 'herdr-agent',
+      });
+
+      bridge.handleAgentMuxEvent('herdr-agent', {
+        type: 'workspace.focused',
+        workspace_id: 'ws-1',
+        workspace_label: 'my-workspace',
+      });
+
+      expect(emitFn).toHaveBeenCalledWith({
+        type: 'mux:focus',
+        payload: { serverName: 'herdr-agent', windowId: 42, taskId: 7, source: 'herdr' },
+      });
+    });
+
+    it('does not emit when window is not found', () => {
+      const { bridge, emitFn, windowRepo } = makeBridge();
+      (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
+
+      bridge.handleAgentMuxEvent('herdr-agent', {
+        type: 'workspace.focused',
+        workspace_id: 'ws-1',
+        workspace_label: 'unknown-ws',
+      });
+
+      expect(emitFn).not.toHaveBeenCalled();
+    });
+
+    it('suppresses echo within 2s of recordFocusCommand', () => {
+      const { bridge, emitFn, windowRepo } = makeBridge();
+      (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 42, ownerType: 'task', taskId: 7, serverName: 'herdr-agent',
+      });
+
+      bridge.recordFocusCommand('herdr-agent', 'my-workspace');
+      bridge.handleAgentMuxEvent('herdr-agent', {
+        type: 'workspace.focused',
+        workspace_id: 'ws-1',
+        workspace_label: 'my-workspace',
+      });
+
+      expect(emitFn).not.toHaveBeenCalled();
+    });
+
+    it('allows event after echo suppression window expires', () => {
+      const { bridge, emitFn, windowRepo } = makeBridge();
+      (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 42, ownerType: 'task', taskId: 7, serverName: 'herdr-agent',
+      });
+
+      bridge.recordFocusCommand('herdr-agent', 'my-workspace');
+      // Manually expire the timestamp
+      (bridge as unknown as { recentFocusCommands: Map<string, number> }).recentFocusCommands.set('herdr-agent:my-workspace', Date.now() - 3000);
+
+      bridge.handleAgentMuxEvent('herdr-agent', {
+        type: 'workspace.focused',
+        workspace_id: 'ws-1',
+        workspace_label: 'my-workspace',
+      });
+
+      expect(emitFn).toHaveBeenCalledWith(expect.objectContaining({ type: 'mux:focus' }));
+    });
+
+    it('omits taskId for project-owned windows', () => {
+      const { bridge, emitFn, windowRepo } = makeBridge();
+      (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+        id: 10, ownerType: 'project', taskId: null, serverName: 'herdr-agent',
+      });
+
+      bridge.handleAgentMuxEvent('herdr-agent', {
+        type: 'workspace.focused',
+        workspace_id: 'ws-1',
+        workspace_label: 'project-ws',
+      });
+
+      expect(emitFn).toHaveBeenCalledWith({
+        type: 'mux:focus',
+        payload: { serverName: 'herdr-agent', windowId: 10, taskId: undefined, source: 'herdr' },
+      });
     });
   });
 

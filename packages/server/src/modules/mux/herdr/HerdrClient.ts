@@ -214,6 +214,12 @@ export class HerdrClient implements IMuxClient {
     return this.okResult();
   }
 
+  async focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
+    const wsId = await this.resolveWorkspaceId(server, ref.workspace);
+    await this.rpc(server, 'workspace.focus', { workspace_id: wsId });
+    return this.okResult();
+  }
+
   async windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean> {
     try {
       const snap = await this.snapshot(server);

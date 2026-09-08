@@ -250,6 +250,7 @@
     "noOffline": "オフラインのウィンドウはありません",
     "noBrowsers": "開いているブラウザはありません",
     "searchPlaceholder": "タイトル・ID・ブランチで検索…",
+    "followHerdr": "herdr に追従",
     "noSearchResults": "「{{query}}」に一致するオブジェクトはありません",
     "openBrowser": "新しく開く",
     "closeBrowserGroup": "このブラウザグループを閉じる",
