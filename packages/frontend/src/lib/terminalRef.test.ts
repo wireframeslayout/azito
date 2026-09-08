@@ -192,6 +192,11 @@ describe('terminalRefDisplayLabel', () => {
     const ref = '{"kind":"tmux","workspace":"sess","window":"win"}';
     expect(terminalRefDisplayLabel({ kind: 'ref', serverName: 'x', ref, pane: 1 })).toBe('sess:win');
   });
+
+  it('shows workspace only for herdr ref', () => {
+    const ref = '{"kind":"herdr","workspace":"my-workspace","window":"main"}';
+    expect(terminalRefDisplayLabel({ kind: 'ref', serverName: 'x', ref, pane: 1 })).toBe('my-workspace');
+  });
 });
 
 describe('isValidTerminalRef', () => {
