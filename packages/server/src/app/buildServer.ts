@@ -743,6 +743,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const terminalOpts: OpenTerminalOpts = {};
       if (resolvedServer.muxRuntime === 'herdr') {
         terminalOpts.herdrLock = resolveHerdrLock(resolvedServer.herdrNavigationLock, resolvedWin?.herdrNavigationLock ?? null);
+        // The agent focuses the target workspace before spawning the herdr
+        // client (Issue #208). That `workspace.focus` is AZITO-issued, not a
+        // user action, so register it with the event bridge the same way
+        // POST /api/windows/:id/focus does — otherwise its `workspace.focused`
+        // echo is relayed as `mux:focus`, the follow-mode UI switches tabs,
+        // the newly shown terminal attaches and focuses again, and two herdr
+        // tabs of one session ping-pong indefinitely.
+        if (resolvedRef.kind === 'herdr') {
+          herdrEventBridge.recordFocusCommand(resolvedServer.name, resolvedRef.workspace);
+        }
       }
 
       handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory, terminalOpts);
