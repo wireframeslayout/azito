@@ -1,5 +1,5 @@
 import type { PaneHandle } from '@azito/shared';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { InterruptKey } from './sources/profiles';
@@ -36,7 +36,7 @@ export type SendSignalResult = 'ok' | 'session_not_found' | 'pane_not_found';
 export class TranscriptPaneService {
   constructor(
     private readonly claudeTranscriptSource: TranscriptSource,
-    private readonly tmuxClient: TmuxClient,
+    private readonly muxDriverRegistry: MuxDriverRegistry,
     private readonly serverRepo: IServerRepository,
   ) {}
 
@@ -57,7 +57,8 @@ export class TranscriptPaneService {
     if (!meta) return null;
 
     const server = this.findLocalServer();
-    const allPanes = await this.tmuxClient.listAllPanes(server);
+    const driver = this.muxDriverRegistry.resolve(server);
+    const allPanes = await driver.listAllPanes(server);
     const panes: PaneCandidate[] = allPanes.map((pane) => ({
       paneId: pane.paneId,
       sessionName: pane.sessionName,
@@ -77,11 +78,12 @@ export class TranscriptPaneService {
     if (!meta) return 'session_not_found';
 
     const server = this.findLocalServer();
-    const exists = await this.tmuxClient.checkPaneExists(server, handle);
-    if (!exists) return 'pane_not_found';
+    const driver = this.muxDriverRegistry.resolve(server);
+    const { alive } = await driver.probePane(server, handle);
+    if (!alive) return 'pane_not_found';
 
-    await this.tmuxClient.sendLiteralText(server, handle, text);
-    await this.tmuxClient.sendKeysToHandle(server, handle, ['Enter']);
+    await driver.sendTextToHandle(server, handle, text);
+    await driver.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
   }
 
@@ -97,10 +99,11 @@ export class TranscriptPaneService {
     if (!meta) return 'session_not_found';
 
     const server = this.findLocalServer();
-    const exists = await this.tmuxClient.checkPaneExists(server, handle);
-    if (!exists) return 'pane_not_found';
+    const driver = this.muxDriverRegistry.resolve(server);
+    const { alive } = await driver.probePane(server, handle);
+    if (!alive) return 'pane_not_found';
 
-    await this.tmuxClient.sendKeysToHandle(server, handle, [key]);
+    await driver.sendKeysToHandle(server, handle, [key]);
     return 'ok';
   }
 }

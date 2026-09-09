@@ -1,8 +1,10 @@
 import type { Window, PaneLayout } from '../windows/Window';
 import type { ITaskRepository } from '../tasks/Task';
-import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
-import type { IServerRepository, ServerConfig } from '../servers/Server';
+import type { MuxPaneInfo } from '@azito/shared';
+import { asPaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { windowSpecMatches } from '../tmux/TmuxClient';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TailState, TranscriptSource } from './sources/TranscriptSource';
@@ -74,7 +76,7 @@ const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
  * （WindowActivityStatusService）がサーバー単位で1回だけ取得して渡す。
  */
 export interface ActivityProbeSnapshot {
-  allPanes: TmuxPaneInfo[];
+  allPanes: MuxPaneInfo[];
   psEntries: PsEntry[];
 }
 
@@ -136,6 +138,10 @@ function toGateState(
 
 // ─── Helpers ───
 
+function resolveWindowRef(window: Pick<Window, 'muxRef' | 'tmuxTarget'>) {
+  return window.muxRef ?? muxRefFromTmuxTarget(window.tmuxTarget);
+}
+
 export function splitWindowTarget(tmuxTarget: string): { sessionName: string; windowSpec: string } {
   const colonIndex = tmuxTarget.indexOf(':');
   if (colonIndex === -1) return { sessionName: tmuxTarget, windowSpec: '' };
@@ -149,7 +155,7 @@ export function splitWindowTarget(tmuxTarget: string): { sessionName: string; wi
  */
 function findPaneLayoutMatch(
   paneLayout: PaneLayout | null,
-  windowPanes: TmuxPaneInfo[],
+  windowPanes: MuxPaneInfo[],
   resolvedSessionId: string,
   resolvedAgentType: string,
 ): string | null {
@@ -165,7 +171,7 @@ function findPaneLayoutMatch(
 
 /** 「エージェントが動いていそうな pane」を選ぶ。paneLayout メタ → command 完全一致 → アクティブ pane → node 系 → 先頭 pane の順。 */
 function selectPane(
-  panes: TmuxPaneInfo[],
+  panes: MuxPaneInfo[],
   activePaneIndex: number | null,
   paneLayout: PaneLayout | null,
   resolvedSessionId: string,
@@ -227,7 +233,7 @@ function selectPane(
 export class WindowSessionResolver {
   constructor(
     private readonly taskRepo: ITaskRepository,
-    private readonly tmuxClient: TmuxClient,
+    private readonly muxDriverRegistry: MuxDriverRegistry,
     private readonly serverRepo: IServerRepository,
     private readonly sources: TranscriptSource[],
     private readonly sessionCaptureService: SessionCaptureService,
@@ -438,7 +444,7 @@ export class WindowSessionResolver {
    */
   private async detectWindowAgentProcess(
     server: ServerConfig,
-    windowPanes: TmuxPaneInfo[],
+    windowPanes: MuxPaneInfo[],
     sharedPsEntries?: PsEntry[],
   ): Promise<{ entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'>; rootPids: number[] } | null> {
     if (windowPanes.length === 0) return null;
@@ -453,11 +459,12 @@ export class WindowSessionResolver {
       }
       const now = Date.now();
 
+      const driver = this.muxDriverRegistry.resolve(server);
       let processStartMs: number | null = null;
       const agentTypes = new Set<'claude' | 'codex'>();
       const rootPids: number[] = [];
       for (const pane of windowPanes) {
-        const pid = await this.tmuxClient.getPanePid(server, pane.paneId);
+        const pid = await driver.panePidByHandle(server, asPaneHandle(pane.paneId));
         if (pid === null) continue;
         rootPids.push(pid);
         const startMs = findAgentProcessStartMs(entries, pid, now);
@@ -524,7 +531,7 @@ export class WindowSessionResolver {
    *    採用する（呼び出し元が passesSessionGate で追加検査する）。
    */
   private resolveViaCwdMatch(
-    windowPanes: TmuxPaneInfo[],
+    windowPanes: MuxPaneInfo[],
     allowedAgentTypes: Set<'claude' | 'codex'> | null,
     processStartMs: number | null,
   ): { agentType: string; sessionId: string; viaCreationMatch: boolean } | null {
@@ -560,10 +567,10 @@ export class WindowSessionResolver {
     return { agentType: latest.agentType, sessionId: latest.sessionId, viaCreationMatch: false };
   }
 
-  private async getWindowPanes(server: ServerConfig, window: Window, allPanes?: TmuxPaneInfo[]): Promise<TmuxPaneInfo[]> {
-    const { sessionName, windowSpec } = splitWindowTarget(window.tmuxTarget);
-    const panes = allPanes ?? await this.tmuxClient.listAllPanes(server);
-    return panes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
+  private async getWindowPanes(server: ServerConfig, window: Window, allPanes?: MuxPaneInfo[]): Promise<MuxPaneInfo[]> {
+    const ref = resolveWindowRef(window);
+    const panes = allPanes ?? await this.muxDriverRegistry.resolve(server).listAllPanes(server);
+    return panes.filter((p) => p.sessionName === ref.workspace && windowSpecMatches(ref.window, p.windowIndex, p.windowName));
   }
 
   /**
@@ -573,8 +580,9 @@ export class WindowSessionResolver {
    */
   async captureActivityProbeSnapshot(server: ServerConfig): Promise<ActivityProbeSnapshot | null> {
     try {
+      const driver = this.muxDriverRegistry.resolve(server);
       const [allPanes, ps] = await Promise.all([
-        this.tmuxClient.listAllPanes(server),
+        driver.listAllPanes(server),
         this.transportFactory.getTransport(server).exec(PS_COMMAND),
       ]);
       if (ps.code !== 0) return null;
@@ -594,7 +602,7 @@ export class WindowSessionResolver {
   private async resolvePaneWithDetection(
     server: ServerConfig,
     window: Window,
-    windowPanes: TmuxPaneInfo[],
+    windowPanes: MuxPaneInfo[],
     sessionId: string,
     agentType: string,
     psEntries: PsEntry[] | null,
@@ -644,7 +652,7 @@ export class WindowSessionResolver {
    */
   private async detectAgent(
     server: ServerConfig,
-    pane: TmuxPaneInfo | undefined,
+    pane: MuxPaneInfo | undefined,
     sessionId: string,
     agentType: string,
     psEntries: PsEntry[] | null,
@@ -673,7 +681,8 @@ export class WindowSessionResolver {
   private async detectAgentProcess(server: ServerConfig, paneId: string, psEntries: PsEntry[] | null): Promise<boolean> {
     if (psEntries === null) return false;
     try {
-      const pid = await this.tmuxClient.getPanePid(server, paneId);
+      const driver = this.muxDriverRegistry.resolve(server);
+      const pid = await driver.panePidByHandle(server, asPaneHandle(paneId));
       if (pid === null) return false;
       return isAgentProcessRunning(psEntries, pid);
     } catch {
@@ -682,11 +691,12 @@ export class WindowSessionResolver {
   }
 
   private async findActivePaneIndex(server: ServerConfig, window: Window): Promise<number | null> {
-    const { sessionName, windowSpec } = splitWindowTarget(window.tmuxTarget);
-    const sessions = await this.tmuxClient.listSessions(server);
-    const session = sessions.find((s) => s.name === sessionName);
-    if (!session) return null;
-    const win = session.windows.find((w) => windowSpecMatches(windowSpec, w.index, w.name));
+    const ref = resolveWindowRef(window);
+    const driver = this.muxDriverRegistry.resolve(server);
+    const workspaces = await driver.listWorkspaces(server);
+    const ws = workspaces.find((s) => s.name === ref.workspace);
+    if (!ws) return null;
+    const win = ws.windows.find((w) => windowSpecMatches(ref.window, w.index, w.name));
     if (!win) return null;
     return win.panes.find((p) => p.active)?.index ?? null;
   }

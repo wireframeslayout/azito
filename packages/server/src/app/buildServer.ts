@@ -614,9 +614,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
-    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
+    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
     windowSessionResolver,
-    windowInputService: new WindowInputService(windowRepo, tmuxClient, serverRepo),
+    windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo),
     windowRepo,
     interactionMonitor,
   });
