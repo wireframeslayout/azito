@@ -325,6 +325,7 @@ export class WindowRespawnService {
       // itself all run inside its callback, against the SAME `freshServer`
       // row throughout.
       let createdViaNewSession = false;
+      let createdRef: MuxRef | null = null;
       const {
         newName,
         windowEnv,
@@ -392,9 +393,11 @@ export class WindowRespawnService {
           createdViaNewSession = !freshWorkspaceExists;
           if (!freshWorkspaceExists) {
             const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: windowPart, exactName: true, extraEnv: env });
+            createdRef = opened.ref;
             return { result: opened.result, windowName: opened.ref.window };
           }
           const opened = await createDriver.openWindow(fs, sessionName, windowPart, { exactName: true, extraEnv: env });
+          createdRef = opened.ref;
           return { result: opened.result, windowName: opened.windowName ?? opened.ref.window };
         };
 
@@ -448,10 +451,10 @@ export class WindowRespawnService {
       // no generation to protect, so it only needs the kill + discoverability
       // half (no revoke call).
       const restoreDriver = this.resolveDriver(respawnServer);
-      const newRef: MuxRef = { kind: restoreDriver.kind, workspace: sessionName, window: newName };
+      const newRef: MuxRef = createdRef ?? { kind: restoreDriver.kind, workspace: sessionName, window: newName };
       try {
         if (win.paneLayout) {
-          await this.restorePaneLayout(respawnServer, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
         } else {
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
@@ -656,9 +659,11 @@ export class WindowRespawnService {
     // WindowRotation.ts) so a concurrent rotation for this task cannot
     // revoke this generation out from under it.
     const { windowName } = await runExclusiveForTask(taskId, async () => {
+      let legacyCreatedRef: MuxRef | null = null;
       const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', async (freshServer, env) => {
           const d = this.resolveDriver(freshServer);
           const opened = await d.openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
+          legacyCreatedRef = opened.ref;
           return { result: opened.result, windowName: opened.windowName ?? opened.ref.window };
         },
         true,
@@ -708,7 +713,7 @@ export class WindowRespawnService {
       // below, same as respawn()'s other two branches already do.
       server = created.server;
       const legacyDriver = this.resolveDriver(server);
-      const legacyRef: MuxRef = { kind: legacyDriver.kind, workspace: tmuxSession, window: created.windowName };
+      const legacyRef: MuxRef = legacyCreatedRef ?? { kind: legacyDriver.kind, workspace: tmuxSession, window: created.windowName };
       const windowTarget = tmuxTargetFromMuxRef(legacyRef);
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
@@ -866,6 +871,7 @@ export class WindowRespawnService {
 
   private async restorePaneLayout(
     server: ServerConfig,
+    ref: MuxRef,
     baseTarget: string,
     paneLayout: PaneLayout,
     win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
@@ -882,8 +888,7 @@ export class WindowRespawnService {
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     const paneCount = paneLayout.panes.length;
-    const layoutRef = muxRefFromTmuxTarget(baseTarget);
-    const firstPaneId = await driver.resolvePane(server, layoutRef, 1);
+    const firstPaneId = await driver.resolvePane(server, ref, 1);
 
     if (driver.caps.layoutSnapshot) {
       for (let i = 1; i < paneCount; i++) {
@@ -892,12 +897,12 @@ export class WindowRespawnService {
       }
 
       if (paneLayout.layout) {
-        await driver.applyLayout(server, layoutRef, paneLayout.layout);
+        await driver.applyLayout(server, ref, paneLayout.layout);
       }
     }
 
     const paneIdMap = new Map<number, PaneHandle>();
-    const paneEntries = await driver.listPanesByRef(server, layoutRef);
+    const paneEntries = await driver.listPanesByRef(server, ref);
     for (const entry of paneEntries) {
       paneIdMap.set(entry.ordinal - 1, entry.handle);
     }
