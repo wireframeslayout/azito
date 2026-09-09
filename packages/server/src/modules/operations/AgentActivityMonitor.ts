@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, muxKindForRuntime, formatMuxRef, type PaneHandle, type MuxWorkspace, type MuxRef } from '@azito/shared';
+import { windowKey, asPaneHandle, muxKindForRuntime, type PaneHandle, type MuxWorkspace, type MuxRef } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
@@ -84,10 +84,9 @@ function extractPaneIndex(windowSpec: string, windowIndex: number, windowName: s
  */
 export function findLiveWindow(sessions: TmuxSession[], target: string, muxRef?: MuxRef): TmuxWindow | null {
   if (muxRef) {
-    const refStr = formatMuxRef(muxRef);
     for (const s of sessions) {
       for (const w of s.windows) {
-        if (w.ref && formatMuxRef(w.ref) === refStr) return w;
+        if (w.ref && w.ref.kind === muxRef.kind && w.ref.workspace === muxRef.workspace && w.ref.window === muxRef.window) return w;
       }
     }
   }
