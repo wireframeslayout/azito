@@ -12,7 +12,6 @@ import type { SqliteProjectSecretRepository } from '../../projects/SqliteProject
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
-import type { TmuxClient } from '../../tmux/TmuxClient';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import { confirmOldWindowGone, createRotatedWindow, createRotatedWindowInLock, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, withServerLock, type ServerIsolationLock } from './WindowRotation';
@@ -102,7 +101,6 @@ export class ExecuteTaskUseCase {
     private projectServerRepo: IProjectServerRepository,
     private sidekickLoader: SidekickPackageLoader,
     private logRepo: IExecutionLogRepository,
-    private tmux: TmuxClient,
     private worktreeServiceFactory: WorktreeServiceFactory,
     private gitProvider: GitProviderService,
     private transportFactory: TransportFactory,
@@ -180,7 +178,7 @@ export class ExecuteTaskUseCase {
       (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
     );
     this.workerInput = new WorkerInputService(
-      this.tmux,
+      this.muxDriverRegistry,
       this.supervisorRegistry,
       (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
     );
@@ -867,7 +865,7 @@ export class ExecuteTaskUseCase {
           const execDriver = this.resolveDriver(freshServer);
           return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', async (fs, env) => {
             const { ref: createdRef, result } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env });
-            return { result, windowName: createdRef.window };
+            return { result, windowName: createdRef.window, ref: createdRef };
           },
             (fs) => {
               const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs);
@@ -1535,7 +1533,7 @@ export class ExecuteTaskUseCase {
         const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', async (freshServer, env) => {
           const fuCreateDriver = this.resolveDriver(freshServer);
           const { ref: fuRef, result } = await fuCreateDriver.openWindow(freshServer, muxWorkspace, `task-${task.id}`, { extraEnv: env });
-          return { result, windowName: fuRef.window };
+          return { result, windowName: fuRef.window, ref: fuRef };
         },
           true,
           (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs),

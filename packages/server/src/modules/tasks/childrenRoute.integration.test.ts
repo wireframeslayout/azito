@@ -108,7 +108,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
     logRepo: { findByTask: vi.fn(() => []), findByUnit: vi.fn(() => []), append: vi.fn() },
     executeTaskUseCase: { stopByTaskId: vi.fn(() => false), execute: vi.fn(), followUp: vi.fn(), events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() } } as unknown as TasksRouteOptions['executeTaskUseCase'],
     unitRepo: { findAll: vi.fn(() => []), findById: vi.fn(() => null), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
-    tmux: {} as unknown as TasksRouteOptions['tmux'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({})) } as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: { findAll: vi.fn(() => []), findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), findMetaByNames: vi.fn(() => []), delete: vi.fn() },
     worktreeServiceFactory: {} as unknown as TasksRouteOptions['worktreeServiceFactory'],
     transportFactory: {} as unknown as TasksRouteOptions['transportFactory'],
@@ -127,7 +127,6 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
-    muxDriverRegistry: { resolve: () => ({}) } as any,
   };
 
   const app = Fastify();
