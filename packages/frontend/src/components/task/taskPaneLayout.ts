@@ -22,7 +22,7 @@
  */
 import type { PaneLayoutStorage } from '../../hooks/usePaneLayout';
 import { findPane, listPanes, openTab, createPane, normalizeLayout, type LayoutNode } from '../../hooks/paneLayoutTree';
-import type { Window, Session } from '../../pages/workspace/types';
+import type { Window, Session, TmuxWindow } from '../../pages/workspace/types';
 import { isSameWindowTarget, windowKey } from '@azito/shared';
 
 // Legacy (pre-Issue #397) sub-tab model: one selected view + optional terminal ref.
@@ -428,39 +428,66 @@ export interface WindowContextExtra {
  * context menu (rename window/pane, capture panes, respawn, ...) — mirrors
  * `WindowPaneTree`'s own session/window/pane matching (single-pane branch),
  * since a task-scoped window tab always addresses one specific window.
+ *
+ * Matching priority:
+ * 1. windowId — session listing carries `windowId` when a DB row exists
+ * 2. muxRef — serialized JSON comparison (needed for herdr/zellij where the
+ *    tmuxTarget's session component doesn't match the actual session name)
+ * 3. tmuxTarget session:window split — legacy tmux path
  */
 export function resolveWindowContextExtra(
-  w: Pick<Window, 'serverName' | 'tmuxTarget' | 'label'>,
+  w: Pick<Window, 'serverName' | 'tmuxTarget' | 'label' | 'id' | 'muxRef'>,
   sessionData: Record<string, Session[]>,
 ): WindowContextExtra {
   const sessions = sessionData[w.serverName] || [];
-  const parts = w.tmuxTarget.split(':');
-  const sessionName = parts[0];
-  const rest = parts[1] ?? '';
-  const dotIdx = rest.indexOf('.');
-  const winPart = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest || null;
-  const paneIdxPart = dotIdx >= 0 ? rest.slice(dotIdx + 1) : null;
 
-  const session = sessions.find((s) => s.name === sessionName);
-  if (!session) return { online: false };
-
-  let matchedWindows = winPart != null
-    ? session.windows.filter((sw) => {
-        const idx = parseInt(winPart, 10);
-        return Number.isNaN(idx) ? sw.name === winPart : sw.index === idx;
-      })
-    : session.windows;
-  if (matchedWindows.length === 0 && w.label) {
-    matchedWindows = session.windows.filter((sw) => sw.name === w.label);
+  // Priority 1 & 2: windowId / muxRef — cross-session search
+  let sw: TmuxWindow | undefined;
+  let matchedSession: Session | undefined;
+  for (const s of sessions) {
+    const found = s.windows.find((win) =>
+      (w.id != null && win.windowId === w.id) || (w.muxRef && win.ref === w.muxRef),
+    );
+    if (found) { sw = found; matchedSession = s; break; }
   }
-  const sw = matchedWindows[0];
+
+  // Priority 3: legacy tmuxTarget session:window split
+  if (!sw) {
+    const parts = w.tmuxTarget.split(':');
+    const sessionName = parts[0];
+    const rest = parts[1] ?? '';
+    const dotIdx = rest.indexOf('.');
+    const winPart = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest || null;
+
+    const session = sessions.find((s) => s.name === sessionName);
+    if (!session) return { online: false };
+    matchedSession = session;
+
+    let matchedWindows = winPart != null
+      ? session.windows.filter((win) => {
+          const idx = parseInt(winPart, 10);
+          return Number.isNaN(idx) ? win.name === winPart : win.index === idx;
+        })
+      : session.windows;
+    if (matchedWindows.length === 0 && w.label) {
+      matchedWindows = session.windows.filter((win) => win.name === w.label);
+    }
+    sw = matchedWindows[0];
+  }
+
   if (!sw) return { online: false };
+
+  // Resolve pane from the tmuxTarget's pane suffix (shared by all paths)
+  const rest = w.tmuxTarget.split(':')[1] ?? '';
+  const dotIdx = rest.indexOf('.');
+  const paneIdxPart = dotIdx >= 0 ? rest.slice(dotIdx + 1) : null;
 
   const pane = paneIdxPart != null
     ? sw.panes.find((p) => String(p.index) === paneIdxPart) ?? sw.panes[0]
     : sw.panes[0];
   if (!pane) return { online: true, windowName: sw.name };
 
+  const sessionName = matchedSession!.name;
   const paneTarget = `${sessionName}:${sw.name}.${pane.index}`;
   const paneTitle = pane.title && pane.title !== pane.command ? pane.title : pane.command;
   return { online: true, windowName: sw.name, paneTarget, paneTitle, paneCommand: pane.command };

@@ -382,6 +382,50 @@ describe('resolveWindowContextExtra', () => {
     const w = makeWindow({ tmuxTarget: 'sess:99.0' });
     expect(resolveWindowContextExtra(w, sessionData)).toEqual({ online: false });
   });
+
+  it('matches herdr window by windowId across sessions', () => {
+    const herdrSessionData: Record<string, Session[]> = {
+      server007: [{
+        name: 'azito',
+        windows: [{
+          index: 0, name: 'win--8u83',
+          ref: '{"kind":"herdr","workspace":"win--8u83","window":"main"}',
+          windowId: 778,
+          panes: [{ index: 0, title: 'claude', command: 'claude', width: 80, height: 24, active: true }],
+        }],
+      }],
+    };
+    const w = makeWindow({ id: 778, serverName: 'server007', tmuxTarget: 'win--8u83:main' });
+    const result = resolveWindowContextExtra(w, herdrSessionData);
+    expect(result.online).toBe(true);
+    expect(result.windowName).toBe('win--8u83');
+  });
+
+  it('matches herdr window by muxRef when windowId is not set', () => {
+    const herdrRef = '{"kind":"herdr","workspace":"win--8u83","window":"main"}';
+    const herdrSessionData: Record<string, Session[]> = {
+      server007: [{
+        name: 'azito',
+        windows: [{
+          index: 0, name: 'win--8u83', ref: herdrRef, windowId: null,
+          panes: [{ index: 0, title: 'claude', command: 'claude', width: 80, height: 24, active: true }],
+        }],
+      }],
+    };
+    const w = makeWindow({ id: 999, serverName: 'server007', tmuxTarget: 'win--8u83:main', muxRef: herdrRef });
+    const result = resolveWindowContextExtra(w, herdrSessionData);
+    expect(result.online).toBe(true);
+    expect(result.windowName).toBe('win--8u83');
+  });
+
+  it('falls back to tmuxTarget session:window split for tmux windows', () => {
+    const result = resolveWindowContextExtra(
+      makeWindow({ serverName: 'local', tmuxTarget: 'sess:1.0' }),
+      sessionData,
+    );
+    expect(result.online).toBe(true);
+    expect(result.windowName).toBe('main');
+  });
 });
 
 describe('writeSubTabMap LRU eviction', () => {
