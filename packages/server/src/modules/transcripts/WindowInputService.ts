@@ -1,11 +1,10 @@
-import type { PaneHandle } from '@azito/shared';
+import { type PaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
-import type { TmuxClient } from '../tmux/TmuxClient';
-import { windowSpecMatches } from '../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
-import { splitWindowTarget } from './WindowSessionResolver';
 
 // ─── Types ───
 
@@ -21,6 +20,12 @@ export type PaneIndexResult = number | 'window_not_found' | 'pane_not_found';
  */
 export type AnswerKey = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 
+// ─── Helpers ───
+
+function resolveWindowRef(window: Pick<Window, 'muxRef' | 'tmuxTarget'>) {
+  return window.muxRef ?? muxRefFromTmuxTarget(window.tmuxTarget);
+}
+
 // ─── Service ───
 
 /**
@@ -33,7 +38,7 @@ export type AnswerKey = '1' | '2' | '3' | '4' | '5' | '6' | '7' | '8' | '9';
 export class WindowInputService {
   constructor(
     private readonly windowRepo: IWindowRepository,
-    private readonly tmuxClient: TmuxClient,
+    private readonly muxDriverRegistry: MuxDriverRegistry,
     private readonly serverRepo: IServerRepository,
     private readonly wait: (ms: number) => Promise<void> = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   ) {}
@@ -45,14 +50,15 @@ export class WindowInputService {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const belongsToWindow = await this.paneBelongsToWindow(server, window, handle);
+    const driver = this.muxDriverRegistry.resolve(server);
+    const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(server, handle);
-    await this.tmuxClient.sendLiteralText(server, handle, text);
+    await this.preparePaneForInput(driver, server, handle);
+    await driver.sendTextToHandle(server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
-    await this.tmuxClient.sendKeysToHandle(server, handle, ['Enter']);
+    await driver.sendKeysToHandle(server, handle, ['Enter']);
     return 'ok';
   }
 
@@ -63,12 +69,13 @@ export class WindowInputService {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const belongsToWindow = await this.paneBelongsToWindow(server, window, handle);
+    const driver = this.muxDriverRegistry.resolve(server);
+    const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(server, handle);
+    await this.preparePaneForInput(driver, server, handle);
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey | AnswerKey);
-    await this.tmuxClient.sendKeysToHandle(server, handle, [resolvedKey]);
+    await driver.sendKeysToHandle(server, handle, [resolvedKey]);
     return 'ok';
   }
 
@@ -87,62 +94,50 @@ export class WindowInputService {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const pane = (await this.listWindowPanes(server, window)).find((p) => p.paneId === paneId);
+    const driver = this.muxDriverRegistry.resolve(server);
+    const pane = (await this.listWindowPanes(driver, server, window)).find((p) => p.paneId === paneId);
     return pane ? pane.paneIndex : 'pane_not_found';
   }
 
   /**
-   * 送信直前のペイン準備ステップ（Issue #69 T12）。将来 tmux 以外のマルチプレクサに差し替える計画
-   * があるため、意図（「入力できる状態にする」）をこのメソッド名で表し、tmux 固有の copy-mode
-   * 判定/解除ロジックは TmuxClient 側に隔離する — IMultiplexer のような抽象は現時点では過剰
-   * （実装は tmux の1系統のみ。「tmuxラッパーと割り切る」方針）なので新設せず、このメソッド境界
-   * だけを将来の抽出点として用意する。copy-mode 中（スクロールバック閲覧中）は send-keys のリテラル
-   * 入力がバッファ選択操作に吸収され対象アプリに届かないため、解除してから短い待機を挟む。
+   * copy-mode 判定は MuxCapabilities.copyMode で分岐し、herdr/zellij は copy-mode 概念が
+   * 無いため no-op。tmux ではスクロールバック閲覧中の send-keys がバッファ選択操作に吸収される
+   * ため、解除してから短い待機を挟む。
    */
-  private async preparePaneForInput(server: ServerConfig, paneId: string): Promise<void> {
-    const inMode = await this.tmuxClient.isPaneInMode(server, paneId);
+  private async preparePaneForInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle): Promise<void> {
+    if (!driver.caps.copyMode) return;
+    const inMode = await driver.isPaneInModeByHandle(server, handle);
     if (!inMode) return;
-    await this.tmuxClient.cancelPaneMode(server, paneId);
+    await driver.cancelPaneModeByHandle(server, handle);
     await this.wait(100);
   }
 
-  /**
-   * paneId が実在するだけでなく、指定ウィンドウ（window.tmuxTarget）に属する pane であることを検証する
-   * （Important #1: 帰属未検証だと細工した paneId で別ウィンドウの任意ペインへ送信・割込ができてしまう）。
-   * ウィンドウ側の pane 集合は WindowSessionResolver.getWindowPanes と同じロジック（session 名 +
-   * windowSpecMatches によるウィンドウ特定）で解決する。
-   */
-  private async paneBelongsToWindow(server: ServerConfig, window: Window, paneId: string): Promise<boolean> {
-    const windowPanes = await this.listWindowPanes(server, window);
+  private async paneBelongsToWindow(driver: IMuxClient, server: ServerConfig, window: Window, paneId: string): Promise<boolean> {
+    const windowPanes = await this.listWindowPanes(driver, server, window);
     return windowPanes.some((p) => p.paneId === paneId);
   }
 
-  /** ウィンドウ（window.tmuxTarget）に属する pane 集合。WindowSessionResolver.getWindowPanes と同じ解決ロジック。 */
-  private async listWindowPanes(server: ServerConfig, window: Window) {
-    const { sessionName, windowSpec } = splitWindowTarget(window.tmuxTarget);
-    const allPanes = await this.tmuxClient.listAllPanes(server);
-    return allPanes.filter((p) => p.sessionName === sessionName && windowSpecMatches(windowSpec, p.windowIndex, p.windowName));
+  private async listWindowPanes(driver: IMuxClient, server: ServerConfig, window: Window) {
+    const ref = resolveWindowRef(window);
+    const allPanes = await driver.listAllPanes(server);
+    return allPanes.filter((p) => p.sessionName === ref.workspace && windowSpecMatches(ref.window, p.windowIndex, p.windowName));
   }
 
-  /**
-   * workerType に対応する AgentTranscriptProfile の interruptKey を採用する。プロファイルが
-   * 無い workerType（generic、または未知の値）は 'C-c' を既定にする — 既存 /signal ルート
-   * （TranscriptPaneService.sendSignal）はプロファイル必須で 400 にするが、ウィンドウ直接入力は
-   * プレーンシェルへの割り込みも成立させたい。Escape はシェルに対しては無効な一方、
-   * Ctrl+C はシェル・大半の CLI エージェント双方で有効な汎用割り込みキーのため、これを既定とする。
-   */
   private resolveInterruptKey(workerType: string | null): InterruptKey {
     if (workerType === null) return 'C-c';
     return getAgentTranscriptProfile(workerType)?.interruptKey ?? 'C-c';
   }
 
-  /**
-   * workerType に対応する AgentTranscriptProfile の submitDelayMs を採用する。プロファイルが
-   * 無い workerType（generic、または未知の値）・ウィンドウは待ちなし（0）を既定にする —
-   * リテラル送信直後に Enter が届いても支障のない従来挙動を維持する。
-   */
   private resolveSubmitDelay(workerType: string | null): number {
     if (workerType === null) return 0;
     return getAgentTranscriptProfile(workerType)?.submitDelayMs ?? 0;
   }
+}
+
+function windowSpecMatches(windowSpec: string, windowIndex: number, windowName: string): boolean {
+  for (const spec of new Set([windowSpec, windowSpec.replace(/\.\d+$/, '')])) {
+    if (!spec) continue;
+    if (/^\d+$/.test(spec) ? spec === String(windowIndex) : spec === windowName) return true;
+  }
+  return false;
 }

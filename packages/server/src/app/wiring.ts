@@ -433,7 +433,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
   // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
   // lookups (and their cache) to one per process.
-  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService, infra.transportFactory);
+  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
