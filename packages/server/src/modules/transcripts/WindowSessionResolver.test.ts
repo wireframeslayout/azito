@@ -100,7 +100,7 @@ function buildDeps(opts: {
   listAllPanes?: TmuxClient['listAllPanes'];
   listSessions?: TmuxClient['listSessions'];
   getPanePid?: TmuxClient['getPanePid'];
-  execCommand?: TmuxClient['execCommand'];
+  exec?: (cmd: string) => Promise<{ stdout: string; stderr: string; code: number }>;
   servers?: ServerConfig[];
   claudeGetSessionCwd?: TranscriptSource['getSessionCwd'];
   claudeListSessions?: TranscriptSource['listSessions'];
@@ -122,8 +122,11 @@ function buildDeps(opts: {
     // メソッドが無いのと同じ状況を再現する — WindowSessionResolver.detectAgentProcess の
     // try/catch が例外を吸収し、レイヤー2「検出できず」として次のレイヤーへフォールバックする。
     getPanePid: opts.getPanePid,
-    execCommand: opts.execCommand,
   } as unknown as TmuxClient;
+
+  const transportFactory = {
+    getTransport: () => ({ exec: opts.exec ?? (async () => ({ stdout: '', stderr: '', code: 0 })) }),
+  } as any;
 
   const serverRepo = {
     findByName: (name: string) => (opts.servers ?? [LOCAL_SERVER]).find((s) => s.name === name) ?? null,
@@ -153,20 +156,20 @@ function buildDeps(opts: {
     adoptResolvedSession: vi.fn(() => false),
   } as unknown as SessionCaptureService;
 
-  return { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService };
+  return { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory };
 }
 
 describe('WindowSessionResolver', () => {
   it('returns unsupported_server for a non-local server', async () => {
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({ servers: [AGENT_SERVER] });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [AGENT_SERVER] });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ serverName: 'agent1' }));
     expect(result).toEqual({ resolved: false, reason: 'unsupported_server', agentDetected: false });
   });
 
   it('returns unsupported_server when the window\'s server is not found', async () => {
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({ servers: [] });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [] });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: false, reason: 'unsupported_server', agentDetected: false });
   });
@@ -175,11 +178,11 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       servers: [AGENT_SERVER],
       listAllPanes: async () => panes,
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ serverName: 'agent1', workerType: 'claude' }));
     expect(result).toEqual({
       resolved: false,
@@ -194,12 +197,12 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7 }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -209,7 +212,7 @@ describe('WindowSessionResolver', () => {
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
     ];
     const recentMtime = Date.now() - 5 * 60 * 1000;
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById: () => buildTask({ agentSessionId: 'not-a-real-session' }),
       listAllPanes: async () => panes,
       claudeGetSessionCwd: () => null, // session file does not exist
@@ -217,7 +220,7 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7 }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -229,12 +232,12 @@ describe('WindowSessionResolver', () => {
     const now = Date.now();
     const older: SessionSummary = { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: now - 10 * 60 * 1000, sizeBytes: 1, preview: '' };
     const newer: SessionSummary = { sessionId: SID_CODEX, agentType: 'codex', projectDir: 'p', cwd: '/proj', mtimeMs: now - 2 * 60 * 1000, sizeBytes: 1, preview: '' };
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
       claudeListSessions: () => [older],
       codexListSessions: () => [newer],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: false });
   });
@@ -245,13 +248,13 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 60 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeListSessions: () => [
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
         ],
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const window = buildWindow({ id: 99, taskId: null, agentSessionId: null });
       const result = await resolver.resolve(window);
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: false });
@@ -263,11 +266,11 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
       expect(sessionCaptureService.adoptResolvedSession).not.toHaveBeenCalled();
@@ -277,12 +280,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7, agentSessionId: null }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
       expect(sessionCaptureService.adoptResolvedSession).not.toHaveBeenCalled();
@@ -294,13 +297,13 @@ describe('WindowSessionResolver', () => {
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
     ];
     const staleMtime = Date.now() - 31 * 60 * 1000;
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
       claudeListSessions: () => [
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     // window.workerType defaults to 'claude'; the single 'node' pane still matches the node-ish fallback
     // in selectPane, so a best-effort paneId is returned even though no session could be resolved.
@@ -311,20 +314,20 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
       claudeListSessions: () => [
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/other', mtimeMs: Date.now(), sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
   });
 
   it('returns no_recent_session with no pane hint when the window has no panes at all', async () => {
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({ listAllPanes: async () => [] });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ listAllPanes: async () => [] });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: false, reason: 'no_recent_session', agentDetected: false });
   });
@@ -336,8 +339,8 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({ listAllPanes: async () => panes });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ listAllPanes: async () => panes });
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(
       buildWindow({
         workerType: 'claude',
@@ -353,13 +356,13 @@ describe('WindowSessionResolver', () => {
       { paneId: '%2', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 1, currentPath: '/proj', currentCommand: 'claude' },
     ];
     const recentMtime = Date.now() - 1000;
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
       claudeListSessions: () => [
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: true });
   });
@@ -390,14 +393,14 @@ describe('WindowSessionResolver', () => {
         ],
       },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
       listSessions: async () => sessions,
       claudeListSessions: () => [
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: false });
   });
@@ -407,12 +410,12 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById,
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -421,14 +424,14 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'codex' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
     });
     const codexWithSession = {
       ...codexSource,
       getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
     } as unknown as TranscriptSource;
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'codex' }));
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
   });
@@ -437,14 +440,14 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'codex' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       listAllPanes: async () => panes,
     });
     const codexWithSession = {
       ...codexSource,
       getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
     } as unknown as TranscriptSource;
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'generic' }));
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
   });
@@ -453,7 +456,7 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'codex' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById: () => buildTask({ agentSessionId: SID_CODEX }),
       listAllPanes: async () => panes,
     });
@@ -461,7 +464,7 @@ describe('WindowSessionResolver', () => {
       ...codexSource,
       getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
     } as unknown as TranscriptSource;
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7, workerType: null }));
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
   });
@@ -471,12 +474,12 @@ describe('WindowSessionResolver', () => {
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       { paneId: '%2', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 1, currentPath: '/proj', currentCommand: 'claude' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7 }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: true });
   });
@@ -486,12 +489,12 @@ describe('WindowSessionResolver', () => {
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
       { paneId: '%2', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 1, currentPath: '/proj', currentCommand: 'bash' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(
       buildWindow({
         taskId: 7,
@@ -514,14 +517,14 @@ describe('WindowSessionResolver', () => {
     const panes: TmuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
     ];
-    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+    const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
       findById,
       listAllPanes: async () => panes,
       claudeListSessions: () => [
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: Date.now(), sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+    const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -537,12 +540,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow());
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
     });
@@ -552,13 +555,13 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const getPanePid = vi.fn(async () => 9000);
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         servers: [AGENT_SERVER],
         listAllPanes: async () => panes,
         getPanePid,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ serverName: 'agent1', workerType: 'claude' }));
       expect(getPanePid).not.toHaveBeenCalled();
       expect(result).toEqual({ resolved: false, reason: 'unsupported_server', paneId: '%1', agentType: 'claude', agentDetected: false });
@@ -569,15 +572,15 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000; // 5s ago, well within the 120s activity window
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -587,15 +590,15 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const staleMtime = Date.now() - 121 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: false });
     });
@@ -604,12 +607,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow());
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
     });
@@ -619,14 +622,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         getPanePid: async () => { throw new Error('tmux display-message failed'); },
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -646,14 +649,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const staleMtime = Date.now() - 10 * 60 * 1000; // 10min ago: older than (processStart(-10s) - 180s skew) = -190s
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // The stale session is rejected by the gate; no other candidate exists, so it falls through to
       // the best-effort unresolved pane hint (the live process is still detected as agentDetected:true).
@@ -665,14 +668,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const staleMtime = Date.now() - 60 * 1000; // 60s ago: within (processStart(-10s) - 180s skew) = -190s
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -682,15 +685,15 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const staleMtime = Date.now() - 60 * 1000; // 60s ago: older than (processStart(-10s) - 15s skew) = -25s
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeListSessions: () => [
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
         ],
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       // No window/task link at all, so this exercises tier3 (cwd match) only.
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
@@ -702,16 +705,16 @@ describe('WindowSessionResolver', () => {
       ];
       const staleMtime = Date.now() - 2 * 60 * 60 * 1000; // 2 hours ago: far outside RECENT_SESSION_WINDOW_MS (30min)
       const createdNearProcessStart = Date.now() - 10 * 1000; // matches the mocked process start (~10s ago)
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeListSessions: () => [
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
         ],
         claudeGetSessionCreatedMs: (id) => (id === SID_CLAUDE ? createdNearProcessStart : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -722,16 +725,16 @@ describe('WindowSessionResolver', () => {
       ];
       const staleMtime = Date.now() - 60 * 1000; // 60s ago: older than (processStart(-10s) - 15s skew) = -25s
       const createdLongBefore = Date.now() - 60 * 60 * 1000; // 1 hour before process start: outside the 5-minute skew
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeListSessions: () => [
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
         ],
         claudeGetSessionCreatedMs: (id) => (id === SID_CLAUDE ? createdLongBefore : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
     });
@@ -745,17 +748,17 @@ describe('WindowSessionResolver', () => {
         '  9001   9000     10 /opt/codex/bin/codex resume ' + SID_CODEX,
       ].join('\n');
       const staleMtime = Date.now() - 18 * 1000; // mtime precedes processStart(-10s) by 18s: would be rejected by any mtime-based skew this small, but args evidence bypasses it entirely
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_RESUME_ARG, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_RESUME_ARG, stderr: '', code: 0 }),
       });
       const codexWithSession = {
         ...codexSource,
         getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
         getSessionMtimeMs: (id: string) => (id === SID_CODEX ? staleMtime : null),
       } as unknown as TranscriptSource;
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'codex' }));
       expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
     });
@@ -765,14 +768,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000; // 5s ago: within (processStart(-10s) - 15s skew) = -25s
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -782,13 +785,13 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
       ];
       const veryStaleMtime = Date.now() - 60 * 60 * 1000; // 1 hour ago
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? veryStaleMtime : null),
         // execCommand is intentionally not mocked (undefined), simulating a tmux/ps failure.
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -798,15 +801,15 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
       ];
       const recentMtime = Date.now() - 5 * 1000; // would pass the old 30-minute cwd-match rule
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeListSessions: () => [
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
         ],
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ workerType: 'claude' }));
       // Without the process-detection gate, this would have matched the recent cwd session
       // (reproducing the reported bug: a bash pane in the same cwd showing an unrelated old chat).
@@ -831,7 +834,7 @@ describe('WindowSessionResolver', () => {
       const now = Date.now();
       // The claude session (e.g. actively streaming in a *different* window sharing the same cwd)
       // has a more recent mtime than the codex session actually running in *this* window/pane.
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         claudeListSessions: () => [
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: now - 2_000, sizeBytes: 1, preview: '' },
@@ -842,9 +845,9 @@ describe('WindowSessionResolver', () => {
         ],
         codexGetSessionMtimeMs: (id) => (id === SID_CODEX ? now - 20_000 : null),
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
     });
@@ -853,12 +856,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       // No session file at all (no *ListSessions mocked), so this falls through to the best-effort
       // unresolved path. Even though window.workerType is null, agentType should still be 'codex'
@@ -870,12 +873,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       // workerType explicitly set to 'claude' even though the live process detected is codex
       // (e.g. stale window metadata) — the explicit workerType still wins.
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: 'claude' }));
@@ -891,8 +894,8 @@ describe('WindowSessionResolver', () => {
     const PS_OUTPUT_NO_AGENT = ['  9000      1     90 node /path/to/some-other-script.js'].join('\n');
 
     it('returns offline when the server is not local', async () => {
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({ servers: [AGENT_SERVER] });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [AGENT_SERVER] });
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ serverName: 'agent1' }));
       expect(result.status).toBe('offline');
     });
@@ -901,12 +904,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow());
       expect(result.status).toBe('offline');
     });
@@ -915,12 +918,12 @@ describe('WindowSessionResolver', () => {
       const panes: TmuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: null }));
       expect(result.status).toBe('idle');
     });
@@ -930,13 +933,13 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const staleMtime = Date.now() - 121 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result.status).toBe('idle');
     });
@@ -946,14 +949,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: recentMtime }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ status: 'working', completedAt: null, interruptedAt: null, tailState: 'in_progress', lastEntryTimestampMs: recentMtime });
     });
@@ -963,14 +966,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'terminal_interrupted' as const, lastEntryTimestampMs: recentMtime }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // 中断は完了ではない: interruptedAt だけが立ち、completedAt は null。
       expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: recentMtime, tailState: 'terminal_interrupted', lastEntryTimestampMs: recentMtime });
@@ -981,14 +984,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: null }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // timestamp が無い＝再新性の根拠が無い。mtime へは倒さない（偽 working も偽完了も作らない）。
       expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null, tailState: 'terminal_final', lastEntryTimestampMs: null });
@@ -999,14 +1002,14 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'terminal_local' as const, lastEntryTimestampMs: null }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result.status).toBe('idle');
     });
@@ -1016,15 +1019,15 @@ describe('WindowSessionResolver', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const recentMtime = Date.now() - 5 * 1000;
-      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+      const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
         listAllPanes: async () => panes,
         getPanePid: async () => 9000,
-        execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+        exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         findById: () => buildTask({ agentSessionId: SID_CLAUDE }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: recentMtime }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+      const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: 7, workerType: 'claude' }));
       expect(result.status).toBe('working');
     });
@@ -1038,14 +1041,14 @@ describe('WindowSessionResolver', () => {
         // （terminal_final = 前回セッションの最終応答）は何分も前のまま、というリスポーン直後の実観測を再現する。
         const recentMtime = Date.now() - 5 * 1000;
         const staleEntryTimestampMs = Date.now() - 10 * 60 * 1000;
-        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
           listAllPanes: async () => panes,
           getPanePid: async () => 9000,
-          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: staleEntryTimestampMs }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result.status).toBe('idle');
       });
@@ -1056,14 +1059,14 @@ describe('WindowSessionResolver', () => {
         ];
         const recentMtime = Date.now() - 5 * 1000;
         const recentEntryTimestampMs = Date.now() - 5 * 1000;
-        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
           listAllPanes: async () => panes,
           getPanePid: async () => 9000,
-          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: recentEntryTimestampMs }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result).toEqual({ status: 'idle', completedAt: recentEntryTimestampMs, interruptedAt: null, tailState: 'terminal_final', lastEntryTimestampMs: recentEntryTimestampMs });
       });
@@ -1073,14 +1076,14 @@ describe('WindowSessionResolver', () => {
           { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
         ];
         const recentMtime = Date.now() - 5 * 1000;
-        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
           listAllPanes: async () => panes,
           getPanePid: async () => 9000,
-          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: recentMtime }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result.status).toBe('working');
       });
@@ -1090,14 +1093,14 @@ describe('WindowSessionResolver', () => {
           { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
         ];
         const recentMtime = Date.now() - 5 * 1000;
-        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService } = buildDeps({
+        const { taskRepo, tmuxClient, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
           listAllPanes: async () => panes,
           getPanePid: async () => 9000,
-          execCommand: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
+          exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService);
+        const resolver = new WindowSessionResolver(taskRepo, tmuxClient, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null, tailState: 'unknown', lastEntryTimestampMs: null });
       });

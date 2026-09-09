@@ -2,7 +2,6 @@ import { readdirSync, unlinkSync } from 'fs';
 import type { Task } from './Task';
 import type { IServerRepository } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import type { TmuxClient } from '../tmux/TmuxClient';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -29,27 +28,25 @@ function removeTempFiles(taskId: number, log: { warn: (msg: string) => void }): 
 
 export interface TaskCleanupDeps {
   serverRepo: IServerRepository;
-  tmux: TmuxClient;
   worktreeServiceFactory: WorktreeServiceFactory;
   transportFactory: TransportFactory;
   projectServerRepo: IProjectServerRepository;
   projectRepo: IProjectRepository;
-  /** Optional: resolve the mux driver per server so herdr / zellij task windows are closed too. */
-  muxDriverRegistry?: MuxDriverRegistry;
+  muxDriverRegistry: MuxDriverRegistry;
 }
 
 export class TaskCleanupService {
   constructor(private deps: TaskCleanupDeps) {}
 
   async cleanup(task: Task, log: { warn: (msg: string) => void }): Promise<void> {
-    const { serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo } = this.deps;
+    const { serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo } = this.deps;
 
     const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
     const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
 
     if (task.tmuxWindow && resolvedServerName && server) {
       const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, projectServerRepo);
-      const driver = this.deps.muxDriverRegistry?.resolve(server) ?? tmux;
+      const driver = this.deps.muxDriverRegistry.resolve(server);
       const ref = { ...muxRefFromTmuxTarget(`${muxWorkspace}:${task.tmuxWindow}`), kind: driver.kind };
       driver.closeWindow(server, ref).catch((e) => {
         log.warn(`[task-cleanup] Failed to kill tmux window ${muxWorkspace}:${task.tmuxWindow}: ${(e as Error).message}`);

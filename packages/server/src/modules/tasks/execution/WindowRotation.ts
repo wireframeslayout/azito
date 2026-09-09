@@ -1,7 +1,6 @@
 import type { MuxRef, PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
-import type { TmuxClient } from '../../tmux/TmuxClient';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import type { Task } from '../Task';
@@ -352,22 +351,22 @@ export async function createSecondaryWindowInLock(
  * "isolated" window holding the old, unmasked UI token.
  */
 export async function createPlainWindow(
-  tmux: Pick<TmuxClient, 'uiTokenEnvForServer'>,
+  uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   lock: ServerIsolationLock,
   server: ServerConfig,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
   enforceSnapshot = true,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
-  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createPlainWindowInLock(tmux, freshServer, create));
+  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createPlainWindowInLock(uiTokenEnvFn, freshServer, create));
 }
 
 /** Core of {@link createPlainWindow} — see {@link createRotatedWindowInLock}'s doc comment for why this split exists. */
 export async function createPlainWindowInLock(
-  tmux: Pick<TmuxClient, 'uiTokenEnvForServer'>,
+  uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   freshServer: ServerConfig,
   create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
 ): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
-  const env = tmux.uiTokenEnvForServer(freshServer);
+  const env = uiTokenEnvFn(freshServer);
   const created = await create(freshServer, env);
   return { windowName: created.windowName, env, server: freshServer };
 }

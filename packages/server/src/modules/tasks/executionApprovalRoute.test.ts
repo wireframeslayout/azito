@@ -198,6 +198,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: () => ({}) } as any,
   };
 }
 

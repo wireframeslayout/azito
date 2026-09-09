@@ -191,6 +191,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: () => ({}) } as unknown as TasksRouteOptions['muxDriverRegistry'],
   };
   return { opts: routeOpts, task };
 }

@@ -127,6 +127,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: () => ({}) } as any,
   };
 
   const app = Fastify();

@@ -241,7 +241,8 @@ function createMocks(): Mocks {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createUseCase(mocks: Mocks, muxDriverRegistry: any = null): RecoverStuckTasksUseCase {
+function createUseCase(mocks: Mocks, registry?: any): RecoverStuckTasksUseCase {
+  const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient } as any;
   return new RecoverStuckTasksUseCase(
     mocks.taskRepo as any,
     mocks.unitRepo as any,
@@ -249,8 +250,7 @@ function createUseCase(mocks: Mocks, muxDriverRegistry: any = null): RecoverStuc
     mocks.projectRepo as any,
     mocks.projectServerRepo as any,
     mocks.logRepo as any,
-    muxDriverRegistry,
-    mocks.tmuxClient as any,
+    mockRegistry,
     mocks.executeTaskUseCase as any,
     mocks.turnRepo as any,
     mocks.logger,
@@ -859,7 +859,7 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 40);
   });
 
-  it('should fall back to tmuxClient when muxDriverRegistry is null', async () => {
+  it('should use the default registry driver (tmuxClient) when no custom driver is registered', async () => {
     const task = makeTask({ id: 41 });
     mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
       status === 'running' ? [task] : [],
@@ -869,7 +869,7 @@ describe('RecoverStuckTasksUseCase', () => {
       makeAgentTurn({ id: 21, taskId: 41, phase: 'implementing', status: 'completed' }),
     );
 
-    const useCase = createUseCase(mocks, null);
+    const useCase = createUseCase(mocks);
     await useCase.run();
 
     expect(mocks.tmuxClient.resolvePane).toHaveBeenCalled();

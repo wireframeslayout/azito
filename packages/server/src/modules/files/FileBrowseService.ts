@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { createHash } from 'crypto';
 import type { ServerConfig } from '../servers/Server';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 import { shellQuote } from '../../shared/shellQuote';
 
@@ -102,7 +102,11 @@ export interface FileDownloadResult {
 // ─── Service ───
 
 export class FileBrowseService {
-  constructor(private readonly tmux: TmuxClient) {}
+  constructor(private readonly transportFactory: TransportFactory) {}
+
+  private exec(srv: ServerConfig, cmd: string) {
+    return this.transportFactory.getTransport(srv).exec(cmd);
+  }
 
   // Per (serverName, path) in-process write serialization (simple mutex via Promise chaining). The hub
   // is a single process, so this is sufficient to close the race where two concurrent saves against the
@@ -172,7 +176,7 @@ export class FileBrowseService {
         }
         const cmd = `LC_ALL=C command find ${sq(dir)} -maxdepth 1 -mindepth 1 -type d -printf '%f\\n' 2>/dev/null | head -20`;
         try {
-          const result = await this.tmux.execCommand(srv, cmd);
+          const result = await this.exec(srv, cmd);
           entries = stripTerminalArtifacts(result.stdout).trim().split('\n').filter(Boolean)
             .map(name => name.trim())
             .filter(name => !name.startsWith('.'))
@@ -219,7 +223,7 @@ export class FileBrowseService {
     // Remote: use find to avoid alias/icon contamination from ls
     const hiddenFilter = showHidden ? '' : " ! -name '.*'";
     const cmd = `LC_ALL=C command find ${sq(dirPath)} -maxdepth 1 -mindepth 1${hiddenFilter} -printf '%y %s %f\\n' 2>/dev/null | sort`;
-    const result = await this.tmux.execCommand(srv, cmd);
+    const result = await this.exec(srv, cmd);
     const lines = stripTerminalArtifacts(result.stdout).trim().split('\n').filter(Boolean);
     const entries: FileEntry[] = [];
     for (const line of lines) {
@@ -261,14 +265,14 @@ export class FileBrowseService {
         const buf = fs.readFileSync(filePath);
         return { type: 'image', mimeType, base64: buf.toString('base64'), path: filePath, size: stat.size };
       } else {
-        const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
+        const typeCheck = await this.exec(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
         if (typeCheck.stdout.trim() !== 'ok') throw new FileBrowseError('Not a regular file', 400);
-        const sizeResult = await this.tmux.execCommand(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
+        const sizeResult = await this.exec(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
         const size = parseInt(sizeResult.stdout.trim(), 10) || 0;
         if (size > MAX_IMAGE_SIZE) {
           throw new FileBrowseError(`Image too large (${Math.round(size / 1024)}KB). Maximum is 5MB.`, 400);
         }
-        const result = await this.tmux.execCommand(srv, `base64 -w0 ${sq(filePath)} 2>/dev/null || base64 ${sq(filePath)} 2>/dev/null`);
+        const result = await this.exec(srv, `base64 -w0 ${sq(filePath)} 2>/dev/null || base64 ${sq(filePath)} 2>/dev/null`);
         const base64 = result.stdout.replace(/[\r\n]/g, '');
         return { type: 'image', mimeType, base64, path: filePath, size };
       }
@@ -286,14 +290,14 @@ export class FileBrowseService {
         const buf = fs.readFileSync(filePath);
         return { type: 'pdf', mimeType: 'application/pdf', base64: buf.toString('base64'), path: filePath, size: stat.size };
       } else {
-        const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
+        const typeCheck = await this.exec(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
         if (typeCheck.stdout.trim() !== 'ok') throw new FileBrowseError('Not a regular file', 400);
-        const sizeResult = await this.tmux.execCommand(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
+        const sizeResult = await this.exec(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
         const size = parseInt(sizeResult.stdout.trim(), 10) || 0;
         if (size > MAX_IMAGE_SIZE) {
           throw new FileBrowseError(`PDF too large (${Math.round(size / 1024)}KB). Maximum is 5MB.`, 400);
         }
-        const result = await this.tmux.execCommand(srv, `base64 -w0 ${sq(filePath)} 2>/dev/null || base64 ${sq(filePath)} 2>/dev/null`);
+        const result = await this.exec(srv, `base64 -w0 ${sq(filePath)} 2>/dev/null || base64 ${sq(filePath)} 2>/dev/null`);
         const base64 = result.stdout.replace(/[\r\n]/g, '');
         return { type: 'pdf', mimeType: 'application/pdf', base64, path: filePath, size };
       }
@@ -337,9 +341,9 @@ export class FileBrowseService {
       // whitespace-stripped base64 string in Node recovers the exact original byte sequence, from which
       // content/hash/binary-detection/size are all derived (so they all agree on the same bytes, the way
       // the local branch's `fs.readFileSync` result already does).
-      const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
+      const typeCheck = await this.exec(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
       if (typeCheck.stdout.trim() !== 'ok') throw new FileBrowseError('Not a regular file', 400);
-      const sizeResult = await this.tmux.execCommand(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
+      const sizeResult = await this.exec(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
       const size = parseInt(sizeResult.stdout.trim(), 10) || 0;
       if (size > MAX_FILE_SIZE) {
         throw new FileBrowseError(`File too large (${Math.round(size / 1024)}KB). Maximum is 500KB.`, 400);
@@ -354,7 +358,7 @@ export class FileBrowseService {
       // file vanished between the `stat` above and this read) from a genuinely empty file — without it,
       // empty stdout from a failed command was indistinguishable from an empty file's correct output, so
       // it was silently accepted and returned as a new, incorrectly-hashed empty document.
-      const result = await this.tmux.execCommand(
+      const result = await this.exec(
         srv,
         `(base64 -w0 < ${sq(filePath)} 2>/dev/null || base64 < ${sq(filePath)} 2>/dev/null) && echo AZITO_READ_OK`,
       );
@@ -414,7 +418,7 @@ export class FileBrowseService {
    */
   private async getRemoteMtimeMs(srv: ServerConfig, filePath: string): Promise<{ mtimeMs: number; precise: boolean } | null> {
     const q = sq(filePath);
-    const result = await this.tmux.execCommand(
+    const result = await this.exec(
       srv,
       `stat -c%.Y ${q} 2>/dev/null || stat -c%Y ${q} 2>/dev/null || stat -f%m ${q} 2>/dev/null`,
     );
@@ -435,7 +439,7 @@ export class FileBrowseService {
    */
   private async getRemoteFileMode(srv: ServerConfig, filePath: string): Promise<string | null> {
     const q = sq(filePath);
-    const result = await this.tmux.execCommand(
+    const result = await this.exec(
       srv,
       `stat -c%a ${q} 2>/dev/null || stat -f%Lp ${q} 2>/dev/null`,
     );
@@ -470,7 +474,7 @@ export class FileBrowseService {
    */
   private async getRemoteSha256(srv: ServerConfig, filePath: string): Promise<string | null> {
     const q = sq(filePath);
-    const result = await this.tmux.execCommand(
+    const result = await this.exec(
       srv,
       `sha256sum ${q} 2>/dev/null || shasum -a 256 ${q} 2>/dev/null`,
     );
@@ -628,11 +632,11 @@ export class FileBrowseService {
       // final decode step ever runs (Issue #27 review follow-up: umask/cleanup on remote temp files).
       // Each exec runs `/bin/sh -c <command>` as its own process (AgentTransport -> agent routes.ts
       // execFile), so this umask never leaks into unrelated commands.
-      await this.tmux.execCommand(srv, `umask 077; : > ${qUpload}`);
+      await this.exec(srv, `umask 077; : > ${qUpload}`);
       try {
         for (let i = 0; i < b64.length; i += WRITE_CHUNK_SIZE) {
           const chunk = b64.slice(i, i + WRITE_CHUNK_SIZE);
-          await this.tmux.execCommand(srv, `printf '%s' ${sq(chunk)} >> ${qUpload}`);
+          await this.exec(srv, `printf '%s' ${sq(chunk)} >> ${qUpload}`);
         }
         // デコードを別の一時ファイルへ行ってから `mv` で原子的に置き換える
         // （デコード先を直接 filePath にすると、書き込み途中で読まれたり途中で
@@ -679,7 +683,7 @@ export class FileBrowseService {
           `if [ "$u" = ${expectedB64Len} ]; then ` +
           `${decodeStep}${chmodStep} && mv -f ${qDecoded} ${q} && echo AZITO_WRITE_OK; ` +
           `else echo AZITO_WRITE_SIZE_MISMATCH; fi`;
-        const writeResult = await this.tmux.execCommand(srv, writeCmd);
+        const writeResult = await this.exec(srv, writeCmd);
         const writeStdout = stripTerminalArtifacts(writeResult.stdout);
         if (writeStdout.includes('AZITO_WRITE_SIZE_MISMATCH')) {
           throw new FileBrowseError('Failed to write file: staged content size mismatch', 500);
@@ -691,7 +695,7 @@ export class FileBrowseService {
         // Best-effort cleanup for failures before the final command ran at all (e.g. a chunk append
         // exec throwing partway through the loop) — the final command's own `trap ... EXIT` only covers
         // failures within that single command, not an earlier one in this sequence.
-        await this.tmux.execCommand(srv, `rm -f ${qUpload} ${qDecoded}`).catch(() => {});
+        await this.exec(srv, `rm -f ${qUpload} ${qDecoded}`).catch(() => {});
         throw err;
       }
       const verifyResult = await this.getRemoteMtimeMs(srv, filePath);
@@ -732,7 +736,7 @@ export class FileBrowseService {
       }
     }
     const q = sq(filePath);
-    const exists = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    const exists = await this.exec(srv, `test -e ${q} && echo yes || echo no`);
     if (stripTerminalArtifacts(exists.stdout).trim() !== 'yes') return null;
     const script = [
       `p=${q}`,
@@ -749,7 +753,7 @@ export class FileBrowseService {
       'b=$(basename -- "$p")',
       'cd -- "$d" 2>/dev/null && printf \'%s/%s\\n\' "$(pwd -P)" "$b"',
     ].join('\n');
-    const result = await this.tmux.execCommand(srv, script);
+    const result = await this.exec(srv, script);
     const resolved = stripTerminalArtifacts(result.stdout).trim();
     return resolved || null;
   }
@@ -782,15 +786,15 @@ export class FileBrowseService {
       return { created: true };
     }
     const q = sq(targetPath);
-    const state = await this.tmux.execCommand(
+    const state = await this.exec(
       srv,
       `if [ -d ${q} ]; then echo dir; elif [ -e ${q} ]; then echo other; else echo none; fi`,
     );
     const stateResult = stripTerminalArtifacts(state.stdout).trim();
     if (stateResult === 'other') throw new FileBrowseError('Path already exists and is not a directory', 409);
     if (stateResult === 'dir') return { created: false };
-    await this.tmux.execCommand(srv, `mkdir -p ${q}`);
-    const verify = await this.tmux.execCommand(srv, `test -d ${q} && echo ok || echo ng`);
+    await this.exec(srv, `mkdir -p ${q}`);
+    const verify = await this.exec(srv, `test -d ${q} && echo ok || echo ng`);
     if (stripTerminalArtifacts(verify.stdout).trim() !== 'ok') throw new FileBrowseError('Create failed', 500);
     return { created: true };
   }
@@ -807,11 +811,11 @@ export class FileBrowseService {
       return;
     }
     const q = sq(targetPath);
-    const exists = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    const exists = await this.exec(srv, `test -e ${q} && echo yes || echo no`);
     if (stripTerminalArtifacts(exists.stdout).trim() === 'yes') throw new FileBrowseError('Already exists', 409);
     const cmd = type === 'directory' ? `mkdir ${q}` : `set -C; : > ${q}`;
-    await this.tmux.execCommand(srv, cmd);
-    const verify = await this.tmux.execCommand(srv, `test -e ${q} && echo ok || echo ng`);
+    await this.exec(srv, cmd);
+    const verify = await this.exec(srv, `test -e ${q} && echo ok || echo ng`);
     if (stripTerminalArtifacts(verify.stdout).trim() !== 'ok') throw new FileBrowseError('Create failed', 500);
   }
 
@@ -823,10 +827,10 @@ export class FileBrowseService {
       return;
     }
     const q = sq(targetPath);
-    const exists = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    const exists = await this.exec(srv, `test -e ${q} && echo yes || echo no`);
     if (stripTerminalArtifacts(exists.stdout).trim() !== 'yes') throw new FileBrowseError('Not found', 404);
-    await this.tmux.execCommand(srv, `rm -rf ${q}`);
-    const verify = await this.tmux.execCommand(srv, `test -e ${q} && echo yes || echo no`);
+    await this.exec(srv, `rm -rf ${q}`);
+    const verify = await this.exec(srv, `test -e ${q} && echo yes || echo no`);
     if (stripTerminalArtifacts(verify.stdout).trim() === 'yes') throw new FileBrowseError('Delete failed', 500);
   }
 
@@ -841,12 +845,12 @@ export class FileBrowseService {
     }
     const qOld = sq(oldPath);
     const qNew = sq(newPath);
-    const existsOld = await this.tmux.execCommand(srv, `test -e ${qOld} && echo yes || echo no`);
+    const existsOld = await this.exec(srv, `test -e ${qOld} && echo yes || echo no`);
     if (stripTerminalArtifacts(existsOld.stdout).trim() !== 'yes') throw new FileBrowseError('Not found', 404);
-    const existsNew = await this.tmux.execCommand(srv, `test -e ${qNew} && echo yes || echo no`);
+    const existsNew = await this.exec(srv, `test -e ${qNew} && echo yes || echo no`);
     if (stripTerminalArtifacts(existsNew.stdout).trim() === 'yes') throw new FileBrowseError('Already exists', 409);
-    await this.tmux.execCommand(srv, `mv -n ${qOld} ${qNew}`);
-    const verify = await this.tmux.execCommand(srv, `test -e ${qNew} && echo ok || echo ng`);
+    await this.exec(srv, `mv -n ${qOld} ${qNew}`);
+    const verify = await this.exec(srv, `test -e ${qNew} && echo ok || echo ng`);
     if (stripTerminalArtifacts(verify.stdout).trim() !== 'ok') throw new FileBrowseError('Rename failed', 500);
   }
 
@@ -868,15 +872,15 @@ export class FileBrowseService {
       return { buffer, contentType, basename };
     } else {
       // Remote: reject non-regular files, then check size
-      const typeCheck = await this.tmux.execCommand(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
+      const typeCheck = await this.exec(srv, `test -f ${sq(filePath)} && echo ok || echo ng`);
       if (typeCheck.stdout.trim() !== 'ok') throw new FileBrowseError('Not a regular file', 400);
-      const sizeResult = await this.tmux.execCommand(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
+      const sizeResult = await this.exec(srv, `stat -c%s ${sq(filePath)} 2>/dev/null || stat -f%z ${sq(filePath)} 2>/dev/null`);
       const size = parseInt(sizeResult.stdout.trim(), 10) || 0;
       if (size > MAX_DOWNLOAD_SIZE) {
         throw new FileBrowseError(`File too large (${Math.round(size / 1024 / 1024)}MB). Maximum is 50MB.`, 400);
       }
       // Use base64 to safely transfer binary content over SSH
-      const result = await this.tmux.execCommand(srv, `base64 -- ${sq(filePath)}`);
+      const result = await this.exec(srv, `base64 -- ${sq(filePath)}`);
       const raw = stripTerminalArtifacts(result.stdout).replace(/\s/g, '');
       const buffer = Buffer.from(raw, 'base64');
       return { buffer, contentType, basename };

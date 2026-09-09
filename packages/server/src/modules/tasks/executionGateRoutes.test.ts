@@ -183,6 +183,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: () => ({}) } as any,
   };
   return { opts, createCalls };
 }

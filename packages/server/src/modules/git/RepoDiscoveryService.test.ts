@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RepoDiscoveryService, toDiscoveryResponse } from './RepoDiscoveryService';
 import { normalizeRemoteUrl } from './parseRemoteUrl';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 
 function makeServer(): ServerConfig {
@@ -22,13 +22,13 @@ function makeServer(): ServerConfig {
   } as unknown as ServerConfig;
 }
 
-function makeTmux(execCommand: (cmd: string) => Promise<{ stdout: string; stderr: string; code: number }>): TmuxClient {
-  return { execCommand: vi.fn((_server: ServerConfig, cmd: string) => execCommand(cmd)) } as unknown as TmuxClient;
+function makeTransportFactory(exec: (cmd: string) => Promise<{ stdout: string; stderr: string; code: number }>): TransportFactory {
+  return { getTransport: () => ({ exec: vi.fn((cmd: string) => exec(cmd)) }) } as unknown as TransportFactory;
 }
 
 describe('RepoDiscoveryService', () => {
   it('detects a repository whose .git is a file (worktree), resolving its own toplevel', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         // A worktree's .git is a regular file, found via -type f.
         return { stdout: '/work/main-repo/.worktrees/feature-x/.git\n', stderr: '', code: 0 };
@@ -46,7 +46,7 @@ describe('RepoDiscoveryService', () => {
       };
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     const repos = await service.discover(makeServer(), '/work');
 
     expect(repos).toHaveLength(1);
@@ -58,7 +58,7 @@ describe('RepoDiscoveryService', () => {
   });
 
   it('dedupes when multiple candidates resolve to the same toplevel', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         return { stdout: '/work/repo/.git\n', stderr: '', code: 0 };
       }
@@ -73,37 +73,37 @@ describe('RepoDiscoveryService', () => {
       };
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     const repos = await service.discover(makeServer(), '/work');
     expect(repos).toHaveLength(1);
   });
 
   it('propagates a find failure as an error instead of an empty result', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         return { stdout: '', stderr: 'find: /work: Permission denied', code: 1 };
       }
       throw new Error('should not reach remote fetch step');
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/scan failed/i);
   });
 
   it('propagates a transport-level rejection from the find step', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         throw new Error('ssh connection lost');
       }
       throw new Error('should not reach remote fetch step');
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/ssh connection lost/);
   });
 
   it('propagates a nonzero `git --version` precheck as an error instead of an empty result (Issue #19 review round 2/3, Important finding 1)', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         return { stdout: '/work/repo/.git\n', stderr: '', code: 0 };
       }
@@ -118,12 +118,12 @@ describe('RepoDiscoveryService', () => {
       throw new Error('should not reach the batch step once the git precheck failed');
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/remote lookup failed/i);
   });
 
   it('propagates a nonzero batch exit code (transport-level failure) as an error instead of an empty result', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         return { stdout: '/work/repo/.git\n', stderr: '', code: 0 };
       }
@@ -137,7 +137,7 @@ describe('RepoDiscoveryService', () => {
       return { stdout: '', stderr: 'transport error', code: 1 };
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     await expect(service.discover(makeServer(), '/work')).rejects.toThrow(/remote lookup failed/i);
   });
 
@@ -149,7 +149,7 @@ describe('RepoDiscoveryService', () => {
     // hold no matter where in the batch the broken candidate falls,
     // since `find`'s output order is filesystem-dependent.
 
-    function makeBrokenBatchTmux(brokenPosition: 'first' | 'last') {
+    function makeBrokenBatchFactory(brokenPosition: 'first' | 'last') {
       const goodSection = [
         '---AZITO_REPO_SECTION---',
         '/work/good-repo',
@@ -162,7 +162,7 @@ describe('RepoDiscoveryService', () => {
       const sections = brokenPosition === 'first' ? [brokenSection, goodSection] : [goodSection, brokenSection];
       const batchStdout = sections.join('\n');
 
-      return makeTmux(async (cmd) => {
+      return makeTransportFactory(async (cmd) => {
         if (cmd.startsWith('find')) {
           const paths =
             brokenPosition === 'first'
@@ -181,14 +181,14 @@ describe('RepoDiscoveryService', () => {
     }
 
     it('drops only the broken candidate when it is FIRST in the batch', async () => {
-      const service = new RepoDiscoveryService(makeBrokenBatchTmux('first'));
+      const service = new RepoDiscoveryService(makeBrokenBatchFactory('first'));
       const repos = await service.discover(makeServer(), '/work');
       expect(repos).toHaveLength(1);
       expect(repos[0].absolutePath).toBe('/work/good-repo');
     });
 
     it('drops only the broken candidate when it is LAST in the batch', async () => {
-      const service = new RepoDiscoveryService(makeBrokenBatchTmux('last'));
+      const service = new RepoDiscoveryService(makeBrokenBatchFactory('last'));
       const repos = await service.discover(makeServer(), '/work');
       expect(repos).toHaveLength(1);
       expect(repos[0].absolutePath).toBe('/work/good-repo');
@@ -196,14 +196,14 @@ describe('RepoDiscoveryService', () => {
   });
 
   it('returns an empty list when no .git entries are found', async () => {
-    const tmux = makeTmux(async (cmd) => {
+    const tf = makeTransportFactory(async (cmd) => {
       if (cmd.startsWith('find')) {
         return { stdout: '', stderr: '', code: 0 };
       }
       throw new Error('should not reach remote fetch step');
     });
 
-    const service = new RepoDiscoveryService(tmux);
+    const service = new RepoDiscoveryService(tf);
     const repos = await service.discover(makeServer(), '/work');
     expect(repos).toEqual([]);
   });
@@ -245,23 +245,20 @@ describe('RepoDiscoveryService', () => {
       mkdirSync(join(fixtureRoot, 'repo', '.git', 'modules', 'sub', '.git'), { recursive: true });
 
       let capturedFindCmd = '';
-      const tmux = {
-        execCommand: vi.fn(async (_server: ServerConfig, cmd: string) => {
-          if (cmd.startsWith('find')) {
-            capturedFindCmd = cmd;
-            // Run the real command the service built, against the real
-            // fixture directory — this is the crux of the regression test.
-            const stdout = execSync(cmd, { shell: '/bin/bash' }).toString();
-            return { stdout, stderr: '', code: 0 };
-          }
-          // Batched rev-parse + remote -v step: not what this test is
-          // verifying, so return a minimal well-formed response per
-          // candidate without actually invoking git.
-          return { stdout: '', stderr: '', code: 0 };
+      const tf = {
+        getTransport: () => ({
+          exec: vi.fn(async (cmd: string) => {
+            if (cmd.startsWith('find')) {
+              capturedFindCmd = cmd;
+              const stdout = execSync(cmd, { shell: '/bin/bash' }).toString();
+              return { stdout, stderr: '', code: 0 };
+            }
+            return { stdout: '', stderr: '', code: 0 };
+          }),
         }),
-      } as unknown as TmuxClient;
+      } as unknown as TransportFactory;
 
-      const service = new RepoDiscoveryService(tmux);
+      const service = new RepoDiscoveryService(tf);
       await service.discover(makeServer(), fixtureRoot);
 
       expect(capturedFindCmd).toContain('find ');
@@ -277,8 +274,8 @@ describe('RepoDiscoveryService', () => {
 
   describe('checkPathStatus', () => {
     it('reports exists:false without an error for a path that does not exist', async () => {
-      const tmux = makeTmux(async () => ({ stdout: '', stderr: '', code: 0 }));
-      const service = new RepoDiscoveryService(tmux);
+      const tf = makeTransportFactory(async () => ({ stdout: '', stderr: '', code: 0 }));
+      const service = new RepoDiscoveryService(tf);
 
       const status = await service.checkPathStatus(makeServer(), '/does/not/exist');
 
@@ -286,8 +283,8 @@ describe('RepoDiscoveryService', () => {
     });
 
     it('reports exists:true, isGitRepository:false for an existing non-git directory', async () => {
-      const tmux = makeTmux(async () => ({ stdout: 'EXISTS\n', stderr: '', code: 0 }));
-      const service = new RepoDiscoveryService(tmux);
+      const tf = makeTransportFactory(async () => ({ stdout: 'EXISTS\n', stderr: '', code: 0 }));
+      const service = new RepoDiscoveryService(tf);
 
       const status = await service.checkPathStatus(makeServer(), '/work/plain-dir');
 
@@ -295,8 +292,8 @@ describe('RepoDiscoveryService', () => {
     });
 
     it('reports exists:true, isGitRepository:true when the path itself has a .git entry', async () => {
-      const tmux = makeTmux(async () => ({ stdout: 'EXISTS\nISGIT\n', stderr: '', code: 0 }));
-      const service = new RepoDiscoveryService(tmux);
+      const tf = makeTransportFactory(async () => ({ stdout: 'EXISTS\nISGIT\n', stderr: '', code: 0 }));
+      const service = new RepoDiscoveryService(tf);
 
       const status = await service.checkPathStatus(makeServer(), '/work/repo');
 
@@ -304,8 +301,8 @@ describe('RepoDiscoveryService', () => {
     });
 
     it('throws (does not silently report exists:false) on a transport-level failure', async () => {
-      const tmux = makeTmux(async () => ({ stdout: '', stderr: 'boom', code: 1 }));
-      const service = new RepoDiscoveryService(tmux);
+      const tf = makeTransportFactory(async () => ({ stdout: '', stderr: 'boom', code: 1 }));
+      const service = new RepoDiscoveryService(tf);
 
       await expect(service.checkPathStatus(makeServer(), '/work')).rejects.toThrow(/Path status check failed/);
     });

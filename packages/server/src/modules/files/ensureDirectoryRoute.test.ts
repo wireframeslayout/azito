@@ -21,7 +21,6 @@ function makeOpts(overrides: Partial<FileBrowseRouteOptions> = {}): FileBrowseRo
       create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn(),
     } as unknown as FileBrowseRouteOptions['serverRepo'],
-    tmux: {} as unknown as FileBrowseRouteOptions['tmux'],
     projectServerRepo: { find: vi.fn(() => null), findByProject: vi.fn(() => []), findByServer: vi.fn(() => []), upsert: vi.fn(), remove: vi.fn() } as unknown as FileBrowseRouteOptions['projectServerRepo'],
     transportFactory: { getTransport: vi.fn() } as unknown as FileBrowseRouteOptions['transportFactory'],
     searchService: {} as unknown as FileBrowseRouteOptions['searchService'],

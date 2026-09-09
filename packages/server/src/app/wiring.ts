@@ -9,6 +9,8 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
+import type { ServerConfig } from '../modules/servers/Server';
+import { uiTokenEnvForServer } from '../shared/auth/uiTokenEnv';
 import { SftpService } from '../modules/servers/ssh/SftpService';
 import { HubRepoCache } from '../modules/git/hub-transfer/HubRepoCache';
 import { RemoteBundleOps } from '../modules/git/hub-transfer/RemoteBundleOps';
@@ -402,7 +404,8 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, sessionCaptureService, harnessPrefix);
+  const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, sessionCaptureService, harnessPrefix);
   const windowSleepService = new WindowSleepService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
@@ -430,7 +433,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
   // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
   // lookups (and their cache) to one per process.
-  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
+  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);

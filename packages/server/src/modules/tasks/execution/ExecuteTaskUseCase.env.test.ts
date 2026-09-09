@@ -455,6 +455,7 @@ function buildUseCase(opts: {
     null,
     (opts.fetchDistributionService as any) ?? null,
     (opts.distributionStateRepo as any) ?? null,
+    { resolve: () => tmux } as any,
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -1582,6 +1583,10 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       new KeyedMutex(),
       true,
       async () => [],
+      null,
+      null,
+      null,
+      { resolve: () => tmux } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2598,6 +2603,10 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       new KeyedMutex(),
       true,
       async () => [],
+      null,
+      null,
+      null,
+      { resolve: () => tmux } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree

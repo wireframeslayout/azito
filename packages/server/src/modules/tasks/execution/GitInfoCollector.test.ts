@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { GitInfoCollector } from './GitInfoCollector';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 
 const server = { name: 'remote', type: 'agent' } as ServerConfig;
@@ -11,15 +11,17 @@ interface FakeExec {
 
 function makeCollector(handler: FakeExec): { collector: GitInfoCollector; commands: string[] } {
   const commands: string[] = [];
-  const tmux = {
-    execCommand: vi.fn(async (_srv: ServerConfig, cmd: string) => {
-      commands.push(cmd);
-      const result = handler(cmd);
-      if (result instanceof Error) throw result;
-      return result;
+  const transportFactory = {
+    getTransport: () => ({
+      exec: vi.fn(async (cmd: string) => {
+        commands.push(cmd);
+        const result = handler(cmd);
+        if (result instanceof Error) throw result;
+        return result;
+      }),
     }),
-  } as unknown as TmuxClient;
-  return { collector: new GitInfoCollector(tmux), commands };
+  } as unknown as TransportFactory;
+  return { collector: new GitInfoCollector(transportFactory), commands };
 }
 
 const ok = (stdout: string) => ({ stdout, stderr: '', code: 0 });

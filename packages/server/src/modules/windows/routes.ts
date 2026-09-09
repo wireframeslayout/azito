@@ -29,8 +29,7 @@ export interface WindowsRouteOptions {
   projectRepo: IProjectRepository;
   taskRepo: ITaskRepository;
   tmux: TmuxClient;
-  /** Per-server mux driver (herdr / zellij windows); falls back to `tmux` when absent. */
-  muxDriverRegistry?: MuxDriverRegistry;
+  muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
   respawnService: WindowRespawnService;
   sleepService: WindowSleepService;
@@ -47,7 +46,7 @@ export interface WindowsRouteOptions {
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
   const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
-  const driverFor = (srv: ServerConfig): IMuxClient => (opts.muxDriverRegistry ? opts.muxDriverRegistry.resolve(srv) : tmux);
+  const driverFor = (srv: ServerConfig): IMuxClient => opts.muxDriverRegistry.resolve(srv);
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });

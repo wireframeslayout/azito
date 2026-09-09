@@ -135,6 +135,7 @@ async function buildApp(opts: {
   await app.register(sessionsRoutes, {
     serverRepo: opts.serverRepo ?? makeServerRepo(srv),
     tmux: opts.tmux as TmuxClient,
+    uiToken: 'test-token',
     windowRepo: opts.windowRepo,
     destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
     destroySessionWindows: opts.destroySessionWindows,
@@ -606,20 +607,17 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
   it('splits with the legacy uiTokenEnvForServer() for a non-task window', async () => {
     const windowRepo = makeWindowRepo();
     const splitPane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
-    const uiTokenEnvForServer = vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' }));
     const tmux: Partial<TmuxClient> = {
       getWindowIdentity: vi.fn(async () => null),
       resolveRef: vi.fn(async () => null),
       splitPane,
-      uiTokenEnvForServer,
     };
     app = await buildApp({ tmux, windowRepo });
 
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
 
     expect(res.statusCode).toBe(200);
-    expect(uiTokenEnvForServer).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }));
-    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: 'legacy-ui-token' });
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: 'test-token' });
   });
 
   // Issue #29 review (5th pass), Critical finding 1: this generic "add pane"
@@ -634,14 +632,13 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
       getWindowIdentity: vi.fn(async () => null),
       resolveRef: vi.fn(async () => null),
       splitPane,
-      uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, isolationIntent: true });
 
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
 
     expect(res.statusCode).toBe(200);
-    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: '' });
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
   });
 
   // Issue #29 review, Important finding 2: identity resolution and the
@@ -662,7 +659,6 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
       getWindowIdentity: vi.fn(async () => null),
       resolveRef,
       splitPane,
-      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, serverRepo });
 
@@ -691,7 +687,6 @@ describe('POST /api/servers/:name/sessions', () => {
     const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
     const tmux: Partial<TmuxClient> = {
       createSession,
-      uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, isolationIntent: true });
 
@@ -701,7 +696,7 @@ describe('POST /api/servers/:name/sessions', () => {
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'srv1' }),
       'newsess',
-      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '' } }),
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } }),
     );
   });
 
@@ -710,7 +705,6 @@ describe('POST /api/servers/:name/sessions', () => {
     const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
     const tmux: Partial<TmuxClient> = {
       createSession,
-      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, isolationIntent: false });
 
@@ -720,7 +714,7 @@ describe('POST /api/servers/:name/sessions', () => {
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'srv1' }),
       'newsess',
-      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: 'legacy-ui-token' } }),
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: 'test-token' } }),
     );
   });
 
@@ -740,7 +734,6 @@ describe('POST /api/servers/:name/sessions', () => {
     const createSession = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
     const tmux: Partial<TmuxClient> = {
       createSession,
-      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, serverRepo, resourceGuard: { check: resourceGuardCheck } });
 
@@ -767,7 +760,6 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
     const createWindow = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
     const tmux: Partial<TmuxClient> = {
       createWindow,
-      uiTokenEnvForServer: vi.fn((server: ServerConfig) => (server.isolationIntent ? { AZITO_UI_TOKEN: '' } : { AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, isolationIntent: true });
 
@@ -778,7 +770,7 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
       expect.objectContaining({ name: 'srv1' }),
       'session',
       undefined,
-      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '' } }),
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } }),
     );
   });
 
@@ -793,7 +785,6 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
     const createWindow = vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'win' }));
     const tmux: Partial<TmuxClient> = {
       createWindow,
-      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'legacy-ui-token' })),
     };
     app = await buildApp({ tmux, windowRepo, serverRepo, resourceGuard: { check: resourceGuardCheck } });
 

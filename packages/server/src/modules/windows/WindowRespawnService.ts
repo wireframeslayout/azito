@@ -165,6 +165,7 @@ export class WindowRespawnService {
     // needs it for resolveEffectiveInputPolicy(). Placed before the optional
     // sessionCaptureService (required params must precede optional ones).
     private scopedAuthEnabled: boolean,
+    private uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
     private sessionCaptureService?: SessionCaptureService,
     private harnessPrefix?: string,
   ) {}
@@ -415,7 +416,7 @@ export class WindowRespawnService {
           // env-resolution -> create() span inside the same per-server
           // isolation lock as the primary/secondary branches, against the
           // freshly re-fetched `freshServer` row.
-          const created = await createPlainWindowInLock(this.tmux, freshServer, doCreate);
+          const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate);
           return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
         }
       });
