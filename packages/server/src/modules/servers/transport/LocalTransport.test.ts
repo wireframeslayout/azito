@@ -17,7 +17,7 @@ import type { TmuxRuntime } from './TmuxRuntime';
 
 const dummyRuntime: TmuxRuntime = { bin: '/usr/bin/tmux', baseArgs: [] };
 
-function makeSnapshot(workspaces: Array<{ workspace_id: string; label: string }>) {
+function makeSnapshotResult(workspaces: Array<{ workspace_id: string; label: string }>) {
   return {
     snapshot: {
       workspaces,
@@ -35,14 +35,14 @@ describe('LocalTransport.openHerdrTerminal', () => {
     mockSocket = {
       sessionName: 'azito',
       socketPath: '/home/user/.config/herdr/sessions/azito/herdr.sock',
-      call: vi.fn(),
+      callRpc: vi.fn(),
     } as unknown as HerdrSocketClient;
     transport = new LocalTransport(dummyRuntime, 'http://localhost:3001', mockSocket);
   });
 
   it('uses injected socket sessionName for HERDR_SESSION env, not ref.workspace', async () => {
-    const snap = makeSnapshot([{ workspace_id: 'ws1', label: 'win--8u83' }]);
-    (mockSocket.call as ReturnType<typeof vi.fn>).mockResolvedValue(snap);
+    const snap = makeSnapshotResult([{ workspace_id: 'ws1', label: 'win--8u83' }]);
+    (mockSocket.callRpc as ReturnType<typeof vi.fn>).mockResolvedValue(snap);
 
     const spawnSpy = vi.spyOn(transport, 'spawnTerminal').mockReturnValue({
       on: vi.fn(),
@@ -61,9 +61,9 @@ describe('LocalTransport.openHerdrTerminal', () => {
   });
 
   it('calls workspace.focus before tab.focus and pane.focus', async () => {
-    const snap = makeSnapshot([{ workspace_id: 'ws1', label: 'win--x' }]);
+    const snap = makeSnapshotResult([{ workspace_id: 'ws1', label: 'win--x' }]);
     const callOrder: string[] = [];
-    (mockSocket.call as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
+    (mockSocket.callRpc as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) => {
       callOrder.push(method);
       if (method === 'session.snapshot') return snap;
       return {};
@@ -81,15 +81,15 @@ describe('LocalTransport.openHerdrTerminal', () => {
   });
 
   it('throws WINDOW_NOT_FOUND when workspace label does not exist in snapshot', async () => {
-    const snap = makeSnapshot([{ workspace_id: 'ws1', label: 'azito' }]);
-    (mockSocket.call as ReturnType<typeof vi.fn>).mockResolvedValue(snap);
+    const snap = makeSnapshotResult([{ workspace_id: 'ws1', label: 'azito' }]);
+    (mockSocket.callRpc as ReturnType<typeof vi.fn>).mockResolvedValue(snap);
 
     const ref: MuxRef = { kind: 'herdr', workspace: 'nonexistent', window: 'main' };
     await expect(transport.openTerminal(ref, 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
   });
 
   it('throws WINDOW_NOT_FOUND when snapshot is null', async () => {
-    (mockSocket.call as ReturnType<typeof vi.fn>).mockResolvedValue({ snapshot: null });
+    (mockSocket.callRpc as ReturnType<typeof vi.fn>).mockResolvedValue({ snapshot: null });
 
     const ref: MuxRef = { kind: 'herdr', workspace: 'win--x', window: 'main' };
     await expect(transport.openTerminal(ref, 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
@@ -100,5 +100,28 @@ describe('LocalTransport.openHerdrTerminal', () => {
 
     const ref: MuxRef = { kind: 'herdr', workspace: 'win--x', window: 'main' };
     await expect(transportNoSocket.openTerminal(ref, 1 as PaneOrdinal, 80, 24)).rejects.toThrow('herdr socket not configured');
+  });
+});
+
+describe('HerdrSocketClient.callRpc', () => {
+  it('unwraps result envelope from raw herdr response', async () => {
+    const rawResponse = {
+      id: '1',
+      result: {
+        type: 'session_snapshot',
+        snapshot: { workspaces: [{ workspace_id: 'ws1', label: 'azito' }], tabs: [], panes: [] },
+      },
+    };
+    const sock = { callRpc: HerdrSocketClient.prototype.callRpc, call: vi.fn().mockResolvedValue(rawResponse) } as unknown as HerdrSocketClient;
+    const result = await sock.callRpc('session.snapshot');
+    expect(result).toEqual(rawResponse.result);
+    expect(result.snapshot).toBeDefined();
+  });
+
+  it('returns raw response when no result envelope (e.g. pong)', async () => {
+    const rawResponse = { type: 'pong', version: '0.8.2' };
+    const sock = { callRpc: HerdrSocketClient.prototype.callRpc, call: vi.fn().mockResolvedValue(rawResponse) } as unknown as HerdrSocketClient;
+    const result = await sock.callRpc('ping');
+    expect(result).toEqual(rawResponse);
   });
 });
