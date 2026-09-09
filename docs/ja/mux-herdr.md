@@ -104,8 +104,8 @@ herdr / zellij サーバーで `TmuxClient` 具象に依存するモジュール
 | モジュール | 使用メソッド | 縮退動作 |
 |---|---|---|
 | `operations/AgentActivityMonitor` | `listSessions`, `captureScreen` | `listSessions`: MuxDriverRegistry 経由で解決済み。`captureScreen`: Tier 2 画面取得で使用、herdr は `IMuxClient.captureScreen` で対応 |
-| `windows/WindowSleepService` | `closeWindow` | tmux 直結。herdr サーバーではスリープ機能未対応（要対応） |
-| `windows/WindowRespawnService` | `listSessions`, `createSession`, `createWindow`, `resolvePane`, `closeWindow`, `sendKeysToHandle`, `captureLayout`, `splitPaneByHandle`, `applyLayout`, `listPanesByRef` | tmux 直結。herdr サーバーでは respawn 未対応（要対応） |
+| `windows/WindowSleepService` | `closeWindow` | **MuxDriverRegistry 経由で解決済み（#409）。Fail Fast: closeWindow 失敗時は sleeping=1 にしない** |
+| `windows/WindowRespawnService` | `listWorkspaces`, `openWorkspace`, `openWindow`, `resolvePane`, `closeWindow`, `sendKeysToHandle`, `captureLayout`, `splitPaneByHandle`, `applyLayout`, `listPanesByRef` | **MuxDriverRegistry 経由で解決済み（#409）。herdr/zellij でもスリープ/復帰が動作** |
 | `git/RepoDiscoveryService` | `execCommand` | tmux 固有。herdr/zellij では `execCommand` 不可。agent サーバーは `AgentTransport.exec()` 経由で動作するため影響なし |
 | `files/FileBrowseService` | `execCommand` | 同上。agent サーバーは transport 経由 |
 | `tasks/execution/GitInfoCollector` | `execCommand` | 同上 |
@@ -123,9 +123,9 @@ herdr / zellij サーバーで `TmuxClient` 具象に依存するモジュール
 
 ### 分類
 
-- **(a) IMuxClient / MuxDriverRegistry 経由で解決済み**: AgentActivityMonitor, WorkerInputService, WindowRotation, TaskCleanupService, RecoverStuckTasksUseCase
+- **(a) IMuxClient / MuxDriverRegistry 経由で解決済み**: AgentActivityMonitor, WorkerInputService, WindowRotation, TaskCleanupService, RecoverStuckTasksUseCase, WindowSleepService, WindowRespawnService
 - **(b) `execCommand` 依存（tmux 固有コマンド実行）**: RepoDiscoveryService, FileBrowseService, GitInfoCollector, PushVerifier — agent サーバーは `AgentTransport.exec()` で動作するため herdr/zellij でも無害
-- **(c) 未対応（herdr/zellij 本格対応時に要移行）**: WindowSleepService, WindowRespawnService, TaskRestoreService, WindowSessionResolver, WindowInputService, TranscriptPaneService, servers/routes (一部), tasks/routes (一部)
+- **(c) 未対応（herdr/zellij 本格対応時に要移行）**: TaskRestoreService, WindowSessionResolver, WindowInputService, TranscriptPaneService, servers/routes (一部), tasks/routes (一部)
 
 ## 検証結果
 
