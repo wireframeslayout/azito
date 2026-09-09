@@ -13,6 +13,7 @@ import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindow
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
+import type { HerdrEventBridge } from '../../operations/HerdrEventBridge';
 
 // ─── Types ───
 
@@ -23,6 +24,7 @@ export interface SessionsRouteOptions {
   windowRepo?: SqliteWindowRepository;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
+  herdrEventBridge?: HerdrEventBridge;
   /**
    * Issue #28 third-party review finding: kill-window here must revoke a
    * task-owned window's token generation the same way the task-execution
@@ -1005,6 +1007,22 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
       await muxClient.closePane(srv, handle);
       notifySessionsChanged(request.params.name);
+      return { ok: true };
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/focus ──
+  fastify.post<{ Params: { name: string }; Body: { ref: string } }>(
+    '/api/servers/:name/mux/focus',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { ref: refParam } = request.body as { ref?: string } ?? {};
+      if (!refParam) return reply.status(400).send({ error: 'ref is required' });
+      const ref = resolveRefFromParam(refParam);
+      const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
+      await muxClient.focusWindow(srv, ref);
+      opts.herdrEventBridge?.recordFocusCommand(srv.name, ref.workspace);
       return { ok: true };
     },
   );

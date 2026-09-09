@@ -481,7 +481,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   await app.register(sessionsRoutes, {
-    serverRepo, tmux: tmuxClient, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
+    serverRepo, tmux: tmuxClient, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex, herdrEventBridge,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at

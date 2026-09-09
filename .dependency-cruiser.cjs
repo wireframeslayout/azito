@@ -61,7 +61,8 @@ module.exports = {
         'ペアとして双方向を許可 = 下記 pathNot に列挙した servers 全体）。' +
         '個別の例外: tmux/routes/hooks.ts が notifications/NotificationBus（フック通知のイベント発火）を、' +
         'tmux/routes/sessions.ts が windows/SqliteWindowRepository（セッション一覧とウィンドウ情報の突合）と' +
-        'windows/windowPaneOps（ref ルートの共通操作関数、段階5-A）を' +
+        'windows/windowPaneOps（ref ルートの共通操作関数、段階5-A）と' +
+        'operations/HerdrEventBridge（mux/focus ルートのエコー抑止、Issue #407）を' +
         '参照している。これは tmux/routes 配下の HTTP インターフェース層としての実装であり、この箇所に限定する。',
       from: { path: '^packages/server/src/modules/tmux' },
       to: {
@@ -70,6 +71,7 @@ module.exports = {
           '^packages/server/src/modules/tmux',
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/notifications/NotificationBus\\.ts$',
+          '^packages/server/src/modules/operations/HerdrEventBridge\\.ts$',
           '^packages/server/src/modules/windows/SqliteWindowRepository\\.ts$',
           '^packages/server/src/modules/windows/windowPaneOps\\.ts$',
           '^packages/server/src/modules/mux/herdr/HerdrPaneStream\\.ts$',
