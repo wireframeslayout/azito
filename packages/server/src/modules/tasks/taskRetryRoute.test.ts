@@ -146,15 +146,13 @@ function makeOpts(
       update: vi.fn(),
       delete: vi.fn(),
     },
-    muxDriverRegistry: { _driver: null as any, resolve: vi.fn(() => ({
-      listSessions: vi.fn(async () => []),
-      createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
-      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
-      sendKeysToHandle: vi.fn(async () => {}),
-      checkPaneExists: vi.fn(async () => true),
-      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    })) } as unknown as TasksRouteOptions['muxDriverRegistry'],
+    muxDriverRegistry: (() => {
+      const driver = {
+        closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
+        windowExists: vi.fn(async () => true),
+      };
+      return { resolve: vi.fn(() => driver), _driver: driver };
+    })() as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
       findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
@@ -245,7 +243,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.muxDriverRegistry.resolve({} as any).closeWindow).toHaveBeenCalledWith(
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       { kind: 'tmux', workspace: 'azito', window: 'task-1' },
     );
@@ -267,7 +265,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Failed to kill/);
-    expect(opts.muxDriverRegistry.resolve({} as any).closeWindow).toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).toHaveBeenCalled();
     // Fail-closed: nothing mutates on a 409 — not the execution, not the
     // token generation, not the task row. The 409 response must be true.
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
@@ -289,7 +287,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Could not resolve the server/);
-    expect(opts.muxDriverRegistry.resolve({} as any).closeWindow).not.toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
     expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
     expect(opts.taskRepo.update).not.toHaveBeenCalled();
@@ -304,7 +302,7 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.muxDriverRegistry.resolve({} as any).closeWindow).not.toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
   });
@@ -318,7 +316,7 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(400);
-    expect(opts.muxDriverRegistry.resolve({} as any).closeWindow).not.toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the task does not exist', async () => {
