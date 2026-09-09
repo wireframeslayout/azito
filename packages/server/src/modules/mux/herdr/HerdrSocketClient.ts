@@ -92,6 +92,14 @@ export class HerdrSocketClient {
     });
   }
 
+  async callRpc(method: string, params: unknown = {}): Promise<Record<string, unknown>> {
+    const raw = await this.call(method, params);
+    if (raw && typeof raw === 'object' && 'result' in raw && !('type' in raw)) {
+      return (raw.result ?? {}) as Record<string, unknown>;
+    }
+    return raw as Record<string, unknown>;
+  }
+
   async ping(): Promise<boolean> {
     try {
       const resp = await this.call('ping');

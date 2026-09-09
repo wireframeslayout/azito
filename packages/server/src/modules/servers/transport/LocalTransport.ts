@@ -138,20 +138,20 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
   private async openHerdrTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('./ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
     if (!this.herdrSocket) throw new Error('LocalTransport: herdr socket not configured');
     const sock = this.herdrSocket;
-    const resp = await sock.call('session.snapshot');
-    const snap = (resp as Record<string, unknown>).snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
+    const resp = await sock.callRpc('session.snapshot');
+    const snap = resp.snapshot as { workspaces: Array<{ workspace_id: string; label: string }>; tabs: Array<{ tab_id: string; workspace_id: string; label: string }>; panes: Array<{ pane_id: string; tab_id: string }> } | undefined;
     if (!snap) throw new Error('WINDOW_NOT_FOUND');
     const ws = snap.workspaces.find((w) => w.label === ref.workspace);
     if (!ws) throw new Error('WINDOW_NOT_FOUND');
     try {
-      await sock.call('workspace.focus', { workspace_id: ws.workspace_id });
+      await sock.callRpc('workspace.focus', { workspace_id: ws.workspace_id });
       const tab = snap.tabs.find((t) => t.workspace_id === ws.workspace_id);
       if (tab) {
-        await sock.call('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
+        await sock.callRpc('tab.focus', { tab_id: tab.tab_id }).catch(() => {});
         const panesInTab = snap.panes.filter((p) => p.tab_id === tab.tab_id);
         const target = panesInTab[ordinal - 1];
         if (target) {
-          await sock.call('pane.focus', { pane_id: target.pane_id }).catch(() => {});
+          await sock.callRpc('pane.focus', { pane_id: target.pane_id }).catch(() => {});
         }
       }
     } catch { /* best-effort focus */ }
