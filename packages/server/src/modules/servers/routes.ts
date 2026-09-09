@@ -3,9 +3,9 @@ import { execSync } from 'child_process';
 import os from 'os';
 import fs from 'fs';
 import type { IServerRepository, MuxRuntime, HerdrNavigationLock, ServerConfig } from './Server';
-import type { TmuxClient, TmuxSession } from '../tmux/TmuxClient';
+import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { muxKindForRuntime } from '@azito/shared';
+import { muxKindForRuntime, type MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -302,25 +302,26 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         },
       };
     }
-    let liveSessions: TmuxSession[];
+    const driver = muxDriverRegistry.resolve(srv);
+    let liveWorkspaces: MuxWorkspace[];
     try {
-      liveSessions = await tmux.listSessionsForSecurityGate(srv);
+      liveWorkspaces = await driver.listWorkspacesStrict(srv);
     } catch (err: unknown) {
       return {
         status: 409,
         body: {
           error: 'isolation_intent_blocked_by_session_check_failure',
-          message: `隔離対象サーバーの tmux セッション一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
+          message: `隔離対象サーバーのワークスペース一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
         },
       };
     }
-    if (liveSessions.length > 0) {
+    if (liveWorkspaces.length > 0) {
       return {
         status: 409,
         body: {
           error: 'isolation_intent_blocked_by_live_sessions',
-          message: `${liveSessions.length} 件の稼働中 tmux セッションがこのサーバー上に存在するため隔離を有効化できません。セッションを終了してから再度有効化してください。`,
-          sessionCount: liveSessions.length,
+          message: `${liveWorkspaces.length} 件の稼働中ワークスペースがこのサーバー上に存在するため隔離を有効化できません。ワークスペースを終了してから再度有効化してください。`,
+          sessionCount: liveWorkspaces.length,
         },
       };
     }

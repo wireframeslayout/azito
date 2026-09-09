@@ -296,11 +296,13 @@ export default function ObjectsSidebar({
     label: type === 'terminal' ? t('common:labels.terminal') : (agentByType.get(type)?.label ?? type),
   })), [agentByType, t]);
 
-  const handlePaneClick = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number) => {
+  const handlePaneClick = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, muxRef?: string) => {
     if (mobile) {
       try {
         if (windowId != null && paneOrdinal != null) {
           await api(`/windows/${windowId}/panes/${paneOrdinal}/zoom`, { method: 'POST' });
+        } else if (muxRef && paneOrdinal != null) {
+          await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(muxRef)}/panes/${paneOrdinal}/zoom`, { method: 'POST' });
         } else {
           await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/zoom`, { method: 'POST' });
         }
@@ -331,7 +333,7 @@ export default function ObjectsSidebar({
   // numeric windows.id. Passing handlePaneClick directly put the row object into
   // `windowId` and produced `terminal:<server>::w[object Object].1` tabs (rc.6 regression).
   const handleTreePaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
-    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined);
+    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined, undefined, w.muxRef);
   }, [handlePaneClick]);
 
   const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
@@ -341,7 +343,7 @@ export default function ObjectsSidebar({
       if (mobile) onCloseMobileSidebar();
       return;
     }
-    handlePaneClick(serverName, target, w.id);
+    handlePaneClick(serverName, target, w.id, undefined, w.muxRef);
   }, [onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {

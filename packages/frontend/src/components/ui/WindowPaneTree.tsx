@@ -47,10 +47,12 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
     });
   }, []);
 
-  const handleUnzoom = useCallback(async (serverName: string, sessionName: string, windowName: string, windowId?: number) => {
+  const handleUnzoom = useCallback(async (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => {
     try {
       if (windowId != null) {
         await api(`/windows/${windowId}/panes/1/unzoom`, { method: 'POST' });
+      } else if (ref) {
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/1/unzoom`, { method: 'POST' });
       } else {
         const target = `${sessionName}:${windowName}`;
         await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/unzoom`, { method: 'POST' });
@@ -98,7 +100,7 @@ interface WindowRowProps {
   isActive?: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
-  onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number) => void;
+  onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => void;
   onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
@@ -420,7 +422,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                 )}
               </div>
               <button
-                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId, sw.windowId ?? undefined); }}
+                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId, sw.windowId ?? undefined, sw.ref); }}
                 title={t('windowPaneTree.showAllPanes')}
                 aria-label={t('windowPaneTree.showAllPanesLabel')}
                 style={{

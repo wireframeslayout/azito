@@ -612,10 +612,12 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [setSelectedRepoId, project, openIssueListRaw, currentProjectId, mobile, setSidebarOpen]);
 
-  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number) => {
+  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => {
     try {
       if (windowId != null) {
         await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      } else if (ref) {
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
       } else {
         const colonIdx = target.indexOf(':');
         if (colonIdx < 0) return;

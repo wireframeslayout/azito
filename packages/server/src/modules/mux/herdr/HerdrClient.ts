@@ -172,6 +172,7 @@ export class HerdrClient implements IMuxClient {
   }
 
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> {
+    // Fail-closed: RPC errors propagate to caller (isolation gate returns 409).
     return this.listWorkspaces(server);
   }
 

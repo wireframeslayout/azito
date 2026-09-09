@@ -114,22 +114,26 @@ export function useWindowActions(
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRenameWindow = useCallback(async (serverName: string, tmuxTarget: string, currentName: string, windowId?: number) => {
+  const handleRenameWindow = useCallback(async (serverName: string, tmuxTarget: string, currentName: string, windowId?: number, ref?: string) => {
     const newName = prompt(t('windows.renameWindowPrompt'), currentName);
     if (!newName || newName === currentName) return;
     if (windowId != null) {
       await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else if (ref) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     } else {
       await api(`/servers/${serverName}/windows/${encodeURIComponent(tmuxTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     }
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRenamePane = useCallback(async (serverName: string, paneTarget: string, currentTitle: string, windowId?: number, paneOrdinal?: number) => {
+  const handleRenamePane = useCallback(async (serverName: string, paneTarget: string, currentTitle: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const newTitle = prompt(t('windows.renamePanePrompt'), currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
     if (windowId != null && paneOrdinal != null) {
       await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    } else if (ref && paneOrdinal != null) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else {
       await api(`/servers/${serverName}/panes/${encodeURIComponent(paneTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
     }

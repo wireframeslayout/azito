@@ -279,7 +279,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   function requireTmuxDriver(srv: ServerConfig, reply: any): boolean {
     const kind = muxKindForRuntime(srv.muxRuntime ?? 'system');
     if (kind !== 'tmux') {
-      reply.status(400).send({ error: `Not supported for ${kind} driver. Use /mux/windows/:ref routes instead.` });
+      reply.status(409).send({ error: 'tmux_only_route' });
       return false;
     }
     return true;
@@ -599,6 +599,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       try {
         const target = decodeURIComponent(request.params.target);
         // Resolve identity before killing — once the window is gone, tmux can no longer tell us
@@ -677,6 +678,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       try {
         const target = decodeURIComponent(request.params.target);
         const result = await tmux.killPane(srv, target)
@@ -704,6 +706,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
       try {
@@ -723,6 +726,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
       try {
@@ -742,6 +746,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       const { title } = request.body as { title?: string };
       if (!title) return reply.status(400).send({ error: 'New title required' });
       try {
@@ -764,6 +769,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
 
       const startLine = request.query.start != null ? parseInt(request.query.start, 10) : undefined;
       const endLine = request.query.end != null ? parseInt(request.query.end, 10) : undefined;
@@ -796,6 +802,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       const { keys } = request.body as { keys?: string[] };
       if (!keys || !Array.isArray(keys))
         return reply.status(400).send({ error: 'keys array required' });
@@ -815,6 +822,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       try {
         await tmux.zoomPane(srv, decodeURIComponent(request.params.target));
         return { ok: true };
@@ -831,6 +839,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       reply.header('Deprecation', 'true');
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (!requireTmuxDriver(srv, reply)) return;
       try {
         await tmux.unzoomPane(srv, decodeURIComponent(request.params.target));
         return { ok: true };
@@ -1089,6 +1098,83 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return reply.status(500).send({ error: (err as Error).message });
         }
       });
+    },
+  );
+
+  // ── PUT /api/servers/:name/mux/workspaces/:workspace/rename ──
+  fastify.put<{ Params: { name: string; workspace: string } }>(
+    '/api/servers/:name/mux/workspaces/:workspace/rename',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const { name } = request.body as { name?: string };
+      if (!name) return reply.status(400).send({ error: 'New name required' });
+      const driver: IMuxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
+      const workspace = decodeURIComponent(request.params.workspace);
+      await driver.renameWorkspace(srv, workspace, name);
+      notifySessionsChanged(request.params.name);
+      return { ok: true };
+    },
+  );
+
+  // ── DELETE /api/servers/:name/mux/workspaces/:workspace ──
+  fastify.delete<{ Params: { name: string; workspace: string } }>(
+    '/api/servers/:name/mux/workspaces/:workspace',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const workspace = decodeURIComponent(request.params.workspace);
+      const driver: IMuxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
+
+      // Snapshot captured inside resolvePrimaryTaskWindows (re-invoked under lock
+      // by destroySessionWindows) — same pattern as DELETE /sessions/:session.
+      let rowSnapshot: Array<{ id: number; tmuxTarget: string }> = [];
+      let handledTargets = new Set<string>();
+
+      const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
+        const freshRows = opts.windowRepo?.findByServerAndSession(request.params.name, workspace) ?? [];
+        rowSnapshot = freshRows.map((win) => ({ id: win.id, tmuxTarget: win.tmuxTarget }));
+        const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
+        for (const win of freshRows) {
+          if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
+          const windowName = windowNameFromTarget(win.tmuxTarget);
+          if (windowName) {
+            out.push({
+              taskId: win.taskId,
+              windowName,
+              target: win.tmuxTarget,
+              onDestroyed: () => opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget),
+            });
+          }
+        }
+        return out;
+      };
+
+      if (opts.destroySessionWindows) {
+        const result = await opts.destroySessionWindows(
+          resolvePrimaryTaskWindows,
+          request.params.name,
+          'window_killed_via_workspace_delete',
+          () => driver.closeWorkspace(srv, workspace),
+        );
+        if (!result.outcome.success) {
+          return reply.status(500).send({ error: `close-workspace failed: ${result.outcome.result.stderr || result.outcome.result.stdout}` });
+        }
+        handledTargets = result.handledTargets;
+      } else {
+        resolvePrimaryTaskWindows();
+        const result = await driver.closeWorkspace(srv, workspace);
+        if (result.code !== 0) {
+          return reply.status(500).send({ error: `close-workspace failed: ${result.stderr || result.stdout}` });
+        }
+      }
+
+      for (const win of rowSnapshot) {
+        if (handledTargets.has(win.tmuxTarget)) continue;
+        opts.windowRepo?.remove(win.id);
+      }
+      notifySessionsChanged(request.params.name);
+      return { ok: true };
     },
   );
 

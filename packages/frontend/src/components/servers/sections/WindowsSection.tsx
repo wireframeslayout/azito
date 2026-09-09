@@ -4,7 +4,7 @@ import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
-import { stripPaneSuffix } from '@azito/shared';
+import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -45,23 +45,33 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
     setShowTree(false);
   }, []);
 
+  const useMuxRoutes = useMemo(() => muxKindForRuntime((server.muxRuntime ?? 'system') as MuxRuntime) !== 'tmux', [server.muxRuntime]);
+
   const handleCreateSession = useCallback(async () => {
     const name = prompt('New session name:');
     if (!name) return;
-    await api(`/servers/${encodeURIComponent(server.name)}/sessions`, {
-      method: 'POST', body: JSON.stringify({ name }),
-    });
+    if (useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
+    } else {
+      await api(`/servers/${encodeURIComponent(server.name)}/sessions`, { method: 'POST', body: JSON.stringify({ name }) });
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
   const handleAddWindow = useCallback(async (sessionName: string) => {
-    await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    if (useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+    } else {
+      await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
-  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number) => {
+  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {
       await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else if (ref && useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     } else {
       await api(
         `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
@@ -69,7 +79,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
       );
     }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
   if (sessions.length === 0) {
     return (
