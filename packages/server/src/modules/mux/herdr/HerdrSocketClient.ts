@@ -20,11 +20,13 @@ export function herdrSocketPath(sessionName: string): string {
 export class HerdrSocketClient {
   private nextId = 1;
   readonly socketPath: string;
+  readonly sessionName: string;
 
   constructor(sessionName: string);
   constructor(socketPath: string, raw: true);
   constructor(arg: string, raw?: true) {
     this.socketPath = raw ? arg : herdrSocketPath(arg);
+    this.sessionName = raw ? '' : arg;
   }
 
   async call(method: string, params: unknown = {}): Promise<HerdrResponse> {
