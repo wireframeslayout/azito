@@ -288,6 +288,38 @@ module.exports = {
         ],
       },
     },
+
+    // --- TmuxClient import 制限 (#408) ---
+    {
+      name: 'no-tmuxclient-outside-tmux',
+      severity: 'error',
+      comment:
+        'TmuxClient の import は modules/tmux/**, app/wiring.ts, cli/** に限定する。' +
+        '暫定 allow-list に列挙されたファイルは後続 Issue で順次 IMuxClient/TransportFactory に移行して削減する。',
+      from: {
+        path: '^packages/server/src/modules',
+        pathNot: [
+          '^packages/server/src/modules/tmux',
+          // --- 暫定 allow-list（後続 Issue で削減） ---
+          '^packages/server/src/modules/servers/routes\\.ts$',
+          '^packages/server/src/modules/servers/ServerIsolationLock\\.ts$',
+          '^packages/server/src/modules/tasks/routes\\.ts$',
+          '^packages/server/src/modules/tasks/TaskRestoreService\\.ts$',
+          '^packages/server/src/modules/tasks/execution/ExecuteTaskUseCase\\.ts$',
+          '^packages/server/src/modules/tasks/execution/WorkerInputService\\.ts$',
+          '^packages/server/src/modules/windows/routes\\.ts$',
+          '^packages/server/src/modules/windows/WindowRespawnService\\.ts$',
+          '^packages/server/src/modules/windows/WindowSleepService\\.ts$',
+          '^packages/server/src/modules/transcripts/WindowSessionResolver\\.ts$',
+          '^packages/server/src/modules/transcripts/TranscriptPaneService\\.ts$',
+          '^packages/server/src/modules/transcripts/WindowInputService\\.ts$',
+          '^packages/server/src/modules/operations/AgentActivityMonitor\\.ts$',
+          '^packages/server/src/modules/notifications/InteractionMonitor\\.ts$',
+          '^packages/server/src/modules/projects/routes\\.ts$',
+        ],
+      },
+      to: { path: '^packages/server/src/modules/tmux/TmuxClient\\.ts$' },
+    },
   ],
 
   options: {

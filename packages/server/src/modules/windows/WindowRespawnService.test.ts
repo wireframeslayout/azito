@@ -316,6 +316,7 @@ function buildService(opts: {
     paneEnvService,
     new KeyedMutex(),
     true,
+    () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
     undefined,
   );
 
@@ -1721,6 +1722,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       paneEnvService,
       new KeyedMutex(),
       true,
+      () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
       undefined,
     );
 

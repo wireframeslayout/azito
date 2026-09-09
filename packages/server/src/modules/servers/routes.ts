@@ -1074,7 +1074,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             let tmuxAvailable = false;
             let tmuxVersion = '';
             try {
-              const { stdout } = await tmux.execCommand(srv, tmuxVersionCmd);
+              const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
               tmuxAvailable = true;
               tmuxVersion = stdout.trim();
             } catch { /* tmux not found on agent */ }
@@ -1095,7 +1095,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           let tmuxAvailable = false;
           let tmuxVersion = '';
           try {
-            const { stdout } = await tmux.execCommand(srv, tmuxVersionCmd);
+            const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
             tmuxAvailable = true;
             tmuxVersion = stdout.trim();
           } catch { /* tmux not found */ }
@@ -1271,7 +1271,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       try {
         const safeDir = workingDir.replace(/'/g, "'\\''");
         const cmd = `cd '${safeDir}' && git branch -a --format='%(refname:short)' 2>/dev/null`;
-        const result = await tmux.execCommand(srv, cmd);
+        const result = await transportFactory.getTransport(srv).exec(cmd);
         const lines = stripTerminalArtifacts(result.stdout).trim().split('\n').filter(Boolean);
 
         const seen = new Set<string>();

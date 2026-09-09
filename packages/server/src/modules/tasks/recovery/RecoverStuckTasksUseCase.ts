@@ -8,7 +8,6 @@ import type { IExecutionLogRepository } from '../ExecutionLog';
 import type { IServerRepository } from '../../servers/Server';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
-import type { TmuxClient } from '../../tmux/TmuxClient';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ExecuteTaskUseCase } from '../execution/ExecuteTaskUseCase';
@@ -36,8 +35,7 @@ export class RecoverStuckTasksUseCase {
     private projectRepo: IProjectRepository,
     private projectServerRepo: IProjectServerRepository,
     private logRepo: IExecutionLogRepository,
-    private muxDriverRegistry: MuxDriverRegistry | null,
-    private tmuxClient: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private executeTaskUseCase: ExecuteTaskUseCase,
     private turnRepo: SqliteAgentTurnRepository,
     private logger: RecoveryLogger,
@@ -106,13 +104,7 @@ export class RecoverStuckTasksUseCase {
     if (!server) return;
     if (server.type !== 'local' && !usesHttpSignalPath(unit.workerExecutionMode)) return;
 
-    const driver: IMuxClient = (() => {
-      try {
-        return this.muxDriverRegistry ? this.muxDriverRegistry.resolve(server) : this.tmuxClient;
-      } catch {
-        return this.tmuxClient;
-      }
-    })();
+    const driver: IMuxClient = this.muxDriverRegistry.resolve(server);
 
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     const windowName = task.tmuxWindow || `task-${task.id}`;

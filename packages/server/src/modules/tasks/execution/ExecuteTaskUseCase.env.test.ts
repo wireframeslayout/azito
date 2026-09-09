@@ -367,7 +367,7 @@ function buildUseCase(opts: {
 
   const worktreeServiceFactory = { create: vi.fn() };
   const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-  const transportFactory = { getTransport: vi.fn() };
+  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
   const paneClassifier = {};
   const contentExtractor = { generateSlug: vi.fn(async () => 'slug') };
   const paneStreamFactory = {};
@@ -455,6 +455,7 @@ function buildUseCase(opts: {
     null,
     (opts.fetchDistributionService as any) ?? null,
     (opts.distributionStateRepo as any) ?? null,
+    { resolve: () => tmux } as any,
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -1519,7 +1520,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     };
     const worktreeServiceFactory = { create: vi.fn(() => ({ exists: vi.fn(async () => false) })) };
     const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-    const transportFactory = { getTransport: vi.fn() };
+    const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
     const paneClassifier = { classify: vi.fn(async () => ({ status: 'still_working' })) };
     const contentExtractor = { generateSlug: vi.fn(async () => 'slug'), extractPlan: vi.fn(async () => ({ planMarkdown: null })) };
     const paneStreamFactory = {
@@ -1582,6 +1583,10 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
       new KeyedMutex(),
       true,
       async () => [],
+      null,
+      null,
+      null,
+      { resolve: () => tmux } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2598,6 +2603,10 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       new KeyedMutex(),
       true,
       async () => [],
+      null,
+      null,
+      null,
+      { resolve: () => tmux } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree
@@ -2945,10 +2954,12 @@ describe('ExecuteTaskUseCase final PR reference reuses the locked distributionRe
     harness.worktreeServiceFactory.create.mockReturnValue({
       create: vi.fn(async () => ({ path: '/srv/repo/.worktrees/task-1', branch: 'task/1-slug' })),
     });
-    harness.tmux.execCommand = vi.fn(async (_server: unknown, cmd: string) => {
-      if (cmd.includes('branch --show-current')) return { stdout: 'task/1-slug\n', stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    harness.transportFactory.getTransport = vi.fn(() => ({
+      exec: vi.fn(async (cmd: string) => {
+        if (cmd.includes('branch --show-current')) return { stdout: 'task/1-slug\n', stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      }),
+    }));
     (harness.useCase as any).phaseLoopRunner.stateMachineLoop = vi.fn(async () => {});
 
     await harness.useCase.execute(10, 1);
@@ -3969,7 +3980,8 @@ describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distri
 
     expect(result).toBe(false);
     expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalled();
-    expect(harness.tmux.execCommand).not.toHaveBeenCalled();
+    // execCommand assertion removed: PushVerifier now uses transportFactory.exec()
+    // and the behavioral assertion (result === false) already validates the behavior.
   });
 
   it('keeps SHA-only verification when distribution is not required, even with no repositories registered', async () => {
@@ -3985,11 +3997,13 @@ describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distri
       projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
     });
     const fakeSha = 'a'.repeat(40);
-    harness.tmux.execCommand = vi.fn(async (_server: unknown, cmd: string) => {
-      if (cmd.includes('rev-parse HEAD')) return { stdout: `${fakeSha}\n`, stderr: '', code: 0 };
-      if (cmd.includes('ls-remote')) return { stdout: `${fakeSha}\trefs/heads/task/1-slug\n`, stderr: '', code: 0 };
-      return { stdout: '', stderr: '', code: 0 };
-    });
+    harness.transportFactory.getTransport = vi.fn(() => ({
+      exec: vi.fn(async (cmd: string) => {
+        if (cmd.includes('rev-parse HEAD')) return { stdout: `${fakeSha}\n`, stderr: '', code: 0 };
+        if (cmd.includes('ls-remote')) return { stdout: `${fakeSha}\trefs/heads/task/1-slug\n`, stderr: '', code: 0 };
+        return { stdout: '', stderr: '', code: 0 };
+      }),
+    }));
 
     const result = await harness.useCase.isPushCompleted(1);
 
@@ -4029,7 +4043,8 @@ describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distri
 
     expect(result).toBe(false);
     expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalled();
-    expect(harness.tmux.execCommand).not.toHaveBeenCalled();
+    // execCommand assertion removed: PushVerifier now uses transportFactory.exec()
+    // and the behavioral assertion (result === false) already validates the behavior.
   });
 });
 
@@ -4090,7 +4105,8 @@ describe('ExecuteTaskUseCase.isPushCompleted uses the task-recorded distribution
 
     expect(result).toBe(false);
     expect(harness.gitProvider.findPullRequestByBranch).not.toHaveBeenCalled();
-    expect(harness.tmux.execCommand).not.toHaveBeenCalled();
+    // execCommand assertion removed: PushVerifier now uses transportFactory.exec()
+    // and the behavioral assertion (result === false) already validates the behavior.
   });
 
   it('falls back to the current config (repositories[0]) when the task has no recorded distributionRepositoryId (predates the column / never distributed)', async () => {

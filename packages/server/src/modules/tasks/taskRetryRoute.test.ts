@@ -211,6 +211,7 @@ function makeOpts(
       destroyPrimaryTaskWindow(taskId, windowName, taskRepo, paneEnvService as TaskPaneEnvironmentService, reason, kill, onDestroyed),
     paneEnvService,
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: () => ({}) } as any,
   };
 }
 

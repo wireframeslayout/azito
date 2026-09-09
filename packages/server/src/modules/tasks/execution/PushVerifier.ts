@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
@@ -11,7 +11,7 @@ import { shellQuote } from '../../../shared/shellQuote';
  * GitProviderService (no CLI dependency — Issue: git provider abstraction).
  */
 export class PushVerifier {
-  constructor(private tmux: TmuxClient, private gitProvider: GitProviderService) {}
+  constructor(private transportFactory: TransportFactory, private gitProvider: GitProviderService) {}
 
   async verifyPushCompleted(
     server: ServerConfig,
@@ -68,9 +68,9 @@ export class PushVerifier {
       // codebase.
       const quotedDir = shellQuote(workingDir);
       const quotedBranch = shellQuote(branch);
-      const r1 = await this.tmux.execCommand(server, `cd -- ${quotedDir} && git rev-parse HEAD`);
+      const r1 = await this.transportFactory.getTransport(server).exec(`cd -- ${quotedDir} && git rev-parse HEAD`);
       const localSha = r1.stdout.trim();
-      const r2 = await this.tmux.execCommand(server, `cd -- ${quotedDir} && git ls-remote --heads origin ${quotedBranch}`);
+      const r2 = await this.transportFactory.getTransport(server).exec(`cd -- ${quotedDir} && git ls-remote --heads origin ${quotedBranch}`);
       const remoteShaLine = r2.stdout.trim();
       if (!localSha || !remoteShaLine) return null;
       return { localSha, remoteSha: remoteShaLine.slice(0, 40) };

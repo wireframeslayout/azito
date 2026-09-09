@@ -169,11 +169,11 @@ export class ExecuteTaskUseCase {
     // information must fail toward keeping the record" rule — the record is
     // left untouched rather than cleared. See the field's use below.
     private distributionStateRepo: IDistributionStateRepository | null = null,
-    private muxDriverRegistry: MuxDriverRegistry | null = null,
+    private muxDriverRegistry: MuxDriverRegistry,
     private harnessPrefix?: string,
   ) {
-    this.gitInfoCollector = new GitInfoCollector(this.tmux);
-    this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
+    this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
+    this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
     this.pullRequestCreator = new PullRequestCreator(
       this.taskRepo,
       this.gitProvider,
@@ -184,9 +184,8 @@ export class ExecuteTaskUseCase {
       this.supervisorRegistry,
       (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
     );
-    const effectiveRegistry = this.muxDriverRegistry ?? { resolve: () => this.tmux } as unknown as MuxDriverRegistry;
     this.workerWaiter = new WorkerWaiter(
-      effectiveRegistry,
+      this.muxDriverRegistry,
       this.transportFactory,
       this.paneClassifier,
       this.contentExtractor,
@@ -239,8 +238,7 @@ export class ExecuteTaskUseCase {
   }
 
   private resolveDriver(server: ServerConfig): IMuxClient {
-    if (this.muxDriverRegistry) return this.muxDriverRegistry.resolve(server);
-    return this.tmux;
+    return this.muxDriverRegistry.resolve(server);
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {

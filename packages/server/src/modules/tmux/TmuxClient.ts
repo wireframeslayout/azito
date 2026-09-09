@@ -3,7 +3,6 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
-import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 import type { IMuxClient } from './IMuxClient';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo } from './types';
@@ -276,51 +275,6 @@ export class TmuxClient implements IMuxClient {
     const result = await this.runTmuxCommand(server, args);
     await this.setWindowStatusFormat(server, sessionName, windowName);
     return { result, windowName };
-  }
-
-  /**
-   * Legacy default env for a window that is NOT a task pane (Issue #28
-   * Phase A後半): `createSession`/`createWindow` above used to inject
-   * AZITO_UI_TOKEN unconditionally into every window they created,
-   * regardless of caller — that meant a task pane always carried the
-   * all-powerful UI token too, which is exactly what design v3 §2 (task
-   * panes get a scoped AZITO_TASK_TOKEN instead) needs to stop. The
-   * unconditional injection is gone; every caller now decides its own
-   * `extraEnv` explicitly. Callers that open a plain terminal/manual/project
-   * window (not a task's — those go through TaskPaneEnvironmentService
-   * instead, which decides UI-token inclusion via the AZITO_SCOPED_AUTH
-   * flag) call this to reproduce the old default.
-   */
-  uiTokenEnv(): Record<string, string> {
-    return this.uiToken ? { AZITO_UI_TOKEN: this.uiToken } : {};
-  }
-
-  /**
-   * Server-aware wrapper around {@link uiTokenEnv} (Issue #29 review, Critical
-   * finding 1): `uiTokenEnv()` above has no way to know which server it is
-   * injecting into, so every one of its call sites — manual session/window/
-   * pane creation in `modules/tmux/routes/sessions.ts`, and the non-task
-   * respawn fallback in `WindowRespawnService.run()` — happily injected the
-   * hub's all-powerful `AZITO_UI_TOKEN` into an `isolation_intent=1` server's
-   * pane too, exactly the credential that server is declared to hold none of.
-   * (Task-owned windows already avoid this via
-   * `TaskPaneEnvironmentService`/`applyTokenMaskingOrCompat`, which checks
-   * `server.isolationIntent` first — this is the same decision, applied to
-   * the handful of NON-task callers that still call the legacy default
-   * directly instead.)
-   *
-   * When `server.isolationIntent` is set, returns the shared
-   * {@link ISOLATION_MASKED_ENV} mask (both `AZITO_UI_TOKEN` AND
-   * `AZITO_AGENT_TOKEN` — an agent-type isolated server's process env holds
-   * the latter too, see `agent/main.ts`) rather than an empty object — see
-   * `applyTokenMaskingOrCompat`'s doc comment for why an explicit empty value
-   * is required to override a token the pane's tmux SESSION may already
-   * carry (a pre-existing session's env persists across `new-window`, and
-   * `-e KEY=` on the new window is the only thing that can mask it).
-   */
-  uiTokenEnvForServer(server: ServerConfig): Record<string, string> {
-    if (server.isolationIntent) return { ...ISOLATION_MASKED_ENV };
-    return this.uiTokenEnv();
   }
 
   /**
@@ -688,11 +642,6 @@ export class TmuxClient implements IMuxClient {
     ]);
     if (check.stdout.trim() !== '1') return { stdout: '', stderr: '', code: 0 };
     return this.runTmuxCommand(server, ['resize-pane', '-Z', '-t', target]);
-  }
-
-  /** Execute an arbitrary shell command on the server (local or remote). */
-  async execCommand(server: ServerConfig, command: string): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).exec(command);
   }
 
   // ─── IMuxClient implementation ───

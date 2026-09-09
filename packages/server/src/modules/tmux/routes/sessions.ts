@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
+import { uiTokenEnvForServer } from '../../../shared/auth/uiTokenEnv';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { isPrimaryTaskWindow } from '../../windows/SqliteWindowRepository';
 import type { NotificationBus } from '../../notifications/NotificationBus';
@@ -20,6 +21,7 @@ import type { HerdrEventBridge } from '../../operations/HerdrEventBridge';
 export interface SessionsRouteOptions {
   serverRepo: IServerRepository;
   tmux: TmuxClient;
+  uiToken: string;
   muxDriverRegistry?: MuxDriverRegistry;
   windowRepo?: SqliteWindowRepository;
   notificationBus?: NotificationBus;
@@ -133,7 +135,7 @@ export interface SessionsRouteOptions {
   /**
    * Issue #29 review (6th pass), Important finding 3: serializes the
    * session/window/pane creation handlers below (from re-fetching the server
-   * row through evaluating `tmux.uiTokenEnvForServer` and issuing the tmux
+   * row through evaluating `uiTokenEnvForServer` and issuing the tmux
    * create call) against the isolation_intent false->true transition's
    * check-through-commit span in `servers/routes.ts`, keyed by server name.
    * A shared instance (the SAME object both route files receive — wired once
@@ -315,7 +317,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           // `WindowRotation.ensureSessionWithLock`, which uses the
           // mask-only `isolationMaskForServer` (Issue #29 review, 11th
           // pass, Critical finding 1).
-          const { result, windowName } = await tmux.createSession(freshSrv, name, { command, windowName: reqWindowName, extraEnv: tmux.uiTokenEnvForServer(freshSrv) });
+          const { result, windowName } = await tmux.createSession(freshSrv, name, { command, windowName: reqWindowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           // Agent/SSH transports resolve with a non-zero code instead of throwing — surface it.
           if (result.code !== 0)
             return reply.status(500).send({ error: `new-session failed: ${result.stderr || result.stdout}` });
@@ -349,7 +351,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         try {
           // Manual, human-facing window creation — see the `uiTokenEnvForServer`
           // vs. `isolationMaskForServer` note on POST /api/servers/:name/sessions above.
-          const { result, windowName } = await tmux.createWindow(freshSrv, request.params.session, reqName || undefined, { extraEnv: tmux.uiTokenEnvForServer(freshSrv) });
+          const { result, windowName } = await tmux.createWindow(freshSrv, request.params.session, reqName || undefined, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           if (result.code !== 0)
             return reply.status(500).send({ error: `new-window failed: ${result.stderr || result.stdout}` });
           notifySessionsChanged(request.params.name);
@@ -434,7 +436,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             // human-facing pane, so `uiTokenEnvForServer` (inject-capable)
             // is correct here, unlike task session bootstrap's mask-only
             // `isolationMaskForServer` (Issue #29 review, 11th pass).
-            : tmux.uiTokenEnvForServer(freshSrv);
+            : uiTokenEnvForServer(opts.uiToken, freshSrv);
 
           await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', extraEnv);
           notifySessionsChanged(request.params.name);

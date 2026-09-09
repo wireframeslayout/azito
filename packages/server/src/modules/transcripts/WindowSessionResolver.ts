@@ -3,6 +3,7 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { TmuxClient, TmuxPaneInfo } from '../tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import { windowSpecMatches } from '../tmux/TmuxClient';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TailState, TranscriptSource } from './sources/TranscriptSource';
 import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
@@ -230,6 +231,7 @@ export class WindowSessionResolver {
     private readonly serverRepo: IServerRepository,
     private readonly sources: TranscriptSource[],
     private readonly sessionCaptureService: SessionCaptureService,
+    private readonly transportFactory: TransportFactory,
   ) {}
 
   async resolve(window: Window): Promise<WindowSessionResolution> {
@@ -445,7 +447,7 @@ export class WindowSessionResolver {
       if (sharedPsEntries) {
         entries = sharedPsEntries;
       } else {
-        const { stdout, code } = await this.tmuxClient.execCommand(server, PS_COMMAND);
+        const { stdout, code } = await this.transportFactory.getTransport(server).exec(PS_COMMAND);
         if (code !== 0) return null;
         entries = parsePsOutput(stdout);
       }
@@ -573,7 +575,7 @@ export class WindowSessionResolver {
     try {
       const [allPanes, ps] = await Promise.all([
         this.tmuxClient.listAllPanes(server),
-        this.tmuxClient.execCommand(server, PS_COMMAND),
+        this.transportFactory.getTransport(server).exec(PS_COMMAND),
       ]);
       if (ps.code !== 0) return null;
       return { allPanes, psEntries: parsePsOutput(ps.stdout) };

@@ -470,7 +470,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // near projectsRoutes below, so both the project-independent scan route
   // (servers/routes.ts) and the project-scoped one (projects/routes.ts)
   // share this exact instance.
-  const repoDiscovery = new RepoDiscoveryService(tmuxClient);
+  const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
     serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
@@ -481,7 +481,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   await app.register(sessionsRoutes, {
-    serverRepo, tmux: tmuxClient, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex, herdrEventBridge,
+    serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex, herdrEventBridge,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at
@@ -532,7 +532,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   const fileSearchService = new FileSearchService(transportFactory);
-  await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
+  await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader, muxDriverRegistry });
