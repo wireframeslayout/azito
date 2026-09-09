@@ -1,4 +1,4 @@
-import type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo } from '@azito/shared';
+import type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo, MuxRef } from '@azito/shared';
 
 export type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
 
@@ -18,6 +18,8 @@ export interface TmuxWindow {
   active: boolean;
   panes: TmuxPane[];
   activity: number;
+  /** Present only for non-tmux mux drivers (herdr/zellij) whose session structure differs from tmux. */
+  ref?: MuxRef;
 }
 
 export interface TmuxSession {

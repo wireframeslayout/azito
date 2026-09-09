@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, muxKindForRuntime, type PaneHandle, type MuxWorkspace } from '@azito/shared';
+import { windowKey, asPaneHandle, muxKindForRuntime, formatMuxRef, type PaneHandle, type MuxWorkspace, type MuxRef } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
@@ -33,6 +33,7 @@ function workspacesToTmuxSessions(workspaces: MuxWorkspace[]): TmuxSession[] {
         pid: p.pid,
       })),
       activity: win.activity,
+      ref: win.ref,
     })),
   }));
 }
@@ -69,17 +70,27 @@ function extractPaneIndex(windowSpec: string, windowIndex: number, windowName: s
 }
 
 /**
- * Confirm the window still exists in a live `listSessions` snapshot (matched
- * via windowSpecMatches: numeric spec → index only, otherwise name; raw and
- * pane-stripped spec forms both tried). This replaces trusting
- * `display-message`'s per-target activity answer, which silently falls back to
- * the session's active window when the requested window is gone — the exact
- * bug that made stale `windows` rows look "running".
+ * Confirm the window still exists in a live `listSessions` snapshot.
  *
- * Returns the window itself (not just its activity) so callers can also
- * inspect its panes' foreground commands.
+ * When `muxRef` is given (herdr/zellij DB windows carry one), matching is done
+ * by comparing the serialized ref against each live window's `ref` field across
+ * all sessions — this is necessary because non-tmux drivers may map multiple
+ * workspaces into a single session (e.g. herdr uses session `azito` for all
+ * workspaces), so the tmuxTarget's "session" component does not correspond to
+ * the actual session name.
+ *
+ * Falls back to the legacy `parseWindowTarget` → session name → windowSpec
+ * path when no `muxRef` is given or the ref-based search finds nothing.
  */
-export function findLiveWindow(sessions: TmuxSession[], target: string): TmuxWindow | null {
+export function findLiveWindow(sessions: TmuxSession[], target: string, muxRef?: MuxRef): TmuxWindow | null {
+  if (muxRef) {
+    const refStr = formatMuxRef(muxRef);
+    for (const s of sessions) {
+      for (const w of s.windows) {
+        if (w.ref && formatMuxRef(w.ref) === refStr) return w;
+      }
+    }
+  }
   const { sessionName, windowSpec } = parseWindowTarget(target);
   const session = sessions.find((s) => s.name === sessionName);
   if (!session) return null;
@@ -1143,7 +1154,7 @@ export class AgentActivityMonitor {
       const server = servers.get(w.serverName) ?? this.serverRepo.findByName(w.serverName);
       if (!server) continue;
       const sessions = sessionsByServer.get(w.serverName) ?? [];
-      const window = findLiveWindow(sessions, w.tmuxTarget);
+      const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
@@ -1177,7 +1188,7 @@ export class AgentActivityMonitor {
             const server = servers.get(w.serverName);
             if (server) {
               const sessions = sessionsByServer.get(w.serverName) ?? [];
-              const window = findLiveWindow(sessions, w.tmuxTarget);
+              const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
               if (window) {
                 const { windowSpec } = parseWindowTarget(w.tmuxTarget);
                 const pi = extractPaneIndex(windowSpec, window.index, window.name);
@@ -1260,7 +1271,7 @@ export class AgentActivityMonitor {
             const server = servers.get(w.serverName);
             if (server) {
               const sessions = sessionsByServer.get(w.serverName) ?? [];
-              const muxWindow = findLiveWindow(sessions, w.tmuxTarget);
+              const muxWindow = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
               if (muxWindow) {
                 const { windowSpec: ws } = parseWindowTarget(w.tmuxTarget);
                 const pi = extractPaneIndex(ws, muxWindow.index, muxWindow.name);
@@ -1288,7 +1299,7 @@ export class AgentActivityMonitor {
       }
 
       const sessions = sessionsByServer.get(w.serverName) ?? [];
-      const window = findLiveWindow(sessions, w.tmuxTarget);
+      const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
       // null (window gone, i.e. a stale DB row) → idle. Reset both the
       // debounce window and any hook state too: a later resumption must
       // re-earn confirmation from scratch, not resume a stale window.
@@ -1511,7 +1522,8 @@ export class AgentActivityMonitor {
       if (entry.paneName) continue;
       const sessions = sessionsByServer.get(entry.serverName);
       if (!sessions) continue;
-      const win = findLiveWindow(sessions, entry.target);
+      const dbWin = allWindows.find((aw) => windowKey(aw.serverName, aw.tmuxTarget) === key);
+      const win = findLiveWindow(sessions, entry.target, dbWin?.muxRef);
       if (!win) continue;
       const { windowSpec } = parseWindowTarget(entry.target);
       const pi = extractPaneIndex(windowSpec, win.index, win.name);
@@ -1664,7 +1676,7 @@ export class AgentActivityMonitor {
     if (sessionErrors.has(w.serverName)) return this.heldStatusOnUnknown(key);
     // A successful listing that does not contain the window means the pane is
     // genuinely gone; nothing is waiting on the user there.
-    const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+    const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
     if (!window) return null;
 
     const { windowSpec } = parseWindowTarget(w.tmuxTarget);
@@ -1788,7 +1800,7 @@ export class AgentActivityMonitor {
     for (const w of candidates) {
       const server = servers.get(w.serverName);
       if (!server) continue;
-      const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+      const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
