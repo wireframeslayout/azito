@@ -12,7 +12,7 @@ interface WindowTreePopoverProps {
   onClose: () => void;
   onCreateSession: () => void;
   onAddWindow: (sessionName: string) => void;
-  onSplitPane: (sessionName: string, windowName: string, direction: string) => void;
+  onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
   isMobile: boolean;
 }
 
@@ -90,7 +90,7 @@ export default function WindowTreePopover({
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal');
+                        onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
                       }}
                     >
                       <Icon name="split-h" size={14} /> {t('windows.split')}

@@ -1126,44 +1126,51 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const workspace = decodeURIComponent(request.params.workspace);
       const driver: IMuxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
 
-      const rows = opts.windowRepo?.findByServerAndSession(request.params.name, workspace) ?? [];
-      const primaryTaskRows = rows.filter((w) => w.taskId !== null && isPrimaryTaskWindow(w));
+      // Snapshot captured inside resolvePrimaryTaskWindows (re-invoked under lock
+      // by destroySessionWindows) — same pattern as DELETE /sessions/:session.
+      let rowSnapshot: Array<{ id: number; tmuxTarget: string }> = [];
+      let handledTargets = new Set<string>();
 
-      if (primaryTaskRows.length > 0 && opts.destroySessionWindows) {
-        const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
-          const freshRows = opts.windowRepo?.findByServerAndSession(request.params.name, workspace) ?? [];
-          const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
-          for (const win of freshRows) {
-            if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
-            const windowName = windowNameFromTarget(win.tmuxTarget);
-            if (windowName) {
-              out.push({
-                taskId: win.taskId,
-                windowName,
-                target: win.tmuxTarget,
-                onDestroyed: () => opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget),
-              });
-            }
+      const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
+        const freshRows = opts.windowRepo?.findByServerAndSession(request.params.name, workspace) ?? [];
+        rowSnapshot = freshRows.map((win) => ({ id: win.id, tmuxTarget: win.tmuxTarget }));
+        const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
+        for (const win of freshRows) {
+          if (win.taskId === null || !isPrimaryTaskWindow(win)) continue;
+          const windowName = windowNameFromTarget(win.tmuxTarget);
+          if (windowName) {
+            out.push({
+              taskId: win.taskId,
+              windowName,
+              target: win.tmuxTarget,
+              onDestroyed: () => opts.windowRepo?.removeByServerAndTarget(request.params.name, win.tmuxTarget),
+            });
           }
-          return out;
-        };
-        const { outcome } = await opts.destroySessionWindows(
+        }
+        return out;
+      };
+
+      if (opts.destroySessionWindows) {
+        const result = await opts.destroySessionWindows(
           resolvePrimaryTaskWindows,
           request.params.name,
           'window_killed_via_workspace_delete',
           () => driver.closeWorkspace(srv, workspace),
         );
-        if (!outcome.success) {
-          return reply.status(500).send({ error: `close-workspace failed: ${outcome.result.stderr || outcome.result.stdout}` });
+        if (!result.outcome.success) {
+          return reply.status(500).send({ error: `close-workspace failed: ${result.outcome.result.stderr || result.outcome.result.stdout}` });
         }
+        handledTargets = result.handledTargets;
       } else {
+        resolvePrimaryTaskWindows();
         const result = await driver.closeWorkspace(srv, workspace);
         if (result.code !== 0) {
           return reply.status(500).send({ error: `close-workspace failed: ${result.stderr || result.stdout}` });
         }
       }
 
-      for (const win of rows) {
+      for (const win of rowSnapshot) {
+        if (handledTargets.has(win.tmuxTarget)) continue;
         opts.windowRepo?.remove(win.id);
       }
       notifySessionsChanged(request.params.name);
