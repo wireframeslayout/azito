@@ -7,7 +7,7 @@ import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, Window } from '../../pages/workspace/types';
 
-export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean };
+export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: string };
 
 type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
 
@@ -47,10 +47,16 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
     });
   }, []);
 
-  const handleUnzoom = useCallback(async (serverName: string, sessionName: string, windowName: string) => {
-    const target = `${sessionName}:${windowName}`;
+  const handleUnzoom = useCallback(async (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => {
     try {
-      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/unzoom`, { method: 'POST' });
+      if (windowId != null) {
+        await api(`/windows/${windowId}/panes/1/unzoom`, { method: 'POST' });
+      } else if (ref) {
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/1/unzoom`, { method: 'POST' });
+      } else {
+        const target = `${sessionName}:${windowName}`;
+        await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/unzoom`, { method: 'POST' });
+      }
     } catch { /* best-effort */ }
   }, []);
 
@@ -94,7 +100,7 @@ interface WindowRowProps {
   isActive?: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
-  onUnzoom: (serverName: string, sessionName: string, windowName: string) => void;
+  onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => void;
   onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
@@ -416,7 +422,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                 )}
               </div>
               <button
-                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId); }}
+                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId, sw.windowId ?? undefined, sw.ref); }}
                 title={t('windowPaneTree.showAllPanes')}
                 aria-label={t('windowPaneTree.showAllPanesLabel')}
                 style={{

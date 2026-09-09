@@ -1,13 +1,18 @@
 import type { IWindowRepository, Window } from './Window';
-import type { TmuxClient } from '../tmux/TmuxClient';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { IServerRepository } from '../servers/Server';
-import { stripPaneSuffix } from './paneTarget';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { muxRefFromTmuxTarget } from '@azito/shared';
+import { resolveKillOutcome } from '../tmux/killOutcome';
+
+function resolveWindowRef(win: Pick<Window, 'muxRef' | 'tmuxTarget'>) {
+  return win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
+}
 
 export class WindowSleepService {
   constructor(
     private windowRepo: IWindowRepository,
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private sessionStrategyFactory: ISessionStrategyFactory,
     private serverRepo: IServerRepository,
   ) {}
@@ -30,10 +35,11 @@ export class WindowSleepService {
 
     const srv = this.serverRepo.findByName(win.serverName);
     if (srv) {
-      try {
-        await this.tmux.killWindow(srv, stripPaneSuffix(win.tmuxTarget));
-      } catch {
-        // kill failure is acceptable — the window may already be gone
+      const driver = this.muxDriverRegistry.resolve(srv);
+      const ref = resolveWindowRef(win);
+      const outcome = await resolveKillOutcome(driver.closeWindow(srv, ref));
+      if (!outcome.success) {
+        throw new Error(`Failed to close window before sleeping: ${outcome.result.stderr || outcome.result.stdout || 'unknown'}`);
       }
     }
 

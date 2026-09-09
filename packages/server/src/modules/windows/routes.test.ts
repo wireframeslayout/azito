@@ -30,13 +30,16 @@ function makeWindowActivityStatusService(): WindowActivityStatusService {
 }
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
+  const tmuxTarget = overrides.tmuxTarget ?? 'proj:win1';
+  const colonIdx = tmuxTarget.indexOf(':');
   return {
     id: 1,
     ownerType: 'project',
     projectId: 1,
     taskId: null,
     serverName: 'local-server',
-    tmuxTarget: 'proj:win1',
+    tmuxTarget,
+    muxRef: { kind: 'tmux' as const, workspace: tmuxTarget.slice(0, colonIdx), window: tmuxTarget.slice(colonIdx + 1) },
     label: 'manual-agent',
     isPrimary: false,
     windowType: 'agent',
@@ -47,6 +50,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
+    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -66,6 +70,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -92,8 +97,8 @@ describe('POST /api/windows/:id/launch-agent', () => {
       findByName: (name: string) => (name === server.name ? server : null),
     };
     const tmux: Partial<TmuxClient> = {
-      sendKeys: sendKeys as unknown as TmuxClient['sendKeys'],
-      resolvePaneId: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePaneId'],
+      sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
+      resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
     };
 
     app = Fastify();
@@ -102,6 +107,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: tmux as TmuxClient,
+      muxDriverRegistry: { resolve: () => tmux } as any,
       serverRepo: serverRepo as IServerRepository,
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
@@ -235,9 +241,10 @@ describe('POST /api/windows/:id/launch-agent', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {
-        sendKeys: sendKeys as unknown as TmuxClient['sendKeys'],
-        resolvePaneId: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePaneId'],
+        sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
+        resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
       } as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({ sendKeysToHandle: sendKeys, resolvePane: vi.fn().mockResolvedValue('%0') }) } as any,
       serverRepo: {
         findByName: (name: string) => (name === server.name ? server : null),
       } as unknown as IServerRepository,
@@ -292,6 +299,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: { findByName: () => makeServer() } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
@@ -365,6 +373,8 @@ describe('GET /api/windows/pane-loading-state', () => {
       lastActivityFrameAt: null,
       lastReportedState: null,
       lastReportedStatus: null,
+      lastReportedDecidedBy: null,
+      muxPaneRef: null,
     };
     app = await setup(win, [entry]);
     const res = await app.inject({
@@ -409,6 +419,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: serverRepo as IServerRepository,
       respawnService: { respawn } as unknown as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
@@ -475,6 +486,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: {} as IServerRepository,
       respawnService: {} as WindowRespawnService,
       sleepService: { canSleep: vi.fn(() => false), sleep: vi.fn() } as unknown as WindowSleepService,
@@ -505,6 +517,7 @@ describe('POST /api/windows/:id/sleep', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: {} as ITaskRepository,
       tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => ({}) } as any,
       serverRepo: {
         findByName: () => ({ name: 'local-server', type: 'local' }),
       } as unknown as IServerRepository,

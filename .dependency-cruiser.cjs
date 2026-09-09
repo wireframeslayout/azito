@@ -60,8 +60,10 @@ module.exports = {
         '基盤層 modules/tmux は modules/servers 以外への依存を原則禁止（servers との関係は tmux⇄servers ' +
         'ペアとして双方向を許可 = 下記 pathNot に列挙した servers 全体）。' +
         '個別の例外: tmux/routes/hooks.ts が notifications/NotificationBus（フック通知のイベント発火）を、' +
-        'tmux/routes/sessions.ts が windows/SqliteWindowRepository（セッション一覧とウィンドウ情報の突合）を' +
-        '参照している。これは tmux/routes 配下の HTTP インターフェース層としての実装であり、この2箇所に限定する。',
+        'tmux/routes/sessions.ts が windows/SqliteWindowRepository（セッション一覧とウィンドウ情報の突合）と' +
+        'windows/windowPaneOps（ref ルートの共通操作関数、段階5-A）と' +
+        'operations/HerdrEventBridge（mux/focus ルートのエコー抑止、Issue #407）を' +
+        '参照している。これは tmux/routes 配下の HTTP インターフェース層としての実装であり、この箇所に限定する。',
       from: { path: '^packages/server/src/modules/tmux' },
       to: {
         path: '^packages/server/src/modules',
@@ -69,7 +71,10 @@ module.exports = {
           '^packages/server/src/modules/tmux',
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/notifications/NotificationBus\\.ts$',
+          '^packages/server/src/modules/operations/HerdrEventBridge\\.ts$',
           '^packages/server/src/modules/windows/SqliteWindowRepository\\.ts$',
+          '^packages/server/src/modules/windows/windowPaneOps\\.ts$',
+          '^packages/server/src/modules/mux/herdr/HerdrPaneStream\\.ts$',
         ],
       },
     },
@@ -90,6 +95,8 @@ module.exports = {
         'トランスポート経由のイベント通知のため）。\n' +
         '- servers/agent-deploy/AgentUpdater.ts: units/SqliteUnitRepository・tasks/SqliteTaskRepository ' +
         'を参照（エージェント更新時に実行中タスク/Unit の状態を確認するため）。\n' +
+        '- servers/transport/LocalTransport.ts・TransportFactory.ts: mux/herdr/HerdrSocketClient を参照' +
+        '（herdr ドライバの NDJSON ソケットクライアントをトランスポートに注入するため、基盤⇄基盤。段階7-B）。\n' +
         'いずれも本来は上位層への逆依存であり理想形ではないが、現状の実装として個別に許可する。',
       from: { path: '^packages/server/src/modules/servers' },
       to: {
@@ -97,6 +104,7 @@ module.exports = {
         pathNot: [
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/tmux',
+          '^packages/server/src/modules/mux',
           '^packages/server/src/modules/git/DiffParser\\.ts$',
           '^packages/server/src/modules/git/RepoDiscoveryService\\.ts$',
           '^packages/server/src/modules/projects/Project\\.ts$',
@@ -123,6 +131,28 @@ module.exports = {
         pathNot: [
           '^packages/server/src/modules/supervisors',
           '^packages/server/src/modules/servers/Server\\.ts$',
+        ],
+      },
+    },
+
+    // --- 基盤層: modules/mux ---
+    {
+      name: 'base-mux-limited-upward',
+      severity: 'error',
+      comment:
+        '基盤層 modules/mux は modules/servers（トランスポート抽象）と ' +
+        'modules/tmux の IMuxClient.ts・MuxCapabilityError.ts（インターフェースとエラー型のみ）以外への' +
+        '依存を禁止する。herdr/zellij ドライバは基盤層として独立し、tmux 実装詳細には依存しない（段階7-B）。',
+      from: { path: '^packages/server/src/modules/mux' },
+      to: {
+        path: '^packages/server/src/modules',
+        pathNot: [
+          '^packages/server/src/modules/mux',
+          '^packages/server/src/modules/servers',
+          '^packages/server/src/modules/tmux/IMuxClient\\.ts$',
+          '^packages/server/src/modules/tmux/MuxCapabilityError\\.ts$',
+          '^packages/server/src/modules/tmux/PaneStream\\.ts$',
+          '^packages/server/src/modules/tmux/PaneOutputStream\\.ts$',
         ],
       },
     },
@@ -257,6 +287,27 @@ module.exports = {
           '^packages/server/src/modules/prompt/PromptModuleLoader\\.ts$',
         ],
       },
+    },
+
+    // --- TmuxClient import 制限 (#408) ---
+    {
+      name: 'no-tmuxclient-outside-tmux',
+      severity: 'error',
+      comment:
+        'TmuxClient の import は modules/tmux/**, app/wiring.ts, cli/** に限定する。' +
+        '暫定 allow-list に列挙されたファイルは後続 Issue で順次 IMuxClient/TransportFactory に移行して削減する。',
+      from: {
+        path: '^packages/server/src/modules',
+        pathNot: [
+          '^packages/server/src/modules/tmux',
+          // --- 暫定 allow-list（type import のみ残存） ---
+          '^packages/server/src/modules/servers/routes\\.ts$',
+          '^packages/server/src/modules/servers/ServerIsolationLock\\.ts$',
+          '^packages/server/src/modules/windows/routes\\.ts$',
+          '^packages/server/src/modules/projects/routes\\.ts$',
+        ],
+      },
+      to: { path: '^packages/server/src/modules/tmux/TmuxClient\\.ts$' },
     },
   ],
 

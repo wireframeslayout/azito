@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
+import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -66,7 +67,7 @@ interface ObjectsSidebarProps {
   activeTabId: string | null;
   mobile: boolean;
   projectServers: { serverName: string; workingDirectory?: string }[];
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   showWindowContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   /** 長押し（タッチ座標）版の showWindowContextMenu。プレーンなプロジェクトウィンドウ行の
    * 長押しで desktop と同一のコンテキストメニューを開く（Issue #338 T10）。省略時は長押しを
@@ -103,6 +104,9 @@ interface ObjectsSidebarProps {
   /** オペレーションウィンドウ行の「オペレーションを停止」に接続する（Unit の POST /api/units/:id/stop）。
    * taskId を省略すると同じ Unit を使う他タスクの実行まで巻き添えで止まるため、対象タスクの id を必ず渡す。 */
   onStopOperation: (unitId: number | null, taskId: number) => void;
+  followHerdr?: boolean;
+  onFollowHerdrChange?: (v: boolean) => void;
+  onWindowFocus?: (windowId: number) => void;
 }
 
 type QuickAddAgent = 'claude' | 'codex' | 'terminal';
@@ -145,6 +149,9 @@ export default function ObjectsSidebar({
   showContextMenuAt,
   onCapturePanes,
   onStopOperation,
+  followHerdr,
+  onFollowHerdrChange,
+  onWindowFocus,
 }: ObjectsSidebarProps) {
   const { t } = useTranslation(['workspace', 'tasks', 'browser']);
   const { showToast } = useToast();
@@ -289,15 +296,25 @@ export default function ObjectsSidebar({
     label: type === 'terminal' ? t('common:labels.terminal') : (agentByType.get(type)?.label ?? type),
   })), [agentByType, t]);
 
-  const handlePaneClick = useCallback(async (serverName: string, target: string) => {
+  const handlePaneClick = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, muxRef?: string) => {
     if (mobile) {
       try {
-        await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/zoom`, { method: 'POST' });
+        if (windowId != null && paneOrdinal != null) {
+          await api(`/windows/${windowId}/panes/${paneOrdinal}/zoom`, { method: 'POST' });
+        } else if (muxRef && paneOrdinal != null) {
+          await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(muxRef)}/panes/${paneOrdinal}/zoom`, { method: 'POST' });
+        } else {
+          await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/zoom`, { method: 'POST' });
+        }
       } catch { /* best-effort */ }
     }
-    connectPane(serverName, target);
+    const ref: TerminalRef = windowId != null
+      ? { kind: 'windowId' as const, serverName, windowId, pane: paneOrdinal ?? 1 }
+      : terminalRefFromTarget(serverName, target);
+    connectPane(ref);
+    if (windowId != null) onWindowFocus?.(windowId);
     if (mobile) onCloseMobileSidebar();
-  }, [mobile, connectPane, onCloseMobileSidebar]);
+  }, [mobile, connectPane, onCloseMobileSidebar, onWindowFocus]);
 
   const handleOpenBrowser = useCallback((serverName: string, groupId?: string) => {
     openBrowser(serverName, groupId);
@@ -312,6 +329,13 @@ export default function ObjectsSidebar({
   // クリックされた行の WindowItem 自体（w）から taskId を得る。物理ターゲット（serverName+target）で
   // Map を引き直すと、同じ物理 tmux ウィンドウを別々のタスクが持つ場合に取り違える
   // （後勝ちで上書きされた1件に固定されてしまう）ため、行の実体を直接使う。
+  // WindowPaneTree hands the whole WindowItem to onPaneClick; handlePaneClick wants the
+  // numeric windows.id. Passing handlePaneClick directly put the row object into
+  // `windowId` and produced `terminal:<server>::w[object Object].1` tabs (rc.6 regression).
+  const handleTreePaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
+    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined, undefined, w.muxRef);
+  }, [handlePaneClick]);
+
   const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
     const decision = resolveOperationClick(w, serverName, target);
     if (decision.kind === 'task' && onOpenTaskWindow) {
@@ -319,7 +343,7 @@ export default function ObjectsSidebar({
       if (mobile) onCloseMobileSidebar();
       return;
     }
-    handlePaneClick(serverName, target);
+    handlePaneClick(serverName, target, w.id, undefined, w.muxRef);
   }, [onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
@@ -545,7 +569,23 @@ export default function ObjectsSidebar({
       <div style={{ marginBottom: 4 }}>
         <div style={{ fontSize: 'var(--font-xs)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, color: 'var(--text-dim)', padding: '12px 12px 4px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>{t('objects.title')} <span style={{ fontWeight: 400, fontSize: 'var(--font-2xs)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{objectsLoading ? '—' : sections.totalCount}</span></span>
-          <button onClick={() => onOpenAddWindow()} title={t('windows.addWindow')} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}><Icon name="plus" size={16} /></button>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            {onFollowHerdrChange != null && (
+              <label
+                className="toggle"
+                title={t('objects.followHerdr')}
+                style={{ transform: 'scale(0.7)', transformOrigin: 'right center' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={followHerdr ?? false}
+                  onChange={(e) => onFollowHerdrChange(e.target.checked)}
+                />
+                <span className="toggle-slider" />
+              </label>
+            )}
+            <button onClick={() => onOpenAddWindow()} title={t('windows.addWindow')} className="icon-btn" style={{ border: 'none', color: 'var(--text-dim)', cursor: 'pointer', padding: '3px 6px', display: 'flex', alignItems: 'center' }}><Icon name="plus" size={16} /></button>
+          </span>
         </div>
 
         {objectsLoading ? (
@@ -653,7 +693,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -699,7 +739,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -745,7 +785,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -775,7 +815,7 @@ export default function ObjectsSidebar({
                       quickAddIcons={quickAddIcons}
                       agentDefsLoading={agentDefsLoading}
                       agentDefsError={agentDefsError}
-                      onPaneClick={handlePaneClick}
+                      onPaneClick={handleTreePaneClick}
                       onContextMenu={showWindowContextMenu}
                       onLongPress={showWindowContextMenuAt}
                       onOpenQuickAdd={onOpenQuickAdd}
@@ -876,7 +916,7 @@ interface ServerGroupProps {
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
   agentDefsLoading?: boolean;
   agentDefsError?: string | null;
-  onPaneClick: (serverName: string, target: string) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onLongPress?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;

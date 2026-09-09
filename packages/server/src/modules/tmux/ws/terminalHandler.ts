@@ -1,7 +1,8 @@
 import type { WebSocket } from 'ws';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
-import type { ITerminalStream } from '../../servers/transport/ServerTransport';
+import type { ITerminalStream, OpenTerminalOpts } from '../../servers/transport/ServerTransport';
+import type { MuxRef, PaneOrdinal } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
 const OPEN_TERMINAL_TIMEOUT_MS = 30_000;
@@ -9,10 +10,12 @@ const OPEN_TERMINAL_TIMEOUT_MS = 30_000;
 export function handleTerminalConnection(
   ws: WebSocket,
   server: ServerConfig,
-  target: string,
+  ref: MuxRef,
+  ordinal: PaneOrdinal,
   cols: number,
   rows: number,
   transportFactory: TransportFactory,
+  terminalOpts?: OpenTerminalOpts,
 ): void {
   let closed = false;
   let activeStream: ITerminalStream | null = null;
@@ -37,7 +40,7 @@ export function handleTerminalConnection(
 
   const openPromise = transportFactory
     .getTransport(server)
-    .openTerminal(target, cols, rows);
+    .openTerminal(ref, ordinal, cols, rows, terminalOpts);
 
   openPromise.then((stream) => {
     if (closed) stream.close();

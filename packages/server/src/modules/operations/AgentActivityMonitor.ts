@@ -2,14 +2,41 @@ import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import { ACTIVITY_THRESHOLD_SEC } from '../tasks/execution/WorkerWaiter';
 import type { AgentWindow, IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
-import type { TmuxClient, TmuxSession, TmuxWindow } from '../tmux/TmuxClient';
-import { windowSpecMatches } from '../tmux/TmuxClient';
+import type { TmuxSession, TmuxWindow } from '../tmux/types';
+import { windowSpecMatches } from '../tmux/types';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { stripPaneSuffix } from '../windows/paneTarget';
+import { windowKey, asPaneHandle, muxKindForRuntime, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef } from '@azito/shared';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { resolveInterval } from '../../shared/testIntervals';
+import type { PaneHandleResolver } from './PaneHandleResolver';
+
+function workspacesToTmuxSessions(workspaces: MuxWorkspace[]): TmuxSession[] {
+  return workspaces.map(ws => ({
+    name: ws.name,
+    attached: ws.attached,
+    windowCount: ws.windowCount,
+    created: ws.created,
+    windows: ws.windows.map(win => ({
+      index: win.index,
+      name: win.name,
+      active: win.active,
+      panes: win.panes.map(p => ({
+        index: p.index,
+        command: p.command,
+        title: p.title,
+        width: p.width,
+        height: p.height,
+        active: p.active,
+        pid: p.pid,
+      })),
+      activity: win.activity,
+      ref: win.ref,
+    })),
+  }));
+}
 
 /** Split a stored `session:windowSpec[.pane]` target into its session and window parts. */
 export function parseWindowTarget(target: string): { sessionName: string; windowSpec: string } {
@@ -43,17 +70,26 @@ function extractPaneIndex(windowSpec: string, windowIndex: number, windowName: s
 }
 
 /**
- * Confirm the window still exists in a live `listSessions` snapshot (matched
- * via windowSpecMatches: numeric spec → index only, otherwise name; raw and
- * pane-stripped spec forms both tried). This replaces trusting
- * `display-message`'s per-target activity answer, which silently falls back to
- * the session's active window when the requested window is gone — the exact
- * bug that made stale `windows` rows look "running".
+ * Confirm the window still exists in a live `listSessions` snapshot.
  *
- * Returns the window itself (not just its activity) so callers can also
- * inspect its panes' foreground commands.
+ * When `muxRef` is given (herdr/zellij DB windows carry one), matching is done
+ * by comparing the serialized ref against each live window's `ref` field across
+ * all sessions — this is necessary because non-tmux drivers may map multiple
+ * workspaces into a single session (e.g. herdr uses session `azito` for all
+ * workspaces), so the tmuxTarget's "session" component does not correspond to
+ * the actual session name.
+ *
+ * Falls back to the legacy `parseWindowTarget` → session name → windowSpec
+ * path when no `muxRef` is given or the ref-based search finds nothing.
  */
-export function findLiveWindow(sessions: TmuxSession[], target: string): TmuxWindow | null {
+export function findLiveWindow(sessions: TmuxSession[], target: string, muxRef?: MuxRef): TmuxWindow | null {
+  if (muxRef) {
+    for (const s of sessions) {
+      for (const w of s.windows) {
+        if (w.ref && w.ref.kind === muxRef.kind && w.ref.workspace === muxRef.workspace && w.ref.window === muxRef.window) return w;
+      }
+    }
+  }
   const { sessionName, windowSpec } = parseWindowTarget(target);
   const session = sessions.find((s) => s.name === sessionName);
   if (!session) return null;
@@ -141,6 +177,7 @@ export interface AgentActivityEntry {
    */
   status?: 'working' | 'blocked';
   paneName?: string;
+  windowId?: number;
 }
 
 /**
@@ -157,6 +194,7 @@ export interface AgentHookSignal {
   windowName: string;
   paneIndex: number;
   event: 'start' | 'stop';
+  muxPaneRef?: string;
 }
 
 interface HookState {
@@ -305,9 +343,13 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
   await Promise.all(workers);
 }
 
+/** herdr `pane.agent_status_changed` status values. */
+export type MuxAgentStatus = 'working' | 'idle' | 'blocked' | 'done' | 'unknown';
+
 /** Which rung of the ladder decided a key's state on the last tick. */
 export type ActivityDecidedBy =
   | 'tier0_supervisor'
+  | 'tier0_mux'
   | 'tier1_hook'
   | 'tier2_title'
   | 'tier3_heuristic'
@@ -366,7 +408,7 @@ export interface ActivityDiagnosticEntry {
    * deciding tier — see refineTier0IdleKeys().
    */
   refinedBy?: ActivityRefinedBy;
-  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop' };
+  hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
   probe?: {
     status: 'working' | 'idle' | 'offline';
     tailState?: string;
@@ -443,10 +485,6 @@ const OPERATION_ATTRIBUTION_TTL_MS = 90_000;
  * Purely a display memo — nothing in the judgment path reads it.
  */
 const LAST_TRANSITION_TTL_MS = 30 * 60_000;
-
-function windowKey(serverName: string, target: string): string {
-  return `${serverName}::${stripPaneSuffix(target)}`;
-}
 
 interface CollectResult {
   next: Map<string, AgentActivityEntry>;
@@ -530,10 +568,15 @@ export class AgentActivityMonitor {
   // inferring exit from a foreground-command fallback to a bare shell — so
   // Tier 0 needs no such fallback and bypasses Tier 1/2 entirely for its keys.
   private supervisorStates = new Map<string, SupervisorState>();
+  // Mux-native agent state (herdr pane.agent_status_changed events).
+  // Wired into the collect() ladder as Tier 0 mux — below supervisor, above
+  // Tier 1 hooks. Keyed by windowKey(serverName, target).
+  private muxStates = new Map<string, { status: MuxAgentStatus; at: number; serverName: string; target: string }>();
   // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
   private processStates = new Map<string, ProcessActivityProbeEntry>();
+  private windowIdByKey = new Map<string, number>();
   // Screen-check cache, keyed the same as every other tier. Bounds the
   // `capture-pane` cost of the title-confirmation path (see screenVerdict) and
   // carries the failure bookkeeping the unknown-hold reads. Pruned alongside
@@ -579,14 +622,17 @@ export class AgentActivityMonitor {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
 
+  private hookMatchedBy = new Map<string, 'muxPaneRef' | 'windowSpec'>();
+
   constructor(
     private executeTaskUseCase: ExecuteTaskUseCase,
     private windowRepo: IWindowRepository,
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private serverRepo: IServerRepository,
     private notificationBus: NotificationBus,
     private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
+    private paneHandleResolver?: PaneHandleResolver,
   ) {}
 
   start(): void {
@@ -631,7 +677,7 @@ export class AgentActivityMonitor {
         decidedBy: decision.decidedBy,
         evidenceAt: decision.evidenceAt,
         refinedBy: decision.refinedBy,
-        hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const } : undefined,
+        hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const, matchedBy: this.hookMatchedBy.get(key) } : undefined,
         probe: probe
           ? {
             status: probe.status,
@@ -647,6 +693,12 @@ export class AgentActivityMonitor {
     });
   }
 
+  isKeyWorking(serverName: string, target: string): boolean {
+    const key = windowKey(serverName, target);
+    const decision = this.decisions.get(key);
+    return decision?.state === 'working';
+  }
+
   /**
    * Record a Tier 1 hook signal against every manual agent window it
    * identifies (normally exactly one), then tick immediately so the UI
@@ -659,6 +711,20 @@ export class AgentActivityMonitor {
     const status: HookState['status'] = signal.event === 'start' ? 'running' : 'idle';
     const at = Date.now();
 
+    if (signal.muxPaneRef && this.paneHandleResolver) {
+      const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
+      if (resolved) {
+        const key = windowKey(signal.serverName, resolved.tmuxTarget);
+        this.hookStates.set(key, { status, at });
+        this.hookMatchedBy.set(key, 'muxPaneRef');
+        void this.tick();
+        return;
+      }
+      if (resolved === undefined) {
+        this.paneHandleResolver.warm(signal.serverName, signal.muxPaneRef);
+      }
+    }
+
     for (const w of this.windowRepo.findAll()) {
       if (!isAgentWindow(w)) continue;
       if (w.sleeping) continue;
@@ -668,21 +734,19 @@ export class AgentActivityMonitor {
       if (sessionName !== signal.sessionName) continue;
       if (!windowSpecMatches(windowSpec, signal.windowIndex, signal.windowName)) continue;
 
-      // If the target pins a specific pane (`.N` suffix beyond the window
-      // spec itself), the signal's pane must match it too — otherwise a
-      // hook firing from an unrelated pane in the same window would
-      // falsely flip this window's tracked pane.
       const paneIndex = extractPaneIndex(windowSpec, signal.windowIndex, signal.windowName);
       if (paneIndex !== null && paneIndex !== signal.paneIndex) continue;
 
-      this.hookStates.set(windowKey(w.serverName, w.tmuxTarget), { status, at });
+      const key = windowKey(w.serverName, w.tmuxTarget);
+      this.hookStates.set(key, { status, at });
+      this.hookMatchedBy.set(key, 'windowSpec');
     }
 
     void this.tick();
   }
 
   /**
-   * Record a Tier 0 supervisor signal for a `${serverName}::${stripPaneSuffix(target)}` key,
+   * Record a Tier 0 supervisor signal for a `${serverName}::${target}` key,
    * then tick immediately so the UI reflects the transition without waiting
    * for the next poll interval. Unlike recordHookSignal, this is not matched
    * against the `windows` table here — the caller (SupervisorRegistry event)
@@ -720,13 +784,60 @@ export class AgentActivityMonitor {
         status: state === 'active' ? 'running' : 'idle',
         at: Date.now(),
         serverName,
-        target: stripPaneSuffix(target),
+        target,
         taskId,
         label,
         agentStatus: state === 'active' ? agentStatus : undefined,
       });
     }
     void this.tick();
+  }
+
+  /**
+   * Record a mux-native agent state signal (herdr `pane.agent_status_changed`).
+   * Wired into the `collect()` ladder as Tier 0 mux — below supervisor, above
+   * Tier 1 hooks. `done` is treated as an explicit completion (the key is
+   * removed from `muxStates` so lower tiers can take over). `unknown` is
+   * stored but skipped during tier evaluation (lower tiers decide).
+   */
+  recordMuxSignal(
+    serverName: string,
+    target: string,
+    status: MuxAgentStatus,
+  ): void {
+    const key = windowKey(serverName, target);
+    if (status === 'done') {
+      this.muxStates.set(key, { status: 'done', at: Date.now(), serverName, target });
+      void this.tick();
+      return;
+    }
+    this.muxStates.set(key, { status, at: Date.now(), serverName, target });
+    void this.tick();
+  }
+
+  private mapMuxStatus(raw: MuxAgentStatus): { state: ActivityDecidedState; reason?: AgentActivityStopReason } | null {
+    switch (raw) {
+      case 'working': return { state: 'working' };
+      case 'blocked': return { state: 'blocked' };
+      case 'idle': return { state: 'idle' };
+      case 'done': return { state: 'idle', reason: 'completed' };
+      case 'unknown': return null;
+      default: return null;
+    }
+  }
+
+  private mergeMuxDecisions(decisions: Map<string, ActivityDecision>): void {
+    for (const [key, mux] of this.muxStates) {
+      if (decisions.has(key)) continue;
+      const mapped = this.mapMuxStatus(mux.status);
+      decisions.set(key, {
+        serverName: mux.serverName,
+        target: mux.target,
+        decidedBy: 'tier0_mux',
+        state: mapped?.state ?? 'none',
+        evidenceAt: mux.at,
+      });
+    }
   }
 
   async tick(): Promise<void> {
@@ -813,6 +924,11 @@ export class AgentActivityMonitor {
   private async collect(): Promise<CollectResult> {
     this.tickCounter++;
     this.kickProcessProbeRefresh();
+    const allWindows = this.windowRepo.findAll();
+    this.windowIdByKey.clear();
+    for (const w of allWindows) {
+      this.windowIdByKey.set(windowKey(w.serverName, w.tmuxTarget), w.id);
+    }
     const next = new Map<string, AgentActivityEntry>();
     const reasons = new Map<string, AgentActivityStopReason>();
     const deletedKeys = new Set<string>();
@@ -827,7 +943,7 @@ export class AgentActivityMonitor {
       taskId?: number,
       evidenceAt?: number,
     ): void => {
-      decisions.set(key, { serverName, target: stripPaneSuffix(target), decidedBy, state, taskId, evidenceAt });
+      decisions.set(key, { serverName, target, decidedBy, state, taskId, evidenceAt });
     };
     // Candidate keys a Tier 0 supervisor reported idle on this tick, mapped to
     // the `windows` row and the entry they would publish if the Tier 2 blocked
@@ -863,23 +979,37 @@ export class AgentActivityMonitor {
           decide(key, e.serverName, e.target, 'tier0_supervisor', 'idle', e.taskId, supervisor.at);
           continue;
         }
+        // Tier 0 mux fallback for operations without a supervisor.
+        const mux = !supervisor ? this.muxStates.get(key) : undefined;
+        const muxMapped = mux ? this.mapMuxStatus(mux.status) : null;
+        if (!supervisor && muxMapped?.state === 'idle') {
+          if (muxMapped.reason) reasons.set(key, muxMapped.reason);
+          decide(key, e.serverName, e.target, 'tier0_mux', 'idle', e.taskId, mux!.at);
+          continue;
+        }
+        const decidedBy: ActivityDecidedBy = supervisor ? 'tier0_supervisor' : (muxMapped ? 'tier0_mux' : 'none');
+        const effectiveStatus: 'working' | 'blocked' | undefined =
+          supervisor?.agentStatus === 'blocked' ? 'blocked'
+          : muxMapped?.state === 'blocked' ? 'blocked'
+          : supervisor?.agentStatus ?? (muxMapped?.state === 'working' ? 'working' : undefined);
         decide(
           key,
           e.serverName,
           e.target,
-          supervisor ? 'tier0_supervisor' : 'none',
-          supervisor?.agentStatus === 'blocked' ? 'blocked' : 'working',
+          decidedBy,
+          effectiveStatus === 'blocked' ? 'blocked' : 'working',
           e.taskId,
-          supervisor?.at,
+          supervisor?.at ?? mux?.at,
         );
         next.set(key, {
           serverName: e.serverName,
-          target: stripPaneSuffix(e.target),
+          target: e.target,
           running: true,
           source: supervisor ? 'supervised' : 'operation',
           operation: true,
           taskId: e.taskId,
-          status: supervisor?.agentStatus,
+          status: effectiveStatus,
+          windowId: this.windowIdByKey.get(key),
         });
       }
     }
@@ -898,7 +1028,7 @@ export class AgentActivityMonitor {
     // is absent from `next` but must still not fall through to the manual
     // hook/heuristic path — its state is owned by the operation+Tier 0 logic
     // above.
-    const allAgentWindows = this.windowRepo.findAll().filter((w): w is AgentWindow => isAgentWindow(w) && !w.sleeping);
+    const allAgentWindows = allWindows.filter((w): w is AgentWindow => isAgentWindow(w) && !w.sleeping);
 
     // Dedup: same server + same window (pane suffix stripped) → keep taskId row.
     // Multiple DB rows can point at the same tmux window (project-owned vs task-owned).
@@ -936,6 +1066,9 @@ export class AgentActivityMonitor {
     for (const key of this.hookStates.keys()) {
       if (!candidateKeys.has(key)) this.hookStates.delete(key);
     }
+    for (const key of this.hookMatchedBy.keys()) {
+      if (!candidateKeys.has(key)) this.hookMatchedBy.delete(key);
+    }
     for (const key of this.processDisarmedKeys) {
       if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);
     }
@@ -961,6 +1094,7 @@ export class AgentActivityMonitor {
 
     if (candidates.length === 0) {
       this.previousLiveKeys = liveKeys;
+      this.mergeMuxDecisions(decisions);
       return { next, reasons, deletedKeys, decisions };
     }
 
@@ -978,7 +1112,23 @@ export class AgentActivityMonitor {
       }
     }
 
-    // One listSessions call per server (not one per candidate/operation window),
+    // Filter candidates whose mux_ref.kind doesn't match the server's runtime.
+    // These are stale rows (e.g. tmux windows left after migrating to herdr).
+    const filteredCandidates = candidates.filter((w) => {
+      if (!w.muxRef) return true;
+      const server = servers.get(w.serverName);
+      if (!server) return true;
+      const serverKind = muxKindForRuntime(server.muxRuntime ?? 'system');
+      if (w.muxRef.kind !== serverKind) {
+        const key = windowKey(w.serverName, w.tmuxTarget);
+        reasons.set(key, 'offline');
+        decide(key, w.serverName, w.tmuxTarget, 'none', 'offline', w.taskId ?? undefined);
+        return false;
+      }
+      return true;
+    });
+
+    // One listWorkspaces call per server (not one per candidate/operation window),
     // queried in parallel so one slow/offline server cannot stretch the tick past
     // the poll interval.
     const sessionsByServer = new Map<string, TmuxSession[]>();
@@ -989,7 +1139,9 @@ export class AgentActivityMonitor {
     await Promise.all([...servers.entries()].map(async ([serverName, server]) => {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
-        sessionsByServer.set(serverName, await this.tmux.listSessions(server));
+        const driver = this.muxDriverRegistry.resolve(server);
+        const workspaces = await driver.listWorkspaces(server);
+        sessionsByServer.set(serverName, workspacesToTmuxSessions(workspaces));
       } catch {
         sessionsByServer.set(serverName, []);
         sessionErrors.add(serverName);
@@ -998,7 +1150,7 @@ export class AgentActivityMonitor {
 
     // Warm the screen-verdict cache before the per-key ladder runs, so its
     // capture-pane calls happen in bounded parallel instead of one at a time.
-    await this.prefetchScreenVerdicts(candidates, servers, sessionsByServer);
+    await this.prefetchScreenVerdicts(filteredCandidates, servers, sessionsByServer);
 
     // Post-check: operation-run entries whose supervisor didn't report blocked.
     // For claude workers, screen-check them now that sessions are available.
@@ -1009,7 +1161,7 @@ export class AgentActivityMonitor {
       const server = servers.get(w.serverName) ?? this.serverRepo.findByName(w.serverName);
       if (!server) continue;
       const sessions = sessionsByServer.get(w.serverName) ?? [];
-      const window = findLiveWindow(sessions, w.tmuxTarget);
+      const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
@@ -1024,7 +1176,7 @@ export class AgentActivityMonitor {
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
-    for (const w of candidates) {
+    for (const w of filteredCandidates) {
       const key = windowKey(w.serverName, w.tmuxTarget);
 
       // Tier 0: an event-driven supervisor signal for this key is
@@ -1043,7 +1195,7 @@ export class AgentActivityMonitor {
             const server = servers.get(w.serverName);
             if (server) {
               const sessions = sessionsByServer.get(w.serverName) ?? [];
-              const window = findLiveWindow(sessions, w.tmuxTarget);
+              const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
               if (window) {
                 const { windowSpec } = parseWindowTarget(w.tmuxTarget);
                 const pi = extractPaneIndex(windowSpec, window.index, window.name);
@@ -1055,7 +1207,7 @@ export class AgentActivityMonitor {
           decide(key, w.serverName, w.tmuxTarget, 'tier0_supervisor', effectiveStatus ?? 'working', w.taskId ?? undefined, supervisor.at);
           next.set(key, {
             serverName: w.serverName,
-            target: stripPaneSuffix(w.tmuxTarget),
+            target: w.tmuxTarget,
             running: true,
             source: 'supervised',
             operation: false,
@@ -1063,6 +1215,7 @@ export class AgentActivityMonitor {
             label: w.label ?? undefined,
             projectId: w.projectId ?? undefined,
             status: effectiveStatus,
+            windowId: w.id,
           });
         } else {
           // The supervisor explicitly reported its child idle — an authoritative
@@ -1076,21 +1229,84 @@ export class AgentActivityMonitor {
             window: w,
             entry: {
               serverName: w.serverName,
-              target: stripPaneSuffix(w.tmuxTarget),
+              target: w.tmuxTarget,
               running: true,
               source: 'supervised',
               operation: false,
               taskId: w.taskId ?? undefined,
               label: w.label ?? undefined,
               projectId: w.projectId ?? undefined,
+              windowId: w.id,
             },
           });
         }
         continue;
       }
 
+      // Tier 0 mux: herdr's native agent_status for this key. Authoritative
+      // when no supervisor is present — herdr's paneStateClassifier is the
+      // same lineage as AZITO's Tier 2 screen classifier, but event-driven
+      // rather than polled. Bypasses Tier 1/2/3 but sits below a supervisor
+      // (whose rules are AZITO-controlled).
+      const muxState = this.muxStates.get(key);
+      if (muxState) {
+        const mapped = this.mapMuxStatus(muxState.status);
+        if (mapped) {
+          if (mapped.state === 'idle') {
+            if (mapped.reason) reasons.set(key, mapped.reason);
+            decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'idle', w.taskId ?? undefined, muxState.at);
+            tier0IdlePending.set(key, {
+              window: w,
+              entry: {
+                serverName: w.serverName,
+                target: w.tmuxTarget,
+                running: true,
+                source: 'manual',
+                operation: false,
+                taskId: w.taskId ?? undefined,
+                label: w.label ?? undefined,
+                projectId: w.projectId ?? undefined,
+                windowId: w.id,
+              },
+            });
+            continue;
+          }
+          // mux working/blocked — for claude, also check screen for blocked
+          // (herdr's blocked detection is unverified; same as supervisor path).
+          let effectiveMuxStatus = mapped.state === 'blocked' ? 'blocked' as const : undefined;
+          if (w.workerType === 'claude' && effectiveMuxStatus !== 'blocked') {
+            const server = servers.get(w.serverName);
+            if (server) {
+              const sessions = sessionsByServer.get(w.serverName) ?? [];
+              const muxWindow = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
+              if (muxWindow) {
+                const { windowSpec: ws } = parseWindowTarget(w.tmuxTarget);
+                const pi = extractPaneIndex(ws, muxWindow.index, muxWindow.name);
+                const classified = await this.classifyCandidateState(server, w, muxWindow, pi, key);
+                if (classified === 'blocked') effectiveMuxStatus = 'blocked';
+              }
+            }
+          }
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', effectiveMuxStatus ?? 'working', w.taskId ?? undefined, muxState.at);
+          next.set(key, {
+            serverName: w.serverName,
+            target: w.tmuxTarget,
+            running: true,
+            source: 'manual',
+            operation: false,
+            taskId: w.taskId ?? undefined,
+            label: w.label ?? undefined,
+            projectId: w.projectId ?? undefined,
+            status: effectiveMuxStatus,
+            windowId: w.id,
+          });
+          continue;
+        }
+        // mapped === null → unknown: fall through to lower tiers.
+      }
+
       const sessions = sessionsByServer.get(w.serverName) ?? [];
-      const window = findLiveWindow(sessions, w.tmuxTarget);
+      const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
       // null (window gone, i.e. a stale DB row) → idle. Reset both the
       // debounce window and any hook state too: a later resumption must
       // re-earn confirmation from scratch, not resume a stale window.
@@ -1118,13 +1334,14 @@ export class AgentActivityMonitor {
 
       const entry: AgentActivityEntry = {
         serverName: w.serverName,
-        target: stripPaneSuffix(w.tmuxTarget),
+        target: w.tmuxTarget,
         running: true,
         source: 'manual',
         operation: false,
         taskId: w.taskId ?? undefined,
         label: w.label ?? undefined,
         projectId: w.projectId ?? undefined,
+        windowId: w.id,
       };
 
       // Tier 1: an event-driven hook signal for this key overrides the Tier 2
@@ -1312,7 +1529,8 @@ export class AgentActivityMonitor {
       if (entry.paneName) continue;
       const sessions = sessionsByServer.get(entry.serverName);
       if (!sessions) continue;
-      const win = findLiveWindow(sessions, entry.target);
+      const dbWin = allWindows.find((aw) => windowKey(aw.serverName, aw.tmuxTarget) === key);
+      const win = findLiveWindow(sessions, entry.target, dbWin?.muxRef);
       if (!win) continue;
       const { windowSpec } = parseWindowTarget(entry.target);
       const pi = extractPaneIndex(windowSpec, win.index, win.name);
@@ -1320,7 +1538,15 @@ export class AgentActivityMonitor {
       if (name) next.set(key, { ...entry, paneName: name });
     }
 
+    // Expire `done` mux entries: the agent session is finished, so herdr's
+    // state is no longer authoritative. Removing the entry lets lower tiers
+    // take over on subsequent ticks (e.g. the window may be reused).
+    for (const [key, mux] of this.muxStates) {
+      if (mux.status === 'done') this.muxStates.delete(key);
+    }
+
     this.previousLiveKeys = liveKeys;
+    this.mergeMuxDecisions(decisions);
     return { next, reasons, deletedKeys, decisions };
   }
 
@@ -1371,7 +1597,8 @@ export class AgentActivityMonitor {
     const activityAdvanced = prevHistory !== undefined && window.activity > prevHistory.lastActivity;
     if (!activityAdvanced) return 'unknown';
 
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    const ref = w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
   }
@@ -1457,7 +1684,7 @@ export class AgentActivityMonitor {
     if (sessionErrors.has(w.serverName)) return this.heldStatusOnUnknown(key);
     // A successful listing that does not contain the window means the pane is
     // genuinely gone; nothing is waiting on the user there.
-    const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+    const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
     if (!window) return null;
 
     const { windowSpec } = parseWindowTarget(w.tmuxTarget);
@@ -1536,7 +1763,8 @@ export class AgentActivityMonitor {
     paneIndex: number | null,
   ): Promise<ScreenVerdict> {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
-    const screenTail = await this.captureScreenTail(server, w.tmuxTarget);
+    const ref = w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
     if (screenTail === null) return 'unknown';
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
@@ -1581,7 +1809,7 @@ export class AgentActivityMonitor {
     for (const w of candidates) {
       const server = servers.get(w.serverName);
       if (!server) continue;
-      const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget);
+      const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
@@ -1611,10 +1839,15 @@ export class AgentActivityMonitor {
     return titleOnly === 'working' || titleOnly === 'idle';
   }
 
-  /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */
-  private async captureScreenTail(server: ServerConfig, target: string): Promise<string | null> {
+  private async captureScreenTail(
+    server: ServerConfig,
+    muxRef: MuxRef,
+    paneOrdinal: number,
+  ): Promise<string | null> {
     try {
-      const { stdout, code } = await this.tmux.capturePane(server, target, -30);
+      const driver = this.muxDriverRegistry.resolve(server);
+      const handle = await driver.resolvePane(server, muxRef, paneOrdinal as PaneOrdinal);
+      const { stdout, code } = await driver.captureScreen(server, handle, -30);
       if (code !== 0) return null;
       return stdout;
     } catch {
@@ -1725,6 +1958,7 @@ export class AgentActivityMonitor {
           taskId: operationMeta?.taskId ?? probe.taskId,
           label: probe.label,
           projectId: probe.projectId,
+          windowId: this.windowIdByKey.get(key),
           reason: 'completed',
         },
       });
@@ -1757,6 +1991,7 @@ export class AgentActivityMonitor {
             projectId: entry.projectId,
             status: entry.status,
             paneName: entry.paneName,
+            windowId: entry.windowId,
           },
         });
         if (previous === undefined) {
@@ -1787,6 +2022,7 @@ export class AgentActivityMonitor {
             label: entry.label,
             projectId: entry.projectId,
             paneName: entry.paneName,
+            windowId: entry.windowId,
             reason,
           },
         });

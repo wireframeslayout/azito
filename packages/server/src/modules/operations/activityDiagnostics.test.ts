@@ -29,6 +29,8 @@ function makeSupervisor(overrides: Partial<SupervisorEntry> = {}): SupervisorEnt
     lastActivityFrameAt: null,
     lastReportedState: null,
     lastReportedStatus: null,
+    lastReportedDecidedBy: null,
+    muxPaneRef: null,
     ...overrides,
   };
 }
@@ -95,7 +97,7 @@ describe('buildActivityDiagnostics', () => {
   it('adds a row for a connected supervisor the monitor has no decision for', () => {
     const rows = buildActivityDiagnostics(
       makeMonitor([]),
-      makeRegistry([makeSupervisor({ target: 'azito:agent-2.1' })]),
+      makeRegistry([makeSupervisor({ target: 'azito:agent-2' })]),
       emptyWindows,
     );
     expect(rows).toEqual([expect.objectContaining({
@@ -103,5 +105,33 @@ describe('buildActivityDiagnostics', () => {
       decidedBy: 'none',
       state: 'none',
     })]);
+  });
+});
+
+describe('buildActivityDiagnostics — PaneHandleResolver cache', () => {
+  function makeResolver(cached: unknown, warm: (server: string, ref: string) => void) {
+    return { getCached: () => cached, warm } as unknown as import('./PaneHandleResolver').PaneHandleResolver;
+  }
+
+  it('re-warms the resolver when a supervisor muxPaneRef is not in the cache', () => {
+    const warmed: string[] = [];
+    buildActivityDiagnostics(
+      makeMonitor([]),
+      makeRegistry([makeSupervisor({ muxPaneRef: '%82' })]),
+      emptyWindows,
+      makeResolver(undefined, (server, ref) => warmed.push(`${server}::${ref}`)),
+    );
+    expect(warmed).toEqual(['local::%82']);
+  });
+
+  it('does not re-warm on a cached negative result', () => {
+    const warmed: string[] = [];
+    buildActivityDiagnostics(
+      makeMonitor([]),
+      makeRegistry([makeSupervisor({ muxPaneRef: '%82' })]),
+      emptyWindows,
+      makeResolver(null, (server, ref) => warmed.push(`${server}::${ref}`)),
+    );
+    expect(warmed).toEqual([]);
   });
 });

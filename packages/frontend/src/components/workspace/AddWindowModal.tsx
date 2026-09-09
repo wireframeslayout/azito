@@ -5,6 +5,7 @@ import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
 import { FormInput, FormSelect, baseInputStyle, Button } from '../ui';
 import { api } from '../../api/client';
+import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
 
 interface AddWindowModalProps {
@@ -99,6 +100,15 @@ export default function AddWindowModal({
           </FormField>
           <FormField label={t('addWindow.windowName')}>
             <FormInput value={awNewWindowName} onChange={(e) => setAwNewWindowName(e.target.value)} placeholder={t('addWindow.windowNamePlaceholder')} />
+            {!awNewWindowName.trim() && (() => {
+              const serverInfo = servers.find((s) => s.name === awServer);
+              const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
+              return muxKind !== 'tmux' ? (
+                <div style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                  {t('addWindow.windowNameAutoGenHint')}
+                </div>
+              ) : null;
+            })()}
           </FormField>
           <FormField label={t('addWindow.workingDir')}>
             <DirectoryInput

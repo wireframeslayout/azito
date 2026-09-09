@@ -1,9 +1,9 @@
 import type { SqliteDatabase } from '../../shared/db/Database';
 import { seal, open } from '../../shared/crypto/SecretBox';
-import type { ServerConfig, IServerRepository, MuxRuntime, ServerMeta } from './Server';
+import type { ServerConfig, IServerRepository, MuxRuntime, HerdrNavigationLock, ServerMeta } from './Server';
 import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 
-const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
+const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, herdr_navigation_lock, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
 
 export class SqliteServerRepository implements IServerRepository {
   private listStmt;
@@ -23,9 +23,9 @@ export class SqliteServerRepository implements IServerRepository {
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
     this.getStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE name = ? AND type IN ('local', 'agent')`);
-    this.addStmt = db.prepare('INSERT INTO servers (name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+    this.addStmt = db.prepare('INSERT INTO servers (name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, herdr_navigation_lock) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
     this.removeStmt = db.prepare('DELETE FROM servers WHERE name = ?');
-    this.updateStmt = db.prepare('UPDATE servers SET type = ?, host = ?, agent_port = ?, agent_token = ?, ssh_host = ?, mux_runtime = ? WHERE name = ?');
+    this.updateStmt = db.prepare('UPDATE servers SET type = ?, host = ?, agent_port = ?, agent_token = ?, ssh_host = ?, mux_runtime = ?, herdr_navigation_lock = ? WHERE name = ?');
     this.updateAgentVersionStmt = db.prepare('UPDATE servers SET agent_version = ? WHERE name = ?');
     this.updateFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = ? WHERE name = ?');
     this.clearFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = NULL WHERE name = ?');
@@ -104,12 +104,12 @@ export class SqliteServerRepository implements IServerRepository {
     return row ? this.toEntity(row) : null;
   }
 
-  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime): void {
-    this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system');
+  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, herdrNavigationLock?: HerdrNavigationLock): void {
+    this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system', herdrNavigationLock ?? 'locked');
   }
 
-  update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void {
-    this.updateStmt.run(type, host ?? null, agentPort ?? null, seal(agentToken ?? null), sshHost ?? null, muxRuntime ?? 'system', name);
+  update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, herdrNavigationLock?: HerdrNavigationLock): void {
+    this.updateStmt.run(type, host ?? null, agentPort ?? null, seal(agentToken ?? null), sshHost ?? null, muxRuntime ?? 'system', herdrNavigationLock ?? 'locked', name);
   }
 
   // Issue #29 review, Important finding 1: routes.ts's "type no longer
@@ -121,9 +121,9 @@ export class SqliteServerRepository implements IServerRepository {
   // unreachable. Wrapped in `db.transaction()` (matches the pattern used by
   // SqliteTaskRepository.update / consumePendingApproval) so both writes
   // commit or neither does.
-  updateWithIsolationClear(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void {
+  updateWithIsolationClear(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, herdrNavigationLock?: HerdrNavigationLock): void {
     const run = this.db.transaction(() => {
-      this.update(name, type, host, agentPort, agentToken, sshHost, muxRuntime);
+      this.update(name, type, host, agentPort, agentToken, sshHost, muxRuntime, herdrNavigationLock);
       this.updateIsolationIntentStmt.run(0, null, name);
     });
     run();
@@ -185,6 +185,7 @@ export class SqliteServerRepository implements IServerRepository {
       agentVersion: (row.agent_version as string) ?? null,
       sshHost: (row.ssh_host as string) ?? null,
       muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+      herdrNavigationLock: (row.herdr_navigation_lock as HerdrNavigationLock) ?? 'locked',
       sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
       isolationIntent: (row.isolation_intent as number) === 1,
       isolationVerifiedAt: (row.isolation_verified_at as string) ?? null,

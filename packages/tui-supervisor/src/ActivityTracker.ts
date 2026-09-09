@@ -1,15 +1,16 @@
 import { EventEmitter } from 'node:events';
-import type { ActivityState, AgentStatus } from './protocol';
+import type { PaneAgentState } from '@azito/shared';
+import type { ActivityState, AgentStatus, ActivityDecidedBy } from './protocol';
 import type { TitleAgentState } from './TitleStateTracker';
 
 export interface ActivityTrackerOptions {
-  /** Sliding window length used to sum output bytes. */
+  /** Sliding window length used to sum output bytes (S3). */
   windowMs?: number;
-  /** Window byte sum at/above which the tracker transitions to 'active'. */
+  /** Window byte sum at/above which S3 transitions to 'active'. */
   activeThresholdBytes?: number;
-  /** Silence duration after the last output required to transition to 'idle'. */
+  /** Silence duration after the last output required for S3 to transition to 'idle'. */
   idleAfterMs?: number;
-  /** Evaluation tick interval. */
+  /** Evaluation tick interval (S3 and the keepalive re-send). */
   tickMs?: number;
   /**
    * After a terminal resize, output for this long is NOT counted as activity.
@@ -20,6 +21,16 @@ export interface ActivityTrackerOptions {
    * once — making unrelated windows light up as running on focus.
    */
   resizeGraceMs?: number;
+  /**
+   * After a keystroke (or any bytes written INTO the child PTY), output for
+   * this long is NOT counted as activity. A TUI agent repaints its input box on
+   * every keystroke — Claude Code redraws the whole prompt frame, several
+   * hundred bytes per key — so merely typing a prompt would otherwise push the
+   * byte window over the threshold on consecutive ticks and light the window
+   * up as 'active'. Real agent work produces output long after the last input
+   * byte, so gating on input quiet time separates the two without thresholds.
+   */
+  inputGraceMs?: number;
 }
 
 interface Sample {
@@ -29,27 +40,42 @@ interface Sample {
 
 /** While 'active', re-emit the current state at this interval (keepalive for the hub). */
 const ACTIVE_RESEND_MS = 15_000;
+/** S3: consecutive above-threshold ticks needed before idle→active (echo filter). */
+const ACTIVE_CONSECUTIVE_TICKS = 2;
+/**
+ * S1 working→idle hold: a screen that reads idle is re-evaluated every
+ * IDLE_RECHECK_MS and published only after IDLE_CONFIRMATIONS consecutive idle
+ * readings, or once IDLE_HOLD_CAP_MS has elapsed. Claude Code clears the
+ * spinner line and paints the prompt box over several frames, so a single
+ * idle frame in between is not a completed turn. Every other transition
+ * (→working, →blocked) is immediate. Values follow herdr's
+ * AGENT_PENDING_IDLE_* constants.
+ */
+const IDLE_RECHECK_MS = 100;
+const IDLE_CONFIRMATIONS = 3;
+const IDLE_HOLD_CAP_MS = 700;
+
+export type DecidedBy = ActivityDecidedBy;
 
 /**
  * Classifies the child agent's activity into 'active'/'idle' and emits
- * 'transition' (state, bytesInWindow, status?) on state changes, plus a
- * periodic 'active' re-send while activity continues.
+ * 'transition' (state, bytesInWindow, status?, decidedBy) on state changes,
+ * plus a periodic 'active' re-send while activity continues.
  *
- * Two information sources, in priority order:
- * 1. Title state (setTitleState, fed from TitleStateTracker): once a title
- *    carrying a RECOGNIZED marker (working spinner / idle `✳` / blocked
- *    "Action Required") has been observed, it becomes the sole authority
- *    — working/blocked map to 'active' (with the corresponding status),
- *    idle maps to 'idle'. The byte-volume heuristic is disabled entirely in
- *    this mode, because it misreads keystroke echo as activity: Claude
- *    Code's TUI repaints its input box on every keypress, exceeding the
- *    byte threshold while the agent is actually idle.
- * 2. Byte-volume sliding window (record): the legacy heuristic, used while
- *    TitleStateTracker still reports 'unknown' — i.e. for agents that never
- *    set a pane title, and for those that only set titles this tracker cannot
- *    interpret (a static app name). Gating mode entry on a recognized marker
- *    (Issue #338) is what keeps such an agent from being reported permanently
- *    idle: an unrecognized title alone no longer disables the heuristic.
+ * Three information sources, evaluated top-down; the first rung that has an
+ * opinion decides (see runLadder):
+ * - S1 screen (`setScreenState`, fed by ScreenStateTracker): the reconstructed
+ *   pane content classified by the shared screen rules — the primary source,
+ *   because Claude Code ≥2.1.236 under tmux never animates its title anymore
+ *   (it is pinned to `✳ <topic>`), while the spinner line and the permission /
+ *   AskUserQuestion dialogs are still drawn on screen.
+ * - S2 title (`setTitleState`, fed by TitleStateTracker): OSC 0/2 title
+ *   glyphs. Still authoritative for codex (`Action Required`, braille spinner)
+ *   and for Claude Code ≤2.1.234; once a working/blocked title has been seen
+ *   the rung stays enabled (`titleAuthoritative`).
+ * - S3 bytes (`record`): the byte-volume sliding window with resize/input
+ *   grace and the consecutive-tick echo filter — the last resort for generic
+ *   TUIs and screens no rule recognises. Unchanged from the pre-S1 design.
  */
 export class ActivityTracker extends EventEmitter {
   private readonly windowMs: number;
@@ -57,18 +83,26 @@ export class ActivityTracker extends EventEmitter {
   private readonly idleAfterMs: number;
   private readonly tickMs: number;
   private readonly resizeGraceMs: number;
+  private readonly inputGraceMs: number;
 
   private samples: Sample[] = [];
   private state: ActivityState = 'idle';
-  /** Last tick at which the window sum was at/above the active threshold. */
   private lastAboveThresholdTs = 0;
   private lastActiveEmitTs = 0;
   private resizeGraceUntil = 0;
+  private inputGraceUntil = 0;
   private timer: NodeJS.Timeout | undefined;
-  /** Latest classified title state — 'unknown' until a title is first observed. */
   private titleState: TitleAgentState = 'unknown';
-  /** Status carried by the last 'active' emit (title mode only). */
+  private titleAuthoritative = false;
+  private aboveStreak = 0;
+  private freshBytes = false;
   private emittedStatus: AgentStatus | undefined;
+  private emittedDecidedBy: DecidedBy | undefined;
+
+  private screenState: PaneAgentState = 'unknown';
+  private idleHoldStart: number | undefined;
+  private idleHoldCount = 0;
+  private idleHoldTimer: NodeJS.Timeout | undefined;
 
   constructor(options: ActivityTrackerOptions = {}) {
     super();
@@ -77,23 +111,40 @@ export class ActivityTracker extends EventEmitter {
     this.idleAfterMs = options.idleAfterMs ?? 5_000;
     this.tickMs = options.tickMs ?? 1_000;
     this.resizeGraceMs = options.resizeGraceMs ?? 800;
+    this.inputGraceMs = options.inputGraceMs ?? 500;
   }
 
-  /** Call when the terminal was resized; suppresses the repaint burst that follows. */
+  /**
+   * Call when bytes were written into the child PTY (user keystrokes forwarded
+   * from stdin, or hub-injected input). Output within the following
+   * inputGraceMs is treated as echo / input-box repaint, not activity (S3 only —
+   * S1 reads the reconstructed screen and is not fooled by echo).
+   */
+  notifyInput(): void {
+    this.inputGraceUntil = Date.now() + this.inputGraceMs;
+  }
+
+  /** Call when the terminal was resized; suppresses the repaint burst that follows (S3). */
   notifyResize(): void {
     this.resizeGraceUntil = Date.now() + this.resizeGraceMs;
   }
 
-  /**
-   * Feed the latest title-derived state (from TitleStateTracker). Anything
-   * other than 'unknown' switches the tracker into title mode for good —
-   * TitleStateTracker only leaves 'unknown' after observing a recognized
-   * marker (so the child provably drives its title with this protocol), and
-   * never reverts once it has.
-   */
   setTitleState(state: TitleAgentState): void {
     if (state === 'unknown') return;
     this.titleState = state;
+    if (state === 'working' || state === 'blocked') {
+      this.titleAuthoritative = true;
+    }
+  }
+
+  /**
+   * Feed the latest screen-derived state (S1). 'unknown' hands the decision
+   * down to S2/S3. Evaluated immediately rather than on the next tick so that
+   * idle→working and →blocked reach the hub without the tick latency.
+   */
+  setScreenState(state: PaneAgentState): void {
+    this.screenState = state;
+    this.evaluateNow();
   }
 
   start(): void {
@@ -106,6 +157,8 @@ export class ActivityTracker extends EventEmitter {
   stop(): void {
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    if (this.idleHoldTimer) clearTimeout(this.idleHoldTimer);
+    this.idleHoldTimer = undefined;
   }
 
   record(bytes: number): void {
@@ -114,11 +167,34 @@ export class ActivityTracker extends EventEmitter {
     // its bytes are dropped, so a resize can neither light up an idle agent
     // nor keep an active one alive by itself.
     if (now < this.resizeGraceUntil) return;
+    // Within the post-input grace, treat output as keystroke echo / prompt
+    // repaint: typing must never light the window up, and (while active) it
+    // must not extend activity by itself either.
+    if (now < this.inputGraceUntil) return;
     this.samples.push({ ts: now, bytes });
+    this.freshBytes = true;
   }
 
   getState(): ActivityState {
     return this.state;
+  }
+
+  getSnapshot(): { state: ActivityState; bytesInWindow: number; status?: AgentStatus; decidedBy?: DecidedBy } {
+    const cutoff = Date.now() - this.windowMs;
+    const sum = this.samples.filter((s) => s.ts >= cutoff).reduce((acc, s) => acc + s.bytes, 0);
+    return {
+      state: this.state,
+      bytesInWindow: sum,
+      ...(this.emittedStatus !== undefined ? { status: this.emittedStatus } : {}),
+      ...(this.emittedDecidedBy !== undefined ? { decidedBy: this.emittedDecidedBy } : {}),
+    };
+  }
+
+  private evaluateNow(): void {
+    const now = Date.now();
+    const cutoff = now - this.windowMs;
+    const sum = this.samples.filter((s) => s.ts >= cutoff).reduce((acc, s) => acc + s.bytes, 0);
+    this.runLadder(now, sum);
   }
 
   private tick(): void {
@@ -126,64 +202,129 @@ export class ActivityTracker extends EventEmitter {
     const cutoff = now - this.windowMs;
     this.samples = this.samples.filter((s) => s.ts >= cutoff);
     const sum = this.samples.reduce((acc, s) => acc + s.bytes, 0);
+    this.runLadder(now, sum);
+  }
 
-    // Title mode: a classifiable OSC title has been observed at least once —
-    // it is the sole authority from then on (see class doc).
-    if (this.titleState !== 'unknown') {
-      this.tickTitleMode(now, sum);
+  private runLadder(now: number, sum: number): void {
+    // S1: screen
+    if (this.screenState !== 'unknown') {
+      this.applyClassified(now, sum, this.screenState, 'screen');
       return;
     }
-
-    const above = sum >= this.activeThresholdBytes;
-    if (above) this.lastAboveThresholdTs = now;
-
-    if (this.state === 'idle') {
-      if (above) {
-        this.state = 'active';
-        this.lastActiveEmitTs = now;
-        this.emit('transition', 'active', sum);
+    // S2: title
+    if (this.titleAuthoritative || this.titleState === 'working' || this.titleState === 'blocked') {
+      if (this.titleState === 'working' || this.titleState === 'blocked') {
+        this.titleAuthoritative = true;
       }
+      this.applyClassified(now, sum, this.titleState as PaneAgentState, 'title');
       return;
     }
-
-    // state === 'active'.
-    // Idle is measured from the last tick whose window sum was *above the
-    // threshold* — not from the last byte seen. An idle TUI still dribbles a
-    // few bytes (cursor blink, prompt redraw); keying off the last byte let
-    // that trickle postpone 'idle' indefinitely, so the spinner lingered long
-    // after the agent had actually finished.
-    if (!above && now - this.lastAboveThresholdTs >= this.idleAfterMs) {
-      this.state = 'idle';
-      this.emit('transition', 'idle', sum);
-    } else if (now - this.lastActiveEmitTs >= ACTIVE_RESEND_MS) {
-      this.lastActiveEmitTs = now;
-      this.emit('transition', 'active', sum);
-    }
+    // S3: bytes
+    this.tickCombinedMode(now, sum);
   }
 
   /**
-   * Title-mode evaluation: working/blocked → 'active' (carrying the status),
-   * idle → 'idle'. Emits on any (state, status) change — including a
-   * working↔blocked flip while staying 'active' — plus the same periodic
-   * 'active' keepalive as the byte heuristic.
+   * S1/S2 shared state application: working/blocked → 'active' (carrying the
+   * status), idle → 'idle'. Emits on any (state, status, decidedBy) change —
+   * including a working↔blocked flip while staying 'active' — plus the same
+   * periodic 'active' keepalive as S3. Only a screen-derived working→idle is
+   * held for confirmation (see IDLE_* constants).
    */
-  private tickTitleMode(now: number, sum: number): void {
-    const desired: ActivityState = this.titleState === 'idle' ? 'idle' : 'active';
+  private applyClassified(now: number, sum: number, s: PaneAgentState, by: DecidedBy): void {
+    const desired: ActivityState = s === 'idle' ? 'idle' : 'active';
     const status: AgentStatus | undefined =
-      this.titleState === 'working' ? 'working'
-      : this.titleState === 'blocked' ? 'blocked'
-      : undefined;
+      s === 'working' ? 'working' : s === 'blocked' ? 'blocked' : undefined;
 
-    if (desired !== this.state || (desired === 'active' && status !== this.emittedStatus)) {
+    if (desired === 'idle' && this.state === 'active' && by === 'screen') {
+      if (!this.holdIdle(now)) return;
+    } else {
+      this.resetIdleHold();
+    }
+
+    if (
+      desired !== this.state ||
+      (desired === 'active' && status !== this.emittedStatus) ||
+      by !== this.emittedDecidedBy
+    ) {
       this.state = desired;
       this.emittedStatus = desired === 'active' ? status : undefined;
+      this.emittedDecidedBy = by;
       this.lastActiveEmitTs = now;
-      this.emit('transition', desired, sum, this.emittedStatus);
+      this.emit('transition', desired, sum, this.emittedStatus, by);
       return;
     }
     if (this.state === 'active' && now - this.lastActiveEmitTs >= ACTIVE_RESEND_MS) {
       this.lastActiveEmitTs = now;
-      this.emit('transition', 'active', sum, this.emittedStatus);
+      this.emit('transition', 'active', sum, this.emittedStatus, by);
+    }
+  }
+
+  private holdIdle(now: number): boolean {
+    if (this.idleHoldStart === undefined) {
+      this.idleHoldStart = now;
+      this.idleHoldCount = 1;
+      this.scheduleIdleRecheck();
+      return false;
+    }
+    this.idleHoldCount++;
+    if (this.idleHoldCount >= IDLE_CONFIRMATIONS || now - this.idleHoldStart >= IDLE_HOLD_CAP_MS) {
+      this.resetIdleHold();
+      return true;
+    }
+    this.scheduleIdleRecheck();
+    return false;
+  }
+
+  private scheduleIdleRecheck(): void {
+    if (this.idleHoldTimer) clearTimeout(this.idleHoldTimer);
+    this.idleHoldTimer = setTimeout(() => {
+      this.idleHoldTimer = undefined;
+      this.evaluateNow();
+    }, IDLE_RECHECK_MS);
+    this.idleHoldTimer.unref();
+  }
+
+  private resetIdleHold(): void {
+    this.idleHoldStart = undefined;
+    this.idleHoldCount = 0;
+    if (this.idleHoldTimer) clearTimeout(this.idleHoldTimer);
+    this.idleHoldTimer = undefined;
+  }
+
+  /**
+   * S3: byte-volume heuristic with echo filter, plus instant promotion to the
+   * title rung on a working/blocked title. Unchanged from the combined mode
+   * that preceded S1 (PR #123 / #146).
+   */
+  private tickCombinedMode(now: number, sum: number): void {
+    if (this.titleState === 'working' || this.titleState === 'blocked') {
+      this.titleAuthoritative = true;
+      this.applyClassified(now, sum, this.titleState as PaneAgentState, 'title');
+      return;
+    }
+
+    const above = sum >= this.activeThresholdBytes && this.freshBytes;
+    this.freshBytes = false;
+    this.aboveStreak = above ? this.aboveStreak + 1 : 0;
+    if (above) this.lastAboveThresholdTs = now;
+
+    if (this.state === 'idle') {
+      if (this.aboveStreak >= ACTIVE_CONSECUTIVE_TICKS) {
+        this.state = 'active';
+        this.emittedDecidedBy = 'bytes';
+        this.lastActiveEmitTs = now;
+        this.emit('transition', 'active', sum, undefined, 'bytes');
+      }
+      return;
+    }
+
+    if (!above && now - this.lastAboveThresholdTs >= this.idleAfterMs) {
+      this.state = 'idle';
+      this.emittedDecidedBy = 'bytes';
+      this.emit('transition', 'idle', sum, undefined, 'bytes');
+    } else if (now - this.lastActiveEmitTs >= ACTIVE_RESEND_MS) {
+      this.lastActiveEmitTs = now;
+      this.emit('transition', 'active', sum, undefined, 'bytes');
     }
   }
 }

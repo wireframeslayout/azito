@@ -40,7 +40,7 @@ function b64(s: string): string {
 function makeTransport(handler: (cmd: string) => Promise<ExecResult> | ExecResult): IServerTransport {
   return {
     exec: vi.fn(async (cmd: string) => handler(cmd)),
-    execTmux: vi.fn(),
+    execMux: vi.fn(),
     openTerminal: vi.fn(),
     createPaneStream: vi.fn(),
   } as unknown as IServerTransport;

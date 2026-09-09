@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveWorktreeCreateBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveWorktreeCreateBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import type { ProjectDetail } from '../../projects/Project';
 
@@ -49,17 +49,17 @@ describe('resolveTaskServerName', () => {
   });
 });
 
-describe('resolveTmuxSession', () => {
+describe('resolveMuxWorkspace', () => {
   it('returns the project_servers tmux_session when a row exists', () => {
     const repo = makeProjectServerRepo({
       find: vi.fn(() => ({ projectId: 1, serverName: 'server-a', workingDirectory: null, branch: null, tmuxSession: 'custom-session', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
     });
-    expect(resolveTmuxSession(1, 'server-a', repo)).toBe('custom-session');
+    expect(resolveMuxWorkspace(1, 'server-a', repo)).toBe('custom-session');
   });
 
   it('falls back to "azito" when no project_servers row links this project/server', () => {
     const repo = makeProjectServerRepo({ find: vi.fn(() => null) });
-    expect(resolveTmuxSession(1, 'server-a', repo)).toBe('azito');
+    expect(resolveMuxWorkspace(1, 'server-a', repo)).toBe('azito');
   });
 });
 

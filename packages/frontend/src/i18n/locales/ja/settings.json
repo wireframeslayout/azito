@@ -204,6 +204,7 @@
     "colState": "状態",
     "colTier": "判定 Tier",
     "colSupervisor": "supervisor",
+    "colMatch": "照合",
     "colTransition": "最終遷移",
     "stateWorking": "稼働中",
     "stateBlocked": "確認待ち",

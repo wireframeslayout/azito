@@ -92,6 +92,8 @@
     "session": "Session",
     "windowName": "Window Name (optional)",
     "windowNamePlaceholder": "e.g. dev",
+    "windowNameAutoGenHint": "Auto-generated if empty (e.g. win--a7x2)",
+    "windowExistsError": "A window with this name already exists",
     "workingDir": "Working Directory",
     "workingDirPlaceholder": "/path/to/project",
     "codingAgent": "Coding Agent",
@@ -250,6 +252,7 @@
     "noOffline": "No offline windows",
     "noBrowsers": "No browsers open",
     "searchPlaceholder": "Search title, ID, branch…",
+    "followHerdr": "Follow herdr",
     "noSearchResults": "No matches for \"{{query}}\"",
     "openBrowser": "Open new",
     "closeBrowserGroup": "Close this browser group",
@@ -297,5 +300,9 @@
     "pinTab": "Pin tab",
     "addWindowChip": "Window",
     "addBrowserChip": "Browser"
+  },
+  "herdrConflict": {
+    "title": "Session display limit",
+    "message": "Only one window per herdr session can be displayed at a time. Click this pane to switch the display."
   }
 }

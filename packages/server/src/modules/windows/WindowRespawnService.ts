@@ -1,6 +1,8 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import type { ServerConfig } from '../servers/Server';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { IMuxClient } from '../tmux/IMuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -20,7 +22,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
-import { resolveTmuxSession } from '../tasks/execution/TaskExecutionEnv';
+import { resolveMuxWorkspace } from '../tasks/execution/TaskExecutionEnv';
 import {
   confirmOldWindowGone,
   createPlainWindowInLock,
@@ -82,6 +84,11 @@ interface SupervisionContext {
   supervise: boolean;
   taskId: number | null;
   unitId: number | null;
+  windowId?: number;
+}
+
+function resolveWindowRef(win: Pick<Window, 'muxRef' | 'tmuxTarget'>) {
+  return win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
 }
 
 export class WindowRespawnService {
@@ -89,7 +96,7 @@ export class WindowRespawnService {
 
   constructor(
     private windowRepo: IWindowRepository,
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private sessionStrategyFactory: ISessionStrategyFactory,
     private taskRepo: ITaskRepository,
     private unitRepo: IUnitRepository,
@@ -163,11 +170,17 @@ export class WindowRespawnService {
     // needs it for resolveEffectiveInputPolicy(). Placed before the optional
     // sessionCaptureService (required params must precede optional ones).
     private scopedAuthEnabled: boolean,
+    private uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
     private sessionCaptureService?: SessionCaptureService,
+    private harnessPrefix?: string,
   ) {}
 
   private get serverIsolationLock(): ServerIsolationLock {
     return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
+  }
+
+  private resolveDriver(server: Pick<ServerConfig, 'muxRuntime'>): IMuxClient {
+    return this.muxDriverRegistry.resolve(server);
   }
 
   async respawn(windowId: number, server: ServerConfig): Promise<{ tmuxTarget: string }> {
@@ -228,7 +241,7 @@ export class WindowRespawnService {
     const supervise = shouldSupervise(server.type, win.windowType);
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
-    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId };
+    const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
 
     // Window-generation point for this window: EITHER branch below actually
     // (re)creates the window that becomes the respawned pane (unlike
@@ -317,6 +330,7 @@ export class WindowRespawnService {
         windowEnv,
         tokenId,
         server: respawnServer,
+        ref,
       } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
         // Issue #29 Step 3a review round, Important finding 2: re-verify the
         // untrusted-execution gate against `freshServer` — re-read once this
@@ -357,41 +371,32 @@ export class WindowRespawnService {
           );
         }
 
-        const sessions = await this.tmux.listSessions(freshServer);
-        const sessionExists = sessions.some((s) => s.name === sessionName);
-        const session = sessions.find((s) => s.name === sessionName);
-        const windowAlive = sessionExists && (session?.windows.some((w) => w.name === windowPart) ?? false);
+        const driver = this.resolveDriver(freshServer);
+        const workspaces = await driver.listWorkspaces(freshServer);
+        const workspaceExists = workspaces.some((s) => s.name === sessionName);
+        const workspace = workspaces.find((s) => s.name === sessionName);
+        const windowAlive = workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
 
-        // Confirm the old window is actually gone BEFORE rotating the task
-        // token (Issue #28 third-party review finding 3), via the same
-        // shared operation execute()/followUp() now use (WindowRotation.ts)
-        // — buildEnvForNewWindow() revokes the current token generation and
-        // issues a new one, so calling it while the old window might still
-        // be alive (a killWindow() failure was previously swallowed via
-        // `.catch(() => {})`) could leave that still-live pane holding a
-        // now-dead credential.
+        const oldRef = resolveWindowRef(currentWin);
         await confirmOldWindowGone(
-          this.tmux,
+          driver,
           freshServer,
-          windowAlive ? { target: `${sessionName}:${windowPart}`, kind: 'window' } : null,
+          windowAlive ? { kind: 'window', ref: oldRef } : null,
           isPrimary ? task!.id : null,
         );
 
-        createdViaNewSession = !sessionExists;
+        createdViaNewSession = !workspaceExists;
         const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
-          // Re-lists sessions from `fs` (Issue #29 review, 9th pass,
-          // Important finding 2) rather than trusting `sessionExists`
-          // above: `fs` here is the SAME `freshServer` the outer lock
-          // already re-read, but re-checking immediately before the actual
-          // create call keeps this decision resilient to a session
-          // teardown/creation racing between the two reads within the same
-          // lock turn.
-          const freshSessions = await this.tmux.listSessions(fs);
-          const freshSessionExists = freshSessions.some((s) => s.name === sessionName);
-          createdViaNewSession = !freshSessionExists;
-          return !freshSessionExists
-            ? this.tmux.createSession(fs, sessionName, { windowName: windowPart, exactName: true, extraEnv: env })
-            : this.tmux.createWindow(fs, sessionName, windowPart, { exactName: true, extraEnv: env });
+          const createDriver = this.resolveDriver(fs);
+          const freshWorkspaces = await createDriver.listWorkspaces(fs);
+          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName);
+          createdViaNewSession = !freshWorkspaceExists;
+          if (!freshWorkspaceExists) {
+            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: windowPart, exactName: true, extraEnv: env });
+            return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
+          }
+          const opened = await createDriver.openWindow(fs, sessionName, windowPart, { exactName: true, extraEnv: env });
+          return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
         };
 
         if (isPrimary) {
@@ -399,10 +404,10 @@ export class WindowRespawnService {
           // confirmOldWindowGone, against this same `freshServer` snapshot
           // (see the comment at the top of this lock callback).
           const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
         } else if (task) {
           const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         } else {
           // Non-task window respawn — server-aware legacy default (Issue #29
           // review, Critical finding 1): withholds the token when the server
@@ -412,14 +417,14 @@ export class WindowRespawnService {
           // env-resolution -> create() span inside the same per-server
           // isolation lock as the primary/secondary branches, against the
           // freshly re-fetched `freshServer` row.
-          const created = await createPlainWindowInLock(this.tmux, freshServer, doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+          const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate);
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         }
       });
       await sleep(createdViaNewSession ? 500 : 300);
 
       const baseTarget = `${sessionName}:${newName}`;
-      const dbTarget = `${baseTarget}.1`;
+      const dbTarget = baseTarget;
 
       // Pane restoration now runs INSIDE this same lock turn, before the
       // final persist below — see the design-rationale comment above this
@@ -443,35 +448,37 @@ export class WindowRespawnService {
       // resumeLegacySession's onStillAlive branch. A non-primary window has
       // no generation to protect, so it only needs the kill + discoverability
       // half (no revoke call).
+      const restoreDriver = this.resolveDriver(respawnServer);
+      const newRef: MuxRef = ref ?? { kind: restoreDriver.kind, workspace: sessionName, window: newName };
       try {
         if (win.paneLayout) {
-          await this.restorePaneLayout(respawnServer, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
         } else {
-          const paneId = await this.tmux.resolvePaneId(respawnServer, baseTarget);
+          const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
           await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
         }
       } catch (err) {
         try {
           if (isPrimary && tokenId !== null) {
             await rollbackWindowReference(
-              this.tmux.killWindow(respawnServer, baseTarget),
+              restoreDriver.closeWindow(respawnServer, newRef),
               this.paneEnvService,
               tokenId,
               'respawn_restore_failed_rollback',
               () => {},
-              () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget }),
+              () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef }),
             );
           } else {
-            const outcome = await resolveKillOutcome(this.tmux.killWindow(respawnServer, baseTarget));
+            const outcome = await resolveKillOutcome(restoreDriver.closeWindow(respawnServer, newRef));
             if (!outcome.success) {
-              this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
+              this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef });
             }
           }
         } catch {}
         throw err;
       }
 
-      this.windowRepo.update(windowId, { tmuxTarget: dbTarget, sleeping: false });
+      this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef, sleeping: false });
 
       return { tmuxTarget: dbTarget };
     };
@@ -637,7 +644,7 @@ export class WindowRespawnService {
 
     const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
 
-    const tmuxSession = resolveTmuxSession(task.projectId, server.name, this.projectServerRepo);
+    const tmuxSession = resolveMuxWorkspace(task.projectId, server.name, this.projectServerRepo);
     // Window generation point — rotates the task token via createRotatedWindow,
     // the same shared operation respawn()/execute()/followUp() use (Issue #28
     // third-party review finding 2): this used to call
@@ -650,8 +657,11 @@ export class WindowRespawnService {
     // WindowRotation.ts) so a concurrent rotation for this task cannot
     // revoke this generation out from under it.
     const { windowName } = await runExclusiveForTask(taskId, async () => {
-      const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', (freshServer, env) =>
-        this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', async (freshServer, env) => {
+          const d = this.resolveDriver(freshServer);
+          const opened = await d.openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
+          return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
+        },
         true,
         // Issue #29 Step 3a review round, Important finding 1: re-verify the
         // untrusted-execution gate against `freshServer` — re-read once this
@@ -698,13 +708,11 @@ export class WindowRespawnService {
       // method was called with — for resolvePaneId/sendKeys/killWindow
       // below, same as respawn()'s other two branches already do.
       server = created.server;
-      const windowTarget = `${tmuxSession}:${created.windowName}`;
+      const legacyDriver = this.resolveDriver(server);
+      const legacyRef: MuxRef = created.ref ?? { kind: legacyDriver.kind, workspace: tmuxSession, window: created.windowName };
+      const windowTarget = tmuxTargetFromMuxRef(legacyRef);
       try {
-        const paneId = await this.tmux.resolvePaneId(server, windowTarget);
-        // --strict-mcp-config (Issue #28 design v3 §3): this is a claude worker
-        // launch, same as buildClaudeLaunchCommand's, just hardcoded here instead
-        // of going through it (see that function's own doc comment for why the
-        // rest of its flags don't apply to a `--resume` relaunch).
+        const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
         const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
         const isSupervised = shouldSupervise(server.type, 'agent');
         if (isSupervised) {
@@ -716,15 +724,17 @@ export class WindowRespawnService {
               target: windowTarget,
               taskId: task.id,
               unitId: task.unitId ?? undefined,
+              harnessPrefix: this.harnessPrefix,
               ...this.supervisorRegistry.issueLaunch({
                 serverName: server.name,
                 target: windowTarget,
                 taskId: task.id,
                 unitId: task.unitId ?? null,
+                windowId: null,
               }),
             })
           : resumeCommand;
-        await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+        await legacyDriver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
       } catch (err) {
         // resolvePaneId()/sendKeys() failing after createRotatedWindow already
         // succeeded used to leave an untracked window (tmuxWindow never
@@ -742,7 +752,7 @@ export class WindowRespawnService {
         // TaskPaneEnvironmentService.revokeGeneration's doc comment.
         try {
           await rollbackWindowReference(
-            this.tmux.killWindow(server, windowTarget),
+            legacyDriver.closeWindow(server, legacyRef),
             this.paneEnvService,
             created.tokenId,
             'resume_legacy_launch_failed_rollback',
@@ -831,44 +841,33 @@ export class WindowRespawnService {
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
+      harnessPrefix: this.harnessPrefix,
       ...this.supervisorRegistry.issueLaunch({
         serverName: server.name,
         target: supervisorTarget,
         taskId: supervision.taskId ?? null,
         unitId: supervision.unitId ?? null,
+        windowId: supervision.windowId ?? null,
       }),
     });
   }
 
   async capturePaneLayout(server: ServerConfig, tmuxTarget: string): Promise<PaneLayout> {
-    const windowTarget = tmuxTarget.includes('.') ? tmuxTarget.split('.')[0] : tmuxTarget;
-
-    const layoutResult = await this.tmux.execCommand(
-      server,
-      `tmux display-message -t '${windowTarget}' -p '#{window_layout}'`,
-    );
-    const layout = layoutResult.stdout.trim();
-
-    const paneResult = await this.tmux.execCommand(
-      server,
-      `tmux list-panes -t '${windowTarget}' -F '#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}'`,
-    );
-
-    const panes = paneResult.stdout.trim().split('\n').map((line) => {
-      const [index, command, workingDirectory, title] = line.split('\t');
-      return {
-        index: parseInt(index, 10),
-        command: command || null,
-        workingDirectory: workingDirectory || null,
-        title: title || null,
-      };
-    });
-
-    return { layout, panes };
+    const ref = muxRefFromTmuxTarget(tmuxTarget);
+    const driver = this.resolveDriver(server);
+    const captured = await driver.captureLayout(server, ref);
+    const panes = captured.panes.map(p => ({
+      index: p.index,
+      command: p.command,
+      workingDirectory: p.path,
+      title: p.title,
+    }));
+    return { layout: captured.layout, panes };
   }
 
   private async restorePaneLayout(
     server: ServerConfig,
+    ref: MuxRef,
     baseTarget: string,
     paneLayout: PaneLayout,
     win: { workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
@@ -883,38 +882,34 @@ export class WindowRespawnService {
     // TmuxClient.splitPane's doc comment).
     paneEnv: Record<string, string>,
   ): Promise<void> {
+    const driver = this.resolveDriver(server);
     const paneCount = paneLayout.panes.length;
-    const firstPaneId = await this.tmux.resolvePaneId(server, baseTarget);
-    for (let i = 1; i < paneCount; i++) {
-      await this.tmux.splitPane(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
-      await sleep(200);
+    const firstPaneId = await driver.resolvePane(server, ref, 1);
+
+    if (driver.caps.layoutSnapshot) {
+      for (let i = 1; i < paneCount; i++) {
+        await driver.splitPaneByHandle(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
+        await sleep(200);
+      }
+
+      if (paneLayout.layout) {
+        await driver.applyLayout(server, ref, paneLayout.layout);
+      }
     }
 
-    if (paneLayout.layout) {
-      await this.tmux.execCommand(
-        server,
-        `tmux select-layout -t '${baseTarget}' '${paneLayout.layout}'`,
-      );
-    }
-
-    const paneIdMap = new Map<number, string>();
-    const paneEntries = await this.tmux.listPaneIds(server, baseTarget);
+    const paneIdMap = new Map<number, PaneHandle>();
+    const paneEntries = await driver.listPanesByRef(server, ref);
     for (const entry of paneEntries) {
-      paneIdMap.set(entry.index, entry.paneId);
+      paneIdMap.set(entry.ordinal - 1, entry.handle);
     }
 
-    for (const pane of paneLayout.panes) {
+    const panesToRestore = driver.caps.layoutSnapshot ? paneLayout.panes : paneLayout.panes.slice(0, 1);
+    for (const pane of panesToRestore) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
-      // Already resolved and containment-checked by resolveAllCwds() before
-      // any destructive tmux operation ran — a missing entry here means the
-      // pane had no workingDirectory to begin with, not a rejected one (a
-      // rejection would have thrown out of respawn() earlier).
       const cwd = paneCwds.get(pane.index);
       if (cwd) {
-        // cwd is a resolved (symlink-free) real path — must be shell-quoted
-        // before being typed into the pane (Issue #27 cd injection).
-        await this.tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(cwd)}`, 'Enter']);
+        await driver.sendKeysToHandle(server, paneId, [`cd -- ${shellQuote(cwd)}`, 'Enter']);
         await sleep(300);
       }
 
@@ -925,7 +920,7 @@ export class WindowRespawnService {
         const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
         if (cmd) {
           const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
-          await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+          await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
         }
       }
     }
@@ -933,18 +928,15 @@ export class WindowRespawnService {
 
   private async setupSinglePane(
     server: ServerConfig,
-    paneId: string,
+    handle: PaneHandle,
     supervisorTarget: string,
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
     singleCwd: string | null,
   ): Promise<void> {
+    const driver = this.resolveDriver(server);
     if (singleCwd) {
-      // singleCwd is a resolved (symlink-free) real path, already
-      // containment-checked by resolveAllCwds() before any destructive tmux
-      // operation ran — must be shell-quoted before being typed into the
-      // pane (Issue #27 cd injection).
-      await this.tmux.sendKeys(server, paneId, [`cd -- ${shellQuote(singleCwd)}`, 'Enter']);
+      await driver.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(singleCwd)}`, 'Enter']);
       await sleep(300);
     }
 
@@ -957,7 +949,7 @@ export class WindowRespawnService {
       const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
       if (cmd) {
         const sendCmd = this.wrapIfSupervised(cmd, server, supervisorTarget, supervision);
-        await this.tmux.sendKeys(server, paneId, [sendCmd, 'Enter']);
+        await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);
       }
     }
   }

@@ -1,8 +1,10 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
-import type { Server, Session, TmuxWindow } from '../../../hooks/useServerManagement';
+import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
+import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -18,45 +20,66 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
-  const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
+  const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
 
-  const firstTarget = useMemo(() => {
+  const firstRef = useMemo<TerminalRef | null>(() => {
     for (const sess of sessions) {
       for (const win of sess.windows) {
-        return `${sess.name}:${win.name ?? win.index}`;
+        return terminalRefFromWindow(server.name, win.windowId, win.ref, 1);
       }
     }
     return null;
-  }, [sessions]);
+  }, [sessions, server.name]);
 
-  const activeTarget = selectedTarget ?? firstTarget;
+  const activeRef = selectedRef ?? firstRef;
 
-  const handleSelect = useCallback((target: string) => {
-    setSelectedTarget(target);
+  const activeLabel = useMemo(() => {
+    if (!activeRef) return null;
+    const resolved = resolveTerminalTarget(activeRef, sessions);
+    if (resolved) return stripPaneSuffix(resolved);
+    return terminalRefDisplayLabel(activeRef);
+  }, [activeRef, sessions]);
+
+  const handleSelect = useCallback((ref: TerminalRef) => {
+    setSelectedRef(ref);
     setShowTree(false);
   }, []);
+
+  const useMuxRoutes = useMemo(() => muxKindForRuntime((server.muxRuntime ?? 'system') as MuxRuntime) !== 'tmux', [server.muxRuntime]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('New session name:');
     if (!name) return;
-    await api(`/servers/${encodeURIComponent(server.name)}/sessions`, {
-      method: 'POST', body: JSON.stringify({ name }),
-    });
+    if (useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
+    } else {
+      await api(`/servers/${encodeURIComponent(server.name)}/sessions`, { method: 'POST', body: JSON.stringify({ name }) });
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
   const handleAddWindow = useCallback(async (sessionName: string) => {
-    await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    if (useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+    } else {
+      await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
-  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string) => {
-    await api(
-      `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
-      { method: 'POST', body: JSON.stringify({ direction }) },
-    );
+  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else if (ref && useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(
+        `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
+        { method: 'POST', body: JSON.stringify({ direction }) },
+      );
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
   if (sessions.length === 0) {
     return (
@@ -101,7 +124,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
             cursor: 'pointer',
           }}
         >
-          {activeTarget ?? 'Select window'}
+          {activeLabel ?? 'Select window'}
           <span style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-dim)' }}>
             <Icon name="chevron-down" size={14} rotate={showTree ? 180 : 0} />
           </span>
@@ -110,11 +133,12 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {activeTarget ? (
+        {activeRef ? (
           <TerminalContainer
-            key={`${server.name}:${activeTarget}`}
+            key={terminalTabId(activeRef)}
             serverName={server.name}
-            target={activeTarget}
+            target={activeLabel ?? ''}
+            terminalRef={activeRef}
             sessions={sessions}
             onWindowChanged={refresh}
           />
@@ -127,7 +151,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
         <WindowTreePopover
           sessions={sessions}
           serverName={server.name}
-          selectedTarget={activeTarget}
+          selectedRef={activeRef}
           onSelect={handleSelect}
           onClose={() => setShowTree(false)}
           onCreateSession={handleCreateSession}

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { WindowSleepService } from './WindowSleepService';
 import type { Window, IWindowRepository } from './Window';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { IMuxClient } from '../tmux/IMuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
@@ -23,6 +24,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
+    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -43,6 +45,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationReport: null,
     isolationCleanupReport: null,
     muxRuntime: 'system',
+    herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -63,8 +66,11 @@ function buildService(overrides: {
     update: vi.fn(),
   };
 
-  const killWindow = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
-  const tmux: Partial<TmuxClient> = { killWindow: killWindow as unknown as TmuxClient['killWindow'] };
+  const closeWindow = vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 });
+  const mockDriver: Partial<IMuxClient> = { closeWindow: closeWindow as unknown as IMuxClient['closeWindow'] };
+  const muxDriverRegistry: Partial<MuxDriverRegistry> = {
+    resolve: vi.fn().mockReturnValue(mockDriver),
+  };
 
   const sessionStrategyFactory: ISessionStrategyFactory = {
     create: (workerType: string | null) => ({
@@ -83,12 +89,12 @@ function buildService(overrides: {
 
   const service = new WindowSleepService(
     windowRepo as IWindowRepository,
-    tmux as TmuxClient,
+    muxDriverRegistry as MuxDriverRegistry,
     sessionStrategyFactory,
     serverRepo as IServerRepository,
   );
 
-  return { service, windowRepo, tmux, killWindow, serverRepo };
+  return { service, windowRepo, muxDriverRegistry, closeWindow, serverRepo };
 }
 
 describe('WindowSleepService', () => {
@@ -120,14 +126,25 @@ describe('WindowSleepService', () => {
   });
 
   describe('sleep', () => {
-    it('calls tmux.killWindow and windowRepo.update({sleeping: true})', async () => {
+    it('calls driver.closeWindow and windowRepo.update({sleeping: true})', async () => {
       const win = makeWindow();
-      const { service, killWindow, windowRepo } = buildService({ windows: [win] });
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
 
       await service.sleep(win.id);
 
-      expect(killWindow).toHaveBeenCalledTimes(1);
-      expect(killWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), 'azito:task-1');
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(closeWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), { kind: 'tmux', workspace: 'azito', window: 'task-1' });
+      expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
+    });
+
+    it('uses muxRef from window when available (herdr)', async () => {
+      const herdrRef = { kind: 'herdr' as const, workspace: 'win--d299', window: 'main' };
+      const win = makeWindow({ muxRef: herdrRef });
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
+
+      await service.sleep(win.id);
+
+      expect(closeWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), herdrRef);
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 
@@ -144,24 +161,35 @@ describe('WindowSleepService', () => {
       await expect(service.sleep(999)).rejects.toThrow('Window not found');
     });
 
-    it('sets sleeping: true even when killWindow fails', async () => {
+    it('throws when closeWindow fails (Fail Fast)', async () => {
       const win = makeWindow();
-      const { service, killWindow, windowRepo } = buildService({ windows: [win] });
-      killWindow.mockRejectedValue(new Error('tmux error'));
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
+      closeWindow.mockResolvedValue({ stdout: '', stderr: 'kill error', code: 1 });
 
-      await service.sleep(win.id);
+      await expect(service.sleep(win.id)).rejects.toThrow('Failed to close window before sleeping');
 
-      expect(killWindow).toHaveBeenCalledTimes(1);
-      expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(windowRepo.update).not.toHaveBeenCalled();
+    });
+
+    it('throws when closeWindow rejects (Fail Fast)', async () => {
+      const win = makeWindow();
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
+      closeWindow.mockRejectedValue(new Error('transport error'));
+
+      await expect(service.sleep(win.id)).rejects.toThrow('Failed to close window before sleeping');
+
+      expect(closeWindow).toHaveBeenCalledTimes(1);
+      expect(windowRepo.update).not.toHaveBeenCalled();
     });
 
     it('sets sleeping: true even when server is not found (window may have been on a removed server)', async () => {
       const win = makeWindow();
-      const { service, killWindow, windowRepo } = buildService({ windows: [win], server: null });
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win], server: null });
 
       await service.sleep(win.id);
 
-      expect(killWindow).not.toHaveBeenCalled();
+      expect(closeWindow).not.toHaveBeenCalled();
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
   });
@@ -190,16 +218,16 @@ describe('WindowSleepService', () => {
       expect(windowRepo.update).toHaveBeenCalledTimes(1);
     });
 
-    it('continues sleeping other windows when one fails', async () => {
+    it('continues sleeping other windows when one fails to close', async () => {
       const win1 = makeWindow({ id: 1, taskId: 5 });
       const win2 = makeWindow({ id: 2, taskId: 5, tmuxTarget: 'azito:task-2.1' });
-      const { service, killWindow, windowRepo } = buildService({ windows: [win1, win2] });
-      killWindow.mockRejectedValueOnce(new Error('kill failed'));
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win1, win2] });
+      closeWindow.mockResolvedValueOnce({ stdout: '', stderr: 'kill error', code: 1 });
 
       const result = await service.sleepTaskWindows(5);
 
-      expect(result).toEqual([1, 2]);
-      expect(windowRepo.update).toHaveBeenCalledTimes(2);
+      expect(result).toEqual([2]);
+      expect(windowRepo.update).toHaveBeenCalledTimes(1);
     });
 
     it('returns empty array when no windows can sleep', async () => {

@@ -146,18 +146,16 @@ function makeOpts(
       update: vi.fn(),
       delete: vi.fn(),
     },
-    tmux: {
-      listSessions: vi.fn(async () => []),
-      createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
-      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      killWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
-      sendKeys: vi.fn(async () => {}),
-      checkPaneExists: vi.fn(async () => true),
-      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    } as unknown as TasksRouteOptions['tmux'],
+    muxDriverRegistry: (() => {
+      const driver = {
+        closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
+        windowExists: vi.fn(async () => true),
+      };
+      return { resolve: vi.fn(() => driver), _driver: driver };
+    })() as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -178,12 +176,14 @@ function makeOpts(
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
+      adoptForTask: vi.fn(),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
-      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, projectId: null, createdAt: '' }]),
+      findByTask: vi.fn(() => [{ id: 50, ownerType: 'task' as const, taskId: 1, isPrimary: true, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', windowType: 'agent' as const, workerType: 'claude', workerModel: null, agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, herdrNavigationLock: null, sleeping: false, projectId: null, createdAt: '' }]),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
@@ -243,9 +243,9 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(200);
     expect(JSON.parse(res.payload)).toEqual({ ok: true });
-    expect(opts.tmux.killWindow).toHaveBeenCalledWith(
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
-      'azito:task-1',
+      { kind: 'tmux', workspace: 'azito', window: 'task-1' },
     );
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'retry_abandoned_window');
@@ -265,7 +265,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Failed to kill/);
-    expect(opts.tmux.killWindow).toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).toHaveBeenCalled();
     // Fail-closed: nothing mutates on a 409 — not the execution, not the
     // token generation, not the task row. The 409 response must be true.
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
@@ -287,7 +287,7 @@ describe('POST /api/tasks/:id/retry', () => {
 
     expect(res.statusCode).toBe(409);
     expect(JSON.parse(res.payload).error).toMatch(/Could not resolve the server/);
-    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
     expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
     expect(opts.taskRepo.update).not.toHaveBeenCalled();
@@ -302,7 +302,7 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(200);
-    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
     expect(opts.executeTaskUseCase.stopByTaskId).toHaveBeenCalledWith(1);
     expect(opts.paneEnvService.revokeForDestroyedWindow).not.toHaveBeenCalled();
   });
@@ -316,7 +316,7 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
 
     expect(res.statusCode).toBe(400);
-    expect(opts.tmux.killWindow).not.toHaveBeenCalled();
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
   });
 
   it('returns 404 when the task does not exist', async () => {

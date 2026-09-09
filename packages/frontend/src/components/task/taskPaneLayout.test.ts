@@ -41,7 +41,7 @@ describe('viewTabId / parseViewTabId', () => {
   });
 
   it('rejects non-view or unknown-view tab ids', () => {
-    expect(parseViewTabId('v-window:local/sess:1.0')).toBeNull();
+    expect(parseViewTabId('v-window:local::sess:1')).toBeNull();
     expect(parseViewTabId('view:not-a-real-view')).toBeNull();
   });
 });
@@ -49,22 +49,28 @@ describe('viewTabId / parseViewTabId', () => {
 describe('windowTabId / parseWindowTabId', () => {
   it('round-trips a server+target pair into its tab id, stripping any pane suffix', () => {
     const tabId = windowTabId('local', 'sess:1.0');
-    expect(tabId).toBe('v-window:local/sess:1');
+    expect(tabId).toBe('v-window:local::sess:1');
     expect(parseWindowTabId(tabId)).toEqual({ serverName: 'local', target: 'sess:1' });
   });
 
   it('encodes two targets that differ only by pane suffix to the same tab id', () => {
-    // The server stores task windows as `session:window.1` (see ExecuteTaskUseCase) while
-    // a pane click elsewhere in the same window produces `session:window.<paneIndex>` —
-    // both must resolve to the same task-panel tab, or allTabIds/reconcile would treat
-    // them as two different tabs and prune whichever one the user actually had selected.
     expect(windowTabId('local', 'sess:main.1')).toBe(windowTabId('local', 'sess:main.0'));
+  });
+
+  it('parses new format (:: separator)', () => {
+    expect(parseWindowTabId('v-window:local::main:0')).toEqual({ serverName: 'local', target: 'main:0' });
+    expect(parseWindowTabId('v-window:srv01::azito:win--abc')).toEqual({ serverName: 'srv01', target: 'azito:win--abc' });
+  });
+
+  it('parses old format (/ separator) for backward compatibility', () => {
+    expect(parseWindowTabId('v-window:local/main:0')).toEqual({ serverName: 'local', target: 'main:0' });
+    expect(parseWindowTabId('v-window:srv01/azito:win--abc')).toEqual({ serverName: 'srv01', target: 'azito:win--abc' });
   });
 
   it('rejects malformed window tab ids', () => {
     expect(parseWindowTabId('view:description')).toBeNull();
     expect(parseWindowTabId('v-window:')).toBeNull();
-    expect(parseWindowTabId('v-window:missing-slash')).toBeNull();
+    expect(parseWindowTabId('v-window:missing-separator')).toBeNull();
   });
 });
 
@@ -79,7 +85,7 @@ describe('browserTabId / parseBrowserTabId', () => {
     expect(parseBrowserTabId('view:description')).toBeNull();
     expect(parseBrowserTabId('v-browser:')).toBeNull();
     expect(parseBrowserTabId('v-browser:missing-slash')).toBeNull();
-    expect(parseBrowserTabId('v-window:local/sess:1')).toBeNull();
+    expect(parseBrowserTabId('v-window:local::sess:1')).toBeNull();
   });
 });
 
@@ -121,7 +127,7 @@ describe('listPersistedBrowserTabIds', () => {
     stubLocalStorage({
       [SUB_TAB_KEY]: JSON.stringify({
         3: {
-          layout: { type: 'pane', id: 'p1', tabIds: ['view:description', 'v-window:local/sess:1'], activeTabId: 'view:description' },
+          layout: { type: 'pane', id: 'p1', tabIds: ['view:description', 'v-window:local::sess:1'], activeTabId: 'view:description' },
           focusedPaneId: 'p1',
         },
       }),
@@ -170,8 +176,8 @@ describe('normalizePersistedTaskLayout', () => {
       root: {
         type: 'pane', id: 'p1',
         // terminal target's pane suffix (".0") is stripped by windowTabId's normalization.
-        tabIds: [...allFixedViewTabIds, 'v-window:local/sess:1'],
-        activeTabId: 'v-window:local/sess:1',
+        tabIds: [...allFixedViewTabIds, 'v-window:local::sess:1'],
+        activeTabId: 'v-window:local::sess:1',
       },
       focusedPaneId: 'p1',
     });
@@ -203,8 +209,8 @@ describe('normalizePersistedTaskLayout', () => {
     expect(result).toEqual({
       root: {
         type: 'pane', id: 'p1',
-        tabIds: ['view:description', 'v-window:local/sess:main'],
-        activeTabId: 'v-window:local/sess:main',
+        tabIds: ['view:description', 'v-window:local::sess:main'],
+        activeTabId: 'v-window:local::sess:main',
       },
       focusedPaneId: 'p1',
     });
@@ -218,8 +224,8 @@ describe('normalizePersistedTaskLayout', () => {
     };
     const result = normalizePersistedTaskLayout({ layout, focusedPaneId: 'p2' });
     const root = result?.root as { a: { tabIds: string[]; activeTabId: string } };
-    expect(root.a.tabIds).toEqual(['v-window:local/sess:main']);
-    expect(root.a.activeTabId).toBe('v-window:local/sess:main');
+    expect(root.a.tabIds).toEqual(['v-window:local::sess:main']);
+    expect(root.a.activeTabId).toBe('v-window:local::sess:main');
   });
 });
 
@@ -257,8 +263,8 @@ describe('selectTaskTerminal', () => {
     selectTaskTerminal(42, { serverName: 'local', target: 'sess:main.1' });
 
     const map = JSON.parse(store[SUB_TAB_KEY]) as Record<string, { layout: { tabIds: string[]; activeTabId: string } }>;
-    expect(map['42'].layout.tabIds).toEqual([...allFixedViewTabIds, 'v-window:local/sess:main']);
-    expect(map['42'].layout.activeTabId).toBe('v-window:local/sess:main');
+    expect(map['42'].layout.tabIds).toEqual([...allFixedViewTabIds, 'v-window:local::sess:main']);
+    expect(map['42'].layout.activeTabId).toBe('v-window:local::sess:main');
   });
 });
 
@@ -298,7 +304,7 @@ describe('resolveDisplayedTaskTerminal', () => {
     const store: Record<string, string> = {
       [SUB_TAB_KEY]: JSON.stringify({
         7: {
-          layout: { type: 'pane', id: 'p1', tabIds: ['v-window:local/sess:main'], activeTabId: 'v-window:local/sess:main' },
+          layout: { type: 'pane', id: 'p1', tabIds: ['v-window:local::sess:main'], activeTabId: 'v-window:local::sess:main' },
           focusedPaneId: 'p1',
         },
       }),
@@ -346,7 +352,7 @@ describe('resolveWindowContextExtra', () => {
       {
         name: 'sess',
         windows: [
-          { index: 1, name: 'main', panes: [{ index: 0, title: 'my-title', command: 'bash', width: 80, height: 24, active: true }] },
+          { index: 1, name: 'main', ref: '{"kind":"tmux","workspace":"sess","window":"main"}', windowId: null, panes: [{ index: 0, title: 'my-title', command: 'bash', width: 80, height: 24, active: true }] },
         ],
       },
     ],
@@ -361,7 +367,7 @@ describe('resolveWindowContextExtra', () => {
 
   it('falls back to the pane command when the title equals the command', () => {
     const data: Record<string, Session[]> = {
-      local: [{ name: 'sess', windows: [{ index: 1, name: 'main', panes: [{ index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true }] }] }],
+      local: [{ name: 'sess', windows: [{ index: 1, name: 'main', ref: '{"kind":"tmux","workspace":"sess","window":"main"}', windowId: null, panes: [{ index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true }] }] }],
     };
     const w = makeWindow({ tmuxTarget: 'sess:1.0' });
     expect(resolveWindowContextExtra(w, data).paneTitle).toBe('bash');
@@ -375,6 +381,50 @@ describe('resolveWindowContextExtra', () => {
   it('reports offline when the window is not present in the matched session', () => {
     const w = makeWindow({ tmuxTarget: 'sess:99.0' });
     expect(resolveWindowContextExtra(w, sessionData)).toEqual({ online: false });
+  });
+
+  it('matches herdr window by windowId across sessions', () => {
+    const herdrSessionData: Record<string, Session[]> = {
+      server007: [{
+        name: 'azito',
+        windows: [{
+          index: 0, name: 'win--8u83',
+          ref: '{"kind":"herdr","workspace":"win--8u83","window":"main"}',
+          windowId: 778,
+          panes: [{ index: 0, title: 'claude', command: 'claude', width: 80, height: 24, active: true }],
+        }],
+      }],
+    };
+    const w = makeWindow({ id: 778, serverName: 'server007', tmuxTarget: 'win--8u83:main' });
+    const result = resolveWindowContextExtra(w, herdrSessionData);
+    expect(result.online).toBe(true);
+    expect(result.windowName).toBe('win--8u83');
+  });
+
+  it('matches herdr window by muxRef when windowId is not set', () => {
+    const herdrRef = '{"kind":"herdr","workspace":"win--8u83","window":"main"}';
+    const herdrSessionData: Record<string, Session[]> = {
+      server007: [{
+        name: 'azito',
+        windows: [{
+          index: 0, name: 'win--8u83', ref: herdrRef, windowId: null,
+          panes: [{ index: 0, title: 'claude', command: 'claude', width: 80, height: 24, active: true }],
+        }],
+      }],
+    };
+    const w = makeWindow({ id: 999, serverName: 'server007', tmuxTarget: 'win--8u83:main', muxRef: herdrRef });
+    const result = resolveWindowContextExtra(w, herdrSessionData);
+    expect(result.online).toBe(true);
+    expect(result.windowName).toBe('win--8u83');
+  });
+
+  it('falls back to tmuxTarget session:window split for tmux windows', () => {
+    const result = resolveWindowContextExtra(
+      makeWindow({ serverName: 'local', tmuxTarget: 'sess:1.0' }),
+      sessionData,
+    );
+    expect(result.online).toBe(true);
+    expect(result.windowName).toBe('main');
   });
 });
 

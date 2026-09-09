@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
 
 // DNS rebinding 対策で許可ホストは明示リストにする。`.ts.net` は Tailscale の
 // MagicDNS 名（tailnet 内でしか解決されない）なので、Tailscale 前提の本プロジェクト
@@ -11,6 +12,11 @@ const extraHosts = (process.env.AZITO_ALLOWED_HOSTS ?? '')
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      '@azito/shared': path.resolve(__dirname, '../shared/src/index.ts'),
+    },
+  },
   server: {
     port: 5173,
     allowedHosts: ['localhost', '127.0.0.1', '.ts.net', ...extraHosts],

@@ -140,6 +140,40 @@ describe('POST /api/webhooks/agent-activity', () => {
     expect(res.statusCode).toBe(200);
     expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ event: 'stop' }));
   });
+
+  it('passes valid muxPaneRef through to recordAgentActivity', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-activity',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ...validActivityBody, muxPaneRef: '%42' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ muxPaneRef: '%42' }));
+  });
+
+  it('ignores invalid muxPaneRef without rejecting the request', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    for (const bad of ['', 'no-percent', '%abc', '42']) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/webhooks/agent-activity',
+        headers: { authorization: `Bearer ${TOKEN}` },
+        payload: { ...validActivityBody, muxPaneRef: bad },
+      });
+      expect(res.statusCode).toBe(200);
+    }
+    expect(options.recordAgentActivity).toHaveBeenCalledTimes(4);
+    for (const call of (options.recordAgentActivity as ReturnType<typeof vi.fn>).mock.calls) {
+      expect(call[0].muxPaneRef).toBeUndefined();
+    }
+  });
 });
 
 const validInteractionBody = {
@@ -316,6 +350,21 @@ describe('POST /api/webhooks/agent-interaction', () => {
     expect(res.statusCode).toBe(200);
     expect(options.recordInteractionSignal).toHaveBeenCalledTimes(1);
     expect(vi.mocked(options.recordInteractionSignal).mock.calls[0][0].content).toBeUndefined();
+  });
+
+  it('passes valid muxPaneRef through to recordInteractionSignal', async () => {
+    const options = buildOptions();
+    app = await buildApp(options);
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/webhooks/agent-interaction',
+      headers: { authorization: `Bearer ${TOKEN}` },
+      payload: { ...validInteractionBody, muxPaneRef: '%7' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(expect.objectContaining({ muxPaneRef: '%7' }));
   });
 });
 

@@ -103,8 +103,8 @@ for value in "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_NAME"; do
   fi
 done
 
-PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open"}' \
-  "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX")
+PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","muxPaneRef":"%s"}' \
+  "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "${TMUX_PANE:-}")
 
 # ── content（任意）──
 # 質問文・選択肢は自由文字列（改行・引用符・非 ASCII を含みうる）なので、bash の文字列操作で
@@ -141,8 +141,8 @@ fi
 # 32KB 上限ガード: 巨大な質問（長い description 等）でハブ側のボディ上限や余計な転送コストに
 # 当たるくらいなら、content を落としてバナーに退化させる方が確実に届く。
 if [[ -n "$CONTENT_JSON" ]]; then
-  CANDIDATE=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","content":%s}' \
-    "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "$CONTENT_JSON")
+  CANDIDATE=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","muxPaneRef":"%s","content":%s}' \
+    "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "${TMUX_PANE:-}" "$CONTENT_JSON")
   if [[ ${#CANDIDATE} -le 32768 ]]; then
     PAYLOAD="$CANDIDATE"
   fi

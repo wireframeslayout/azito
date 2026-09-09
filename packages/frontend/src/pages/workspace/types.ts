@@ -23,6 +23,7 @@ export interface Window {
   taskId?: number;
   serverName: string;
   tmuxTarget: string;
+  muxRef?: string;
   label?: string;
   isPrimary: boolean;
   windowType: 'terminal' | 'agent';
@@ -32,6 +33,7 @@ export interface Window {
   launchCommand?: string;
   workingDirectory?: string;
   paneLayout?: WindowPaneLayout;
+  herdrNavigationLock?: 'locked' | 'free' | null;
   sleeping?: boolean;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
@@ -78,7 +80,7 @@ export interface Unit {
 }
 /** A currently-running execution of a Unit against a Task (formerly the Operation entity; Issue #263 Refine B). */
 export interface RunningOperation {
-  unitId: number; taskId: number; target: string; serverName: string;
+  unitId: number; taskId: number; target: string; serverName: string; windowId?: number;
 }
 export interface Task {
   id: number; title: string; description?: string; status: string; currentPhase?: string | null; projectId: number;
@@ -147,13 +149,14 @@ export interface Server {
   name: string;
   type: string;
   host?: string;
+  muxRuntime?: 'system' | 'managed' | 'herdr' | 'zellij';
   /** Issue #29 Step 3a: whether this server has declared isolation intent — GET /api/servers already returns this (only agentToken/isolationReport/isolationCleanupReport are stripped from the list response), used to gate whether 'allow' is selectable for a project_servers row on this server. */
   isolationIntent?: boolean;
   /** ISO timestamp of the isolation doctor's last passing verification, or null. Used together with `isolationIntent` for the same UI hint. */
   isolationVerifiedAt?: string | null;
 }
 export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; }
-export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; }
+export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; ref: string; windowId: number | null; }
 export interface Session { name: string; windows: TmuxWindow[]; }
 export interface LogEntry { type: string; content: string; createdAt: string; unitId?: number; }
 

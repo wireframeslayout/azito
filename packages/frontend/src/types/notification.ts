@@ -10,6 +10,7 @@ export interface AgentActivityPayload {
    */
   operation: boolean;
   taskId?: number;
+  windowId?: number;
   label?: string;
   projectId?: number;
   /** エージェントが承認待ち等でブロックされているか。省略時は 'working' 扱い（後方互換） */
@@ -62,7 +63,15 @@ export type NotificationEvent =
   | { type: 'agent:activity'; payload: AgentActivityPayload }
   | { type: 'browser:opened'; payload: BrowserOpenedPayload }
   | { type: 'supervisor:ready'; payload: { serverName: string; target: string; taskId?: number } }
+  | { type: 'mux:focus'; payload: MuxFocusPayload }
   | { type: 'workspace:refresh'; payload: Record<string, never> };
+
+export interface MuxFocusPayload {
+  serverName: string;
+  windowId: number;
+  taskId?: number;
+  source: 'herdr';
+}
 
 export interface BrowserOpenedPayload {
   serverName: string;

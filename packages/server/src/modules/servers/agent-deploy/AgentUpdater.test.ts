@@ -16,6 +16,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
     muxRuntime: 'system',
+    herdrNavigationLock: 'locked' as const,
     createdAt: '2024-01-01',
     ...overrides,
   };

@@ -6,6 +6,8 @@ import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
+import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
+import { HerdrSocketClient } from '../modules/mux/herdr/HerdrSocketClient';
 
 const EXT_LANG: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescript',
@@ -39,12 +41,15 @@ const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
 
 import type { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { openBrowserTab } from '../modules/browser/openBrowserTab';
+import type { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
 
 export interface AgentRoutesOptions {
   agentVersion: string;
   startedAt: number;
   agentEventBus: EventEmitter;
   browserSessionManager: BrowserSessionManager;
+  onHerdrMuxRequest?: () => void;
+  zellijResident?: ZellijResidentClient;
   /**
    * Address this agent listens on. tmux hooks are registered against it (see
    * agent/main.ts), so requests the agent makes to itself arrive with this as
@@ -63,8 +68,19 @@ function execCommand(command: string, timeoutMs: number): Promise<{ stdout: stri
   });
 }
 
+let runtimeMismatchWarned = false;
+
 function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
-  const rt = resolveTmuxRuntime(mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system', os.homedir());
+  let rt: ReturnType<typeof resolveTmuxRuntime>;
+  try {
+    rt = resolveTmuxRuntime(mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system', os.homedir());
+  } catch (err) {
+    if (!runtimeMismatchWarned) {
+      runtimeMismatchWarned = true;
+      console.warn(`[agent] ${(err as Error).message} — rejecting tmux mux request`);
+    }
+    return Promise.reject({ statusCode: 409, message: (err as Error).message });
+  }
   return new Promise((resolve) => {
     execFile(rt.bin, [...rt.baseArgs, ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
       const raw = (err as { code?: unknown } | null)?.code;
@@ -74,11 +90,45 @@ function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): P
   });
 }
 
-const VALID_HOOK_EVENTS = new Set([
-  'window-linked', 'window-unlinked', 'after-rename-window',
-  'after-kill-pane', 'session-window-changed', 'session-closed',
-  'after-select-pane',
-]);
+let herdrSocket: HerdrSocketClient | null = null;
+
+function resolveZellijBin(): string {
+  const userBin = path.join(os.homedir(), '.local', 'bin', 'zellij');
+  try { fs.accessSync(userBin, fs.constants.X_OK); return userBin; } catch { return 'zellij'; }
+}
+
+function execZellijCommand(args: string[], timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
+  return new Promise((resolve) => {
+    execFile(resolveZellijBin(), args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      const raw = (err as { code?: unknown } | null)?.code;
+      const code = err ? (typeof raw === 'number' ? raw : 1) : 0;
+      resolve({ stdout: stdout ?? '', stderr: stderr ?? '', code });
+    });
+  });
+}
+
+function execMuxCommand(req: { kind: string; args?: string[]; method?: string; params?: unknown }, timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
+  if (req.kind === 'tmux') {
+    return execTmuxCommand(req.args ?? [], timeoutMs, mux);
+  }
+  if (req.kind === 'herdr') {
+    if (!herdrSocket) {
+      const sessionName = process.env.HERDR_SESSION ?? 'azito';
+      herdrSocket = new HerdrSocketClient(sessionName);
+    }
+    return herdrSocket.call(req.method!, req.params).then((result) => ({
+      stdout: JSON.stringify(result),
+      stderr: '',
+      code: 0,
+    }));
+  }
+  if (req.kind === 'zellij') {
+    return execZellijCommand(req.args ?? [], timeoutMs);
+  }
+  return Promise.reject({ statusCode: 501, message: `Mux kind "${req.kind}" not implemented on this agent` });
+}
+
+const VALID_HOOK_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
   const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress } = opts;
@@ -95,10 +145,42 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
     return execCommand(command, timeoutMs ?? 15000);
   });
 
-  // ── POST /api/tmux ──
+  // ── POST /api/tmux (compatibility wrapper) ──
   fastify.post('/api/tmux', async (request) => {
     const { args, timeoutMs, mux } = request.body as { args: string[]; timeoutMs?: number; mux?: MuxRuntime };
-    return execTmuxCommand(args, timeoutMs ?? 15000, mux);
+    return execMuxCommand({ kind: 'tmux', args }, timeoutMs ?? 15000, mux);
+  });
+
+  // ── POST /api/mux ──
+  fastify.post('/api/mux', async (request, reply) => {
+    const req = request.body as { kind: string; args?: string[]; method?: string; params?: unknown; timeoutMs?: number; action?: string; session?: string; mux?: MuxRuntime };
+    if (req.kind === 'herdr') opts.onHerdrMuxRequest?.();
+
+    if (req.kind === 'zellij-ctl') {
+      if (!opts.zellijResident) {
+        return reply.status(501).send({ error: 'ZellijResidentClient not available on this agent' });
+      }
+      if (req.action === 'ensure-resident' && req.session) {
+        await opts.zellijResident.ensureAttached(req.session);
+        return { stdout: 'ok', stderr: '', code: 0 };
+      }
+      if (req.action === 'detach-resident' && req.session) {
+        opts.zellijResident.detach(req.session);
+        return { stdout: 'ok', stderr: '', code: 0 };
+      }
+      return reply.status(400).send({ error: `Unknown zellij-ctl action: ${req.action}` });
+    }
+
+    const { timeoutMs, action: _a, session: _s, mux, ...muxReq } = req;
+    try {
+      return await execMuxCommand(muxReq, timeoutMs ?? 15000, mux);
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'statusCode' in err) {
+        const e = err as Record<string, unknown>;
+        return reply.status(e.statusCode as number).send({ error: String(e.message ?? '') });
+      }
+      throw err;
+    }
   });
 
   // ── GET /api/files ──

@@ -1,6 +1,7 @@
 import type { Database as SqliteDatabase } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
-import { isSameWindowTarget } from './paneTarget';
+import { isSameWindowTarget } from '@azito/shared';
+import { type MuxRef, formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 
 // Re-exported so tmux/routes/sessions.ts (base layer — dependency-cruiser's
 // `base-tmux-limited-upward` rule only allow-lists this file, not Window.ts
@@ -22,6 +23,7 @@ interface WindowRow {
   task_id: number | null;
   server_name: string;
   tmux_target: string;
+  mux_ref: string | null;
   label: string | null;
   is_primary: number;
   window_type: string;
@@ -31,6 +33,7 @@ interface WindowRow {
   launch_command: string | null;
   working_directory: string | null;
   pane_layout: string | null;
+  herdr_navigation_lock: string | null;
   sleeping: number;
   created_at: string;
 }
@@ -45,24 +48,26 @@ export class SqliteWindowRepository implements IWindowRepository {
   private updatePaneLayoutStmt;
   private findProjectWindowStmt;
   private findByServerStmt;
+  private findByServerAndRefStmt;
   private findAgentSessionIdsByServerStmt;
   private nowStmt;
 
   constructor(private db: SqliteDatabase) {
     this.addStmt = db.prepare(`
-      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, label, is_primary, window_type, worker_type, worker_model, agent_session_id, launch_command, working_directory, pane_layout, herdr_navigation_lock)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     this.findAllStmt = db.prepare('SELECT * FROM windows');
     this.findByIdStmt = db.prepare('SELECT * FROM windows WHERE id = ?');
-    this.findByProjectStmt = db.prepare("SELECT * FROM windows WHERE owner_type = 'project' AND project_id = ?");
+    this.findByProjectStmt = db.prepare('SELECT * FROM windows WHERE project_id = ? ORDER BY created_at ASC');
     this.findByTaskStmt = db.prepare("SELECT * FROM windows WHERE owner_type = 'task' AND task_id = ? ORDER BY is_primary DESC, created_at ASC");
     this.removeStmt = db.prepare('DELETE FROM windows WHERE id = ?');
     this.updatePaneLayoutStmt = db.prepare('UPDATE windows SET pane_layout = ? WHERE id = ?');
     this.findProjectWindowStmt = db.prepare(
-      "SELECT id FROM windows WHERE owner_type = 'project' AND project_id = ? AND server_name = ? AND tmux_target = ?"
+      'SELECT id FROM windows WHERE project_id = ? AND server_name = ? AND tmux_target = ?'
     );
     this.findByServerStmt = db.prepare('SELECT * FROM windows WHERE server_name = ?');
+    this.findByServerAndRefStmt = db.prepare('SELECT * FROM windows WHERE server_name = ? AND mux_ref = ?');
     this.findAgentSessionIdsByServerStmt = db.prepare(
       'SELECT DISTINCT agent_session_id FROM windows WHERE server_name = ? AND agent_session_id IS NOT NULL',
     );
@@ -74,6 +79,9 @@ export class SqliteWindowRepository implements IWindowRepository {
   }
 
   add(window: Omit<Window, 'id' | 'createdAt'>): number {
+    if (window.tmuxTarget && /\.\d+$/.test(window.tmuxTarget)) {
+      throw new Error(`tmuxTarget must not contain pane suffix: ${window.tmuxTarget}`);
+    }
     if (window.ownerType === 'project') {
       const existing = this.findProjectWindowStmt.get(window.projectId, window.serverName, window.tmuxTarget) as { id: number } | undefined;
       if (existing) {
@@ -89,6 +97,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       window.taskId,
       window.serverName,
       window.tmuxTarget,
+      window.muxRef ? formatMuxRef(window.muxRef) : formatMuxRef(muxRefFromTmuxTarget(window.tmuxTarget)),
       window.label,
       window.isPrimary ? 1 : 0,
       window.windowType,
@@ -98,6 +107,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       window.launchCommand,
       window.workingDirectory,
       window.paneLayout ? JSON.stringify(window.paneLayout) : null,
+      window.herdrNavigationLock ?? null,
     );
     return Number(result.lastInsertRowid);
   }
@@ -165,19 +175,39 @@ export class SqliteWindowRepository implements IWindowRepository {
     return this.toWindow(row);
   }
 
+  findByServerAndRef(serverName: string, ref: MuxRef): Window | undefined {
+    const row = this.findByServerAndRefStmt.get(serverName, formatMuxRef(ref)) as WindowRow | undefined;
+    return row ? this.toWindow(row) : undefined;
+  }
+
   findByServerAndSession(serverName: string, sessionName: string): Window[] {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
     const prefix = `${sessionName}:`;
     return rows.filter((r) => r.tmux_target.startsWith(prefix)).map((r) => this.toWindow(r));
   }
 
+  adoptForTask(id: number, taskId: number): void {
+    this.db.prepare("UPDATE windows SET owner_type = 'task', task_id = ? WHERE id = ?").run(taskId, id);
+  }
+
   update(id: number, data: Partial<Pick<Window,
-    'tmuxTarget' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping'
+    'tmuxTarget' | 'muxRef' | 'label' | 'agentSessionId' | 'launchCommand' | 'paneLayout' | 'workerModel' | 'workingDirectory' | 'windowType' | 'workerType' | 'sleeping' | 'projectId' | 'herdrNavigationLock'
   >>): void {
     const fields: string[] = [];
     const values: unknown[] = [];
 
-    if (data.tmuxTarget !== undefined) { fields.push('tmux_target = ?'); values.push(data.tmuxTarget); }
+    if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
+    if (data.tmuxTarget !== undefined) {
+      if (/\.\d+$/.test(data.tmuxTarget)) {
+        throw new Error(`tmuxTarget must not contain pane suffix: ${data.tmuxTarget}`);
+      }
+      fields.push('tmux_target = ?'); values.push(data.tmuxTarget);
+      if (!data.muxRef) { fields.push('mux_ref = ?'); values.push(formatMuxRef(muxRefFromTmuxTarget(data.tmuxTarget))); }
+    }
+    if (data.muxRef !== undefined) {
+      fields.push('mux_ref = ?'); values.push(formatMuxRef(data.muxRef));
+      if (!data.tmuxTarget) { fields.push('tmux_target = ?'); values.push(tmuxTargetFromMuxRef(data.muxRef)); }
+    }
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
     if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }
     if (data.launchCommand !== undefined) { fields.push('launch_command = ?'); values.push(data.launchCommand); }
@@ -187,6 +217,7 @@ export class SqliteWindowRepository implements IWindowRepository {
     if (data.windowType !== undefined) { fields.push('window_type = ?'); values.push(data.windowType); }
     if (data.workerType !== undefined) { fields.push('worker_type = ?'); values.push(data.workerType); }
     if (data.sleeping !== undefined) { fields.push('sleeping = ?'); values.push(data.sleeping ? 1 : 0); }
+    if ('herdrNavigationLock' in data) { fields.push('herdr_navigation_lock = ?'); values.push(data.herdrNavigationLock ?? null); }
 
     if (fields.length === 0) return;
     values.push(id);
@@ -234,6 +265,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       taskId: row.task_id,
       serverName: row.server_name,
       tmuxTarget: row.tmux_target,
+      muxRef: row.mux_ref ? parseMuxRef(row.mux_ref) : muxRefFromTmuxTarget(row.tmux_target),
       label: row.label,
       isPrimary: row.is_primary === 1,
       windowType: row.window_type as Window['windowType'],
@@ -243,6 +275,7 @@ export class SqliteWindowRepository implements IWindowRepository {
       launchCommand: row.launch_command,
       workingDirectory: row.working_directory,
       paneLayout,
+      herdrNavigationLock: (row.herdr_navigation_lock as Window['herdrNavigationLock']) ?? null,
       sleeping: row.sleeping === 1,
       createdAt: row.created_at,
     };

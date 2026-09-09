@@ -1,11 +1,13 @@
 import { useMemo } from 'react';
-import { useAgentActivity, activityKey } from './useAgentActivity';
-import type { FinishedEntry } from './useAgentActivity';
+import { useAgentActivity } from './useAgentActivity';
+import { activityKey, activityKeyForEntry } from '../lib/finishedWindows';
+import type { FinishedEntry } from '../lib/finishedWindows';
 
 export interface ActiveWindowRow {
   key: string;
   serverName: string;
   target: string;
+  windowId?: number;
   label?: string;
   taskId?: number;
   projectId?: number;
@@ -22,9 +24,10 @@ export function useActiveWindowRows() {
     const running: ActiveWindowRow[] = Array.from(entries.values())
       .filter((e) => e.running)
       .map((e) => ({
-        key: activityKey(e.serverName, e.target),
+        key: activityKey(e.serverName, e.target, e.windowId),
         serverName: e.serverName,
         target: e.target,
+        windowId: e.windowId,
         label: e.label,
         taskId: e.taskId,
         projectId: e.projectId,
@@ -34,11 +37,12 @@ export function useActiveWindowRows() {
       }));
     const runningKeys = new Set(running.map((r) => r.key));
     const finishedRows: ActiveWindowRow[] = finishedEntries
-      .filter((e) => !runningKeys.has(activityKey(e.serverName, e.target)))
+      .filter((e) => !runningKeys.has(activityKeyForEntry(e)))
       .map((e) => ({
-        key: activityKey(e.serverName, e.target),
+        key: activityKeyForEntry(e),
         serverName: e.serverName,
         target: e.target,
+        windowId: e.windowId,
         label: e.label,
         taskId: e.taskId,
         projectId: e.projectId,

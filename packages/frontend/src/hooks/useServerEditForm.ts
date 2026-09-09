@@ -13,13 +13,14 @@ export function useServerEditForm() {
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed' | 'herdr' | 'zellij'>('system');
   // Issue #29 review (3rd pass), Important finding 4: isolationIntent had no
   // UI — the only way to declare a server isolated was a raw PUT. Mirrors
   // the other edit* fields: seeded from the server row on open, sent back
   // unconditionally for agent-type servers (the no-op-preserving guard lives
   // server-side in routes.ts, see Important finding 2).
   const [editIsolationIntent, setEditIsolationIntent] = useState(false);
+  const [editHerdrNavigationLock, setEditHerdrNavigationLock] = useState<'locked' | 'free'>('locked');
   const { showToast } = useToast();
   const { t } = useTranslation('servers');
 
@@ -31,6 +32,7 @@ export function useServerEditForm() {
     setEditToken('');
     setEditMuxRuntime(srv.muxRuntime ?? 'system');
     setEditIsolationIntent(srv.isolationIntent ?? false);
+    setEditHerdrNavigationLock(srv.herdrNavigationLock ?? 'locked');
   }, []);
 
   // 成功時のみ true を返す。呼び出し元はこれを見て、バリデーション失敗/APIエラー時に
@@ -45,6 +47,7 @@ export function useServerEditForm() {
       type: editType,
       host: editHost.trim(),
       muxRuntime: editMuxRuntime,
+      herdrNavigationLock: editHerdrNavigationLock,
     };
     if (editType === 'agent') {
       body.agentPort = parseInt(editPort.trim(), 10);
@@ -104,7 +107,7 @@ export function useServerEditForm() {
     else if (res.isolationCleanup === 'skipped') showToast(t('overview.isolationCleanupToastSkipped'));
     setEditServer(null);
     return true;
-  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, showToast, t]);
+  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, editHerdrNavigationLock, showToast, t]);
 
   return {
     editServer, setEditServer,
@@ -114,6 +117,7 @@ export function useServerEditForm() {
     editToken, setEditToken,
     editMuxRuntime, setEditMuxRuntime,
     editIsolationIntent, setEditIsolationIntent,
+    editHerdrNavigationLock, setEditHerdrNavigationLock,
     openEditModal,
     handleEditServer,
   };

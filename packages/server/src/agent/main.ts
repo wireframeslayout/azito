@@ -6,16 +6,32 @@ import * as fs from 'fs';
 import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
+import { LocalTransport } from '../modules/servers/transport/LocalTransport';
+import { HerdrSocketClient } from '../modules/mux/herdr/HerdrSocketClient';
 import type { MuxRuntime } from '../modules/servers/Server';
 import type { WebSocket } from 'ws';
 
 import agentRoutes from './routes';
 import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
+import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
+import { ensureHerdrClientConfigs } from '../modules/mux/herdr/herdrClientConfig';
+import { HerdrEventSubscriber, type HerdrEvent, type HerdrSubscription } from '../modules/mux/herdr/HerdrEventSubscriber';
+import { herdrSocketPath } from '../modules/mux/herdr/HerdrSocketClient';
+import { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
+
+/** `session.snapshot` arrives as `{ id, result: { type, snapshot } }` (or, from tests, already unwrapped). */
+function unwrapHerdrSnapshot(resp: unknown): unknown {
+  const env = (resp && typeof resp === 'object' && 'result' in (resp as Record<string, unknown>)) ? (resp as { result: unknown }).result : resp;
+  if (env && typeof env === 'object' && 'snapshot' in (env as Record<string, unknown>)) return (env as { snapshot: unknown }).snapshot;
+  return env;
+}
+
 
 // ─── Environment validation ───
 
@@ -72,8 +88,14 @@ async function main(): Promise<void> {
 
   await app.register(websocket);
 
+  const zellijResident = new ZellijResidentClient();
+
   // Health endpoint (no auth) + tmux hook receiver + browser routes
-  await app.register(agentRoutes, { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS });
+  await app.register(agentRoutes, {
+    agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS,
+    onHerdrMuxRequest: () => startHerdrRelay(),
+    zellijResident,
+  });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
   app.addHook('onRequest', async (request, reply) => {
@@ -84,6 +106,137 @@ async function main(): Promise<void> {
     }
   });
 
+  const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
+  const muxKind = muxKindForRuntime(muxRuntime);
+  const isTmuxDriver = muxKind === 'tmux';
+  const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
+  const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
+
+  // Build herdr socket for LocalTransport when running under herdr
+  const herdrSession = process.env.HERDR_SESSION || 'azito';
+  const herdrSocket = muxKind === 'herdr'
+    ? new HerdrSocketClient(herdrSession)
+    : undefined;
+
+  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '', herdrSocket);
+
+  ensureHerdrClientConfigs();
+
+  // herdr event relay: detect herdr socket presence (regardless of AZITO_MUX_RUNTIME)
+  // and subscribe to structural + agent_status events, relaying them to the hub
+  // as `mux-event` WS messages. Polls for the socket every 30s if not found initially.
+  let herdrSubscriber: HerdrEventSubscriber | undefined;
+  let herdrProbeTimer: ReturnType<typeof setInterval> | null = null;
+  const herdrSockPath = herdrSocketPath(herdrSession);
+  const herdrRelayPaneCache = new Map<string, { workspace_label: string }>();
+  const herdrRelayWsCache = new Map<string, string>();
+  let herdrRelaySocket: HerdrSocketClient | undefined;
+
+  function startHerdrRelay(): boolean {
+    if (herdrSubscriber) return false;
+    if (!fs.existsSync(herdrSockPath)) return false;
+    herdrRelaySocket = new HerdrSocketClient(herdrSession);
+    const subs: HerdrSubscription[] = [
+      { type: 'tab.created' },
+      { type: 'tab.closed' },
+      { type: 'tab.renamed' },
+      { type: 'workspace.created' },
+      { type: 'workspace.closed' },
+      { type: 'workspace.renamed' },
+      { type: 'pane.created' },
+      { type: 'pane.closed' },
+      { type: 'workspace.focused' },
+    ];
+    const rebuildPaneCache = async (): Promise<void> => {
+      try {
+        const resp = await herdrRelaySocket!.call('session.snapshot');
+        const snap = unwrapHerdrSnapshot(resp) as {
+          panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
+          workspaces: Array<{ workspace_id: string; label: string }>;
+          tabs: Array<{ tab_id: string; label: string }>;
+        };
+        herdrRelayPaneCache.clear();
+        herdrRelayWsCache.clear();
+        const wsLabels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]));
+        for (const [id, label] of wsLabels) herdrRelayWsCache.set(id, label);
+        const paneIds: string[] = [];
+        for (const p of snap.panes) {
+          const wl = wsLabels.get(p.workspace_id);
+          if (wl) {
+            herdrRelayPaneCache.set(p.pane_id, { workspace_label: wl });
+            paneIds.push(p.pane_id);
+          }
+        }
+        if (paneIds.length > 0) {
+          herdrSubscriber!.addSubscriptions(
+            paneIds.map(id => ({ type: 'pane.agent_status_changed', pane_id: id })),
+          );
+        }
+      } catch (err) {
+        console.error('[agent-herdr] Failed to rebuild pane cache:', (err as Error).message);
+      }
+    };
+    herdrSubscriber = new HerdrEventSubscriber(herdrSockPath, subs);
+    herdrSubscriber.on('connected', () => void rebuildPaneCache());
+    herdrSubscriber.on('event', (event: HerdrEvent) => {
+      if (event.type === 'pane.agent_status_changed') {
+        const paneId = event.pane_id as string | undefined;
+        if (!paneId) return;
+        const mapping = herdrRelayPaneCache.get(paneId);
+        if (!mapping) return;
+        agentEventBus.emit('mux-event', { ...event, workspace_label: mapping.workspace_label, tab_label: 'main' });
+        return;
+      }
+      if (event.type === 'workspace.focused') {
+        const wsId = event.workspace_id as string | undefined;
+        if (!wsId) return;
+        const label = herdrRelayWsCache.get(wsId);
+        if (!label) return;
+        agentEventBus.emit('mux-event', { ...event, workspace_label: label });
+        return;
+      }
+      agentEventBus.emit('mux-event', event);
+      agentEventBus.emit('tmux-event', { event: event.type });
+      if (event.type === 'pane.created' && event.pane_id) {
+        herdrSubscriber!.addSubscriptions([{
+          type: 'pane.agent_status_changed',
+          pane_id: event.pane_id as string,
+        }]);
+        void (async () => {
+          try {
+            const r = await herdrRelaySocket!.call('session.snapshot');
+            const s = unwrapHerdrSnapshot(r) as {
+              panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
+              workspaces: Array<{ workspace_id: string; label: string }>;
+            };
+            const pane = s.panes.find(p => p.pane_id === event.pane_id);
+            if (!pane) return;
+            const wl = s.workspaces.find(w => w.workspace_id === pane.workspace_id)?.label;
+            if (wl) herdrRelayPaneCache.set(event.pane_id as string, { workspace_label: wl });
+          } catch { /* non-fatal */ }
+        })();
+      }
+      if (event.type !== 'pane.created' && event.type !== 'pane.closed') {
+        void rebuildPaneCache();
+      } else if (event.type === 'pane.closed' && event.pane_id) {
+        herdrRelayPaneCache.delete(event.pane_id as string);
+      }
+    });
+    herdrSubscriber.start();
+    console.log(`[agent-herdr] Relay started (socket: ${herdrSockPath})`);
+    return true;
+  }
+
+  // Try at startup, then probe every 30s if not found.
+  if (!startHerdrRelay()) {
+    herdrProbeTimer = setInterval(() => {
+      if (startHerdrRelay() && herdrProbeTimer) {
+        clearInterval(herdrProbeTimer);
+        herdrProbeTimer = null;
+      }
+    }, 30_000);
+  }
+
   // WebSocket routes
   await app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
@@ -91,17 +244,33 @@ async function main(): Promise<void> {
       const mode = url.searchParams.get('mode');
 
       if (mode === 'terminal') {
+        const refParam = url.searchParams.get('ref');
+        const paneParam = url.searchParams.get('pane');
         const target = url.searchParams.get('target');
         const cols = parseInt(url.searchParams.get('cols') || '120', 10);
         const rows = parseInt(url.searchParams.get('rows') || '40', 10);
-        if (!target) {
-          socket.send(JSON.stringify({ error: 'target required' }));
+
+        let ref: MuxRef;
+        if (refParam) {
+          try {
+            ref = parseMuxRef(decodeURIComponent(refParam));
+          } catch {
+            socket.send(JSON.stringify({ error: 'Invalid ref parameter' }));
+            socket.close();
+            return;
+          }
+        } else if (target) {
+          ref = muxRefFromTmuxTarget(target);
+        } else {
+          socket.send(JSON.stringify({ error: 'ref or target required' }));
           socket.close();
           return;
         }
-        const muxParam = url.searchParams.get('mux');
-        const mux = muxParam === 'system' || muxParam === 'managed' ? muxParam : undefined;
-        handleAgentTerminal(socket, target, cols, rows, mux);
+        const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+        const herdrLockParam = url.searchParams.get('herdrLock');
+        const terminalOpts = herdrLockParam === 'locked' || herdrLockParam === 'free' ? { herdrLock: herdrLockParam as 'locked' | 'free' } : undefined;
+
+        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport, terminalOpts);
         return;
       }
 
@@ -143,15 +312,22 @@ async function main(): Promise<void> {
             socket.send(JSON.stringify({ type: 'tmux-hook', event: data.event }));
           }
         };
+        const onMuxEvent = (data: HerdrEvent) => {
+          if (socket.readyState === socket.OPEN) {
+            socket.send(JSON.stringify({ type: 'mux-event', data }));
+          }
+        };
         const onBrowserOpened = (data: { groupId: string; tabId: string; url: string | null; taskId?: number; label?: string }) => {
           if (socket.readyState === socket.OPEN) {
             socket.send(JSON.stringify({ type: 'browser-opened', groupId: data.groupId, tabId: data.tabId, url: data.url, taskId: data.taskId, label: data.label }));
           }
         };
         agentEventBus.on('tmux-event', onTmuxEvent);
+        agentEventBus.on('mux-event', onMuxEvent);
         agentEventBus.on('browser-opened', onBrowserOpened);
         socket.on('close', () => {
           agentEventBus.off('tmux-event', onTmuxEvent);
+          agentEventBus.off('mux-event', onMuxEvent);
           agentEventBus.off('browser-opened', onBrowserOpened);
         });
         return;
@@ -164,10 +340,7 @@ async function main(): Promise<void> {
 
   const PORT = parseInt(process.env.PORT || '3002', 10);
   const hookBase = `http://${bind}:${PORT}/api/hooks/tmux`;
-  const hookEvents = ['window-linked', 'window-unlinked', 'after-rename-window', 'after-kill-pane', 'session-window-changed', 'session-closed', 'after-select-pane'];
-
-  const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
+  const hookEvents = HOOK_EVENTS;
 
   // Cleanup tmux hooks and browser on shutdown (must register before listen — Fastify rejects addHook after ready)
   let hookInstallInterval: ReturnType<typeof setInterval> | null = null;
@@ -177,10 +350,15 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    for (const event of hookEvents) {
-      await new Promise<void>((resolve) => {
-        execFile(hookRt.bin, [...hookRt.baseArgs, 'set-hook', '-gu', `${event}[42]`], { timeout: 5000 }, () => resolve());
-      });
+    zellijResident.detachAll();
+    if (herdrProbeTimer) { clearInterval(herdrProbeTimer); herdrProbeTimer = null; }
+    herdrSubscriber?.stop();
+    if (hookRt) {
+      for (const event of hookEvents) {
+        await new Promise<void>((resolve) => {
+          execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
+        });
+      }
     }
   });
 
@@ -208,28 +386,29 @@ async function main(): Promise<void> {
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
   // the initial install fails because tmux isn't up yet, and the next periodic pass installs it).
-  let lastInstallFailed: boolean | null = null;
-  const installTmuxHooks = (): void => {
-    let pending = hookEvents.length;
-    let anyFailed = false;
-    for (const event of hookEvents) {
-      const hookValue = `run-shell "curl -sf -o /dev/null -X POST '${hookBase}?event=${event}&session=#{hook_session_name}' 2>/dev/null &"`;
-      execFile(hookRt.bin, [...hookRt.baseArgs, 'set-hook', '-g', `${event}[42]`, hookValue], { timeout: 5000 }, (err) => {
-        if (err) anyFailed = true;
-        pending--;
-        if (pending === 0 && anyFailed !== lastInstallFailed) {
-          // Only log when the failure/success state changes, to avoid warn-spam every period
-          // while tmux is not yet running.
-          if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
-          else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
-          lastInstallFailed = anyFailed;
-        }
-      });
-    }
-  };
+  // Skipped entirely for non-tmux drivers.
+  if (hookRt) {
+    let lastInstallFailed: boolean | null = null;
+    const installTmuxHooks = (): void => {
+      let pending = hookEvents.length;
+      let anyFailed = false;
+      for (const event of hookEvents) {
+        const hookValue = buildHookValue(hookBase, event);
+        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
+          if (err) anyFailed = true;
+          pending--;
+          if (pending === 0 && anyFailed !== lastInstallFailed) {
+            if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
+            else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
+            lastInstallFailed = anyFailed;
+          }
+        });
+      }
+    };
 
-  installTmuxHooks();
-  hookInstallInterval = setInterval(installTmuxHooks, 60000);
+    installTmuxHooks();
+    hookInstallInterval = setInterval(installTmuxHooks, 60000);
+  }
 }
 
 main().catch((err) => {

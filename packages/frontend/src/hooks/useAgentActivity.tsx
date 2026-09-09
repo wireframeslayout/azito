@@ -1,11 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
-import { findByWindowTarget } from '../utils/tmuxTarget';
+import { stripPaneSuffix, isSameWindowTarget, formatMuxRef, muxRefFromTmuxTarget } from '@azito/shared';
+import { parseTerminalTabId } from '../lib/terminalRef';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
   activityKey,
+  activityKeyForEntry,
   FINISHED_TTL_MS,
   pruneFinished,
   removeFinished,
@@ -15,7 +17,7 @@ import {
 
 // 完了行のキー規約・寿命・リスト操作は lib/finishedWindows.ts に集約してある（純関数としてテスト
 // されている）。ここからの re-export は既存の import 経路（useActiveWindowRows 等）を保つため。
-export { activityKey, FINISHED_TTL_MS };
+export { activityKey, activityKeyForEntry, FINISHED_TTL_MS };
 export type { FinishedEntry };
 
 export interface AgentActivityInfo {
@@ -24,6 +26,7 @@ export interface AgentActivityInfo {
   running: boolean;
   source: 'operation' | 'manual' | 'supervised';
   taskId?: number;
+  windowId?: number;
   projectId?: number;
   label?: string;
   status: 'working' | 'blocked';
@@ -36,6 +39,7 @@ interface AgentActivitySnapshotEntry {
   running: boolean;
   source: 'operation' | 'manual' | 'supervised';
   taskId?: number;
+  windowId?: number;
   projectId?: number;
   label?: string;
   status?: 'working' | 'blocked';
@@ -49,7 +53,7 @@ interface AgentActivityContextValue {
   isRunning: (serverName: string, target: string) => boolean;
   shouldShowActivity: (serverName: string, target: string) => boolean;
   shouldShowTaskActivity: (taskId: number) => boolean;
-  isWatched: (serverName: string, target: string, taskId?: number) => boolean;
+  isWatched: (serverName: string, target: string, taskId?: number, windowId?: number) => boolean;
   windowIndicator: (serverName: string, target: string) => ActivityIndicator;
   /**
    * Raw running/blocked status, with no "currently watched window" suppression and with
@@ -64,8 +68,8 @@ interface AgentActivityContextValue {
    * `finishedEntries` を呼び出し側で生キー完全一致 find すると、ペインサフィックス付きの
    * タスクウィンドウ（`session:win.1`）が引けないため、完了表示の照合は必ずこれを使う。
    */
-  findFinished: (serverName: string, target: string) => FinishedEntry | undefined;
-  dismissFinished: (serverName: string, target: string) => void;
+  findFinished: (serverName: string, target: string, windowId?: number) => FinishedEntry | undefined;
+  dismissFinished: (serverName: string, target: string, windowId?: number) => void;
 }
 
 const AgentActivityContext = createContext<AgentActivityContextValue>({
@@ -85,12 +89,13 @@ function snapshotToMap(snapshot: AgentActivitySnapshotEntry[]): Map<string, Agen
   const map = new Map<string, AgentActivityInfo>();
   for (const e of snapshot) {
     if (!e.running) continue;
-    map.set(activityKey(e.serverName, e.target), {
+    map.set(activityKey(e.serverName, e.target, e.windowId), {
       serverName: e.serverName,
       target: e.target,
       running: true,
       source: e.source,
       taskId: e.taskId,
+      windowId: e.windowId,
       projectId: e.projectId,
       label: e.label,
       status: e.status ?? 'working',
@@ -177,7 +182,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
 
   useNotificationChannel({
     onAgentActivity: (payload: AgentActivityPayload) => {
-      const key = activityKey(payload.serverName, payload.target);
+      const key = activityKey(payload.serverName, payload.target, payload.windowId);
       setEntries((prev) => {
         const next = new Map(prev);
         if (payload.running) {
@@ -187,6 +192,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
             running: true,
             source: payload.source,
             taskId: payload.taskId,
+            windowId: payload.windowId,
             projectId: payload.projectId,
             label: payload.label,
             status: payload.status ?? 'working',
@@ -199,10 +205,6 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       });
       if (payload.running) return;
 
-      // 完了行のライフサイクルは遷移の reason だけで決まる（P3）。
-      // - 'completed' のみが完了行を生む。中断・ウィンドウ削除・プロセス消滅・判定不能は生まない
-      //   （これらを一律「完了」にしていたのが、リスポーンやハブ再起動で偽の完了行が鋳造される原因だった）。
-      // - 'deleted' は該当キーの完了行を即時に取り除く（実体の無いウィンドウの幽霊行を残さない）。
       if (payload.reason === 'deleted') {
         setFinished((cur) => removeFinished(cur, key));
         return;
@@ -212,6 +214,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
       setFinished((cur) => upsertFinished(cur, {
         serverName: payload.serverName,
         target: payload.target,
+        windowId: payload.windowId,
         label: payload.label,
         taskId: payload.taskId,
         projectId: payload.projectId,
@@ -222,19 +225,32 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     onConnected: fetchSnapshot,
   });
 
-  const isWatched = useCallback((serverName: string, target: string, _taskId: number | undefined): boolean => {
+  const isWatched = useCallback((serverName: string, target: string, _taskId: number | undefined, windowId?: number): boolean => {
     if (!browserFocused) return false;
-    const termPrefix = `terminal:${serverName}/${target}`;
-    if (activeTabId === termPrefix || activeTabId?.startsWith(`${termPrefix}.`)) return true;
-    if (focusedTarget === activityKey(serverName, target)) return true;
+    if (activeTabId) {
+      const parsed = parseTerminalTabId(activeTabId);
+      if (parsed) {
+        if (windowId != null && parsed.kind === 'windowId' && parsed.windowId === windowId) return true;
+        if (parsed.kind === 'legacy' && isSameWindowTarget(parsed.target, target)) return true;
+        if (parsed.kind === 'ref') {
+          try {
+            const refJson = formatMuxRef(muxRefFromTmuxTarget(stripPaneSuffix(target)));
+            if (parsed.ref === refJson) return true;
+          } catch { /* target not parseable as tmux target */ }
+        }
+      }
+    }
+    if (focusedTarget) {
+      if (windowId != null && focusedTarget === `wid:${windowId}`) return true;
+      if (focusedTarget === activityKey(serverName, target)) return true;
+    }
     return false;
   }, [browserFocused, activeTabId, focusedTarget]);
   isWatchedRef.current = isWatched;
 
-  // 再稼働したキーの完了行は落とす（同じウィンドウが「稼働中」と「完了」に二重表示されない）。
   useEffect(() => {
-    if (!finished.some((e) => entries.has(activityKey(e.serverName, e.target)))) return;
-    setFinished((cur) => cur.filter((e) => !entries.has(activityKey(e.serverName, e.target))));
+    if (!finished.some((e) => entries.has(activityKeyForEntry(e)))) return;
+    setFinished((cur) => cur.filter((e) => !entries.has(activityKeyForEntry(e))));
   }, [entries, finished]);
 
   // TTL の定期適用。読み込み時（loadFinishedEntries）と保存時（下の effect）にも同じ規則が効く。
@@ -245,13 +261,11 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     return () => clearInterval(timer);
   }, []);
 
-  // Auto-dismiss finished entries that become watched
   useEffect(() => {
-    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.taskId));
+    const watchedFinished = finished.filter((e) => isWatched(e.serverName, e.target, e.taskId, e.windowId));
     if (watchedFinished.length > 0) {
-      setFinished((cur) => cur.filter((e) =>
-        !watchedFinished.some((wf) => activityKey(wf.serverName, wf.target) === activityKey(e.serverName, e.target)),
-      ));
+      const watchedKeys = new Set(watchedFinished.map(activityKeyForEntry));
+      setFinished((cur) => cur.filter((e) => !watchedKeys.has(activityKeyForEntry(e))));
     }
   }, [finished, isWatched]);
 
@@ -259,19 +273,31 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
     saveFinishedEntries(pruneFinished(finished, Date.now()));
   }, [finished]);
 
-  const dismissFinished = useCallback((serverName: string, target: string) => {
-    const key = activityKey(serverName, target);
-    setFinished((cur) => cur.filter((e) => activityKey(e.serverName, e.target) !== key));
+  const dismissFinished = useCallback((serverName: string, target: string, windowId?: number) => {
+    const key = activityKey(serverName, target, windowId);
+    setFinished((cur) => cur.filter((e) => activityKeyForEntry(e) !== key));
   }, []);
 
-  // Raw entry lookup normalized against pane-suffix variance: `entries` keys targets exactly
-  // as reported by the activity source (pane suffix already stripped server-side), while
-  // callers (e.g. a window's `tmuxTarget`) may carry a `.<paneIndex>` suffix.
-  const findEntry = useCallback((serverName: string, target: string): AgentActivityInfo | undefined =>
-    findByWindowTarget(entries.values(), serverName, target), [entries]);
+  const findEntry = useCallback((serverName: string, target: string, windowId?: number): AgentActivityInfo | undefined => {
+    if (windowId != null) {
+      for (const e of entries.values()) {
+        if (e.windowId === windowId) return e;
+      }
+    }
+    const normalized = stripPaneSuffix(target);
+    for (const e of entries.values()) {
+      if (e.serverName === serverName && stripPaneSuffix(e.target) === normalized) return e;
+    }
+    return undefined;
+  }, [entries]);
 
-  const findFinished = useCallback((serverName: string, target: string): FinishedEntry | undefined =>
-    findByWindowTarget(finished, serverName, target), [finished]);
+  const findFinished = useCallback((serverName: string, target: string, windowId?: number): FinishedEntry | undefined => {
+    if (windowId != null) {
+      return finished.find((e) => e.windowId === windowId);
+    }
+    const normalized = stripPaneSuffix(target);
+    return finished.find((e) => e.serverName === serverName && stripPaneSuffix(e.target) === normalized);
+  }, [finished]);
 
   const isRunning = (serverName: string, target: string): boolean =>
     findEntry(serverName, target)?.running === true;

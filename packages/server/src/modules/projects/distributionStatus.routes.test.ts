@@ -443,7 +443,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     db.exec(`
       CREATE TABLE servers (
         name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
-        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', ssh_host_fingerprint TEXT,
+        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', herdr_navigation_lock TEXT NOT NULL DEFAULT 'locked', ssh_host_fingerprint TEXT,
         isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
         isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
       )
@@ -471,7 +471,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     db.exec(`
       CREATE TABLE servers (
         name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
-        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', ssh_host_fingerprint TEXT,
+        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', herdr_navigation_lock TEXT NOT NULL DEFAULT 'locked', ssh_host_fingerprint TEXT,
         isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
         isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
       )

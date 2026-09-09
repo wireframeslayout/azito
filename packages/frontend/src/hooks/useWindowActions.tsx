@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
 import type { Task } from '../pages/workspace/types';
+import type { Server } from './useServerManagement';
 import { useToast } from './useToast';
 import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
@@ -25,6 +26,7 @@ interface WindowActionDeps {
   refreshSessions?: () => Promise<void>;
   togglePin?: (tabId: string) => void;
   connectPane?: (serverName: string, target: string, projectId?: number, opts?: { reconnect?: boolean }) => void;
+  servers?: Server[];
 }
 
 export function useWindowActions(
@@ -39,7 +41,7 @@ export function useWindowActions(
   const [respawnResourceWarning, setRespawnResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
   const { showToast } = useToast();
 
-  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, connectPane } = deps;
+  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, connectPane, servers } = deps;
 
   const handleDetachWindow = useCallback(async (windowId: number) => {
     setConfirmDialog({
@@ -72,8 +74,9 @@ export function useWindowActions(
           const base = tmuxTarget.replace(/\.\d+$/, '');
           let identity: { sessionName: string; windowIndex: number; windowName: string } | null = null;
           try {
+            // Use windowId kill route (5-A) which also removes the tmux window and DB rows.
             const res = await api<{ ok: boolean; identity?: { sessionName: string; windowIndex: number; windowName: string } | null }>(
-              `/servers/${serverName}/windows/${encodeURIComponent(base)}`, { method: 'DELETE' },
+              `/windows/${windowId}/kill`, { method: 'DELETE' },
             );
             identity = res.identity ?? null;
           } catch (e) {
@@ -81,9 +84,6 @@ export function useWindowActions(
             showToast(t('windows.deleteFailed', { error: (e as Error).message }));
             return;
           }
-          // Fallback cleanup: the tmux-kill route above already removes matching DB
-          // rows, so this can 404 — best-effort only.
-          await api(`/windows/${windowId}`, { method: 'DELETE' }).catch(() => {});
           // Tabs may address the window in name form ("sess:win--xxxx") or index form
           // ("sess:3") — match every form the killed window was known under.
           const bases = [base];
@@ -93,7 +93,10 @@ export function useWindowActions(
           const matchesDeletedTarget = (target: string) =>
             bases.some((b) => target === b || target.startsWith(`${b}.`));
           tabs
-            .filter((tab) => tab.type === 'terminal' && tab.serverName === serverName && tab.target && matchesDeletedTarget(tab.target))
+            .filter((tab) => tab.type === 'terminal' && tab.serverName === serverName && (
+              (tab.target && matchesDeletedTarget(tab.target)) ||
+              (tab.terminalRef?.kind === 'windowId' && tab.terminalRef.windowId === windowId)
+            ))
             .forEach((tab) => closeTab(tab.id));
           setConfirmDialog(null);
           refreshWorkspace();
@@ -111,17 +114,29 @@ export function useWindowActions(
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRenameWindow = useCallback(async (serverName: string, tmuxTarget: string, currentName: string) => {
+  const handleRenameWindow = useCallback(async (serverName: string, tmuxTarget: string, currentName: string, windowId?: number, ref?: string) => {
     const newName = prompt(t('windows.renameWindowPrompt'), currentName);
     if (!newName || newName === currentName) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(tmuxTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    if (windowId != null) {
+      await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else if (ref) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(tmuxTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    }
     refreshWorkspace();
   }, [refreshWorkspace]);
 
-  const handleRenamePane = useCallback(async (serverName: string, paneTarget: string, currentTitle: string) => {
+  const handleRenamePane = useCallback(async (serverName: string, paneTarget: string, currentTitle: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const newTitle = prompt(t('windows.renamePanePrompt'), currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(paneTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    } else if (ref && paneOrdinal != null) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(paneTarget)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    }
     refreshWorkspace();
   }, [refreshWorkspace]);
 
@@ -176,15 +191,20 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+  const handleSetHerdrLock = useCallback(async (windowId: number, value: 'locked' | 'free' | null) => {
+    await api(`/windows/${windowId}`, { method: 'PUT', body: JSON.stringify({ herdr_navigation_lock: value }) });
+    refreshWorkspace();
+  }, [refreshWorkspace]);
+
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; herdrNavigationLock?: 'locked' | 'free' | null }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
     const items: ContextMenuItem[] = [
       { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
     ];
     if (extra?.online && extra.windowName !== undefined) {
-      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!) });
+      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
     }
     if (extra?.online && extra.paneTarget) {
-      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '') });
+      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
     }
     if (extra?.online) {
       items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => handleCapturePanes(w.id) });
@@ -200,12 +220,24 @@ export function useWindowActions(
     if (linkedTask) {
       items.push({ label: t('windows.showTask'), icon: <Icon name="tasks" size={16} />, onClick: () => openTask(linkedTask.id, linkedTask.title) });
     }
+    const srv = servers?.find((s) => s.name === w.serverName);
+    if (srv?.muxRuntime === 'herdr') {
+      const effectiveLock = w.herdrNavigationLock ?? srv.herdrNavigationLock ?? 'locked';
+      items.push(
+        { label: '', separator: true, onClick: () => {} },
+        { label: 'herdr 移動を禁止', selected: effectiveLock === 'locked', onClick: () => handleSetHerdrLock(w.id, 'locked') },
+        { label: 'herdr 移動を許可', selected: effectiveLock === 'free', onClick: () => handleSetHerdrLock(w.id, 'free') },
+      );
+      if (w.herdrNavigationLock != null) {
+        items.push({ label: 'サーバー既定に戻す', onClick: () => handleSetHerdrLock(w.id, null) });
+      }
+    }
     items.push(
       { label: t('windows.detachFromProject'), icon: <Icon name="external-link" size={16} />, onClick: () => handleDetachWindow(w.id) },
       { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, handleSetHerdrLock, findTaskByTarget, openTask, servers]);
 
   const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => {
     showContextMenu(e, getWindowMenuItems(w, extra));

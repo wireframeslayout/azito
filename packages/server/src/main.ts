@@ -13,6 +13,7 @@ import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
 import { writeHubCanary } from './modules/servers/hubCanary';
+import { ensureHerdrClientConfigs } from './modules/mux/herdr/herdrClientConfig';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
@@ -98,6 +99,8 @@ async function main(): Promise<void> {
   const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken);
   const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
 
+  ensureHerdrClientConfigs();
+
   app.log.info(`Public URL: ${publicUrl}`);
 
   // ─── Start ───
@@ -148,7 +151,10 @@ async function main(): Promise<void> {
     if (srv.type === 'agent' && srv.host && srv.agentPort && srv.agentToken) {
       const wsBase = `ws://${srv.host}:${srv.agentPort}`;
       const auth = `Bearer ${srv.agentToken}`;
-      const stream = new AgentEventStream(srv.name, wsBase, auth, wiring.notificationBus, invalidateSessionCache);
+      const onMuxEvent = srv.muxRuntime === 'herdr'
+        ? (_sn: string, event: unknown) => wiring.herdrEventBridge.handleAgentMuxEvent(srv.name, event)
+        : undefined;
+      const stream = new AgentEventStream(srv.name, wsBase, auth, wiring.notificationBus, invalidateSessionCache, onMuxEvent);
       stream.start();
       agentEventStreams.push(stream);
     }
@@ -171,7 +177,7 @@ async function main(): Promise<void> {
     wiring.projectRepo,
     wiring.projectServerRepo,
     wiring.logRepo,
-    wiring.tmuxClient,
+    wiring.muxDriverRegistry,
     wiring.executeTaskUseCase,
     wiring.agentTurnRepo,
     app.log,

@@ -5,6 +5,8 @@ import esbuild from 'esbuild';
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, '..');
 
+const REPO_ROOT = path.resolve(ROOT, '..', '..');
+
 async function main(): Promise<void> {
   await esbuild.build({
     entryPoints: [path.join(ROOT, 'src', 'main.ts')],
@@ -14,6 +16,7 @@ async function main(): Promise<void> {
     target: 'node24',
     outfile: path.join(ROOT, 'dist', 'azito-supervisor.cjs'),
     external: ['node-pty'],
+    alias: { '@azito/shared': path.resolve(REPO_ROOT, 'packages/shared/src/index.ts') },
     logLevel: 'warning',
   });
   console.log('[build] dist/azito-supervisor.cjs generated');

@@ -37,7 +37,7 @@ function CompactSupervisorCell({ row }: { row: ActivityDiagnosticRow }) {
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap', ...DIM, fontSize: 'var(--font-xs)' }}>
       <StateDot tone={sv.ready ? 'var(--success)' : 'var(--warning)'} />
-      {reported} · {frame}
+      {reported}{sv.lastReportedDecidedBy ? ` (${sv.lastReportedDecidedBy})` : ''} · {frame}
     </span>
   );
 }
@@ -61,7 +61,13 @@ export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDi
       { taskId: row.taskId, serverName: row.serverName, target: row.target },
       row.target,
       (taskId) => openTaskAnywhere(taskId),
-      (serverName, target) => openTerminal(serverName, target, row.projectId),
+      (refOrServerName) => {
+        if (typeof refOrServerName === 'object') {
+          openTerminal(refOrServerName.serverName, row.target, row.projectId);
+        } else {
+          openTerminal(refOrServerName, row.target, row.projectId);
+        }
+      },
     );
     onClose();
   };

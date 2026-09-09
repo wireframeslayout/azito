@@ -2,8 +2,10 @@ import type { FastifyPluginCallback } from 'fastify';
 import { execSync } from 'child_process';
 import os from 'os';
 import fs from 'fs';
-import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
-import type { TmuxClient, TmuxSession } from '../tmux/TmuxClient';
+import type { IServerRepository, MuxRuntime, HerdrNavigationLock, ServerConfig } from './Server';
+import type { TmuxClient } from '../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { muxKindForRuntime, type MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -23,6 +25,7 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
+import { HERDR_RECOMMENDED_UI } from '../mux/herdr/herdrClientConfig';
 import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
 
 // ─── Hub identity helpers ───
@@ -162,12 +165,14 @@ export interface ServersRouteOptions {
   // to compile/start rather than silently accept every isolation
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
+  muxDriverRegistry: MuxDriverRegistry;
+  onMuxRuntimeChanged?: (serverName: string) => void;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxRuntimeChanged } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -297,25 +302,26 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         },
       };
     }
-    let liveSessions: TmuxSession[];
+    const driver = muxDriverRegistry.resolve(srv);
+    let liveWorkspaces: MuxWorkspace[];
     try {
-      liveSessions = await tmux.listSessionsForSecurityGate(srv);
+      liveWorkspaces = await driver.listWorkspacesStrict(srv);
     } catch (err: unknown) {
       return {
         status: 409,
         body: {
           error: 'isolation_intent_blocked_by_session_check_failure',
-          message: `隔離対象サーバーの tmux セッション一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
+          message: `隔離対象サーバーのワークスペース一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
         },
       };
     }
-    if (liveSessions.length > 0) {
+    if (liveWorkspaces.length > 0) {
       return {
         status: 409,
         body: {
           error: 'isolation_intent_blocked_by_live_sessions',
-          message: `${liveSessions.length} 件の稼働中 tmux セッションがこのサーバー上に存在するため隔離を有効化できません。セッションを終了してから再度有効化してください。`,
-          sessionCount: liveSessions.length,
+          message: `${liveWorkspaces.length} 件の稼働中ワークスペースがこのサーバー上に存在するため隔離を有効化できません。ワークスペースを終了してから再度有効化してください。`,
+          sessionCount: liveWorkspaces.length,
         },
       };
     }
@@ -351,7 +357,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     if (!srv) return reply.status(404).send({ error: 'Server not found' });
     const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
     const { agentToken, ...rest } = srv;
-    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash };
+    const kind = muxKindForRuntime(srv.muxRuntime);
+    const driverAvailable = muxDriverRegistry.has(kind);
+    const caps = driverAvailable ? muxDriverRegistry.resolve(srv).caps : null;
+    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash, mux: { runtime: srv.muxRuntime, kind, driverAvailable, caps } };
   });
 
   // ── POST /api/servers ──
@@ -375,8 +384,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       muxRuntime?: string;
     };
     const validMuxRuntime = muxRuntime || undefined;
-    if (validMuxRuntime && validMuxRuntime !== 'system' && validMuxRuntime !== 'managed')
-      return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+    if (validMuxRuntime && !['system', 'managed', 'herdr', 'zellij'].includes(validMuxRuntime))
+      return reply.status(400).send({ error: 'muxRuntime must be "system", "managed", "herdr", or "zellij"' });
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
@@ -428,12 +437,15 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, isolationIntent } = request.body as {
-        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; isolationIntent?: boolean;
+      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, herdrNavigationLock: putHerdrLock, isolationIntent } = request.body as {
+        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; herdrNavigationLock?: string; isolationIntent?: boolean;
       };
       const validPutMux = putMux || undefined;
-      if (validPutMux && validPutMux !== 'system' && validPutMux !== 'managed')
-        return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+      if (validPutMux && !['system', 'managed', 'herdr', 'zellij'].includes(validPutMux))
+        return reply.status(400).send({ error: 'muxRuntime must be "system", "managed", "herdr", or "zellij"' });
+      const validHerdrLock = putHerdrLock || undefined;
+      if (validHerdrLock && !['locked', 'free'].includes(validHerdrLock))
+        return reply.status(400).send({ error: 'herdrNavigationLock must be "locked" or "free"' });
       // Issue #29 review, Important finding 2: isolationIntent must be an
       // actual boolean, not merely truthy — `"false"` (a string) is truthy
       // in JS and would otherwise be persisted as `true` by
@@ -500,19 +512,17 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // a follow-up PUT once the check/cleanup can agree on which endpoint
       // they're both looking at.
       // Issue #29 review (7th pass), Important finding 2: a `type`
-      // (local<->agent) or `muxRuntime` (system<->managed) change is just as
-      // much an "endpoint the check/cleanup could disagree about" as
-      // host/sshHost/agentPort/agentToken — a local->agent switch changes
-      // which transport (and therefore which live pane/session set) is being
-      // inspected, and a muxRuntime switch changes which tmux runtime the
-      // session-liveness check above (`tmux.listSessions`) actually talks to.
-      // Both were missing from this list, so a false->true isolation
-      // transition combined with either change slipped past the guard above
-      // and inspected/cleaned up against the OLD endpoint while committing
-      // isolation for the NEW one.
+      // (local<->agent) change is just as much an "endpoint the check/cleanup
+      // could disagree about" as host/sshHost/agentPort/agentToken — a
+      // local->agent switch changes which transport (and therefore which live
+      // pane/session set) is being inspected. `muxRuntime` is intentionally
+      // excluded: it selects which local mux driver (tmux/herdr/zellij) to
+      // talk to on the SAME server — a runtime configuration, not a network
+      // endpoint change. The isolation guard exists to prevent endpoint
+      // substitution; changing the mux driver does not change the server
+      // identity or connection credentials.
       const connectionInfoChanged =
         (type !== undefined && effectiveType !== srv.type) ||
-        (validPutMux !== undefined && validPutMux !== srv.muxRuntime) ||
         (host !== undefined && host !== srv.host) ||
         (sshHost !== undefined && sshHost !== srv.sshHost) ||
         (agentPort !== undefined && agentPort !== srv.agentPort) ||
@@ -523,8 +533,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // srv.isolationIntent) — an ALREADY-isolated server
       // (srv.isolationIntent === true) sending a PUT that omits
       // isolationIntent entirely (or repeats true) sailed straight past it
-      // and could freely change host/sshHost/agentPort/agentToken/type/
-      // muxRuntime. isolation_report (the cleanup outcome shown in the UI)
+      // and could freely change host/sshHost/agentPort/agentToken/type.
+      // isolation_report (the cleanup outcome shown in the UI)
       // still describes the OLD endpoint, but the row now points at a NEW
       // one — the "done" cleanup report reads as a guarantee about an
       // endpoint it never actually inspected.
@@ -634,6 +644,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             agentToken ?? srv.agentToken ?? undefined,
             sshHost ?? srv.sshHost ?? undefined,
             (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
+            (validHerdrLock as HerdrNavigationLock | undefined) ?? srv.herdrNavigationLock,
           );
         } else {
           serverRepo.update(
@@ -644,7 +655,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             agentToken ?? srv.agentToken ?? undefined,
             sshHost ?? srv.sshHost ?? undefined,
             (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
+            (validHerdrLock as HerdrNavigationLock | undefined) ?? srv.herdrNavigationLock,
           );
+        }
+        if (validPutMux !== undefined && validPutMux !== srv.muxRuntime) {
+          onMuxRuntimeChanged?.(request.params.name);
         }
         if (effectiveType !== 'agent') {
           // Issue #29 review, Important finding 1: an isolation-invariant
@@ -805,7 +820,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const result = await agentInstaller.install(sshHost, (p) => steps.push(p), srv.muxRuntime);
 
       if (result.success) {
-        serverRepo.update(srv.name, 'agent', result.host, result.port, result.token, sshHost, srv.muxRuntime);
+        serverRepo.update(srv.name, 'agent', result.host, result.port, result.token, sshHost, srv.muxRuntime, srv.herdrNavigationLock);
         serverRepo.updateAgentVersion(srv.name, result.version);
         transportFactory.invalidate(srv.name);
         return { ok: true, steps, startMethod: result.startMethod };
@@ -1060,7 +1075,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             let tmuxAvailable = false;
             let tmuxVersion = '';
             try {
-              const { stdout } = await tmux.execCommand(srv, tmuxVersionCmd);
+              const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
               tmuxAvailable = true;
               tmuxVersion = stdout.trim();
             } catch { /* tmux not found on agent */ }
@@ -1081,7 +1096,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           let tmuxAvailable = false;
           let tmuxVersion = '';
           try {
-            const { stdout } = await tmux.execCommand(srv, tmuxVersionCmd);
+            const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
             tmuxAvailable = true;
             tmuxVersion = stdout.trim();
           } catch { /* tmux not found */ }
@@ -1257,7 +1272,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       try {
         const safeDir = workingDir.replace(/'/g, "'\\''");
         const cmd = `cd '${safeDir}' && git branch -a --format='%(refname:short)' 2>/dev/null`;
-        const result = await tmux.execCommand(srv, cmd);
+        const result = await transportFactory.getTransport(srv).exec(cmd);
         const lines = stripTerminalArtifacts(result.stdout).trim().split('\n').filter(Boolean);
 
         const seen = new Set<string>();
@@ -1407,6 +1422,42 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       ),
     };
   });
+
+  // ── GET /api/servers/:name/herdr/config-check ──
+  fastify.get<{ Params: { name: string } }>(
+    '/api/servers/:name/herdr/config-check',
+    async (request, reply) => {
+      const srv = serverRepo.findByName(request.params.name);
+      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (srv.muxRuntime !== 'herdr') return reply.status(404).send({ error: 'Server is not running herdr' });
+
+      const transport = transportFactory.getTransport(srv);
+      let content: string;
+      try {
+        const result = await transport.exec('cat ~/.config/herdr/config.toml', 5000);
+        if (result.code !== 0) return { ok: true, warnings: [] };
+        content = result.stdout;
+      } catch {
+        return { ok: true, warnings: [] };
+      }
+
+      const warnings: string[] = [];
+      for (const [key, expected] of Object.entries(HERDR_RECOMMENDED_UI)) {
+        const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)`, 'm');
+        const match = re.exec(content);
+        if (!match) {
+          warnings.push(`${key} is not set (recommended: ${expected})`);
+        } else {
+          const value = match[1].replace(/\s*#.*$/, '').trim();
+          if (value !== expected) {
+            warnings.push(`${key} = ${value} (recommended: ${expected})`);
+          }
+        }
+      }
+
+      return { ok: warnings.length === 0, warnings };
+    },
+  );
 
   // ── DELETE /api/servers/:name/ssh-fingerprint ──
   fastify.delete<{ Params: { name: string } }>(

@@ -12,6 +12,8 @@ import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
 import { Chip, Button, Notice, DocsLink } from '../../ui';
+import { useState, useEffect, useCallback } from 'react';
+import { api } from '../../../api/client';
 
 // Issue #29 Step 2 C: display-side TTL for the isolation doctor's last
 // verification — purely advisory ("要再検証"), not a policy re-evaluation.
@@ -151,6 +153,33 @@ export default function OverviewSection({
   const resourceEntry = resourceEntries.find((s) => s.serverName === server.name);
   const resourcesLoading = resourceEntry === undefined;
   const measurement = resourceEntry?.measurement ?? null;
+
+  // ─── herdr navigation lock ───
+  const isHerdr = server.muxRuntime === 'herdr';
+  const [herdrLock, setHerdrLock] = useState<'locked' | 'free'>(server.herdrNavigationLock ?? 'locked');
+  const [herdrConfigWarnings, setHerdrConfigWarnings] = useState<string[]>([]);
+  const [herdrLockUpdating, setHerdrLockUpdating] = useState(false);
+
+  useEffect(() => { setHerdrLock(server.herdrNavigationLock ?? 'locked'); }, [server.herdrNavigationLock]);
+
+  useEffect(() => {
+    if (!isHerdr) { setHerdrConfigWarnings([]); return; }
+    let cancelled = false;
+    api<{ ok?: boolean; warnings?: string[] }>(`/servers/${encodeURIComponent(server.name)}/herdr/config-check`)
+      .then((res) => { if (!cancelled && res.warnings) setHerdrConfigWarnings(res.warnings); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [isHerdr, server.name]);
+
+  const toggleHerdrLock = useCallback(async () => {
+    const next = herdrLock === 'locked' ? 'free' : 'locked';
+    setHerdrLockUpdating(true);
+    const res = await api<{ error?: string }>(`/servers/${encodeURIComponent(server.name)}`, {
+      method: 'PUT', body: JSON.stringify({ herdrNavigationLock: next }),
+    });
+    setHerdrLockUpdating(false);
+    if (!res.error) { setHerdrLock(next); refresh(); }
+  }, [herdrLock, server.name, refresh]);
 
   const isAgent = server.type === 'agent';
   const isChecking = !status || status.status === 'checking';
@@ -393,6 +422,14 @@ export default function OverviewSection({
         />
       </div>
 
+      {isHerdr && herdrConfigWarnings.length > 0 && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <Notice tone="warning" sub={herdrConfigWarnings.map((w, i) => <div key={i}>{w}</div>)}>
+            herdr config.toml: 推奨設定と異なる項目があります
+          </Notice>
+        </div>
+      )}
+
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
@@ -436,9 +473,30 @@ export default function OverviewSection({
         <KvCard title={t('overview.runtimeTitle')}>
           <KvRow label={t('overview.muxRuntimeLabel')}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
-              {server.muxRuntime === 'managed' ? t('overview.muxManaged') : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
+              {server.muxRuntime === 'managed' ? t('overview.muxManaged')
+                : server.muxRuntime === 'herdr' ? 'herdr'
+                : server.muxRuntime === 'zellij' ? 'Zellij'
+                : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
             </span>
           </KvRow>
+          {isHerdr && (
+            <KvRow label="Navigation">
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <label className="toggle" style={{ flexShrink: 0 }}>
+                  <input
+                    type="checkbox"
+                    checked={herdrLock === 'locked'}
+                    disabled={herdrLockUpdating}
+                    onChange={toggleHerdrLock}
+                  />
+                  <span className="toggle-slider" />
+                </label>
+                <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                  {herdrLock === 'locked' ? '移動ロック中' : '移動を許可'}
+                </span>
+              </span>
+            </KvRow>
+          )}
           {isAgent && (
             <KvRow label={t('overview.agentVersionLabel')}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>

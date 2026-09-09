@@ -1,0 +1,11 @@
+[ui]
+sidebar_start_collapsed = true
+sidebar_collapsed_mode = "hidden"
+hide_tab_bar_when_single_tab = true
+pane_borders = false
+pane_outer_borders = false
+pane_gaps = false
+pane_scrollbars = false
+mouse_capture = false
+confirm_close = false
+prompt_new_tab_name = false

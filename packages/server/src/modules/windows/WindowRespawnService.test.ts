@@ -21,7 +21,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     projectId: null,
     taskId: null,
     serverName: 'local-server',
-    tmuxTarget: 'azito:task-1.1',
+    tmuxTarget: 'azito:task-1',
     label: 'task-1',
     isPrimary: true,
     windowType: 'agent',
@@ -32,6 +32,7 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
+    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -51,6 +52,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -158,6 +160,7 @@ function buildService(opts: {
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
+    adoptForTask: vi.fn(),
     findAll: vi.fn(() => []),
     findById: vi.fn(() => opts.window),
     findByProject: vi.fn(() => []),
@@ -166,6 +169,7 @@ function buildService(opts: {
     findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
     findByServer: vi.fn(() => []),
     findByServerAndTarget: vi.fn(() => undefined),
+    findByServerAndRef: vi.fn(() => undefined),
     findByServerAndSession: vi.fn(() => []),
     update: vi.fn(),
     updateAgentSessionIdByWindow: vi.fn(),
@@ -177,29 +181,27 @@ function buildService(opts: {
 
   const sentCommands: string[] = [];
   const tmux = {
-    listSessions: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
-    createSession: vi.fn(async (_server: unknown, _session: string, options?: { windowName?: string; exactName?: boolean }) => ({
+    kind: 'tmux' as const,
+    caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: false },
+    listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
+    openWorkspace: vi.fn(async (_server: unknown, name: string, options?: { windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }) => ({
+      ref: { kind: 'tmux' as const, workspace: name, window: options?.windowName || 'default' },
       result: { stdout: '', stderr: '', code: 0 },
-      windowName: options?.exactName && options.windowName ? options.windowName : `${options?.windowName || 'win'}--rand`,
     })),
-    createWindow: vi.fn(async (_server: unknown, _session: string, baseName?: string, options?: { exactName?: boolean }) => ({
+    openWindow: vi.fn(async (_server: unknown, _workspace: string, baseName?: string, options?: { exactName?: boolean; extraEnv?: Record<string, string> }) => ({
+      ref: { kind: 'tmux' as const, workspace: 'azito', window: options?.exactName && baseName ? baseName : `${baseName || 'win'}-new` },
       result: { stdout: '', stderr: '', code: 0 },
       windowName: options?.exactName && baseName ? baseName : `${baseName || 'win'}-new`,
     })),
-    killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    sendKeys: vi.fn(async (_server: unknown, _target: string, keys: string[]) => {
+    closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    sendKeysToHandle: vi.fn(async (_server: unknown, _target: string, keys: string[]) => {
       sentCommands.push(keys[0]);
     }),
-    splitPane: vi.fn(async (_server: unknown, _target: string, _direction: 'h' | 'v', _extraEnv?: Record<string, string>) => {}),
-    resolvePaneId: vi.fn(async () => '%0'),
-    listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
-    execCommand: vi.fn(async () => ({ stdout: '' })),
-    uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
-    // Issue #29 review (5th pass), Critical finding 1: the non-task respawn
-    // fallback now calls this server-aware wrapper instead of the
-    // server-blind uiTokenEnv() — mirrors it for every existing fixture
-    // server (none of which declare isolationIntent).
-    uiTokenEnvForServer: vi.fn((_server: ServerConfig) => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+    splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
+    resolvePane: vi.fn(async () => '%0'),
+    listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
+    captureLayout: vi.fn(async () => ({ layout: '', panes: [{ index: 0, ordinal: 1, command: 'bash', path: '/home', title: '' }] })),
+    applyLayout: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
   };
 
   const sessionStrategyFactory = {
@@ -280,9 +282,11 @@ function buildService(opts: {
     revokeForDestroyedWindow: vi.fn(),
   } as any;
 
+  const muxDriverRegistry = { resolve: vi.fn(() => tmux) } as any;
+
   const service = new WindowRespawnService(
     windowRepo,
-    tmux as any,
+    muxDriverRegistry,
     sessionStrategyFactory as any,
     taskRepo as any,
     unitRepo as any,
@@ -299,10 +303,11 @@ function buildService(opts: {
     paneEnvService,
     new KeyedMutex(),
     true,
+    () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
     undefined,
   );
 
-  return { service, windowRepo, tmux, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
+  return { service, windowRepo, tmux, muxDriverRegistry, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
 }
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
@@ -372,7 +377,7 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 
     await service.respawn(1, makeServer());
 
-    expect(tmux.sendKeys).toHaveBeenCalledTimes(1);
+    expect(tmux.sendKeysToHandle).toHaveBeenCalledTimes(1);
   });
 
   // Issue #28 review Critical finding: `new-window -e`/`new-session -e` only
@@ -401,10 +406,34 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     await service.respawn(1, makeServer());
 
     const rotatedEnv = paneEnvService.buildEnvForNewWindow.mock.results[0].value.env;
-    expect(tmux.splitPane).toHaveBeenCalledTimes(2);
-    for (const call of tmux.splitPane.mock.calls) {
+    expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(2);
+    for (const call of tmux.splitPaneByHandle.mock.calls) {
       expect(call[3]).toBe(rotatedEnv);
     }
+  });
+
+  it('skips split/applyLayout when caps.layoutSnapshot is false', async () => {
+    const win = makeWindow({
+      id: 1,
+      taskId: 5,
+      windowType: 'agent',
+      workerType: 'claude',
+      paneLayout: {
+        layout: 'some-layout',
+        panes: [
+          { index: 0, command: null, workingDirectory: null, title: null },
+          { index: 1, command: null, workingDirectory: null, title: null },
+        ],
+      },
+    });
+    const { service, tmux } = buildService({ window: win, task: makeTask({ id: 5 }) });
+    (tmux as any).caps = { ...(tmux as any).caps, layoutSnapshot: false };
+
+    await service.respawn(1, makeServer());
+
+    expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
+    expect(tmux.applyLayout).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).toHaveBeenCalled();
   });
 
   it('passes the legacy uiTokenEnvForServer() to splitPane calls for a non-task multi-pane window', async () => {
@@ -425,12 +454,8 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
 
     await service.respawn(1, makeServer());
 
-    expect(tmux.splitPane).toHaveBeenCalledTimes(1);
-    // Issue #29 review (5th pass), Critical finding 1: uiTokenEnvForServer()
-    // is what the non-task window/pane env is actually built from now — see
-    // WindowRespawnService's `windowEnv` assignment (server-aware wrapper
-    // around the legacy uiTokenEnv()).
-    expect(tmux.splitPane.mock.calls[0][3]).toEqual(tmux.uiTokenEnvForServer(makeServer()));
+    expect(tmux.splitPaneByHandle).toHaveBeenCalledTimes(1);
+    expect(tmux.splitPaneByHandle.mock.calls[0][3]).toEqual({ AZITO_UI_TOKEN: 'ui-token-fixture' });
   });
 
   // Issue #29 review (9th pass), Important finding 2: createPlainWindow only
@@ -448,24 +473,24 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     // below), so it can no longer stand in for "some field changed" here.
     const staleServer = makeServer({ agentVersion: 'stale-version' });
     const freshServer = makeServer({ agentVersion: 'fresh-version' });
-    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, serverRepo } = buildService({ window: win });
     // Simulates an unrelated server-row update (e.g. agentVersion bump from
     // an auto-update) committing while this respawn() call was queued for
     // the lock: the row `serverRepo.findByName` returns once the lock is
     // held no longer matches the `staleServer` argument.
     serverRepo.findByName.mockImplementation(() => freshServer);
-    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+    tmux.resolvePane.mockRejectedValueOnce(new Error('pane resolve failed'));
 
     await expect(service.respawn(1, staleServer)).rejects.toThrow('pane resolve failed');
 
-    // resolvePaneId (pane resolution, before the failure) got the fresh row.
-    expect(tmux.resolvePaneId).toHaveBeenCalledWith(freshServer, expect.any(String));
-    expect(tmux.resolvePaneId).not.toHaveBeenCalledWith(staleServer, expect.any(String));
-    // The rollback kill triggered by the resolvePaneId failure also got the
+    // resolvePane (pane resolution, before the failure) got the fresh row.
+    expect(tmux.resolvePane).toHaveBeenCalledWith(freshServer, expect.anything(), expect.anything());
+    expect(tmux.resolvePane).not.toHaveBeenCalledWith(staleServer, expect.anything(), expect.anything());
+    // The rollback kill triggered by the resolvePane failure also got the
     // fresh row, not the stale argument.
-    expect(tmux.killWindow).toHaveBeenCalledWith(freshServer, expect.any(String));
-    expect(tmux.killWindow).not.toHaveBeenCalledWith(staleServer, expect.any(String));
+    expect(tmux.closeWindow).toHaveBeenCalledWith(freshServer, expect.objectContaining({ kind: 'tmux' }));
+    expect(tmux.closeWindow).not.toHaveBeenCalledWith(staleServer, expect.objectContaining({ kind: 'tmux' }));
   });
 
   // Issue #29 review (12th pass), Critical finding 1: unlike the benign
@@ -478,15 +503,15 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
   it('aborts (never resolves a pane / creates a window) when the refetched row disagrees on a security field (e.g. isolationIntent) from the one respawn() was called with', async () => {
     const staleServer = makeServer({ isolationIntent: false });
     const freshServer = makeServer({ isolationIntent: true });
-    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, serverRepo } = buildService({ window: win });
     serverRepo.findByName.mockImplementation(() => freshServer);
 
     await expect(service.respawn(1, staleServer)).rejects.toThrow(/設定が実行準備中に変更された/);
 
-    expect(tmux.resolvePaneId).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.resolvePane).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 });
 
@@ -501,14 +526,14 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
   it('respawning a SECONDARY task window does not rotate the task token, and the primary pane keeps working (masked env only)', async () => {
     const task = makeTask({ id: 5, unitId: 10, tmuxWindow: 'task-5' });
     const unit = makeUnit({ id: 10 });
-    const secondaryWin = makeWindow({ id: 2, taskId: 5, isPrimary: false, tmuxTarget: 'azito:task-5-side.1', windowType: 'terminal', workerType: null });
+    const secondaryWin = makeWindow({ id: 2, taskId: 5, isPrimary: false, tmuxTarget: 'azito:task-5-side', windowType: 'terminal', workerType: null });
     const { service, tmux, paneEnvService } = buildService({ window: secondaryWin, task, unit });
 
     await service.respawn(2, makeServer());
 
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
-    expect(tmux.createWindow).toHaveBeenCalledWith(
+    expect(tmux.openWindow).toHaveBeenCalledWith(
       expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' } },
     );
   });
@@ -516,26 +541,33 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
   it('respawning a SECONDARY task window does not require confirming the old window is gone as fatal (no token at stake) — a kill failure does not block it', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const secondaryWin = makeWindow({ id: 2, taskId: 5, isPrimary: false, tmuxTarget: 'azito:task-5-side.1', windowType: 'terminal', workerType: null });
+    const secondaryWin = makeWindow({ id: 2, taskId: 5, isPrimary: false, tmuxTarget: 'azito:task-5-side', windowType: 'terminal', workerType: null });
     const { service, tmux } = buildService({ window: secondaryWin, task, unit });
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
       created: 0,
       windows: [{ name: 'task-5-side', index: 0, active: true, panes: [], activity: 0 }],
     }]);
-    tmux.killWindow.mockRejectedValueOnce(new Error('kill failed'));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-5-side', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.closeWindow.mockRejectedValueOnce(new Error('kill failed'));
 
     await service.respawn(2, makeServer());
 
-    expect(tmux.createWindow).toHaveBeenCalled();
+    expect(tmux.openWindow).toHaveBeenCalled();
   });
 
   it('respawning the PRIMARY task window still rotates the task token as before', async () => {
     const task = makeTask({ id: 5, unitId: 10, tmuxWindow: 'task-5' });
     const unit = makeUnit({ id: 10 });
-    const primaryWin = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-5.1' });
+    const primaryWin = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-5' });
     const { service, paneEnvService } = buildService({ window: primaryWin, task, unit });
 
     await service.respawn(1, makeServer());
@@ -564,10 +596,10 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow(/execution denied/);
 
-    expect(tmux.killWindow).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(windowRepo.update).not.toHaveBeenCalled();
     expect(logRepo.append).toHaveBeenCalledWith(5, 10, 'command', { type: 'execution_gate_blocked', reason: 'denied' });
   });
@@ -582,7 +614,7 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
 
-    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
     // Recording status alone (the old behavior) is not enough: without
     // pendingOperation/pendingOperationWindowId, the approval handler can't
     // tell a blocked respawn apart from a blocked execute()/resume() and
@@ -625,25 +657,32 @@ describe('WindowRespawnService.respawn — execution gate (Issue #328)', () => {
 
     await service.respawn(1, makeServer());
 
-    expect(tmux.createWindow).toHaveBeenCalled();
+    expect(tmux.openWindow).toHaveBeenCalled();
   });
 });
 
 describe('WindowRespawnService.respawn — window name preservation', () => {
   it('preserves the original tmux window name on respawn', async () => {
-    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12' });
     const { service, windowRepo } = buildService({ window: win });
 
     const result = await service.respawn(1, makeServer());
 
-    expect(result.tmuxTarget).toBe('azito:task-1--ab12.1');
-    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1', sleeping: false });
+    expect(result.tmuxTarget).toBe('azito:task-1--ab12');
+    expect(windowRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12', sleeping: false }));
   });
 
   it('kills an existing window with the same name before recreating', async () => {
-    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux } = buildService({ window: win });
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
@@ -653,8 +692,8 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
 
     await service.respawn(1, makeServer());
 
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-1--ab12');
-    expect(tmux.createWindow).toHaveBeenCalledWith(
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
+    expect(tmux.openWindow).toHaveBeenCalledWith(
       expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
     );
   });
@@ -662,16 +701,23 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
   it('does not rotate the task token when killing the old window fails, and aborts the respawn (Issue #28 third-party review fix 3)', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
       created: 0,
       windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
     }]);
-    tmux.killWindow.mockRejectedValueOnce(new Error('kill failed'));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.closeWindow.mockRejectedValueOnce(new Error('kill failed'));
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow(/task token was not rotated/);
 
@@ -679,21 +725,21 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     // been rotated (the old, still-live pane would otherwise be left
     // holding a dead credential) and no replacement window is created.
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 
   it('does not rotate the task token when killing the old window fails on an agent server (resolves with a non-zero code instead of rejecting) — Issue #28 third-party review finding 2', async () => {
-    // AgentTransport.execTmux never rejects on the remote tmux command's own
+    // AgentTransport.execMux never rejects on the remote tmux command's own
     // exit code — it only rejects on an HTTP-level failure, resolving with
     // whatever ExecResult (including a non-zero code) the agent process
-    // returns. A bare `.then(() => true, () => false)` on killWindow's
+    // returns. A bare `.then(() => true, () => false)` on closeWindow's
     // promise previously read this resolve as "kill succeeded" regardless
     // of `code`, so this exact scenario used to rotate the task token and
     // proceed even though the old pane was, in fact, still alive.
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, paneEnvService, serverRepo } = buildService({ window: win, task, unit });
     // buildService()'s default serverRepo.findByName returns
     // makeServer({ name }) (type: 'local') regardless of what is passed to
@@ -704,20 +750,27 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     // this test is actually about ever runs — see the next test's own
     // identical comment.
     serverRepo.findByName.mockImplementation((name: string) => makeServer({ name, type: 'agent' }));
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
       created: 0,
       windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
     }]);
-    tmux.killWindow.mockResolvedValueOnce({ stdout: '', stderr: 'client refused connection', code: 1 });
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.closeWindow.mockResolvedValueOnce({ stdout: '', stderr: 'client refused connection', code: 1 });
 
     await expect(service.respawn(1, makeServer({ type: 'agent' }))).rejects.toThrow(/task token was not rotated/);
 
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 
   // Issue #29 review, 14th pass, Important finding 1: the per-server
@@ -730,17 +783,24 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
   // the corrected ordering directly: with a security-relevant field
   // (isolationIntent) disagreeing between the `server` respawn() was called
   // with and the row actually committed by the time the lock is acquired,
-  // the old (still-alive) window must survive untouched — killWindow is
+  // the old (still-alive) window must survive untouched — closeWindow is
   // never even attempted, and the Window row keeps pointing at it.
   it('aborts BEFORE killing the old window when the refetched row disagrees on a security field (e.g. isolationIntent)', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ id: 1, taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: 5, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, paneEnvService, windowRepo, serverRepo } = buildService({ window: win, task, unit });
     const staleServer = makeServer({ isolationIntent: false });
     const freshServer = makeServer({ isolationIntent: true });
     serverRepo.findByName.mockImplementation(() => freshServer);
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
@@ -751,13 +811,13 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     await expect(service.respawn(1, staleServer)).rejects.toThrow(/設定が実行準備中に変更された/);
 
     // The old window was NEVER killed — the snapshot mismatch aborted the
-    // whole span before confirmOldWindowGone (which calls killWindow) ever
+    // whole span before confirmOldWindowGone (which calls closeWindow) ever
     // ran.
-    expect(tmux.killWindow).not.toHaveBeenCalled();
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
     // Nothing was rotated or created either.
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
     // The Window row still points at the original (untouched, still-live)
     // target — never updated to a replacement that was never created.
     expect(windowRepo.update).not.toHaveBeenCalled();
@@ -766,7 +826,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
   it('proceeds with rotation when the agent-transport kill resolves with a non-zero code but the window was already gone', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, paneEnvService, serverRepo } = buildService({ window: win, task, unit });
     // buildService()'s default serverRepo.findByName returns
     // makeServer({ name }) (type: 'local') regardless of what is passed to
@@ -776,34 +836,48 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     // review, 12th pass, Critical finding 1) correctly rejects a mismatch
     // that was never meant to be under test here.
     serverRepo.findByName.mockImplementation((name: string) => makeServer({ name, type: 'agent' }));
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
       created: 0,
       windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
     }]);
-    tmux.killWindow.mockResolvedValueOnce({ stdout: '', stderr: "can't find window task-1--ab12", code: 1 });
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.closeWindow.mockResolvedValueOnce({ stdout: '', stderr: "can't find window task-1--ab12", code: 1 });
 
     await service.respawn(1, makeServer({ type: 'agent' }));
 
     expect(paneEnvService.buildEnvForNewWindow).toHaveBeenCalledTimes(1);
-    expect(tmux.createWindow).toHaveBeenCalled();
+    expect(tmux.openWindow).toHaveBeenCalled();
   });
 
   it('revokes the freshly-issued generation when window creation fails after a confirmed kill (Issue #28 third-party review fix 3)', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ taskId: 5, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
       created: 0,
       windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
     }]);
-    tmux.createWindow.mockRejectedValueOnce(new Error('create failed'));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.openWindow.mockRejectedValueOnce(new Error('create failed'));
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow('create failed');
 
@@ -826,17 +900,18 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     // `tmux new-session` always creates a window. Creating the session and then
     // adding the real window separately stranded that first window as a bare
     // shell nobody manages (observed as a stray `win--xxxx` after a respawn).
-    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux } = buildService({ window: win });
-    tmux.listSessions.mockResolvedValue([]);
+    tmux.listWorkspaces.mockResolvedValue([]);
+    tmux.listWorkspaces.mockResolvedValue([]);
 
     const result = await service.respawn(1, makeServer());
 
-    expect(tmux.createSession).toHaveBeenCalledWith(
+    expect(tmux.openWorkspace).toHaveBeenCalledWith(
       expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
     );
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(result.tmuxTarget).toBe('azito:task-1--ab12.1');
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(result.tmuxTarget).toBe('azito:task-1--ab12');
   });
 });
 
@@ -850,34 +925,34 @@ describe('WindowRespawnService.respawn — rollback on pane-restore failure (Iss
   it('kills the new window and revokes the freshly-issued generation when pane setup fails for the PRIMARY task window, then rethrows', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, windowRepo, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+    tmux.resolvePane.mockRejectedValueOnce(new Error('pane resolve failed'));
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow('pane resolve failed');
 
     // The new window (freshly created) must be killed, not left running
     // untracked.
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-1--ab12');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     // Since the kill is confirmed (default mock resolves { code: 0 }), the
     // just-issued generation must be revoked — never left as a live,
     // orphaned credential.
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'respawn_restore_failed_rollback');
     // The DB row must NOT be updated to point at the now-killed new window.
-    expect(windowRepo.update).not.toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+    expect(windowRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12' }));
   });
 
   it('persists the new tmuxTarget (keeps it discoverable) instead of revoking, when the post-failure kill itself fails for the PRIMARY window', async () => {
     const task = makeTask({ id: 5, unitId: 10 });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, windowRepo, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+    tmux.resolvePane.mockRejectedValueOnce(new Error('pane resolve failed'));
     // The default fixture never kills an OLD window here (listSessions
     // reports no matching window, so confirmOldWindowGone is a no-op) —
-    // this is the only killWindow call, and it's the rollback kill of the
+    // this is the only closeWindow call, and it's the rollback kill of the
     // newly-created window, which itself fails (window still alive).
-    tmux.killWindow.mockRejectedValueOnce(new Error('rollback kill failed'));
+    tmux.closeWindow.mockRejectedValueOnce(new Error('rollback kill failed'));
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow('pane resolve failed');
 
@@ -886,19 +961,19 @@ describe('WindowRespawnService.respawn — rollback on pane-restore failure (Iss
     expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
     // Instead it stays discoverable: the DB row is updated to the new
     // (still-alive) tmuxTarget so an operator can find and clean it up.
-    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+    expect(windowRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12' }));
   });
 
   it('kills the new window (no revoke — nothing to revoke) when pane setup fails for a non-task window, then rethrows', async () => {
-    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: null, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, windowRepo, paneEnvService } = buildService({ window: win });
-    tmux.resolvePaneId.mockRejectedValueOnce(new Error('pane resolve failed'));
+    tmux.resolvePane.mockRejectedValueOnce(new Error('pane resolve failed'));
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow('pane resolve failed');
 
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-1--ab12');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
-    expect(windowRepo.update).not.toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12.1' });
+    expect(windowRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12' }));
   });
 });
 
@@ -956,7 +1031,14 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
         projectServerRepo: makeProjectServerRepo(rootDir),
         transportFactory: makeTransportFactory(),
       });
-      tmux.listSessions.mockResolvedValue([{
+      tmux.listWorkspaces.mockResolvedValue([{
+        name: 'azito',
+        windowCount: 1,
+        attached: false,
+        created: 0,
+        windows: [{ name: 'task-1', index: 0, active: true, panes: [], activity: 0 }],
+      }]);
+      tmux.listWorkspaces.mockResolvedValue([{
         name: 'azito',
         windowCount: 1,
         attached: false,
@@ -966,9 +1048,9 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 
       await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
 
-      expect(tmux.killWindow).not.toHaveBeenCalled();
-      expect(tmux.createWindow).not.toHaveBeenCalled();
-      expect(tmux.createSession).not.toHaveBeenCalled();
+      expect(tmux.closeWindow).not.toHaveBeenCalled();
+      expect(tmux.openWindow).not.toHaveBeenCalled();
+      expect(tmux.openWorkspace).not.toHaveBeenCalled();
       expect(windowRepo.update).not.toHaveBeenCalled();
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
@@ -997,7 +1079,14 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
         projectServerRepo: makeProjectServerRepo(rootDir),
         transportFactory: makeTransportFactory(),
       });
-      tmux.listSessions.mockResolvedValue([{
+      tmux.listWorkspaces.mockResolvedValue([{
+        name: 'azito',
+        windowCount: 1,
+        attached: false,
+        created: 0,
+        windows: [{ name: 'task-1', index: 0, active: true, panes: [], activity: 0 }],
+      }]);
+      tmux.listWorkspaces.mockResolvedValue([{
         name: 'azito',
         windowCount: 1,
         attached: false,
@@ -1007,8 +1096,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
 
       await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
 
-      expect(tmux.killWindow).not.toHaveBeenCalled();
-      expect(tmux.createWindow).not.toHaveBeenCalled();
+      expect(tmux.closeWindow).not.toHaveBeenCalled();
+      expect(tmux.openWindow).not.toHaveBeenCalled();
       expect(windowRepo.update).not.toHaveBeenCalled();
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
@@ -1102,7 +1191,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
       // Default mock only reports one pane id (index 0) regardless of the
       // requested pane count — this test needs both panes mapped so pane
       // index 1's (rejected) workingDirectory is actually reached.
-      tmux.listPaneIds.mockResolvedValue([{ index: 0, paneId: '%0' }, { index: 1, paneId: '%1' }]);
+      tmux.listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }, { ordinal: 2, handle: '%1', title: '', command: 'bash', active: true }]);
 
       await expect(service.respawn(1, makeServer())).rejects.toThrow(/escapes the allowed directory/);
     } finally {
@@ -1187,7 +1276,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
 
     await service.respawn(1, makeServer());
 
-    expect(tmux.sendKeys).toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).toHaveBeenCalled();
   });
 
   it("a window whose persisted worker config drifted since approval is blocked, not silently respawned with the drifted config (the mismatch this fix closes: approving what task/Unit resolution says vs. what the Window row actually launches)", async () => {
@@ -1207,7 +1296,7 @@ describe('WindowRespawnService.respawn — respawn config fingerprint (Issue #32
 
     await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
 
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(6, {
       pendingOperation: 'respawn',
       priorStatus: 'open',
@@ -1262,10 +1351,10 @@ describe('WindowRespawnService.respawn — policy resolved from the WINDOW serve
 
     await expect(service.respawn(1, makeServer({ name: 'server-b' }))).rejects.toThrow(/execution denied/);
 
-    expect(tmux.killWindow).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     // Denial never touches task.status/pendingOperation (same as the
     // single-server 'deny' case above) — a bug that instead resolved
     // server A's 'manual-approval' would have called taskRepo.update with
@@ -1284,7 +1373,7 @@ describe('WindowRespawnService.respawn — policy resolved from the WINDOW serve
 
     await expect(service.resumeLegacySession(21, makeServer({ name: 'server-b' }))).rejects.toThrow(/execution denied/);
 
-    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(taskRepo.update).not.toHaveBeenCalled();
   });
 });
@@ -1313,7 +1402,7 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
 
     const result = await service.resumeLegacySession(7, makeServer());
 
-    expect(tmux.createWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-7', { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) });
+    expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-7', { extraEnv: expect.objectContaining({ AZITO_TASK_TOKEN: expect.any(String), AZITO_TASK_ID: '1' }) });
     expect(sentCommands).toHaveLength(1);
     expect(sentCommands[0]).toMatch(/supervisor/);
     expect(sentCommands[0]).toContain('claude --resume sess-abc --dangerously-skip-permissions');
@@ -1324,14 +1413,14 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
   });
 
   // Issue #29 review (10th pass), Important finding 3: resumeLegacySession's
-  // own `resolvePaneId`/`sendKeys` calls (and its rollback's `killWindow`,
+  // own `resolvePaneId`/`sendKeysToHandle` calls (and its rollback's `closeWindow`,
   // covered by the sibling describe block below) previously kept using the
   // `server` this method was CALLED with — never the fresher row
   // createRotatedWindow's own lock span re-read via `serverRepo.findByName`
   // — even though every other respawn() branch already did this correctly.
   // Tags each server object via `agentVersion` so the assertion below can
   // tell exactly which one a given tmux call actually received.
-  it('uses the server row createRotatedWindow re-read, not the server argument it was called with, for resolvePaneId/sendKeys', async () => {
+  it('uses the server row createRotatedWindow re-read, not the server argument it was called with, for resolvePane/sendKeysToHandle', async () => {
     const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 7 });
@@ -1340,8 +1429,8 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
 
     await service.resumeLegacySession(7, makeServer({ agentVersion: 'stale-caller-arg' }));
 
-    expect((tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
-    expect((tmux.sendKeys as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
+    expect((tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
+    expect((tmux.sendKeysToHandle as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({ agentVersion: 'fresh-from-lock' });
   });
 
   it('throws when the task has no agent session ID', async () => {
@@ -1350,7 +1439,7 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     const { service, tmux } = buildService({ window: win, task });
 
     await expect(service.resumeLegacySession(8, makeServer())).rejects.toThrow(/agent session ID/);
-    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
   });
 
   it('blocks an untrusted, unapproved task and records pendingOperation=recover_session_legacy (no windowId, unlike respawn)', async () => {
@@ -1363,7 +1452,7 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
 
     await expect(service.resumeLegacySession(9, makeServer())).rejects.toThrow(/requires approval/);
 
-    expect(tmux.createWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(9, {
       pendingOperation: 'recover_session_legacy',
       priorStatus: 'open',
@@ -1391,10 +1480,10 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
 });
 
 // Issue #28 third-party review, Important finding 2: resumeLegacySession()
-// used to call paneEnvService.buildEnvForNewWindow() + tmux.createWindow()
+// used to call paneEnvService.buildEnvForNewWindow() + tmux.openWindow()
 // directly instead of routing through createRotatedWindow() — a non-zero
 // exit code from createWindow() (agent transport) was read as success, and a
-// resolvePaneId()/sendKeys() failure after a successful create left an
+// resolvePaneId()/sendKeysToHandle() failure after a successful create left an
 // untracked window holding a live token generation with nothing rolling it
 // back.
 describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 third-party review finding 2)', () => {
@@ -1403,25 +1492,25 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 7 });
     const { service, tmux, taskRepo, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.createWindow.mockResolvedValue({ result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'task-7-new' });
+    tmux.openWindow.mockResolvedValue({ ref: { kind: 'tmux' as const, workspace: 'azito', window: 'task-7-new' }, result: { stdout: '', stderr: 'boom', code: 1 }, windowName: 'task-7-new' });
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/Failed to create tmux window/);
 
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'resume_legacy_create_failed');
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(taskRepo.update).not.toHaveBeenCalledWith(7, expect.objectContaining({ tmuxWindow: expect.anything() }));
   });
 
-  it('rolls back (kills the window, revokes the new generation) when resolvePaneId fails after a successful createWindow', async () => {
+  it('rolls back (kills the window, revokes the new generation) when resolvePane fails after a successful createWindow', async () => {
     const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 7 });
     const { service, tmux, taskRepo, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.resolvePaneId.mockRejectedValue(new Error('no such pane'));
+    tmux.resolvePane.mockRejectedValue(new Error('no such pane'));
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
 
-    expect(tmux.killWindow).toHaveBeenCalledWith(expect.anything(), 'azito:task-7-new');
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-7-new' });
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'resume_legacy_launch_failed_rollback');
     expect(taskRepo.update).not.toHaveBeenCalledWith(7, expect.objectContaining({ tmuxWindow: expect.anything() }));
   });
@@ -1431,8 +1520,8 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 7 });
     const { service, tmux, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.resolvePaneId.mockRejectedValue(new Error('no such pane'));
-    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.resolvePane.mockRejectedValue(new Error('no such pane'));
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
 
@@ -1450,8 +1539,8 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
     const unit = makeUnit({ id: 10 });
     const win = makeWindow({ taskId: 7 });
     const { service, tmux, taskRepo, paneEnvService } = buildService({ window: win, task, unit });
-    tmux.resolvePaneId.mockRejectedValue(new Error('no such pane'));
-    tmux.killWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+    tmux.resolvePane.mockRejectedValue(new Error('no such pane'));
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
 
     await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
 
@@ -1486,9 +1575,10 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     // which always returns the SAME static object regardless of update()
     // calls. This test specifically needs the second queued respawn's fresh
     // re-read to observe what the first one just persisted.
-    let windowRow: Window = makeWindow({ id: 1, taskId: 1, ownerType: 'task', isPrimary: true, tmuxTarget: 'sess:win-0.1' });
+    let windowRow: Window = makeWindow({ id: 1, taskId: 1, ownerType: 'task', isPrimary: true, tmuxTarget: 'sess:win-0' });
     const windowRepo: IWindowRepository = {
       add: vi.fn(() => 1),
+      adoptForTask: vi.fn(),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => windowRow),
       findByProject: vi.fn(() => []),
@@ -1497,6 +1587,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServer: vi.fn(() => []),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn((_id: number, fields: Partial<Window>) => {
         windowRow = { ...windowRow, ...fields };
@@ -1519,7 +1610,9 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     const aliveWindows = new Set<string>(['sess:win-0']);
     let createCounter = 0;
     const tmux = {
-      listSessions: vi.fn(async () => {
+      kind: 'tmux' as const,
+      caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: false },
+      listWorkspaces: vi.fn(async () => {
         const bySession = new Map<string, string[]>();
         for (const key of aliveWindows) {
           const [s, w] = key.split(':');
@@ -1531,30 +1624,28 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
           windows: windows.map((w, i) => ({ name: w, index: i, active: true, panes: [] as unknown[], activity: 0 })),
         }));
       }),
-      createSession: vi.fn(async (_server: unknown, sessionName: string, options?: { windowName?: string }) => {
+      openWorkspace: vi.fn(async (_server: unknown, sessionName: string, options?: { windowName?: string }) => {
         createCounter += 1;
         const windowName = `win-${createCounter}`;
         aliveWindows.add(`${sessionName}:${windowName}`);
-        return { result: { stdout: '', stderr: '', code: 0 }, windowName };
+        return { ref: { kind: 'tmux' as const, workspace: sessionName, window: windowName }, result: { stdout: '', stderr: '', code: 0 } };
       }),
-      createWindow: vi.fn(async (_server: unknown, sessionName: string) => {
+      openWindow: vi.fn(async (_server: unknown, sessionName: string) => {
         createCounter += 1;
         const windowName = `win-${createCounter}`;
         aliveWindows.add(`${sessionName}:${windowName}`);
-        return { result: { stdout: '', stderr: '', code: 0 }, windowName };
+        return { ref: { kind: 'tmux' as const, workspace: sessionName, window: windowName }, result: { stdout: '', stderr: '', code: 0 }, windowName };
       }),
-      killWindow: vi.fn(async (_server: unknown, target: string) => {
-        aliveWindows.delete(target);
+      closeWindow: vi.fn(async (_server: unknown, ref: { workspace: string; window: string }) => {
+        aliveWindows.delete(`${ref.workspace}:${ref.window}`);
         return { stdout: '', stderr: '', code: 0 };
       }),
-      sendKeys: vi.fn(async () => {}),
-      splitPane: vi.fn(async () => {}),
-      resolvePaneId: vi.fn(async () => '%0'),
-      listPaneIds: vi.fn(async () => [{ index: 0, paneId: '%0' }]),
-      execCommand: vi.fn(async () => ({ stdout: '' })),
-      uiTokenEnv: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
-      uiTokenEnvForServer: vi.fn(() => ({ AZITO_UI_TOKEN: 'ui-token-fixture' })),
+      sendKeysToHandle: vi.fn(async () => {}),
+      splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
+      resolvePane: vi.fn(async () => '%0'),
+      listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     };
+    const muxDriverRegistry = { resolve: vi.fn(() => tmux) } as any;
 
     const sessionStrategyFactory = {
       create: vi.fn(() => ({
@@ -1592,7 +1683,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
 
     const service = new WindowRespawnService(
       windowRepo,
-      tmux as any,
+      muxDriverRegistry,
       sessionStrategyFactory as any,
       taskRepo as any,
       unitRepo as any,
@@ -1609,6 +1700,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
       paneEnvService,
       new KeyedMutex(),
       true,
+      () => ({ AZITO_UI_TOKEN: 'ui-token-fixture' }),
       undefined,
     );
 
@@ -1632,12 +1724,12 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     // Both respawns' own kill attempts must have run (each turn correctly
     // detected a live window belonging to this task before creating its
     // own) — not just the first one.
-    expect(tmux.killWindow).toHaveBeenCalledTimes(2);
+    expect(tmux.closeWindow).toHaveBeenCalledTimes(2);
     // The persisted window row and the returned tmuxTarget from the LAST
     // completed respawn both agree with the one truly-alive window.
     const [aliveEntry] = aliveWindows;
     const [aliveSession, aliveWindow] = aliveEntry.split(':');
-    expect(windowRow.tmuxTarget).toBe(`${aliveSession}:${aliveWindow}.1`);
+    expect(windowRow.tmuxTarget).toBe(`${aliveSession}:${aliveWindow}`);
     expect(results.map((r) => r.tmuxTarget)).toContain(windowRow.tmuxTarget);
     // Both respawns went through the primary-window token rotation path
     // (each issuing its own generation) — combined with the alive-window and
@@ -1697,8 +1789,8 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
 
     await expect(service.resumeLegacySession(9, verifiedServer())).rejects.toThrow(/requires approval/);
 
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.sendKeys).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(9, {
       pendingOperation: 'recover_session_legacy',
       priorStatus: 'open',
@@ -1710,12 +1802,19 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
   it('respawn (PRIMARY task window) blocks BEFORE killing the existing window when the 3-point AND gate degrades between the outer check and the in-lock refetch', async () => {
     const task = makeTask({ id: 5, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
     const unit = makeUnit({ id: 10 });
-    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12.1' });
+    const win = makeWindow({ id: 1, taskId: 5, isPrimary: true, tmuxTarget: 'azito:task-1--ab12' });
     const { service, tmux, taskRepo, windowRepo, serverRepo } = buildService({
       window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
     });
     serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name, isolationVerifiedAt: null, isolationReport: null }));
-    tmux.listSessions.mockResolvedValue([{
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-1--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    tmux.listWorkspaces.mockResolvedValue([{
       name: 'azito',
       windowCount: 1,
       attached: false,
@@ -1728,10 +1827,10 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
     // The core regression assertion (Important finding 2): the still-live
     // old window must survive untouched — the reverify now runs BEFORE
     // confirmOldWindowGone, not after, so a downgrade discovered here must
-    // never reach killWindow at all.
-    expect(tmux.killWindow).not.toHaveBeenCalled();
-    expect(tmux.createWindow).not.toHaveBeenCalled();
-    expect(tmux.createSession).not.toHaveBeenCalled();
+    // never reach closeWindow at all.
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
     expect(windowRepo.update).not.toHaveBeenCalled();
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(5, {
       pendingOperation: 'respawn',

@@ -50,10 +50,13 @@ import { MobileStatusBar } from '../components/workspace/MobileStatusBar';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
-import type { SidebarMode, Task, Project, Window } from './workspace/types';
+import type { SidebarMode, Task, Project, Window, Session } from './workspace/types';
 import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
+import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
+import { useFocusSync } from '../hooks/useFocusSync';
+import { useHerdrTabFocus } from '../hooks/useHerdrTabFocus';
 
 export default function Workspace() {
   return (
@@ -94,7 +97,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -118,6 +121,14 @@ function WorkspaceInner() {
 
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
+
+  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
+  // sessions of their servers are available (per server, so unfetched servers wait).
+  useEffect(() => {
+    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
+    if (byServer.size === 0) return;
+    migrateLegacyTerminalTabIds(byServer);
+  }, [sessionData, migrateLegacyTerminalTabIds]);
 
   // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
   // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
@@ -432,8 +443,12 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverName: string, target: string, projectId?: number) => {
-    connectPaneRaw(serverName, target, projectId ?? currentProjectId);
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectId?: number) => {
+    if (typeof serverNameOrRef === 'object') {
+      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId);
+    } else {
+      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId));
+    }
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
 
@@ -443,12 +458,15 @@ function WorkspaceInner() {
 
   useEffect(() => {
     if (!focusedActiveTabId?.startsWith('terminal:')) return;
-    const rest = focusedActiveTabId.slice('terminal:'.length);
-    const slashIdx = rest.indexOf('/');
-    if (slashIdx <= 0) return;
-    const serverName = rest.slice(0, slashIdx);
-    const target = rest.slice(slashIdx + 1);
-    setFocusedTarget(`${serverName}::${target}`);
+    const parsed = parseTerminalTabId(focusedActiveTabId);
+    if (!parsed) return;
+    if (parsed.kind === 'legacy') {
+      setFocusedTarget(`${parsed.serverName}::${parsed.target}`);
+    } else if (parsed.kind === 'windowId') {
+      setFocusedTarget(`${parsed.serverName}::w${parsed.windowId}`);
+    } else {
+      setFocusedTarget(`${parsed.serverName}::ref:${parsed.ref}`);
+    }
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);
   useEffect(() => {
@@ -490,6 +508,10 @@ function WorkspaceInner() {
     }
   }, [openTaskRaw, currentProjectId, allTasks]);
 
+  const focusSync = useFocusSync(activeTabId, allTasks, openTask, connectPane);
+  useNotificationChannel({ onMuxFocus: focusSync.handleMuxFocus });
+  const { herdrConflictPaneIds } = useHerdrTabFocus(focusedActiveTabId, tabs, servers, layout.state);
+
   useEffect(() => {
     setOnOpenTask((taskId) => openTask(taskId, t('tasks:detail.taskRef', { id: taskId })));
     return () => setOnOpenTask(null);
@@ -502,9 +524,14 @@ function WorkspaceInner() {
     }
   }, [currentProjectId, navigate]);
 
-  const connectPaneFromActiveWindow = useCallback((serverName: string, target: string, projectId?: number) => {
-    connectPane(serverName, target, projectId);
-    focusProjectById(projectId);
+  const connectPaneFromActiveWindow = useCallback((refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => {
+    if (typeof refOrServerName === 'object') {
+      connectPane(refOrServerName, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined);
+      focusProjectById(typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined);
+    } else {
+      connectPane(refOrServerName, targetOrProjectId as string, projectId);
+      focusProjectById(projectId);
+    }
   }, [connectPane, focusProjectById]);
 
   const openTaskFromActiveWindow = useCallback((taskId: number, title: string, projectId?: number) => {
@@ -527,13 +554,21 @@ function WorkspaceInner() {
       return;
     }
     if (focusedActiveTabId.startsWith('terminal:')) {
-      const rest = focusedActiveTabId.slice('terminal:'.length);
-      const slashIdx = rest.indexOf('/');
-      if (slashIdx > 0) {
-        const serverName = rest.slice(0, slashIdx);
-        const tmuxTarget = rest.slice(slashIdx + 1);
+      const parsed = parseTerminalTabId(focusedActiveTabId);
+      if (parsed) {
+        const serverName = parsed.serverName;
+        let tmuxTarget: string;
+        let windowId: number | undefined;
+        if (parsed.kind === 'windowId') {
+          windowId = parsed.windowId;
+          tmuxTarget = `w${parsed.windowId}`;
+        } else if (parsed.kind === 'legacy') {
+          tmuxTarget = parsed.target;
+        } else {
+          tmuxTarget = parsed.ref;
+        }
         const task = findTaskByTarget(tmuxTarget);
-        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null });
+        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId });
         return;
       }
     }
@@ -577,17 +612,23 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [setSelectedRepoId, project, openIssueListRaw, currentProjectId, mobile, setSidebarOpen]);
 
-  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v') => {
-    const colonIdx = target.indexOf(':');
-    if (colonIdx < 0) return;
-    const sessionName = target.substring(0, colonIdx);
-    const rest = target.substring(colonIdx + 1);
-    const dotIdx = rest.indexOf('.');
-    if (dotIdx < 0) return;
-    const windowIndex = parseInt(rest.substring(0, dotIdx), 10);
-    if (isNaN(windowIndex)) return;
+  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => {
     try {
-      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${windowIndex}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      if (windowId != null) {
+        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      } else if (ref) {
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      } else {
+        const colonIdx = target.indexOf(':');
+        if (colonIdx < 0) return;
+        const sessionName = target.substring(0, colonIdx);
+        const rest = target.substring(colonIdx + 1);
+        const dotIdx = rest.indexOf('.');
+        if (dotIdx < 0) return;
+        const windowIndex = parseInt(rest.substring(0, dotIdx), 10);
+        if (isNaN(windowIndex)) return;
+        await api(`/servers/${serverName}/sessions/${sessionName}/windows/${windowIndex}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      }
       showToast(t(direction === 'h' ? 'workspace:pane.splitSuccessH' : 'workspace:pane.splitSuccessV'));
     } catch (e) {
       showToast(t('workspace:pane.splitFailed', { error: e instanceof Error ? e.message : String(e) }));
@@ -629,7 +670,16 @@ function WorkspaceInner() {
       navigate(location.pathname, { replace: true });
       return;
     }
+    const windowIdParam = params.get('windowId');
     const serverName = params.get('server');
+    if (windowIdParam && serverName) {
+      const wid = parseInt(windowIdParam, 10);
+      if (!isNaN(wid)) {
+        connectPaneRaw({ kind: 'windowId' as const, serverName, windowId: wid, pane: 1 }, currentProjectId);
+        navigate(location.pathname, { replace: true });
+        return;
+      }
+    }
     const target = params.get('target');
     if (serverName && target) {
       connectPane(serverName, target);
@@ -691,7 +741,7 @@ function WorkspaceInner() {
     // the pane TabBar via buildPaneTabMenuItems' base and mobile's single
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
-    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane,
+    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane, servers,
   });
 
   const handleWindowAddedToTask = useCallback(async (
@@ -700,10 +750,11 @@ function WorkspaceInner() {
     tmuxTarget: string,
     label: string,
     activate: boolean,
-    extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string },
+    extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; ref?: string },
   ) => {
     try {
       const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
+      if (extra?.ref) body['ref'] = extra.ref;
       if (extra?.windowType) body['window_type'] = extra.windowType;
       if (extra?.workerType) body['worker_type'] = extra.workerType;
       if (extra?.workerModel) body['worker_model'] = extra.workerModel;
@@ -957,6 +1008,9 @@ function WorkspaceInner() {
       taskWindows={taskWindows}
       allProjects={allProjects}
       onAddWindowToProject={handleAddWindowToProject}
+      followHerdr={focusSync.followEnabled}
+      onFollowHerdrChange={focusSync.setFollowEnabled}
+      onWindowFocus={focusSync.handleWindowSelect}
     />
   );
 
@@ -1166,10 +1220,11 @@ function WorkspaceInner() {
               // TaskPanel's `isPaneFocused` prop doc) — a visible-but-unfocused pane's
               // own background polling must not steal focus from the focused pane.
               const isPaneFocused = !!pane && pane.id === layout.state.focusedPaneId;
+              const herdrConflict = isVisible && !!pane && herdrConflictPaneIds.has(pane.id);
               const positionStyle: React.CSSProperties = rect
                 ? { position: 'absolute', top: rect.top, left: rect.left, width: rect.width, height: rect.height }
                 : { position: 'absolute', top: 0, left: 0, width: 0, height: 0, visibility: 'hidden' };
-              return renderTabContent(tab, { ...positionStyle, overflow: 'hidden' }, isVisible, closeTabPaneAware, isPaneFocused);
+              return renderTabContent(tab, { ...positionStyle, overflow: 'hidden' }, isVisible, closeTabPaneAware, isPaneFocused, herdrConflict);
             })}
           </div>
         )}
@@ -1193,7 +1248,7 @@ function WorkspaceInner() {
   // `isPaneFocused` is omitted by the mobile call site (single-pane concept doesn't
   // apply there) — TabContentRenderer/TaskPanel both default an omitted value to
   // "focused", preserving mobile's existing single-view behavior untouched.
-  function renderTabContent(tab: PersistedTab, wrapperStyle: React.CSSProperties, isVisible: boolean, closeTabFn: (tabId: string) => void, isPaneFocused?: boolean) {
+  function renderTabContent(tab: PersistedTab, wrapperStyle: React.CSSProperties, isVisible: boolean, closeTabFn: (tabId: string) => void, isPaneFocused?: boolean, herdrConflict?: boolean) {
     const interactive = isVisible && !paneDrag;
     const style: React.CSSProperties = { ...wrapperStyle, pointerEvents: interactive ? 'auto' : 'none' };
     const handlePointerDownCapture = interactive
@@ -1218,6 +1273,7 @@ function WorkspaceInner() {
           tab={tab}
           isPaneFocused={isPaneFocused}
           isVisible={isVisible}
+          herdrConflict={herdrConflict}
           tabs={tabs}
           allUnits={allUnits}
           tasks={tasks}

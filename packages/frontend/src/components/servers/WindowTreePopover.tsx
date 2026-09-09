@@ -1,22 +1,23 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
+import type { Session } from '../../hooks/useServerManagement';
+import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
 import { Icon } from '../ui/Icon';
 
 interface WindowTreePopoverProps {
   sessions: Session[];
   serverName: string;
-  selectedTarget: string | null;
-  onSelect: (target: string) => void;
+  selectedRef: TerminalRef | null;
+  onSelect: (ref: TerminalRef) => void;
   onClose: () => void;
   onCreateSession: () => void;
   onAddWindow: (sessionName: string) => void;
-  onSplitPane: (sessionName: string, windowName: string, direction: string) => void;
+  onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
   isMobile: boolean;
 }
 
 export default function WindowTreePopover({
-  sessions, serverName, selectedTarget,
+  sessions, serverName, selectedRef,
   onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, isMobile,
 }: WindowTreePopoverProps) {
   const { t } = useTranslation('servers');
@@ -31,6 +32,7 @@ export default function WindowTreePopover({
   };
 
   const totalWindows = sessions.reduce((sum, s) => sum + s.windows.length, 0);
+  const selectedId = selectedRef ? terminalTabId(selectedRef) : null;
 
   const content = (
     <>
@@ -68,13 +70,14 @@ export default function WindowTreePopover({
               </span>
             </TreeRow>
             {expanded && sess.windows.map((win) => {
-              const winTarget = `${sess.name}:${win.name ?? win.index}`;
+              const winRef = terminalRefFromWindow(serverName, win.windowId, win.ref, 1);
+              const winRefId = terminalTabId(winRef);
               return (
                 <div key={win.index}>
                   <TreeRow
                     indent={1}
-                    onClick={() => onSelect(winTarget)}
-                    selected={selectedTarget === winTarget}
+                    onClick={() => onSelect(winRef)}
+                    selected={selectedId === winRefId}
                   >
                     <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                       <Icon name="chevron-right" size={14} />
@@ -87,20 +90,20 @@ export default function WindowTreePopover({
                       style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
                       onClick={(e) => {
                         e.stopPropagation();
-                        onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal');
+                        onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
                       }}
                     >
                       <Icon name="split-h" size={14} /> {t('windows.split')}
                     </span>
                   </TreeRow>
                   {win.panes.map((pane) => {
-                    const paneTarget = `${sess.name}:${win.name ?? win.index}.${pane.index}`;
+                    const paneRef = terminalRefFromWindow(serverName, win.windowId, win.ref, pane.index);
                     return (
                       <TreeRow
                         key={pane.index}
                         indent={2}
-                        onClick={() => onSelect(paneTarget)}
-                        selected={selectedTarget === paneTarget}
+                        onClick={() => onSelect(paneRef)}
+                        selected={selectedId === terminalTabId(paneRef)}
                       >
                         <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.{pane.index}</span>
                         <span style={{ fontFamily: 'var(--mono)' }}>{pane.title || pane.command}</span>

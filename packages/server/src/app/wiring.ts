@@ -9,6 +9,8 @@ import { EventEmitter } from 'events';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
+import type { ServerConfig } from '../modules/servers/Server';
+import { uiTokenEnvForServer } from '../shared/auth/uiTokenEnv';
 import { SftpService } from '../modules/servers/ssh/SftpService';
 import { HubRepoCache } from '../modules/git/hub-transfer/HubRepoCache';
 import { RemoteBundleOps } from '../modules/git/hub-transfer/RemoteBundleOps';
@@ -20,12 +22,14 @@ import { PushNotaryService } from '../modules/git/hub-transfer/PushNotaryService
 import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
+import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
 import { PaneClassifier } from '../modules/llm/PaneClassifier';
 import { LlmContentExtractor } from '../modules/llm/LlmContentExtractor';
 import type { IContentExtractor } from '../modules/llm/ContentExtractor';
 import { PaneStreamFactory } from '../modules/tmux/PaneStreamFactory';
+import { HerdrEventBridge } from '../modules/operations/HerdrEventBridge';
 import { GitProviderService } from '../modules/git/providers/GitProviderService';
 import { WorktreeServiceFactory } from '../modules/git/WorktreeServiceFactory';
 import { MinioStorageClient } from '../modules/files/storage/MinioStorageClient';
@@ -74,17 +78,20 @@ import { SqliteBrowserSnapshotRepository } from '../modules/browser/SqliteBrowse
 import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGroupRepository';
 
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
+import { HerdrClient } from '../modules/mux/herdr/HerdrClient';
+import { ZellijClient } from '../modules/mux/zellij/ZellijClient';
+import { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
 import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
+import { PaneHandleResolver } from '../modules/operations/PaneHandleResolver';
 import { WindowRespawnService } from '../modules/windows/WindowRespawnService';
 import { WindowSleepService } from '../modules/windows/WindowSleepService';
 import { SessionCaptureService } from '../modules/windows/SessionCaptureService';
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
-import { stripPaneSuffix } from '../modules/windows/paneTarget';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
 import { UsageService } from '../modules/usage/UsageService';
@@ -102,6 +109,10 @@ export interface SharedInfra {
   tmuxInstaller: TmuxInstaller;
   transportFactory: TransportFactory;
   tmuxClient: TmuxClient;
+  muxDriverRegistry: MuxDriverRegistry;
+  herdrClient: HerdrClient;
+  zellijClient: ZellijClient;
+  zellijResident: ZellijResidentClient;
   llmClient: ILlmClient;
   agentRegistry: AgentRegistry;
   paneClassifier: PaneClassifier;
@@ -197,7 +208,9 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
+  herdrEventBridge: HerdrEventBridge;
   interactionMonitor: InteractionMonitor;
+  paneHandleResolver: PaneHandleResolver;
   resourceGuard: ResourceGuard;
   /** Shared with FetchDistributionService (its writer) — also read by projectsRoutes to render each project server's last-distribution record (Issue #87 配信状態の可視化). */
   distributionStateRepo: SqliteDistributionStateRepository;
@@ -205,6 +218,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   fetchDistributionService: FetchDistributionService;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
+  harnessPrefix?: string;
 }
 
 // ─── Per-module factories ───
@@ -216,6 +230,13 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const tmuxInstaller = new TmuxInstaller();
   const transportFactory = new TransportFactory(publicUrl);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl);
+  const muxDriverRegistry = new MuxDriverRegistry();
+  muxDriverRegistry.register('tmux', tmuxClient);
+  const herdrClient = new HerdrClient(transportFactory);
+  muxDriverRegistry.register('herdr', herdrClient);
+  const zellijResident = new ZellijResidentClient();
+  const zellijClient = new ZellijClient(transportFactory, 'azito', zellijResident);
+  muxDriverRegistry.register('zellij', zellijClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
@@ -260,6 +281,10 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     tmuxInstaller,
     transportFactory,
     tmuxClient,
+    muxDriverRegistry,
+    herdrClient,
+    zellijClient,
+    zellijResident,
     llmClient,
     agentRegistry,
     paneClassifier,
@@ -370,7 +395,7 @@ function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths,
   return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, harnessPrefix?: string): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -379,8 +404,9 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   const taskEvents = new EventEmitter();
   const originationService = new TaskOriginationService(repos.taskRepo, repos.auditLogService);
   const taskPaneEnvironmentService = new TaskPaneEnvironmentService(repos.taskTokenRepo, repos.projectSecretRepo, uiToken, scopedAuthEnabled, repos.auditLogService);
-  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, sessionCaptureService);
-  const windowSleepService = new WindowSleepService(repos.windowRepo, infra.tmuxClient, sessionStrategyFactory, repos.serverRepo);
+  const uiTokenEnvFn = (server: ServerConfig) => uiTokenEnvForServer(uiToken, server);
+  const windowRespawnService = new WindowRespawnService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.taskRepo, repos.unitRepo, infra.supervisorRegistry, repos.projectServerRepo, repos.projectRepo, infra.transportFactory, repos.logRepo, infra.unitTypeLoader, infra.sidekickPackageLoader, repos.serverRepo, repos.projectSecretRepo, taskEvents, taskPaneEnvironmentService, infra.serverIsolationMutex, scopedAuthEnabled, uiTokenEnvFn, sessionCaptureService, harnessPrefix);
+  const windowSleepService = new WindowSleepService(repos.windowRepo, infra.muxDriverRegistry, sessionStrategyFactory, repos.serverRepo);
   const taskRestoreService = new TaskRestoreService({
     taskRepo: repos.taskRepo,
     serverRepo: repos.serverRepo,
@@ -388,7 +414,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     projectServerRepo: repos.projectServerRepo,
     unitRepo: repos.unitRepo,
     windowRepo: repos.windowRepo,
-    tmux: infra.tmuxClient,
+    muxDriverRegistry: infra.muxDriverRegistry,
     worktreeServiceFactory: infra.worktreeServiceFactory,
     transportFactory: infra.transportFactory,
     contentExtractor: infra.contentExtractor,
@@ -407,7 +433,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
   // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
   // lookups (and their cache) to one per process.
-  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.tmuxClient, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService);
+  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
@@ -427,6 +453,7 @@ function buildExecuteTaskUseCase(
   fetchDistributionService: FetchDistributionService,
   distributionStateRepo: SqliteDistributionStateRepository,
   dataPaths: DataPaths,
+  harnessPrefix?: string,
 ): ExecuteTaskUseCase {
 
   const sftpService = new SftpService(infra.sshClient);
@@ -443,7 +470,6 @@ function buildExecuteTaskUseCase(
     repos.projectServerRepo,
     infra.sidekickPackageLoader,
     repos.logRepo,
-    infra.tmuxClient,
     infra.worktreeServiceFactory,
     infra.gitProvider,
     infra.transportFactory,
@@ -467,6 +493,8 @@ function buildExecuteTaskUseCase(
     pushNotaryService,
     fetchDistributionService,
     distributionStateRepo,
+    infra.muxDriverRegistry,
+    harnessPrefix,
   );
 }
 
@@ -484,18 +512,20 @@ function buildAgentActivityMonitor(
   executeTaskUseCase: ExecuteTaskUseCase,
   sessionCaptureService: SessionCaptureService,
   processProbe: WindowActivityStatusService,
+  paneHandleResolver: PaneHandleResolver,
+  muxDriverRegistry: MuxDriverRegistry,
 ): AgentActivityMonitor {
   return new AgentActivityMonitor(
     executeTaskUseCase,
     repos.windowRepo,
-    infra.tmuxClient,
+    muxDriverRegistry,
     repos.serverRepo,
     infra.notificationBus,
     processProbe,
     (serverName, target) => {
       const wins = repos.windowRepo.findAll().filter(
         (w) => w.serverName === serverName
-          && stripPaneSuffix(w.tmuxTarget) === stripPaneSuffix(target)
+          && w.tmuxTarget === target
           && !w.agentSessionId
           && w.workerType === 'codex',
       );
@@ -503,6 +533,7 @@ function buildAgentActivityMonitor(
         void sessionCaptureService.tryScanForWindow(w.id);
       }
     },
+    paneHandleResolver,
   );
 }
 
@@ -553,6 +584,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // SupervisorRegistry — constructed inside it — can be given the same
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
+  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
@@ -565,11 +597,14 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // table.
   const distributionStateRepo = new SqliteDistributionStateRepository(db);
   const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo);
-  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo);
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, harnessPrefix);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths);
-  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService);
-  const interactionMonitor = new InteractionMonitor(repos.windowRepo);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, harnessPrefix);
+  const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
+  const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
+  executeTaskUseCase.setActivitySource(agentActivityMonitor);
+  const herdrEventBridge = new HerdrEventBridge(agentActivityMonitor, infra.notificationBus, repos.serverRepo, repos.windowRepo);
+  const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 
   return {
@@ -582,9 +617,12 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,
+    herdrEventBridge,
     interactionMonitor,
+    paneHandleResolver,
     resourceGuard,
     scopedAuthEnabled,
+    harnessPrefix,
     distributionStateRepo,
     fetchDistributionService,
     ...systemUpdateModule,

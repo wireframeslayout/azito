@@ -12,6 +12,7 @@ packages/server/dist-agent/
 .worktrees/
 *.tsbuildinfo
 .env
+packages/shared/dist/
 packages/tui-supervisor/dist/
 data.db.bak-*
 data/vapid-keys.json

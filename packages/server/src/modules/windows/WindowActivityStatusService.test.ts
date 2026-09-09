@@ -13,6 +13,7 @@ const LOCAL_SERVER: ServerConfig = {
   agentVersion: null,
   sshHost: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -40,6 +41,7 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
+    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -130,7 +132,7 @@ describe('WindowActivityStatusService', () => {
     // stuck around independently of the primary (AgentActivityMonitor) source.
     const windows = [
       buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'test:win--1m1u' }),
-      buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u.1' }),
+      buildWindow({ id: 2, ownerType: 'task', projectId: null, taskId: 9, tmuxTarget: 'test:win--1m1u' }),
     ];
     const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[2, 'offline']]));
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);
@@ -153,7 +155,7 @@ describe('WindowActivityStatusService', () => {
     // downstream, so it protected nothing.
     const windows = [
       buildWindow({ id: 1, ownerType: 'project', projectId: 5, taskId: null, tmuxTarget: 'main:agent-1' }),
-      buildWindow({ id: 2, ownerType: 'project', projectId: 6, taskId: null, tmuxTarget: 'main:agent-1.1' }),
+      buildWindow({ id: 2, ownerType: 'project', projectId: 6, taskId: null, tmuxTarget: 'main:agent-1' }),
     ];
     const { windowRepo, serverRepo, windowSessionResolver, getActivityStatus } = buildDeps(windows, [LOCAL_SERVER], new Map([[1, 'idle'], [2, 'working']]));
     const service = new WindowActivityStatusService(windowRepo, serverRepo, windowSessionResolver);

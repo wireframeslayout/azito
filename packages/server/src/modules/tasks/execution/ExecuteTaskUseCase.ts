@@ -12,7 +12,8 @@ import type { SqliteProjectSecretRepository } from '../../projects/SqliteProject
 import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoader';
 import type { SidekickSyncService } from '../../sidekicks/SidekickSyncService';
 import type { IExecutionLogRepository, LogType } from '../ExecutionLog';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { IMuxClient } from '../../tmux/IMuxClient';
+import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import { confirmOldWindowGone, createRotatedWindow, createRotatedWindowInLock, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, withServerLock, type ServerIsolationLock } from './WindowRotation';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
@@ -48,7 +49,8 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -66,8 +68,8 @@ function sleep(ms: number): Promise<void> {
 
 interface RunningExecution {
   taskId: number;
-  target: string;
-  windowTarget: string;
+  handle: PaneHandle;
+  muxRef: MuxRef;
   serverName: string;
   abortController: AbortController;
 }
@@ -99,7 +101,6 @@ export class ExecuteTaskUseCase {
     private projectServerRepo: IProjectServerRepository,
     private sidekickLoader: SidekickPackageLoader,
     private logRepo: IExecutionLogRepository,
-    private tmux: TmuxClient,
     private worktreeServiceFactory: WorktreeServiceFactory,
     private gitProvider: GitProviderService,
     private transportFactory: TransportFactory,
@@ -166,21 +167,24 @@ export class ExecuteTaskUseCase {
     // information must fail toward keeping the record" rule — the record is
     // left untouched rather than cleared. See the field's use below.
     private distributionStateRepo: IDistributionStateRepository | null = null,
+    private muxDriverRegistry: MuxDriverRegistry,
+    private harnessPrefix?: string,
   ) {
-    this.gitInfoCollector = new GitInfoCollector(this.tmux);
-    this.pushVerifier = new PushVerifier(this.tmux, this.gitProvider);
+    this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
+    this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
     this.pullRequestCreator = new PullRequestCreator(
       this.taskRepo,
       this.gitProvider,
       (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
     );
     this.workerInput = new WorkerInputService(
-      this.tmux,
+      this.muxDriverRegistry,
       this.supervisorRegistry,
       (taskId, unitId, type, content) => this.appendLog(taskId, unitId, type, content),
     );
     this.workerWaiter = new WorkerWaiter(
-      this.tmux,
+      this.muxDriverRegistry,
+      this.transportFactory,
       this.paneClassifier,
       this.contentExtractor,
       this.paneStreamFactory,
@@ -189,7 +193,7 @@ export class ExecuteTaskUseCase {
       this.workerInput,
     );
     this.httpSignalCoordinator = new HttpSignalTurnCoordinator(this.turnRepo, this.turnSignalHub);
-    const tuiRuntime = new TuiWorkerRuntime(this.tmux, this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry);
+    const tuiRuntime = new TuiWorkerRuntime(this.workerInput, this.workerWaiter, this.httpSignalCoordinator, this.supervisorRegistry, this.harnessPrefix);
     this.runtimeRegistry = new WorkerRuntimeRegistry();
     this.runtimeRegistry.register('tui', tuiRuntime);
     this.phaseLoopRunner = new PhaseLoopRunner(
@@ -219,12 +223,20 @@ export class ExecuteTaskUseCase {
     );
   }
 
+  setActivitySource(source: { isKeyWorking(serverName: string, target: string): boolean }): void {
+    this.phaseLoopRunner.setActivitySource(source);
+  }
+
   // Bundled once per call (cheap object literal — `serverRepo`/`serverIsolationMutex`
   // themselves are the singletons) so createRotatedWindow/createSecondaryWindow
   // call sites below don't each re-spell the same two-field object. See
   // ServerIsolationLock's doc comment in WindowRotation.ts.
   private get serverIsolationLock(): ServerIsolationLock {
     return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
+  }
+
+  private resolveDriver(server: ServerConfig): IMuxClient {
+    return this.muxDriverRegistry.resolve(server);
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -529,7 +541,7 @@ export class ExecuteTaskUseCase {
   private async rollbackWindowAfterPostCreationFailure(
     taskId: number,
     server: ServerConfig,
-    tmuxSession: string,
+    muxWorkspace: string,
     windowName: string,
     tokenId: number,
     revokeReason: string,
@@ -541,8 +553,9 @@ export class ExecuteTaskUseCase {
       this.taskRepo.updateStatusIfWindowMatches(taskId, windowName, 'failed' as TaskStatus, tokenId);
     }
     try {
+      const rollbackDriver = this.resolveDriver(server);
       await rollbackWindowReference(
-        this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+        rollbackDriver.closeWindow(server, { kind: rollbackDriver.kind, workspace: muxWorkspace, window: windowName }),
         this.paneEnvService,
         tokenId,
         revokeReason,
@@ -589,7 +602,7 @@ export class ExecuteTaskUseCase {
   }
 
   /**
-   * Resolves "where" (serverName/tmuxSession) and "what" (Unit — behavior +
+   * Resolves "where" (serverName/muxWorkspace) and "what" (Unit — behavior +
    * runtime) a task runs with. Fail-fast: when either cannot be resolved,
    * marks the task failed with a log entry and throws (no implicit default
    * server or Unit) — mirrors the existing worktree-creation failure
@@ -603,7 +616,7 @@ export class ExecuteTaskUseCase {
    * run registry point at another. A mismatch fails fast instead of silently
    * preferring either side.
    */
-  private resolveExecutionEnv(task: Task, requestedUnitId: number): { serverName: string; tmuxSession: string; unit: Unit } {
+  private resolveExecutionEnv(task: Task, requestedUnitId: number): { serverName: string; muxWorkspace: string; unit: Unit } {
     const serverName = resolveTaskServerName(task, this.projectServerRepo);
     if (!serverName) {
       const message = 'Cannot resolve execution server: task has no serverName and its project does not have exactly one project_servers entry';
@@ -637,8 +650,8 @@ export class ExecuteTaskUseCase {
       throw new Error(message);
     }
 
-    const tmuxSession = resolveTmuxSession(task.projectId, serverName, this.projectServerRepo);
-    return { serverName, tmuxSession, unit };
+    const muxWorkspace = resolveMuxWorkspace(task.projectId, serverName, this.projectServerRepo);
+    return { serverName, muxWorkspace, unit };
   }
 
   async execute(unitId: number, taskId: number, options?: { force?: boolean }): Promise<void> {
@@ -652,7 +665,7 @@ export class ExecuteTaskUseCase {
     // fails fast (marks the task failed, throws) when neither task.unitId nor
     // project.defaultUnitId resolves to a Unit — same fallback the old
     // workerProfileId resolution used, now merged into Unit (Issue #263 Refine B).
-    const { serverName, tmuxSession, unit } = this.resolveExecutionEnv(task, unitId);
+    const { serverName, muxWorkspace, unit } = this.resolveExecutionEnv(task, unitId);
 
     const serverAtStart = this.serverRepo.findByName(serverName);
     if (!serverAtStart) throw new Error('Server not found');
@@ -746,7 +759,7 @@ export class ExecuteTaskUseCase {
     // creation below) sees it too.
     let sessionResult: { created: boolean; server: ServerConfig };
     try {
-      sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+      sessionResult = await ensureSessionWithLock(this.resolveDriver(server), this.serverIsolationLock, server, muxWorkspace);
     } catch (err) {
       this.failOnServerSnapshotMismatch(err, taskId, unitId);
       throw err;
@@ -828,13 +841,14 @@ export class ExecuteTaskUseCase {
         // killed.
         const { windowName: newWindowName, tokenId: newTokenId, server: newServer } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
           if (currentTask.tmuxWindow) {
-            const preCheck = await this.tmux.listSessions(freshServer);
-            const preSession = preCheck.find((s) => s.name === tmuxSession);
-            const oldWin = preSession?.windows.find((w) => w.name === currentTask.tmuxWindow);
+            const killDriver = this.resolveDriver(freshServer);
+            const preWorkspaces = await killDriver.listWorkspaces(freshServer);
+            const preWs = preWorkspaces.find((ws) => ws.name === muxWorkspace);
+            const oldWin = preWs?.windows.find((w) => w.name === currentTask.tmuxWindow);
             await confirmOldWindowGone(
-              this.tmux,
+              killDriver,
               freshServer,
-              oldWin ? { target: `${tmuxSession}:${oldWin.index}`, kind: 'window' } : null,
+              oldWin ? { kind: 'window' as const, ref: { kind: killDriver.kind, workspace: muxWorkspace, window: String(oldWin.index) } } : null,
               task.id,
             );
             if (oldWin) await sleep(300);
@@ -848,8 +862,11 @@ export class ExecuteTaskUseCase {
           // transport) or resolving with a non-zero exit code (agent
           // transport — see WindowRotation.ts's doc comment; Issue #28
           // third-party review finding).
-          return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', (fs, env) =>
-            this.tmux.createWindow(fs, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+          const execDriver = this.resolveDriver(freshServer);
+          return createRotatedWindowInLock(this.paneEnvService, freshServer, currentTask, 'execute_create_failed', async (fs, env) => {
+            const { ref: createdRef, result } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env });
+            return { result, windowName: createdRef.window, ref: createdRef };
+          },
             (fs) => {
               const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs);
               lockedProject = locked.project;
@@ -876,12 +893,14 @@ export class ExecuteTaskUseCase {
       // (routes.ts) to translate correctly, not be swallowed into the
       // generic "Failed to create tmux window" wrap below.
       if (err instanceof ExecutionGateDeniedError || err instanceof ExecutionGatePendingApprovalError) throw err;
-      throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
+      throw new Error(`Failed to create task window: ${err instanceof Error ? err.message : err}`);
     }
     server = createdServer;
 
-    const windowTarget = `${tmuxSession}:${windowName}`;
-    const target = await this.tmux.resolvePaneId(server, windowTarget);
+    const executeDriver = this.resolveDriver(server);
+    const ref: MuxRef = { kind: executeDriver.kind, workspace: muxWorkspace, window: windowName };
+    const windowTarget = tmuxTargetFromMuxRef(ref);
+    const handle = await executeDriver.resolvePane(server, ref, 1);
 
     // Canonicalized ONCE, immediately after resolution (Issue #87
     // third-party review, 11th round, Important finding 1) — see
@@ -966,7 +985,7 @@ export class ExecuteTaskUseCase {
         : distOutcome.stage === 'stale_local_branch'
           ? 'fetch_distribution_stale_local_branch_rollback'
           : 'fetch_distribution_prereq_failed_rollback';
-      await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, rollbackReason);
+      await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, rollbackReason);
       // No write here — and whether one already happened depends on which
       // stage failed. `onBeforeDistribute` (passed to `performDistribution`
       // above) only fires once every prerequisite check has passed, right
@@ -1084,7 +1103,7 @@ export class ExecuteTaskUseCase {
         // rollbackWindowAfterPostCreationFailure() (see its own doc comment)
         // — shared with the worktree_path_rejected branch below and with the
         // fetch-distribution failure branch above.
-        await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'worktree_creation_failed_rollback');
+        await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, 'worktree_creation_failed_rollback');
         throw new Error(`Worktree creation failed: ${message}`);
       }
 
@@ -1122,7 +1141,7 @@ export class ExecuteTaskUseCase {
           // Fix 3: same clearTmuxWindowIfMatches reasoning as the
           // worktree_failed branch above — this span also runs outside
           // runExclusiveForTask.
-          await this.rollbackWindowAfterPostCreationFailure(taskId, server, tmuxSession, windowName, tokenId, 'worktree_path_rejected_rollback', {
+          await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, 'worktree_path_rejected_rollback', {
             worktreePath: null,
             worktreeBranch: null,
           });
@@ -1173,7 +1192,7 @@ export class ExecuteTaskUseCase {
         // metacharacters via a maliciously named directory/symlink inside
         // the allowed root (Issue #27 review finding: cd command injection).
         // `--` guards against a leading `-` being read as a cd option.
-        await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
+        await this.resolveDriver(server).sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
         await sleep(500);
       } catch {}
     }
@@ -1189,7 +1208,14 @@ export class ExecuteTaskUseCase {
       }
       if (w.sleeping) continue;
       try {
-        const alive = await this.tmux.checkPaneExists(server, w.tmuxTarget);
+        const windowDriver = this.resolveDriver(server);
+        let alive: boolean;
+        if (w.muxRef) {
+          alive = await windowDriver.windowExists(server, w.muxRef);
+        } else {
+          const resolved = await windowDriver.resolveRef(server, w.tmuxTarget);
+          alive = resolved ? await windowDriver.windowExists(server, resolved) : true;
+        }
         if (!alive) this.windowRepo.remove(w.id);
       } catch {
         // checkPaneExists failed — keep the row rather than risk deleting a live window
@@ -1203,7 +1229,8 @@ export class ExecuteTaskUseCase {
       projectId: null,
       taskId,
       serverName,
-      tmuxTarget: `${windowTarget}.1`,
+      tmuxTarget: windowTarget,
+      muxRef: ref,
       label: windowName,
       isPrimary: true,
       windowType,
@@ -1213,6 +1240,7 @@ export class ExecuteTaskUseCase {
       launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
       workingDirectory: effectiveDir || null,
       paneLayout: null,
+      herdrNavigationLock: null,
       sleeping: false,
     });
 
@@ -1266,20 +1294,26 @@ export class ExecuteTaskUseCase {
       if (shouldSupervise(server.type, windowType)) {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
+      const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
       try {
         const actualCommand = await runtime.launch({
-          server, target, supervisorTarget: windowTarget, taskId, unitId,
+          server, handle, driver: executeDriver, supervisorTarget: windowTarget, taskId, unitId,
+          windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
           effectiveLaunchCommand,
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
-      } catch {}
+      } catch (launchErr) {
+        // Keep the historical "launch failure is not fatal here" behaviour, but never hide it:
+        // on rc.15 a herdr launch failed silently and the phase went on to a dead pane.
+        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+      }
     }
 
     const abortController = new AbortController();
     const executions = this.runningExecutions.get(unitId) || [];
-    executions.push({ taskId, abortController, target, windowTarget: `${windowTarget}.1`, serverName });
+    executions.push({ taskId, abortController, handle, muxRef: ref, serverName });
     this.runningExecutions.set(unitId, executions);
     this.appendLog(taskId, unitId, 'status_change', { status: 'started' });
 
@@ -1308,7 +1342,8 @@ export class ExecuteTaskUseCase {
       serverName,
       task,
       server,
-      target,
+      handle,
+      executeDriver,
       abortController.signal,
       windowTarget,
       distributionRepoEntry,
@@ -1395,7 +1430,7 @@ export class ExecuteTaskUseCase {
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error('Task not found');
 
-    const { serverName, tmuxSession, unit } = this.resolveExecutionEnv(task, unitId);
+    const { serverName, muxWorkspace, unit } = this.resolveExecutionEnv(task, unitId);
 
     const serverAtStart = this.serverRepo.findByName(serverName);
     if (!serverAtStart) throw new Error('Server not found');
@@ -1434,7 +1469,7 @@ export class ExecuteTaskUseCase {
     // per-server-name mutex, not against runExclusiveForTask.)
     let sessionResult: { created: boolean; server: ServerConfig };
     try {
-      sessionResult = await ensureSessionWithLock(this.tmux, this.serverIsolationLock, server, tmuxSession);
+      sessionResult = await ensureSessionWithLock(this.resolveDriver(server), this.serverIsolationLock, server, muxWorkspace);
     } catch (err) {
       this.failOnServerSnapshotMismatch(err, taskId, unitId);
       throw err;
@@ -1473,9 +1508,10 @@ export class ExecuteTaskUseCase {
         const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
         let exists = false;
         try {
-          const sessions = await this.tmux.listSessions(server);
-          const session = sessions.find((s) => s.name === tmuxSession);
-          if (session) exists = session.windows.some((w) => w.name === candidateWindowName);
+          const fuDriver = this.resolveDriver(server);
+          const workspaces = await fuDriver.listWorkspaces(server);
+          const ws = workspaces.find((w) => w.name === muxWorkspace);
+          if (ws) exists = ws.windows.some((w) => w.name === candidateWindowName);
         } catch {}
         if (exists) {
           return { windowName: candidateWindowName, windowExists: true, tokenId: null, server };
@@ -1494,8 +1530,11 @@ export class ExecuteTaskUseCase {
         // WindowRotation.ts's doc comment). The DB is only updated with
         // `windowName` once creation is confirmed to have actually
         // succeeded.
-        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', (freshServer, env) =>
-          this.tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+        const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', async (freshServer, env) => {
+          const fuCreateDriver = this.resolveDriver(freshServer);
+          const { ref: fuRef, result } = await fuCreateDriver.openWindow(freshServer, muxWorkspace, `task-${task.id}`, { extraEnv: env });
+          return { result, windowName: fuRef.window, ref: fuRef };
+        },
           true,
           (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs),
         );
@@ -1508,16 +1547,14 @@ export class ExecuteTaskUseCase {
       // comment in execute() above — reverifyGateInLock's errors must not be
       // swallowed into the generic wrap below.
       if (err instanceof ExecutionGateDeniedError || err instanceof ExecutionGatePendingApprovalError) throw err;
-      throw new Error(`Failed to create tmux window: ${err instanceof Error ? err.message : err}`);
+      throw new Error(`Failed to create task window: ${err instanceof Error ? err.message : err}`);
     }
-    // Issue #29 review (10th pass), Important finding 3: use the fresh
-    // `server` row the lock actually ran against (either the "window
-    // already exists" branch's own re-check, or createRotatedWindow's
-    // refetch) for everything followUp() does past this point.
     server = createdServer;
 
-    const windowTarget = `${tmuxSession}:${windowName}`;
-    const target = await this.tmux.resolvePaneId(server, windowTarget);
+    const fuMainDriver = this.resolveDriver(server);
+    const ref: MuxRef = { kind: fuMainDriver.kind, workspace: muxWorkspace, window: windowName };
+    const windowTarget = tmuxTargetFromMuxRef(ref);
+    const handle = await fuMainDriver.resolvePane(server, ref, 1);
 
     if (!windowExists) {
       // Use worktree path if available, otherwise fall back to working directory.
@@ -1556,7 +1593,7 @@ export class ExecuteTaskUseCase {
           // runExclusiveForTask.
           try {
             await rollbackWindowReference(
-              this.tmux.killWindow(server, `${tmuxSession}:${windowName}`),
+              this.resolveDriver(server).closeWindow(server, ref),
               this.paneEnvService,
               tokenId!,
               'followup_working_directory_rejected_rollback',
@@ -1570,7 +1607,7 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.tmux.sendKeys(server, target, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
           await sleep(500);
         } catch {}
       }
@@ -1595,19 +1632,22 @@ export class ExecuteTaskUseCase {
         }
         try {
           const actualCommand = await runtime.resume({
-            server, target, supervisorTarget: windowTarget, taskId, unitId,
+            server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId,
+            windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
             effectiveLaunchCommand: effectiveFollowUpCommand,
           });
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
-        } catch {}
+        } catch (launchErr) {
+          this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+        }
       }
     }
 
     const abortController = new AbortController();
     const followUpExecutions = this.runningExecutions.get(unitId) || [];
-    followUpExecutions.push({ taskId, abortController, target, windowTarget: `${windowTarget}.1`, serverName });
+    followUpExecutions.push({ taskId, abortController, handle, muxRef: ref, serverName });
     this.runningExecutions.set(unitId, followUpExecutions);
     this.appendLog(taskId, unitId, 'status_change', { status: 'follow_up_started', comment });
 
@@ -1625,7 +1665,7 @@ export class ExecuteTaskUseCase {
 
       // Start pipe-pane BEFORE sending to capture all output — this capture runs
       // in BOTH execution modes (see PhaseLoopRunner.stateMachineLoop's identical note).
-      const followUpStream = this.workerWaiter.startPaneStream(server, target, taskId, unitId);
+      const followUpStream = this.workerWaiter.startPaneStream(server, handle, taskId, unitId);
       if (!followUpStream) return;
 
       const followUpProject = this.projectRepo.findById(task.projectId);
@@ -1672,7 +1712,7 @@ export class ExecuteTaskUseCase {
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
       const envelopeResult = runtime.buildFollowUpEnvelope({
         nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, target, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+        server, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const followUpSignalStream = envelopeResult.signalStream;
@@ -1685,7 +1725,7 @@ export class ExecuteTaskUseCase {
       // (supervisor PTY when supervised+connected, tmux send-keys otherwise —
       // see WorkerInputService)
       try {
-        await runtime.sendPrompt({ server, target, supervisorTarget: windowTarget, taskId, unitId }, commentWithMarkers);
+        await runtime.sendPrompt({ server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId }, commentWithMarkers);
       } catch (err: unknown) {
         followUpStream.stop();
         followUpSignalStream.stop();
@@ -1694,7 +1734,7 @@ export class ExecuteTaskUseCase {
         return;
       }
 
-      const waitResult = await this.workerWaiter.waitForWorker(server, target, taskId, unitId, abortController.signal, followUpStream, doneMarker, followUpSignalStream, undefined, windowTarget);
+      const waitResult = await this.workerWaiter.waitForWorker(server, handle, taskId, unitId, abortController.signal, followUpStream, doneMarker, followUpSignalStream, undefined, windowTarget);
       const output = waitResult.output;
       let classification = waitResult.classification;
       let httpSignalFinalTurn = httpSignalTurn;
@@ -1733,7 +1773,7 @@ export class ExecuteTaskUseCase {
         if (followUpPhaseDef?.planApproval) {
           const planMarkdown = followUpPhaseOutput !== null
             ? followUpPhaseOutput
-            : await this.workerWaiter.extractPlanWithFallback(server, target, output);
+            : await this.workerWaiter.extractPlanWithFallback(server, handle, output);
           if (planMarkdown) {
             this.taskRepo.update(taskId, { planMarkdown } as Partial<Task>);
           }
@@ -1784,7 +1824,7 @@ export class ExecuteTaskUseCase {
           // `PhaseLoopRunner.stateMachineLoop`'s `distributionRequired`
           // parameter doc comment.
           const followUpDistributionRequired = isDistributionRequiredForContinuation(task.distributionRepositoryId, server, followUpProjectServer);
-          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, target, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
+          await this.phaseLoopRunner.stateMachineLoop({ ...unit, selfReviewMaxAttempts: effectiveSelfReviewMax }, serverName, { ...task, currentPhase: origCurrentPhase }, server, handle, fuMainDriver, abortController.signal, windowTarget, followUpDistributionRepoEntry, followUpDistributionRequired);
           return;
         }
       }
@@ -1814,7 +1854,7 @@ export class ExecuteTaskUseCase {
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error('Task not found');
 
-    const { serverName, tmuxSession, unit } = this.resolveExecutionEnv(task, unitId);
+    const { serverName, muxWorkspace, unit } = this.resolveExecutionEnv(task, unitId);
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
@@ -1838,12 +1878,14 @@ export class ExecuteTaskUseCase {
     }
 
     const windowName = task.tmuxWindow || `task-${task.id}`;
-    const windowTarget = `${tmuxSession}:${windowName}`;
-    const target = await this.tmux.resolvePaneId(server, windowTarget);
+    const resumeDriver = this.resolveDriver(server);
+    const ref: MuxRef = { kind: resumeDriver.kind, workspace: muxWorkspace, window: windowName };
+    const windowTarget = tmuxTargetFromMuxRef(ref);
+    const handle = await resumeDriver.resolvePane(server, ref, 1);
 
     const abortController = new AbortController();
     const executions = this.runningExecutions.get(unitId) || [];
-    executions.push({ taskId, abortController, target, windowTarget: `${windowTarget}.1`, serverName });
+    executions.push({ taskId, abortController, handle, muxRef: ref, serverName });
     this.runningExecutions.set(unitId, executions);
 
     const effectiveSelfReviewMax = task.selfReviewMaxAttempts ?? unit.selfReviewMaxAttempts;
@@ -1892,7 +1934,8 @@ export class ExecuteTaskUseCase {
       serverName,
       { ...task },
       server,
-      target,
+      handle,
+      resumeDriver,
       abortController.signal,
       windowTarget,
       resumeDistributionRepoEntry,
@@ -1942,7 +1985,7 @@ export class ExecuteTaskUseCase {
   getRunning(): Record<number, Array<{ taskId: number; target: string; serverName: string }>> {
     const result: Record<number, Array<{ taskId: number; target: string; serverName: string }>> = {};
     for (const [id, executions] of this.runningExecutions) {
-      result[id] = executions.map((e) => ({ taskId: e.taskId, target: e.windowTarget, serverName: e.serverName }));
+      result[id] = executions.map((e) => ({ taskId: e.taskId, target: tmuxTargetFromMuxRef(e.muxRef), serverName: e.serverName }));
     }
     return result;
   }

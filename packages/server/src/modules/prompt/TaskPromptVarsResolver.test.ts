@@ -62,6 +62,7 @@ const makeServer = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
   sshHost: null,
   sshHostFingerprint: null,
   muxRuntime: 'system',
+  herdrNavigationLock: 'locked' as const,
   isolationIntent: false,
   isolationVerifiedAt: null,
   isolationReport: null, isolationCleanupReport: null,
@@ -115,7 +116,7 @@ function makeResolver(overrides: {
   } as unknown as IServerRepository;
 
   const transportFactory = {
-    getTransport: vi.fn(() => ({ exec: vi.fn(), execTmux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() })),
+    getTransport: vi.fn(() => ({ exec: vi.fn(), execMux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() })),
     invalidate: vi.fn(),
     ...overrides.transportFactory,
   } as unknown as TransportFactory;

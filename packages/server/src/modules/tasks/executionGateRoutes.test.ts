@@ -124,18 +124,16 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       update: vi.fn(),
       delete: vi.fn(),
     },
-    tmux: {
-      listSessions: vi.fn(async () => []),
-      createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
-      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      sendKeys: vi.fn(async () => {}),
-      checkPaneExists: vi.fn(async () => true),
-      killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    } as unknown as TasksRouteOptions['tmux'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({
+      listWorkspaces: vi.fn(async () => []),
+      openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux' as const, workspace: 'azito', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      openWindow: vi.fn(async () => ({ ref: { kind: 'tmux' as const, workspace: 'azito', window: 'task-1' }, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
+      closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      windowExists: vi.fn(async () => true),
+    })) } as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -149,12 +147,14 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
+      adoptForTask: vi.fn(),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
@@ -616,7 +616,7 @@ describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', 
   it('translates WindowRespawnService gate errors into the same HTTP shape as /execute (window-record path)', async () => {
     const { opts } = makeOpts(makeTask({ inputTrust: 'untrusted', status: 'pending_approval' }));
     opts.windowRepo.findByTask = vi.fn(() => [
-      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
+      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, herdrNavigationLock: null, sleeping: false, createdAt: '' },
     ]);
     opts.respawnService = {
       respawn: vi.fn(async () => { throw new ExecutionGateDeniedError(1); }),
@@ -650,7 +650,7 @@ describe('POST /api/tasks/:id/recover-session — execution gate (Issue #328)', 
 
     expect(res.statusCode).toBe(403);
     expect(res.json()).toMatchObject({ error: 'execution_denied' });
-    expect(opts.tmux.createWindow).not.toHaveBeenCalled();
+    expect(opts.muxDriverRegistry.resolve({} as any).openWindow).not.toHaveBeenCalled();
   });
 
   it('allows the legacy fallback path for a trusted task', async () => {

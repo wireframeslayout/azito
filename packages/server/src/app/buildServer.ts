@@ -71,9 +71,12 @@ import { RepoDiscoveryService } from '../modules/git/RepoDiscoveryService';
 import { LocalRepoCloneService } from '../modules/git/LocalRepoCloneService';
 import { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver';
+import { MuxDriverUnavailableError, MuxCapabilityMissingError } from '../modules/tmux/MuxCapabilityError';
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
+import { muxRefFromTmuxTarget, parseMuxRef, resolveHerdrLock, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import type { OpenTerminalOpts } from '../modules/servers/transport/ServerTransport';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
@@ -86,13 +89,14 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
-    agentInstaller, agentBundler, harnessInstaller, tmuxInstaller,
-    executeTaskUseCase, agentActivityMonitor, interactionMonitor, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
+    executeTaskUseCase, agentActivityMonitor, herdrEventBridge, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
     originationService, scopedAuthEnabled, taskPaneEnvironmentService,
+    zellijResident,
   } = wiring;
 
   // ─── Webhook token ───
@@ -104,11 +108,28 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     console.log('[webhook] Set AZITO_WEBHOOK_TOKEN env to use a fixed token');
   }
 
+  // ─── Global error handler for mux capability errors ───
+  // Catches MuxCapabilityMissingError and MuxDriverUnavailableError from any
+  // route, returning structured 409/503 responses. All other errors are passed
+  // through to Fastify's default handler to preserve validation-error details,
+  // logging, and status-code inference.
+
+  const defaultErrorHandler = app.errorHandler;
+  app.setErrorHandler((err, request, reply) => {
+    if (err instanceof MuxCapabilityMissingError) {
+      return reply.status(409).send({ error: 'mux_capability_missing', capability: err.capability });
+    }
+    if (err instanceof MuxDriverUnavailableError) {
+      return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind });
+    }
+    return defaultErrorHandler.call(app, err, request, reply);
+  });
+
   // ─── UI token (resolved by main.ts, passed through wiring) ───
 
   const verifyUiToken = createTokenVerifier(wiring.uiToken);
 
-  const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
+  const { harnessPrefix } = wiring;
 
   // ─── Push notifications on task status changes ───
 
@@ -253,8 +274,21 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   supervisorRegistry.on('ready', (event) => {
     notificationBus.emit({
       type: 'supervisor:ready',
-      payload: { serverName: event.serverName, target: event.target, ...(event.taskId != null ? { taskId: event.taskId } : {}) },
+      payload: { serverName: event.serverName, target: event.target, ...(event.taskId != null ? { taskId: event.taskId } : {}), windowId: event.windowId },
     });
+  });
+  supervisorRegistry.on('registered', (event) => {
+    if (event.muxPaneRef) {
+      paneHandleResolver.warm(event.serverName, event.muxPaneRef);
+    }
+    const win = windowRepo.findByServerAndTarget(event.serverName, event.target);
+    if (win) supervisorRegistry.setWindowId(event.serverName, event.target, win.id);
+  });
+
+  notificationBus.on((event) => {
+    if (event.type === 'sessions:updated') {
+      paneHandleResolver.invalidate(event.payload.serverName);
+    }
   });
 
   // ─── Plugins ───
@@ -436,11 +470,18 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // near projectsRoutes below, so both the project-independent scan route
   // (servers/routes.ts) and the project-scoped one (projects/routes.ts)
   // share this exact instance.
-  const repoDiscovery = new RepoDiscoveryService(tmuxClient);
+  const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
-  await app.register(serversRoutes, { serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, repoDiscovery });
+  await app.register(serversRoutes, {
+    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    onMuxRuntimeChanged: (serverName) => {
+      transportFactory.invalidate(serverName);
+      paneHandleResolver.clearServer(serverName);
+      supervisorRegistry.clearServerPaneRefs(serverName);
+    },
+  });
   await app.register(sessionsRoutes, {
-    serverRepo, tmux: tmuxClient, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
+    serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex, herdrEventBridge,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at
@@ -491,14 +532,15 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   const fileSearchService = new FileSearchService(transportFactory);
-  await app.register(fileBrowseRoutes, { serverRepo, tmux: tmuxClient, projectServerRepo, transportFactory, searchService: fileSearchService });
+  await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
   await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
-  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader });
-  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo });
+  await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader, muxDriverRegistry });
+  await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver });
   await app.register(auditLogRoutes, { auditLogService });
   await app.register(tasksRoutes, {
-    taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux: tmuxClient, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo, scopedAuthEnabled,
+    muxDriverRegistry,
+    taskRepo, auditLogService, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService: windowRespawnService, taskRestoreService, unitTypeLoader, sidekickLoader: sidekickPackageLoader, projectSecretRepo, originationService, taskTokenRepo, scopedAuthEnabled,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2 — see the identical
       // wiring on sessionsRoutes above for the rationale.
@@ -509,7 +551,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       });
     },
   });
-  await app.register(windowsRoutes, { windowRepo, projectRepo, taskRepo, tmux: tmuxClient, serverRepo, respawnService: windowRespawnService, sleepService: windowSleepService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService, notificationBus, resourceGuard });
+  await app.register(windowsRoutes, {
+    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo,
+    respawnService: windowRespawnService, sleepService: windowSleepService,
+    sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
+    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, herdrEventBridge,
+    destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
+      const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
+      return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
+        onDestroyed();
+        supervisorRegistry.expireResolvedLaunch(launchId);
+      });
+    },
+  });
   await app.register(providersRoutes, { providerRepo: wiring.providerRepo });
   const renderSkillPromptUseCase = new RenderSkillPromptUseCase(
     taskRepo,
@@ -525,8 +579,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   await app.register(phasePromptsRoutes, { sidekickLoader: sidekickPackageLoader, renderSkillPromptUseCase, unitTypeLoader });
   await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, uploadAuth: storageUploadAuth });
-  await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory });
-  await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo });
+  await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory, tmuxClient });
+  await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo, windowRepo });
   await app.register(usageRoutes, { usageService });
   await app.register(webhookRoutes, {
     taskRepo,
@@ -560,9 +614,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
-    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, tmuxClient, serverRepo),
+    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
     windowSessionResolver,
-    windowInputService: new WindowInputService(windowRepo, tmuxClient, serverRepo),
+    windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo),
     windowRepo,
     interactionMonitor,
   });
@@ -655,14 +709,53 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         return;
       }
 
-      const srv = serverName ? serverRepo.findByName(serverName) : null;
-      if (!srv || !target) {
+      // ── Terminal mode: resolve ref from windowId → ref → target (fallback) ──
+      const windowIdParam = wsUrl.searchParams.get('windowId');
+      const refParam = wsUrl.searchParams.get('ref');
+      const paneParam = wsUrl.searchParams.get('pane');
+
+      let resolvedRef: MuxRef | null = null;
+      let resolvedServer = serverName ? serverRepo.findByName(serverName) : null;
+      const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+
+      let resolvedWin: import('../modules/windows/Window').Window | undefined;
+
+      if (windowIdParam) {
+        resolvedWin = windowRepo.findById(Number(windowIdParam));
+        if (resolvedWin) {
+          resolvedRef = resolvedWin.muxRef ?? muxRefFromTmuxTarget(resolvedWin.tmuxTarget);
+          resolvedServer = serverRepo.findByName(resolvedWin.serverName) ?? null;
+        }
+      } else if (refParam) {
+        try {
+          resolvedRef = parseMuxRef(decodeURIComponent(refParam));
+        } catch { /* invalid ref */ }
+      } else if (target) {
+        resolvedRef = muxRefFromTmuxTarget(target);
+      }
+
+      if (!resolvedServer || !resolvedRef) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();
         return;
       }
 
-      handleTerminalConnection(socket, srv, target, cols, rows, transportFactory);
+      const terminalOpts: OpenTerminalOpts = {};
+      if (resolvedServer.muxRuntime === 'herdr') {
+        terminalOpts.herdrLock = resolveHerdrLock(resolvedServer.herdrNavigationLock, resolvedWin?.herdrNavigationLock ?? null);
+        // The agent focuses the target workspace before spawning the herdr
+        // client (Issue #208). That `workspace.focus` is AZITO-issued, not a
+        // user action, so register it with the event bridge the same way
+        // POST /api/windows/:id/focus does — otherwise its `workspace.focused`
+        // echo is relayed as `mux:focus`, the follow-mode UI switches tabs,
+        // the newly shown terminal attaches and focuses again, and two herdr
+        // tabs of one session ping-pong indefinitely.
+        if (resolvedRef.kind === 'herdr') {
+          herdrEventBridge.recordFocusCommand(resolvedServer.name, resolvedRef.workspace);
+        }
+      }
+
+      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory, terminalOpts);
     });
   });
 
@@ -738,13 +831,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const agentEventStreams: AgentEventStream[] = [];
 
   agentActivityMonitor.start();
+  herdrEventBridge.startAll();
 
   app.addHook('onClose', async () => {
     // stopAll() first: playwright's own SIGTERM/SIGINT/SIGHUP handlers are disabled
     // (see BrowserSession.ts), so a Chromium session must be closed here before the
     // 8s hard cap in main.ts's graceful shutdown can starve it in favor of later steps.
     await browserSessionManager.stopAll();
+    zellijResident.detachAll();
     agentActivityMonitor.stop();
+    herdrEventBridge.stopAll();
     const localServers = serverRepo.findAll().filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
     for (const stream of agentEventStreams) stream.stop();

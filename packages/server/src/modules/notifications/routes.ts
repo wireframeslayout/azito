@@ -4,6 +4,8 @@ import type { SqliteAgentWatchRepository } from './SqliteAgentWatchRepository';
 import type { PushNotificationService } from './push/PushNotificationService';
 import type { VapidKeys } from './push/VapidKeyManager';
 import { getPushMessage } from './push/pushCatalog';
+import { stripPaneSuffix } from '@azito/shared';
+import type { IWindowRepository } from '../windows/Window';
 
 const ALLOWED_PUSH_HOSTS = [
   /\.googleapis\.com$/,
@@ -25,10 +27,11 @@ export interface NotificationRouteOptions {
   pushService: PushNotificationService;
   vapidKeys: VapidKeys;
   agentWatchRepo: SqliteAgentWatchRepository;
+  windowRepo?: IWindowRepository;
 }
 
 const notificationRoutes: FastifyPluginCallback<NotificationRouteOptions> = (fastify, opts, done) => {
-  const { pushSubRepo, pushService, vapidKeys, agentWatchRepo } = opts;
+  const { pushSubRepo, pushService, vapidKeys, agentWatchRepo, windowRepo } = opts;
 
   // GET /api/notifications/vapid-public-key
   fastify.get('/api/notifications/vapid-public-key', async () => {
@@ -98,26 +101,39 @@ const notificationRoutes: FastifyPluginCallback<NotificationRouteOptions> = (fas
       return reply.status(400).send({ error: 'endpoint required' });
     }
     const watches = agentWatchRepo.findByEndpoint(endpoint);
-    return watches.map((w) => ({ serverName: w.serverName, target: w.target, label: w.label }));
+    return watches.map((w) => ({ serverName: w.serverName, target: w.target, label: w.label, windowId: w.windowId }));
   });
 
   // POST /api/agent-watches
   fastify.post('/api/agent-watches', async (request, reply) => {
-    const body = request.body as { endpoint?: string; serverName?: string; target?: string; label?: string };
+    const body = request.body as { endpoint?: string; serverName?: string; target?: string; label?: string; windowId?: number };
     if (!body.endpoint || !body.serverName || !body.target) {
+      if (body.endpoint && body.windowId != null && windowRepo) {
+        const win = windowRepo.findById(body.windowId);
+        if (!win) return reply.status(404).send({ error: 'Window not found' });
+        agentWatchRepo.add(body.endpoint, win.serverName, win.tmuxTarget, body.label ?? null, body.windowId);
+        return { ok: true };
+      }
       return reply.status(400).send({ error: 'endpoint, serverName, target required' });
     }
-    agentWatchRepo.add(body.endpoint, body.serverName, body.target, body.label ?? null);
+    agentWatchRepo.add(body.endpoint, body.serverName, stripPaneSuffix(body.target), body.label ?? null, body.windowId);
     return { ok: true };
   });
 
   // DELETE /api/agent-watches
   fastify.delete('/api/agent-watches', async (request, reply) => {
-    const body = request.body as { endpoint?: string; serverName?: string; target?: string };
+    const body = request.body as { endpoint?: string; serverName?: string; target?: string; windowId?: number };
+    if (body.windowId != null && body.endpoint) {
+      const watches = agentWatchRepo.findByWindowId(body.windowId);
+      for (const w of watches) {
+        if (w.endpoint === body.endpoint) agentWatchRepo.deleteById(w.id);
+      }
+      return { ok: true };
+    }
     if (!body.endpoint || !body.serverName || !body.target) {
       return reply.status(400).send({ error: 'endpoint, serverName, target required' });
     }
-    agentWatchRepo.removeByKey(body.endpoint, body.serverName, body.target);
+    agentWatchRepo.removeByKey(body.endpoint, body.serverName, stripPaneSuffix(body.target));
     return { ok: true };
   });
 

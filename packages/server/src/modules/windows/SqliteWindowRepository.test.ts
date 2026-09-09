@@ -60,6 +60,24 @@ import * as m053 from '../../shared/db/migrations/053_browser_tab_snapshots';
 import * as m054 from '../../shared/db/migrations/054_ssh_host_fingerprint';
 import * as m055 from '../../shared/db/migrations/055_reduce_worker_execution_mode';
 import * as m056 from '../../shared/db/migrations/056_drop_windows_supervised';
+import * as m057 from '../../shared/db/migrations/057_push_subscription_lang';
+import * as m058 from '../../shared/db/migrations/058_disable_ssh_servers';
+import * as m059 from '../../shared/db/migrations/059_input_trust_and_exec_gate';
+import * as m060 from '../../shared/db/migrations/060_authz_foundation';
+import * as m061 from '../../shared/db/migrations/061_isolation_profile';
+import * as m062 from '../../shared/db/migrations/062_isolation_report_split';
+import * as m063 from '../../shared/db/migrations/063_window_sleep';
+import * as m064 from '../../shared/db/migrations/064_distribution_state';
+import * as m065 from '../../shared/db/migrations/065_project_server_distribute_code';
+import * as m066 from '../../shared/db/migrations/066_project_server_distribution_repository';
+import * as m067 from '../../shared/db/migrations/067_task_distribution_repository';
+import * as m068 from '../../shared/db/migrations/068_merge_duplicate_window_rows';
+import * as m069 from '../../shared/db/migrations/069_window_mux_ref';
+import * as m070 from '../../shared/db/migrations/070_supervisor_launch_pane_ref_and_watch_normalize';
+import * as m071 from '../../shared/db/migrations/071_agent_watches_window_id';
+import * as m072 from '../../shared/db/migrations/072_fix_herdr_mux_ref_kind';
+import * as m073 from '../../shared/db/migrations/073_restore_tmux_mux_ref_kind';
+import * as m074 from '../../shared/db/migrations/074_herdr_navigation_lock';
 
 import { SqliteWindowRepository } from './SqliteWindowRepository';
 import type { Window } from './Window';
@@ -75,10 +93,12 @@ const ALL_MIGRATIONS: Migration[] = [
   m021, m022, m023, m024, m025, m026, m027, m028, m029, m030,
   m031, m032, m033, m034, m035, m036, m037, m038, m039, m040,
   m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051,
-  m052, m053, m054, m055, m056,
+  m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062,
+  m063, m064, m065, m066, m067, m068, m069,
+  m070, m071, m072, m073, m074,
 ];
 
-const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46]);
+const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
 
 function buildSeededDb(): Database.Database {
   const db = new Database(':memory:');
@@ -122,6 +142,7 @@ function baseWindow(overrides: Partial<Omit<Window, 'id' | 'createdAt'>> = {}): 
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
+    herdrNavigationLock: null,
     sleeping: false,
     ...overrides,
   };
@@ -148,33 +169,29 @@ describe('SqliteWindowRepository.findByServerAndTarget', () => {
     expect(found?.tmuxTarget).toBe('proj:win1');
   });
 
-  it('prefers a task-owning row over a project-owning row for the same target', () => {
+  it('returns the task-owning row for a task target', () => {
     const taskA = insertTask(db, projectId, 'Task A');
-    repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win1' }));
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA }));
+    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'proj:win1' }));
 
     const found = repo.findByServerAndTarget('local-server', 'proj:win1');
     expect(found?.taskId).toBe(taskA);
     expect(found?.ownerType).toBe('task');
   });
 
-  it('falls back to the first row when no task-owning row exists', () => {
-    const taskA = insertTask(db, projectId, 'Task A');
-    const taskB = insertTask(db, projectId, 'Task B');
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, label: 'first' }));
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskB, label: 'second' }));
+  it('returns the project-owning row for a project target', () => {
+    repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win1' }));
 
     const found = repo.findByServerAndTarget('local-server', 'proj:win1');
-    expect(found?.label).toBe('first');
+    expect(found?.ownerType).toBe('project');
   });
 
-  it('returns deterministic result regardless of insertion order when both project and task rows exist', () => {
+  it('distinguishes different targets on the same server', () => {
     const taskA = insertTask(db, projectId, 'Task A');
-    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, windowType: 'agent', workerType: 'claude' }));
-    repo.add(baseWindow({ projectId, windowType: 'agent', workerType: 'claude' }));
+    repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win-project' }));
+    repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'proj:win-task' }));
 
-    const found = repo.findByServerAndTarget('local-server', 'proj:win1');
-    expect(found?.taskId).toBe(taskA);
+    expect(repo.findByServerAndTarget('local-server', 'proj:win-task')?.taskId).toBe(taskA);
+    expect(repo.findByServerAndTarget('local-server', 'proj:win-project')?.ownerType).toBe('project');
   });
 });
 
@@ -232,25 +249,21 @@ describe('SqliteWindowRepository.updateAgentSessionIdByWindow', () => {
     projectId = insertProject(db, 'Test Project');
   });
 
-  it('updates all rows sharing the same physical window (project + task)', () => {
+  it('updates the matching window row', () => {
     const taskId = insertTask(db, projectId, 'Task A');
-    const projWinId = repo.add(baseWindow({ projectId, windowType: 'agent', workerType: 'claude' }));
-    const taskWinId = repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId, windowType: 'agent', workerType: 'claude' }));
+    const taskWinId = repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId, tmuxTarget: 'proj:win1', windowType: 'agent', workerType: 'claude' }));
 
     repo.updateAgentSessionIdByWindow('local-server', 'proj:win1', 'test-session-uuid');
 
-    expect(repo.findById(projWinId)?.agentSessionId).toBe('test-session-uuid');
     expect(repo.findById(taskWinId)?.agentSessionId).toBe('test-session-uuid');
   });
 
-  it('matches pane-suffixed targets against unsuffixed ones', () => {
-    const winId = repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win1', windowType: 'agent', workerType: 'claude' }));
-    const winId2 = repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win1.1', windowType: 'agent', workerType: 'claude' }));
+  it('does not update a row with a different target', () => {
+    const winId = repo.add(baseWindow({ projectId, tmuxTarget: 'proj:win-other', windowType: 'agent', workerType: 'claude' }));
 
     repo.updateAgentSessionIdByWindow('local-server', 'proj:win1', 'session-abc');
 
-    expect(repo.findById(winId)?.agentSessionId).toBe('session-abc');
-    expect(repo.findById(winId2)?.agentSessionId).toBe('session-abc');
+    expect(repo.findById(winId)?.agentSessionId).toBeNull();
   });
 
   it('does not update rows on a different server', () => {
@@ -260,5 +273,32 @@ describe('SqliteWindowRepository.updateAgentSessionIdByWindow', () => {
     repo.updateAgentSessionIdByWindow('local-server', 'proj:win1', 'session-xyz');
 
     expect(repo.findById(winId)?.agentSessionId).toBeNull();
+  });
+});
+
+// Attaching an existing project window to a task must convert the single row (068: one
+// physical window = one row) instead of leaving it project-owned (win--qvp6 / task 368).
+describe('SqliteWindowRepository.adoptForTask', () => {
+  let db: Database.Database;
+  let repo: SqliteWindowRepository;
+  let projectId: number;
+
+  beforeEach(() => {
+    db = buildSeededDb();
+    repo = new SqliteWindowRepository(db);
+    projectId = insertProject(db, 'Test Project');
+  });
+
+
+  it('converts a project-owned row into a task-owned row and keeps project_id', () => {
+    const taskA = insertTask(db, projectId, 'Task A');
+    const id = repo.add(baseWindow({ projectId, tmuxTarget: 'azito:win--qvp6' }));
+    repo.adoptForTask(id, taskA);
+    const w = repo.findById(id)!;
+    expect(w.ownerType).toBe('task');
+    expect(w.taskId).toBe(taskA);
+    expect(w.projectId).toBe(projectId);
+    expect(repo.findByTask(taskA).map((x) => x.id)).toEqual([id]);
+    expect(repo.findByServerAndTarget('local-server', 'azito:win--qvp6')?.id).toBe(id);
   });
 });

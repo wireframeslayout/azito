@@ -92,6 +92,8 @@
     "session": "セッション",
     "windowName": "ウィンドウ名（任意）",
     "windowNamePlaceholder": "例: dev",
+    "windowNameAutoGenHint": "空の場合は自動生成されます（例: win--a7x2）",
+    "windowExistsError": "同名のウィンドウが既に存在します",
     "workingDir": "作業ディレクトリ",
     "workingDirPlaceholder": "/path/to/project",
     "codingAgent": "コーディングエージェント",
@@ -250,6 +252,7 @@
     "noOffline": "オフラインのウィンドウはありません",
     "noBrowsers": "開いているブラウザはありません",
     "searchPlaceholder": "タイトル・ID・ブランチで検索…",
+    "followHerdr": "herdr に追従",
     "noSearchResults": "「{{query}}」に一致するオブジェクトはありません",
     "openBrowser": "新しく開く",
     "closeBrowserGroup": "このブラウザグループを閉じる",
@@ -297,5 +300,9 @@
     "pinTab": "タブをピン止め",
     "addWindowChip": "ウィンドウ",
     "addBrowserChip": "ブラウザ"
+  },
+  "herdrConflict": {
+    "title": "同一セッション表示制限",
+    "message": "同一 herdr セッションの窓は同時に 1 つしか表示できません。このペインをクリックすると表示が切り替わります。"
   }
 }

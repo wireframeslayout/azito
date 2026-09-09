@@ -394,8 +394,10 @@ describe('SupervisorRegistry — launch binding (Issue #28 Phase C, design v3 §
         target TEXT NOT NULL,
         task_id INTEGER,
         unit_id INTEGER,
+        window_id INTEGER,
         bootstrap_hash TEXT NOT NULL,
         session_hash TEXT,
+        mux_pane_ref TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         last_registered_at TEXT
@@ -1068,8 +1070,10 @@ describe('SqliteSupervisorLaunchRepository.verifyBootstrap — pending bootstrap
         target TEXT NOT NULL,
         task_id INTEGER,
         unit_id INTEGER,
+        window_id INTEGER,
         bootstrap_hash TEXT NOT NULL,
         session_hash TEXT,
+        mux_pane_ref TEXT,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         last_registered_at TEXT

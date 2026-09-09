@@ -310,7 +310,10 @@ export function useProjectSettings(
     await api(`/windows/${wid}`, { method: 'DELETE' });
     if (win) {
       tabs
-        .filter((t) => t.id.startsWith(`terminal:${win.serverName}/${win.tmuxTarget}.`))
+        .filter((t) => t.type === 'terminal' && (
+          t.id.startsWith(`terminal:${win.serverName}::w${win.id}.`) ||
+          t.id.startsWith(`terminal:${win.serverName}/${win.tmuxTarget}.`)
+        ))
         .forEach((t) => closeTab(t.id));
     }
     refresh();

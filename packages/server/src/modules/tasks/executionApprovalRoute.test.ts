@@ -120,7 +120,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       update: vi.fn(),
       delete: vi.fn(),
     },
-    tmux: {
+    muxDriverRegistry: { resolve: vi.fn(() => ({
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
@@ -128,10 +128,10 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       sendKeys: vi.fn(async () => {}),
       checkPaneExists: vi.fn(async () => true),
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-    } as unknown as TasksRouteOptions['tmux'],
+    })) } as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -146,12 +146,14 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),
+      adoptForTask: vi.fn(),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
       findByTask: vi.fn(() => []),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
@@ -349,7 +351,7 @@ describe('GET /api/tasks/:id/execution-approval (Issue #51)', () => {
       // isolationReport (Issue #29 review Step 3a, Critical finding 1
       // follow-up defense-in-depth check in resolveEffectiveInputPolicy).
       isolationReport: JSON.stringify({ kind: 'verification', verified: true, checks: [], probedAt: new Date().toISOString() }),
-      isolationCleanupReport: null, createdAt: '',
+      isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '',
     }));
     opts.scopedAuthEnabled = true;
     const app = Fastify();
@@ -1055,7 +1057,7 @@ describe('GET fingerprint satisfies POST (Issue #328 fourteenth-round review —
     // Distribution required (isolated server) so `resolveExecutionRepositoryEntry`
     // (current config) and `resolveRecordedDistributionRepositoryEntry`
     // (task's recorded value) can actually disagree.
-    opts.serverRepo.findByName = vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' }));
+    opts.serverRepo.findByName = vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' }));
     // The project server has since been re-pointed at repository B —
     // task.distributionRepositoryId (above) still names A.
     const projectServerAtB = { projectId: 10, serverName: 'test-server', workingDirectory: '/work', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 2 };

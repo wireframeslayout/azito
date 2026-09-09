@@ -67,6 +67,8 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     tmux: {
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => {}),
+      listWorkspaces: vi.fn(async () => []),
+      openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
     } as unknown as ProjectsRouteOptions['tmux'],
     serverRepo: {
       findAll: vi.fn(() => []),
@@ -122,7 +124,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
         })),
         create: vi.fn(),
@@ -156,7 +158,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           // isolationIntent declared, but never verified — still accepted at
           // the config boundary; the run-time gate (resolveEffectiveInputPolicy)
           // is what keeps 'allow' degraded until a doctor run verifies it.
@@ -299,7 +301,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
           return {
             name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null,
             agentVersion: `gen-${generation}`,
-            sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+            sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
             isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
           };
         }),
@@ -315,6 +317,8 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
       tmux: {
         listSessions: vi.fn(async () => []),
         createSession: vi.fn(async () => {}),
+        listWorkspaces: vi.fn(async () => []),
+        openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
         uiTokenEnvForServer: vi.fn(() => ({})),
       } as unknown as ProjectsRouteOptions['tmux'],
     });
@@ -330,8 +334,8 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
 
     expect(res.statusCode).toBe(200);
     // The FIRST findByName call (top of the handler, `srv`) produced
-    // `gen-1` — createSession must NOT have seen that row.
-    expect(opts.tmux.createSession).toHaveBeenCalledWith(
+    // `gen-1` — openWorkspace must NOT have seen that row.
+    expect(opts.tmux.openWorkspace).toHaveBeenCalledWith(
       expect.not.objectContaining({ agentVersion: 'gen-1' }),
       'p',
       expect.anything(),
@@ -448,7 +452,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
         })),
         create: vi.fn(),
@@ -481,7 +485,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'test-server', type: 'agent' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
+          sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, herdrNavigationLock: 'locked' as const,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
         })),
         create: vi.fn(),

@@ -19,6 +19,7 @@ const unitTypePhaseSchema = z.object({
   subagentRole: z.enum(['implement', 'review']).optional(),
   skillCommand: z.string().optional(),
   defaultSidekick: z.string().optional(),
+  stillWorkingLimit: z.number().int().min(1).optional(),
 });
 
 const unitTypeSchema = z.object({

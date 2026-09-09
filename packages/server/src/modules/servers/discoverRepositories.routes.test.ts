@@ -30,6 +30,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationReport: null,
     isolationCleanupReport: null,
     muxRuntime: 'system',
+    herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -61,6 +62,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: vi.fn(() => ({ caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     repoDiscovery: {
       checkPathStatus: vi.fn(async () => ({ exists: true, isGitRepository: false })),
       discover: vi.fn(async () => []),

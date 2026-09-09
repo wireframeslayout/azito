@@ -1,5 +1,5 @@
 import { execSync } from 'child_process';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import { SAFE_BRANCH } from '../../git/GitDiffService';
 import { assertSafePath } from '../../git/assertSafeGitArgs';
@@ -26,7 +26,7 @@ export interface GitInfo {
  * GitProviderService.findPullRequestByBranch (no CLI dependency).
  */
 export class GitInfoCollector {
-  constructor(private tmux: TmuxClient) {}
+  constructor(private transportFactory: TransportFactory) {}
 
   collectGitInfoSync(workingDir: string, baseBranch?: string): GitInfo {
     const result: GitInfo = { branch: null, changedFiles: null };
@@ -62,7 +62,7 @@ export class GitInfoCollector {
     const run = async (cmd: string): Promise<string | null> => {
       try {
         const safeDir = workingDir.replace(/'/g, "'\\''");
-        const r = await this.tmux.execCommand(server, `cd '${safeDir}' && ${cmd}`);
+        const r = await this.transportFactory.getTransport(server).exec(`cd '${safeDir}' && ${cmd}`);
         if (r.code !== 0 || /^fatal:|^error:/m.test(`${r.stdout}\n${r.stderr}`)) return null;
         return r.stdout.trim();
       } catch { return null; }
@@ -97,7 +97,7 @@ export class GitInfoCollector {
     const b64 = Buffer.from(content, 'utf-8').toString('base64');
     // base64 alphabet contains no single quotes, so single-quoting is safe.
     const command = `echo '${b64}' | base64 -d > '${filePath}'`;
-    const result = await this.tmux.execCommand(server, command);
+    const result = await this.transportFactory.getTransport(server).exec(command);
     if (result.code !== 0) {
       throw new Error(`Failed to write file ${filePath}: ${result.stderr || `exit ${result.code}`}`);
     }

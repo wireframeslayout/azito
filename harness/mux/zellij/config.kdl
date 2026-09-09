@@ -1,0 +1,10 @@
+// AZITO zellij configuration
+// Install: cp config.kdl ~/.config/zellij/config.kdl
+//      or: ZELLIJ_CONFIG_DIR=<dir containing this file> zellij ...
+
+simplified_ui true
+pane_frames false
+mirror_session false
+default_layout "azito"
+scrollback_lines 10000
+mouse_mode false

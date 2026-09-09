@@ -1,47 +1,14 @@
-import type { ExecResult } from '../servers/transport/ServerTransport';
+import type { ExecResult, ITerminalStream } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
-import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
+import type { IMuxClient } from './IMuxClient';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
+import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
+import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
-// ─── Types ───
-
-export interface TmuxPane {
-  index: number;
-  command: string;
-  title: string;
-  width: number;
-  height: number;
-  active: boolean;
-  pid: number;
-}
-
-export interface TmuxWindow {
-  index: number;
-  name: string;
-  active: boolean;
-  panes: TmuxPane[];
-  activity: number;
-}
-
-export interface TmuxSession {
-  name: string;
-  windowCount: number;
-  attached: boolean;
-  created: number;
-  windows: TmuxWindow[];
-}
-
-export interface TmuxPaneInfo {
-  paneId: string;
-  sessionName: string;
-  windowIndex: number;
-  windowName: string;
-  paneIndex: number;
-  currentPath: string;
-  currentCommand: string;
-}
+export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
 
 // ─── Special keys for send-keys ───
 
@@ -53,25 +20,9 @@ const SPECIAL_KEYS = new Set([
   'M-b', 'M-f',
 ]);
 
-// ─── Window spec matching ───
+// ─── Window spec matching (moved to types.ts; re-exported for compatibility) ───
 
-/**
- * Match the window part of a `session:windowSpec[.pane]` target against a
- * window's index and name. Two subtleties:
- * - tmux resolves a fully numeric spec as a window *index*, so a numeric spec
- *   must never match a coincidentally numeric window *name*.
- * - A trailing `.digits` may be a pane suffix or part of the window name
- *   itself (e.g. a window literally named `foo.1`), so both the raw and the
- *   pane-stripped forms of the spec are tried.
- * An empty spec matches nothing — session-only targets are the caller's call.
- */
-export function windowSpecMatches(windowSpec: string, windowIndex: number, windowName: string): boolean {
-  for (const spec of new Set([windowSpec, windowSpec.replace(/\.\d+$/, '')])) {
-    if (!spec) continue;
-    if (/^\d+$/.test(spec) ? spec === String(windowIndex) : spec === windowName) return true;
-  }
-  return false;
-}
+export { windowSpecMatches } from './types';
 
 // ─── Session listing (shared by listSessions / listSessionsForSecurityGate) ───
 
@@ -153,13 +104,25 @@ function isTmuxNoServerRunning(output: string): boolean {
 
 // ─── TmuxClient ───
 
-export class TmuxClient {
+const LINKED_SESSION_PREFIX = '_azito_';
+
+export class TmuxClient implements IMuxClient {
+  readonly kind: MuxDriverKind = 'tmux';
+  readonly caps: MuxCapabilities = {
+    outputStream: true, changeEvents: true, agentState: false,
+    independentClients: true, envInjection: true, zoom: true,
+    copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true,
+    stablePaneHandle: true,
+  };
+
   constructor(
     private transportFactory: TransportFactory,
     private publicUrl: string,
     private uiToken: string,
     /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
     private localUrl: string,
+    /** Webhook token for hook auth. Falls back to uiToken when omitted. */
+    private webhookToken?: string,
   ) {}
 
   /**
@@ -177,7 +140,7 @@ export class TmuxClient {
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).execTmux(args);
+    return this.transportFactory.getTransport(server).execMux({ kind: 'tmux', args });
   }
 
   async listSessions(server: ServerConfig): Promise<TmuxSession[]> {
@@ -280,7 +243,14 @@ export class TmuxClient {
 
   async createWindow(server: ServerConfig, sessionName: string, baseName?: string, options?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ result: ExecResult; windowName: string }> {
     const windowName = options?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
-    const args = ['new-window', '-t', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
+    // `-t <session>:` (trailing colon) pins the target to the SESSION and lets
+    // tmux pick the next free window index. A bare `-t <session>` is resolved
+    // as a target-window first, and tmux matches window NAMES by prefix — so a
+    // window named e.g. `azito-rc` inside session `azito` made `new-window -t
+    // azito` try to create AT that window's index and fail with
+    // "create window failed: index 1 in use" (observed on the server001 hub
+    // when respawning a window while the RC hub ran in a window named azito-rc).
+    const args = ['new-window', '-t', `${sessionName}:`, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -289,51 +259,6 @@ export class TmuxClient {
     const result = await this.runTmuxCommand(server, args);
     await this.setWindowStatusFormat(server, sessionName, windowName);
     return { result, windowName };
-  }
-
-  /**
-   * Legacy default env for a window that is NOT a task pane (Issue #28
-   * Phase A後半): `createSession`/`createWindow` above used to inject
-   * AZITO_UI_TOKEN unconditionally into every window they created,
-   * regardless of caller — that meant a task pane always carried the
-   * all-powerful UI token too, which is exactly what design v3 §2 (task
-   * panes get a scoped AZITO_TASK_TOKEN instead) needs to stop. The
-   * unconditional injection is gone; every caller now decides its own
-   * `extraEnv` explicitly. Callers that open a plain terminal/manual/project
-   * window (not a task's — those go through TaskPaneEnvironmentService
-   * instead, which decides UI-token inclusion via the AZITO_SCOPED_AUTH
-   * flag) call this to reproduce the old default.
-   */
-  uiTokenEnv(): Record<string, string> {
-    return this.uiToken ? { AZITO_UI_TOKEN: this.uiToken } : {};
-  }
-
-  /**
-   * Server-aware wrapper around {@link uiTokenEnv} (Issue #29 review, Critical
-   * finding 1): `uiTokenEnv()` above has no way to know which server it is
-   * injecting into, so every one of its call sites — manual session/window/
-   * pane creation in `modules/tmux/routes/sessions.ts`, and the non-task
-   * respawn fallback in `WindowRespawnService.run()` — happily injected the
-   * hub's all-powerful `AZITO_UI_TOKEN` into an `isolation_intent=1` server's
-   * pane too, exactly the credential that server is declared to hold none of.
-   * (Task-owned windows already avoid this via
-   * `TaskPaneEnvironmentService`/`applyTokenMaskingOrCompat`, which checks
-   * `server.isolationIntent` first — this is the same decision, applied to
-   * the handful of NON-task callers that still call the legacy default
-   * directly instead.)
-   *
-   * When `server.isolationIntent` is set, returns the shared
-   * {@link ISOLATION_MASKED_ENV} mask (both `AZITO_UI_TOKEN` AND
-   * `AZITO_AGENT_TOKEN` — an agent-type isolated server's process env holds
-   * the latter too, see `agent/main.ts`) rather than an empty object — see
-   * `applyTokenMaskingOrCompat`'s doc comment for why an explicit empty value
-   * is required to override a token the pane's tmux SESSION may already
-   * carry (a pre-existing session's env persists across `new-window`, and
-   * `-e KEY=` on the new window is the only thing that can mask it).
-   */
-  uiTokenEnvForServer(server: ServerConfig): Record<string, string> {
-    if (server.isolationIntent) return { ...ISOLATION_MASKED_ENV };
-    return this.uiTokenEnv();
   }
 
   /**
@@ -443,20 +368,6 @@ export class TmuxClient {
     } catch {
       return null;
     }
-  }
-
-  async resolvePaneId(server: ServerConfig, windowTarget: string): Promise<string> {
-    const { stdout, code } = await this.runTmuxCommand(server, [
-      'list-panes', '-t', windowTarget, '-F', '#{pane_id}',
-    ]);
-    if (code !== 0) {
-      throw new Error(`Failed to resolve pane ID for target "${windowTarget}"`);
-    }
-    const firstPaneId = stdout.trim().split('\n')[0];
-    if (!firstPaneId || !firstPaneId.startsWith('%')) {
-      throw new Error(`No valid pane ID found for target "${windowTarget}"`);
-    }
-    return firstPaneId;
   }
 
   async listPaneIds(server: ServerConfig, windowTarget: string): Promise<Array<{ index: number; paneId: string }>> {
@@ -586,40 +497,8 @@ export class TmuxClient {
     return this.runTmuxCommand(server, ['kill-session', '-t', sessionName]);
   }
 
-  async killWindow(server: ServerConfig, target: string): Promise<ExecResult> {
-    return this.runTmuxCommand(server, ['kill-window', '-t', target]);
-  }
-
   async killPane(server: ServerConfig, target: string): Promise<ExecResult> {
     return this.runTmuxCommand(server, ['kill-pane', '-t', target]);
-  }
-
-  async capturePane(
-    server: ServerConfig,
-    target: string,
-    startLine?: number,
-    endLine?: number,
-  ): Promise<ExecResult> {
-    const args = ['capture-pane', '-p', '-t', target, '-e'];
-    if (startLine != null) args.push('-S', String(startLine));
-    if (endLine != null) args.push('-E', String(endLine));
-    return this.runTmuxCommand(server, args);
-  }
-
-  async sendKeys(server: ServerConfig, target: string, keys: string[]): Promise<void> {
-    for (let i = 0; i < keys.length; i++) {
-      const key = keys[i];
-      if (SPECIAL_KEYS.has(key)) {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
-      } else if (Buffer.byteLength(key, 'utf8') > 500) {
-        await this.sendLongText(server, target, key);
-        if (keys[i + 1] === 'Enter') {
-          await new Promise(resolve => setTimeout(resolve, 2000));
-        }
-      } else {
-        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
-      }
-    }
   }
 
   /**
@@ -749,8 +628,185 @@ export class TmuxClient {
     return this.runTmuxCommand(server, ['resize-pane', '-Z', '-t', target]);
   }
 
-  /** Execute an arbitrary shell command on the server (local or remote). */
-  async execCommand(server: ServerConfig, command: string): Promise<ExecResult> {
-    return this.transportFactory.getTransport(server).exec(command);
+  // ─── IMuxClient implementation ───
+
+  async listWorkspaces(server: ServerConfig) { return this.listSessions(server); }
+  async listWorkspacesStrict(server: ServerConfig) { return this.listSessionsForSecurityGate(server); }
+
+  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }) {
+    const { result, windowName } = await this.createSession(server, name, opts);
+    return { ref: { kind: 'tmux' as const, workspace: name, window: windowName }, result };
+  }
+
+  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }) {
+    const { result, windowName } = await this.createWindow(server, workspace, baseName, opts);
+    return { ref: { kind: 'tmux' as const, workspace, window: windowName }, result };
+  }
+
+  async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
+    return this.runTmuxCommand(server, ['kill-window', '-t', tmuxTargetFromMuxRef(ref)]);
+  }
+  async closeWorkspace(server: ServerConfig, workspace: string) { return this.killSession(server, workspace); }
+  async renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string) { return this.renameWindow(server, tmuxTargetFromMuxRef(ref), name); }
+  async renameWorkspace(server: ServerConfig, from: string, to: string) { return this.renameSession(server, from, to); }
+  async windowExists(server: ServerConfig, ref: MuxRef) { return this.checkPaneExists(server, tmuxTargetFromMuxRef(ref)); }
+  async focusWindow(server: ServerConfig, ref: MuxRef) { return this.runTmuxCommand(server, ['select-window', '-t', tmuxTargetFromMuxRef(ref)]); }
+
+  async resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null> {
+    const identity = await this.getWindowIdentity(server, target);
+    if (!identity) return null;
+    return { kind: 'tmux', workspace: identity.sessionName, window: identity.windowName };
+  }
+
+  async resolvePane(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal): Promise<PaneHandle> {
+    const target = tmuxTargetFromMuxRef(ref);
+    const { stdout, code } = await this.runTmuxCommand(server, ['list-panes', '-t', target, '-F', '#{pane_index}\t#{pane_id}']);
+    if (code !== 0) throw new Error(`Failed to list panes for ${target}`);
+    const entries = stdout.trim().split('\n').filter(Boolean)
+      .map(line => { const [idx, id] = line.split('\t'); return { index: parseInt(idx, 10), paneId: id }; })
+      .sort((a, b) => a.index - b.index);
+    if (ordinal < 1 || ordinal > entries.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${entries.length}) for ${target}`);
+    return asPaneHandle(entries[ordinal - 1].paneId);
+  }
+
+  async listPanesByRef(server: ServerConfig, ref: MuxRef) {
+    const target = tmuxTargetFromMuxRef(ref);
+    const { stdout, code } = await this.runTmuxCommand(server, ['list-panes', '-t', target, '-F', '#{pane_index}\t#{pane_id}\t#{pane_title}\t#{pane_current_command}\t#{pane_active}']);
+    if (code !== 0) throw new Error(`Failed to list panes for ${target}`);
+    const entries = stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [idx, id, title, command, active] = line.split('\t');
+      return { index: parseInt(idx, 10), id, title: title || '', command: command || '', active: active === '1' };
+    });
+    entries.sort((a, b) => a.index - b.index);
+    return entries.map((e, i) => ({
+      ordinal: (i + 1) as PaneOrdinal, handle: asPaneHandle(e.id), title: e.title, command: e.command, active: e.active,
+    }));
+  }
+
+  async refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null> {
+    const format = ['#{pane_id}', '#{session_name}', '#{window_name}', '#{pane_index}', '#{?session_grouped,#{session_group},#{session_name}}'].join('\t');
+    let result: ExecResult;
+    try { result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]); } catch { return null; }
+    if (result.code !== 0) return null;
+
+    const lines = result.stdout.trim().split('\n').filter(Boolean);
+    const parsed = lines.map(line => {
+      const [paneId, _sessionName, windowName, paneIndex, resolvedSession] = line.split('\t');
+      return { paneId, windowName, paneIndex: parseInt(paneIndex, 10), resolvedSession };
+    });
+
+    const target = parsed.find(p => p.paneId === (handle as string));
+    if (!target) return null;
+
+    const windowKey = `${target.resolvedSession}\t${target.windowName}`;
+    const siblings = parsed
+      .filter(p => `${p.resolvedSession}\t${p.windowName}` === windowKey)
+      .sort((a, b) => a.paneIndex - b.paneIndex);
+    const ordinal = siblings.findIndex(p => p.paneId === (handle as string)) + 1;
+
+    return { ref: { kind: 'tmux', workspace: target.resolvedSession, window: target.windowName }, ordinal };
+  }
+
+  async probePane(server: ServerConfig, handle: PaneHandle) { return this.checkPaneLiveness(server, handle as string); }
+
+  async splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }> {
+    const flag = dir === 'h' ? '-h' : '-v';
+    const args = ['split-window', flag, '-t', handle as string, '-P', '-F', '#{pane_id}'];
+    if (env) { for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`); }
+    const result = await this.runTmuxCommand(server, args);
+    return { handle: asPaneHandle(result.stdout.trim().split('\n')[0] || ''), result };
+  }
+
+  async closePane(server: ServerConfig, handle: PaneHandle) { return this.killPane(server, handle as string); }
+  async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> {
+    const args = ['capture-pane', '-p', '-t', handle as string, '-e'];
+    if (start != null) args.push('-S', String(start));
+    if (end != null) args.push('-E', String(end));
+    return this.runTmuxCommand(server, args);
+  }
+  async sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void> {
+    const target = handle as string;
+    for (let i = 0; i < keys.length; i++) {
+      const key = keys[i];
+      if (SPECIAL_KEYS.has(key)) {
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, key]);
+      } else if (Buffer.byteLength(key, 'utf8') > 500) {
+        await this.sendLongText(server, target, key);
+        if (keys[i + 1] === 'Enter') {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+        }
+      } else {
+        await this.runTmuxCommand(server, ['send-keys', '-t', target, '-l', key]);
+      }
+    }
+  }
+  async sendTextToHandle(server: ServerConfig, handle: PaneHandle, text: string) { return this.sendLiteralText(server, handle as string, text); }
+  async panePidByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPanePid(server, handle as string); }
+  async paneCommandByHandle(server: ServerConfig, handle: PaneHandle) { return this.getPaneCurrentCommand(server, handle as string); }
+  async startOutputStream(server: ServerConfig, handle: PaneHandle, outputPath: string) { return this.startPipePane(server, handle as string, outputPath); }
+  async stopOutputStream(server: ServerConfig, handle: PaneHandle) { return this.stopPipePane(server, handle as string); }
+  async zoomPaneByHandle(server: ServerConfig, handle: PaneHandle) { return this.zoomPane(server, handle as string); }
+  async unzoomPaneByHandle(server: ServerConfig, handle: PaneHandle) { return this.unzoomPane(server, handle as string); }
+  async isPaneInModeByHandle(server: ServerConfig, handle: PaneHandle) { return this.isPaneInMode(server, handle as string); }
+  async cancelPaneModeByHandle(server: ServerConfig, handle: PaneHandle) { return this.cancelPaneMode(server, handle as string); }
+  async setPaneTitle(server: ServerConfig, handle: PaneHandle, title: string) { return this.renamePane(server, handle as string, title); }
+  async windowActivity(server: ServerConfig, ref: MuxRef) { return this.getWindowActivity(server, tmuxTargetFromMuxRef(ref)); }
+
+  async captureLayout(server: ServerConfig, ref: MuxRef) {
+    const target = tmuxTargetFromMuxRef(ref);
+    const layoutResult = await this.runTmuxCommand(server, ['display-message', '-t', target, '-p', '#{window_layout}']);
+    const paneResult = await this.runTmuxCommand(server, ['list-panes', '-t', target, '-F', '#{pane_index}\t#{pane_current_command}\t#{pane_current_path}\t#{pane_title}']);
+    const entries = paneResult.stdout.trim().split('\n').filter(Boolean).map(line => {
+      const [indexStr, command, path, title] = line.split('\t');
+      return { index: parseInt(indexStr, 10), command: command || null, path: path || null, title: title || null };
+    });
+    entries.sort((a, b) => a.index - b.index);
+    return {
+      layout: layoutResult.stdout.trim(),
+      panes: entries.map((e, i) => ({ index: e.index, ordinal: (i + 1) as PaneOrdinal, command: e.command, path: e.path, title: e.title })),
+    };
+  }
+
+  async applyLayout(server: ServerConfig, ref: MuxRef, layout: string) {
+    return this.runTmuxCommand(server, ['select-layout', '-t', tmuxTargetFromMuxRef(ref), layout]);
+  }
+
+  async measurePanePids(server: ServerConfig): Promise<Array<{ ref: MuxRef; pid: number }>> {
+    let result: ExecResult;
+    try { result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', '#{session_name}\t#{window_name}\t#{pane_pid}\t#{?session_grouped,#{session_group},#{session_name}}']); }
+    catch { return []; }
+    if (result.code !== 0) return [];
+    const seen = new Map<string, { ref: MuxRef; pid: number }>();
+    for (const line of result.stdout.trim().split('\n')) {
+      if (!line) continue;
+      const [_sessionName, windowName, pidStr, resolvedSession] = line.split('\t');
+      const pid = parseInt(pidStr, 10);
+      if (!Number.isFinite(pid) || resolvedSession.startsWith(LINKED_SESSION_PREFIX)) continue;
+      const key = `${pid}`;
+      if (!seen.has(key)) seen.set(key, { ref: { kind: 'tmux', workspace: resolvedSession, window: windowName }, pid });
+    }
+    return Array.from(seen.values());
+  }
+
+  async openTerminal(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, _opts?: import('../servers/transport/ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
+    return this.transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows);
+  }
+
+  async installChangeHooks(server: ServerConfig): Promise<void> {
+    const transport = this.transportFactory.getTransport(server);
+    const port = new URL(this.localUrl).port;
+    const base = `http://localhost:${port}/api/hooks/tmux`;
+    const token = this.webhookToken ?? this.uiToken;
+    for (const event of HOOK_EVENTS) {
+      const hookValue = buildHookValue(base, event, { token, serverName: server.name });
+      await transport.execMux({ kind: 'tmux', args: buildHookSetArgs(event, hookValue) });
+    }
+  }
+
+  async uninstallChangeHooks(server: ServerConfig): Promise<void> {
+    const transport = this.transportFactory.getTransport(server);
+    for (const event of HOOK_EVENTS) {
+      await transport.execMux({ kind: 'tmux', args: buildHookUnsetArgs(event) });
+    }
   }
 }

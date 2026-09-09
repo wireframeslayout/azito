@@ -7,6 +7,7 @@ import type { InstallStep } from '../components/ui';
 import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
+import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 
 export interface Server {
   name: string;
@@ -16,7 +17,8 @@ export interface Server {
   hasAgentToken?: boolean;
   agentVersion?: string;
   sshHost?: string;
-  muxRuntime?: 'system' | 'managed';
+  muxRuntime?: 'system' | 'managed' | 'herdr' | 'zellij';
+  herdrNavigationLock?: 'locked' | 'free';
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
   isolationIntent?: boolean;
@@ -38,6 +40,8 @@ export interface TmuxWindow {
   name: string;
   panes: Pane[];
   activity?: number;
+  ref: string;
+  windowId: number | null;
 }
 
 export interface Session {
@@ -69,7 +73,12 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const closeTabRef = useRef(closeTab);
   closeTabRef.current = closeTab;
 
-  const { refresh: refreshStatuses } = useServerStatuses();
+  const { servers, refresh: refreshStatuses } = useServerStatuses();
+
+  const isTmux = useCallback((serverName: string): boolean => {
+    const srv = servers.find((s) => s.name === serverName);
+    return muxKindForRuntime((srv?.muxRuntime ?? 'system') as MuxRuntime) === 'tmux';
+  }, [servers]);
   const { showToast } = useToast();
   const confirm = useConfirm();
 
@@ -83,7 +92,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [addHost, setAddHost] = useState('');
   const [addPort, setAddPort] = useState('3002');
   const [addToken, setAddToken] = useState('');
-  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed' | 'herdr' | 'zellij'>('system');
   const [addInstallSteps, setAddInstallSteps] = useState<InstallStep[]>([]);
   const [addLoading, setAddLoading] = useState(false);
 
@@ -92,7 +101,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed' | 'herdr' | 'zellij'>('system');
   // Issue #29 review (3rd pass), Important finding 4: mirrors
   // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
   // distinct from ServerDetailPage's).
@@ -135,17 +144,32 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setSessions(newSessions);
 
     for (const tab of tabsRef.current) {
-      if (tab.type !== 'terminal') continue;
+      if (tab.type !== 'terminal' || !tab.serverName) continue;
+      if (!successfulServers.has(tab.serverName)) continue;
+      const serverSessions = newSessions[tab.serverName];
+      if (!serverSessions) continue;
+
+      if (tab.terminalRef) {
+        const ref = tab.terminalRef;
+        if (ref.kind === 'windowId') {
+          const exists = serverSessions.some((s) => s.windows.some((w) => w.windowId === ref.windowId));
+          if (!exists) closeTabRef.current(tab.id);
+        } else {
+          const exists = serverSessions.some((s) => s.windows.some((w) => w.ref === ref.ref));
+          if (!exists) closeTabRef.current(tab.id);
+        }
+        continue;
+      }
+
       const slashIdx = tab.id.indexOf('/');
       if (slashIdx === -1) continue;
       const serverName = tab.id.slice('terminal:'.length, slashIdx);
-      if (!successfulServers.has(serverName)) continue;
       const target = tab.id.slice(slashIdx + 1);
       const colonIdx = target.indexOf(':');
       if (colonIdx === -1) continue;
       const sessionName = target.slice(0, colonIdx);
       const windowPart = target.slice(colonIdx + 1).split('.')[0];
-      const session = newSessions[serverName]?.find((s) => s.name === sessionName);
+      const session = serverSessions.find((s) => s.name === sessionName);
       if (!session) { closeTabRef.current(tab.id); continue; }
       const idx = parseInt(windowPart, 10);
       const windowExists = Number.isNaN(idx)
@@ -329,65 +353,117 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const createSession = useCallback(async (serverName: string) => {
     const name = prompt('New session name:');
     if (!name) return;
-    const command = prompt('Initial command (optional):', '');
-    await api(`/servers/${serverName}/sessions`, { method: 'POST', body: JSON.stringify({ name, command: command || undefined }) });
+    if (isTmux(serverName)) {
+      const command = prompt('Initial command (optional):', '');
+      await api(`/servers/${serverName}/sessions`, { method: 'POST', body: JSON.stringify({ name, command: command || undefined }) });
+    } else {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isTmux]);
 
   const handleRenameSession = useCallback(async (serverName: string, sessionName: string) => {
     const newName = prompt('Rename session:', sessionName);
     if (!newName || newName === sessionName) return;
-    await api(`/servers/${serverName}/sessions/${sessionName}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    if (isTmux(serverName)) {
+      await api(`/servers/${serverName}/sessions/${sessionName}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isTmux]);
 
   const handleKillSession = useCallback(async (serverName: string, sessionName: string) => {
     const ok = await confirm({ title: t('confirm.killSession'), message: t('confirm.killSessionMessage', { name: sessionName }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/sessions/${sessionName}`, { method: 'DELETE' });
+    if (isTmux(serverName)) {
+      await api(`/servers/${serverName}/sessions/${sessionName}`, { method: 'DELETE' });
+    } else {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}`, { method: 'DELETE' });
+    }
     tabs.filter((t) => t.id.startsWith(`terminal:${serverName}/${sessionName}:`)).forEach((t) => closeTab(t.id));
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t]);
+  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
 
   const handleAddWindow = useCallback(async (serverName: string, sessionName: string) => {
-    await api(`/servers/${serverName}/sessions/${sessionName}/windows`, { method: 'POST' });
+    if (isTmux(serverName)) {
+      await api(`/servers/${serverName}/sessions/${sessionName}/windows`, { method: 'POST' });
+    } else {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isTmux]);
 
-  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string) => {
-    await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else if (ref && !isTmux(serverName)) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isTmux]);
 
-  const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string) => {
+  const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string, windowId?: number, ref?: string) => {
     const newName = prompt('Rename window:', currentName);
     if (!newName || newName === currentName) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    if (windowId != null) {
+      await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else if (ref && !isTmux(serverName)) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isTmux]);
 
-  const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string) => {
+  const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    } else if (ref && paneOrdinal != null && !isTmux(serverName)) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
+    }
     refreshAll();
-  }, [refreshAll]);
+  }, [refreshAll, isTmux]);
 
-  const handleKillWindow = useCallback(async (serverName: string, target: string) => {
+  const handleKillWindow = useCallback(async (serverName: string, target: string, windowId?: number, ref?: string) => {
     const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: target }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
-    tabs.filter((t) => t.id.startsWith(`terminal:${serverName}/${target}.`)).forEach((t) => closeTab(t.id));
+    if (windowId != null) {
+      await api(`/windows/${windowId}/kill`, { method: 'DELETE' });
+    } else if (ref && !isTmux(serverName)) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/kill`, { method: 'POST' });
+    } else {
+      await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    }
+    tabs.filter((t) => t.type === 'terminal' && t.serverName === serverName && t.target && (t.target === target || t.target.startsWith(`${target}.`))).forEach((t) => closeTab(t.id));
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t]);
+  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
 
-  const handleKillPane = useCallback(async (serverName: string, target: string) => {
+  const handleKillPane = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: target }), danger: true });
     if (!ok) return;
-    await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
-    closeTab(`terminal:${serverName}/${target}`);
+    if (windowId != null && paneOrdinal != null) {
+      await api(`/windows/${windowId}/panes/${paneOrdinal}`, { method: 'DELETE' });
+    } else if (ref && paneOrdinal != null && !isTmux(serverName)) {
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}`, { method: 'DELETE' });
+    } else {
+      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
+    }
+    const matchTarget = (tab: PersistedTab) =>
+      tab.type === 'terminal' && tab.serverName === serverName && (
+        tab.id === `terminal:${serverName}/${target}` ||
+        (windowId != null && paneOrdinal != null && tab.id === `terminal:${serverName}::w${windowId}.${paneOrdinal}`)
+      );
+    const matchingTab = tabs.find(matchTarget);
+    if (matchingTab) closeTab(matchingTab.id);
     refreshAll();
-  }, [refreshAll, closeTab, confirm, t]);
+  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
 
   return {
     sessions,

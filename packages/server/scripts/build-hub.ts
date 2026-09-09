@@ -261,6 +261,7 @@ async function main(): Promise<void> {
 
   // 3. esbuild hub bundle
   console.log('[build-hub] Bundling hub server...');
+  const sharedAlias = { '@azito/shared': path.resolve(REPO_ROOT, 'packages/shared/src/index.ts') };
   await esbuild.build({
     entryPoints: [path.join(SERVER_ROOT, 'src', 'main.ts')],
     bundle: true,
@@ -269,6 +270,7 @@ async function main(): Promise<void> {
     target: 'node24',
     outfile: path.join(STAGE, 'azito-hub.cjs'),
     external: ['better-sqlite3', 'node-pty', 'ssh2', 'cpu-features', 'playwright'],
+    alias: sharedAlias,
     logLevel: 'warning',
   });
 
@@ -287,6 +289,7 @@ async function main(): Promise<void> {
     target: 'node24',
     outfile: path.join(STAGE, 'azito-supervisor.cjs'),
     external: ['node-pty'],
+    alias: sharedAlias,
     logLevel: 'warning',
   });
 

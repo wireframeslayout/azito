@@ -18,7 +18,9 @@ import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
-import { resolveActivePane, paneDisplayName } from '../lib/tmuxPane';
+import { resolveTerminalTarget, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
+import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
+import { paneDisplayName } from '../lib/paneDisplay';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -39,6 +41,7 @@ function ensureSpinnerKeyframes(): void {
 interface TerminalContainerProps {
   serverName: string;
   target: string;
+  terminalRef?: TerminalRef;
   projectId?: number;
   taskId?: number;
   project?: Project | null;
@@ -81,7 +84,22 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+  // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
+  // everything below that still keys off a tmux target (window-exists check, status dropdown,
+  // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
+  // sessions. Legacy callers (TaskPanel) pass a tmux target and no ref — derive the ref then.
+  const terminalRef = useMemo<TerminalRef | undefined>(
+    () => terminalRefProp ?? terminalRefFromTabTarget(serverName, rawTarget) ?? undefined,
+    [terminalRefProp, serverName, rawTarget],
+  );
+  const target = useMemo(() => {
+    if (terminalRef) {
+      return resolveTerminalTarget(terminalRef, sessions) ?? rawTarget;
+    }
+    return rawTarget;
+  }, [rawTarget, terminalRef, sessions]);
+
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
   const [disconnected, setDisconnected] = useState(false);
@@ -110,8 +128,8 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
   // window isn't resolvable via project/allTasks (a plain pane direct view etc.), windowId is
   // null and the toggle itself is not rendered.
   const currentWindow = useMemo(
-    () => findWindow(serverName, target, project ?? null, allTasks ?? []),
-    [serverName, target, project, allTasks],
+    () => findWindow(serverName, target, project ?? null, allTasks ?? [], terminalRef),
+    [serverName, target, project, allTasks, terminalRef],
   );
   const isTaskOwnedPane = isTaskOwnedWindow(currentWindow);
   const dbWindow = currentWindow;
@@ -212,54 +230,26 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
     if (!sessions) return;
     sessionsUpdateCount.current += 1;
 
-    const colonIdx = target.indexOf(':');
-    if (colonIdx < 0) return;
-    const sessionName = target.slice(0, colonIdx);
-    const rest = target.slice(colonIdx + 1);
+    const result = checkWindowExists(sessions, terminalRef, target);
 
-    const session = sessions.find(s => s.name === sessionName);
-    if (!session) {
+    if (!result.found || !result.paneFound) {
       if (everSeen.current || sessionsUpdateCount.current > 1) setWindowMissing(true);
       return;
-    }
-
-    const dotIdx = rest.lastIndexOf('.');
-    const winSpec = dotIdx >= 0 ? rest.slice(0, dotIdx) : rest;
-    const paneSpec = dotIdx >= 0 ? rest.slice(dotIdx + 1) : null;
-
-    const winIdx = parseInt(winSpec, 10);
-    let tmuxWindow = Number.isNaN(winIdx)
-      ? session.windows.find(w => w.name === winSpec)
-      : session.windows.find(w => w.index === winIdx);
-
-    if (!tmuxWindow && dotIdx >= 0) {
-      const fullWin = session.windows.find(w => w.name === rest)
-        ?? session.windows.find(w => String(w.index) === rest);
-      if (fullWin) { tmuxWindow = fullWin; }
-    }
-
-    if (!tmuxWindow) {
-      if (everSeen.current || sessionsUpdateCount.current > 1) setWindowMissing(true);
-      return;
-    }
-
-    if (paneSpec !== null && /^\d+$/.test(paneSpec)) {
-      const pIdx = parseInt(paneSpec, 10);
-      if (!tmuxWindow.panes.some(p => p.index === pIdx)) {
-        if (everSeen.current || sessionsUpdateCount.current > 1) setWindowMissing(true);
-        return;
-      }
     }
 
     everSeen.current = true;
     setWindowMissing(false);
     setDisconnected(false);
     setConnectFailed(false);
-  }, [sessions, target]);
+  }, [sessions, target, terminalRef]);
 
   const activePane = useMemo(
-    () => sessions ? resolveActivePane(sessions, target) : null,
-    [sessions, target],
+    () => {
+      if (!sessions) return null;
+      if (terminalRef) return resolveActivePaneByRef(sessions, terminalRef);
+      return resolveActivePane(sessions, target);
+    },
+    [sessions, terminalRef, target],
   );
   const activePaneName = activePane ? paneDisplayName(activePane) : undefined;
 
@@ -351,6 +341,7 @@ export function TerminalContainer({ serverName, target, projectId, taskId, proje
             ref={xtermRef}
             serverName={serverName}
             target={target}
+            terminalRef={terminalRef}
             onDisconnect={onDisconnect}
             onWindowNotFound={() => setWindowMissing(true)}
             onMaxRetriesReached={() => setDisconnected(true)}
