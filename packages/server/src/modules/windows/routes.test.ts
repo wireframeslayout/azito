@@ -244,7 +244,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
         sendKeysToHandle: sendKeys as unknown as TmuxClient['sendKeysToHandle'],
         resolvePane: vi.fn().mockResolvedValue('%0') as unknown as TmuxClient['resolvePane'],
       } as TmuxClient,
-      muxDriverRegistry: { resolve: () => ({}) } as any,
+      muxDriverRegistry: { resolve: () => ({ sendKeysToHandle: sendKeys, resolvePane: vi.fn().mockResolvedValue('%0') }) } as any,
       serverRepo: {
         findByName: (name: string) => (name === server.name ? server : null),
       } as unknown as IServerRepository,

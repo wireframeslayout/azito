@@ -181,7 +181,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
-    muxDriverRegistry: { resolve: () => ({}) } as any,
+    muxDriverRegistry: { resolve: () => ({ kind: 'tmux', closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) }) } as any,
   };
 }
 
