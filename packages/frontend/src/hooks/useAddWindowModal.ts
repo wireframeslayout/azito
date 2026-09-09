@@ -355,11 +355,13 @@ export function useAddWindowModal(
           onConnect?.(termRef, numericProjectId);
         }
 
-        const paneTarget = `${target}.1`;
         if (awWorkDir.trim()) {
           if (created.id) {
             await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+          } else if (newRef) {
+            await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
           } else {
+            const paneTarget = `${target}.1`;
             await api(`/servers/${awServer}/panes/${encodeURIComponent(paneTarget)}/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
           }
           await new Promise((r) => setTimeout(r, 500));

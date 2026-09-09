@@ -173,6 +173,7 @@ export class ZellijClient implements IMuxClient {
   }
 
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> {
+    // Fail-closed: exec errors propagate to caller (isolation gate returns 409).
     return this.listWorkspaces(server);
   }
 
