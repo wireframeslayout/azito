@@ -466,19 +466,19 @@ export class WindowRespawnService {
               tokenId,
               'respawn_restore_failed_rollback',
               () => {},
-              () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget }),
+              () => this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef }),
             );
           } else {
             const outcome = await resolveKillOutcome(restoreDriver.closeWindow(respawnServer, newRef));
             if (!outcome.success) {
-              this.windowRepo.update(windowId, { tmuxTarget: dbTarget });
+              this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef });
             }
           }
         } catch {}
         throw err;
       }
 
-      this.windowRepo.update(windowId, { tmuxTarget: dbTarget, sleeping: false });
+      this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef, sleeping: false });
 
       return { tmuxTarget: dbTarget };
     };
