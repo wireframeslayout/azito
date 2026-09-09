@@ -5,7 +5,7 @@ import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient } from './IMuxClient';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
-import type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo } from './types';
+import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export type { TmuxPane, TmuxWindow, TmuxSession, TmuxPaneInfo, MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
@@ -20,25 +20,9 @@ const SPECIAL_KEYS = new Set([
   'M-b', 'M-f',
 ]);
 
-// ─── Window spec matching ───
+// ─── Window spec matching (moved to types.ts; re-exported for compatibility) ───
 
-/**
- * Match the window part of a `session:windowSpec[.pane]` target against a
- * window's index and name. Two subtleties:
- * - tmux resolves a fully numeric spec as a window *index*, so a numeric spec
- *   must never match a coincidentally numeric window *name*.
- * - A trailing `.digits` may be a pane suffix or part of the window name
- *   itself (e.g. a window literally named `foo.1`), so both the raw and the
- *   pane-stripped forms of the spec are tried.
- * An empty spec matches nothing — session-only targets are the caller's call.
- */
-export function windowSpecMatches(windowSpec: string, windowIndex: number, windowName: string): boolean {
-  for (const spec of new Set([windowSpec, windowSpec.replace(/\.\d+$/, '')])) {
-    if (!spec) continue;
-    if (/^\d+$/.test(spec) ? spec === String(windowIndex) : spec === windowName) return true;
-  }
-  return false;
-}
+export { windowSpecMatches } from './types';
 
 // ─── Session listing (shared by listSessions / listSessionsForSecurityGate) ───
 

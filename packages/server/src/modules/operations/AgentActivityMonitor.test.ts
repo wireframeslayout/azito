@@ -3,9 +3,10 @@ import { AgentActivityMonitor, parseWindowTarget, findLiveWindow } from './Agent
 import type { ProcessActivityProbeEntry } from './AgentActivityMonitor';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import type { IWindowRepository, Window } from '../windows/Window';
-import type { TmuxClient, TmuxSession, TmuxPane } from '../tmux/TmuxClient';
+import type { TmuxSession, TmuxPane } from '../tmux/types';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { herdrMuxRef } from '@azito/shared';
 
 type RunningMap = Record<number, Array<{ taskId: number; target: string; serverName: string }>>;
@@ -65,6 +66,14 @@ function nowSec(): number {
   return Math.floor(Date.now() / 1000);
 }
 
+function mockRegistry(
+  listWorkspaces: ReturnType<typeof vi.fn>,
+  captureScreen: ReturnType<typeof vi.fn>,
+  resolvePane: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue('resolved-pane'),
+): MuxDriverRegistry {
+  return { resolve: () => ({ listWorkspaces, captureScreen, resolvePane }) } as unknown as MuxDriverRegistry;
+}
+
 describe('AgentActivityMonitor', () => {
   let getRunning: ReturnType<typeof vi.fn>;
   let findAll: ReturnType<typeof vi.fn>;
@@ -89,7 +98,7 @@ describe('AgentActivityMonitor', () => {
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
       { findAll } as unknown as IWindowRepository,
-      { listSessions, captureScreen } as unknown as TmuxClient,
+      mockRegistry(listSessions, captureScreen),
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
     );
@@ -516,7 +525,7 @@ describe('AgentActivityMonitor', () => {
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, captureScreen } as unknown as TmuxClient,
+        mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
       );
@@ -533,7 +542,7 @@ describe('AgentActivityMonitor', () => {
 
       listSessions.mockResolvedValueOnce(makeSessions('azito', 'agent-1', 3, base + 1, [makePane({ command: 'claude', title: 'claude' })]));
       await monitor.tick();
-      expect(captureScreen).toHaveBeenCalledWith(expect.anything(), 'azito:agent-1', -30);
+      expect(captureScreen).toHaveBeenCalledWith(expect.anything(), 'resolved-pane', -30);
       expect(monitor.snapshot()).toEqual([
         expect.objectContaining({ target: 'azito:agent-1', running: true, source: 'manual', status: 'blocked' }),
       ]);
@@ -544,7 +553,7 @@ describe('AgentActivityMonitor', () => {
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, captureScreen } as unknown as TmuxClient,
+        mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
       );
@@ -934,7 +943,7 @@ describe('AgentActivityMonitor', () => {
         monitor = new AgentActivityMonitor(
           { getRunning } as unknown as ExecuteTaskUseCase,
           { findAll } as unknown as IWindowRepository,
-          { listSessions, captureScreen: screenClient } as unknown as TmuxClient,
+          mockRegistry(listSessions, screenClient),
           { findByName } as unknown as IServerRepository,
           { emit } as unknown as NotificationBus,
         );
@@ -1594,7 +1603,7 @@ describe('AgentActivityMonitor', () => {
       return new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, captureScreen } as unknown as TmuxClient,
+        mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
         probe,
@@ -2100,7 +2109,7 @@ describe('AgentActivityMonitor', () => {
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
-        { listSessions, captureScreen } as unknown as TmuxClient,
+        mockRegistry(listSessions, captureScreen),
         { findByName } as unknown as IServerRepository,
         { emit } as unknown as NotificationBus,
         probe,

@@ -2,13 +2,13 @@ import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import { ACTIVITY_THRESHOLD_SEC } from '../tasks/execution/WorkerWaiter';
 import type { AgentWindow, IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
-import type { TmuxClient, TmuxSession, TmuxWindow } from '../tmux/TmuxClient';
-import { windowSpecMatches } from '../tmux/TmuxClient';
+import type { TmuxSession, TmuxWindow } from '../tmux/types';
+import { windowSpecMatches } from '../tmux/types';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, muxKindForRuntime, type PaneHandle, type MuxWorkspace, type MuxRef } from '@azito/shared';
+import { windowKey, asPaneHandle, muxKindForRuntime, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
@@ -627,13 +627,12 @@ export class AgentActivityMonitor {
   constructor(
     private executeTaskUseCase: ExecuteTaskUseCase,
     private windowRepo: IWindowRepository,
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private serverRepo: IServerRepository,
     private notificationBus: NotificationBus,
     private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
     private paneHandleResolver?: PaneHandleResolver,
-    private muxDriverRegistry?: MuxDriverRegistry,
   ) {}
 
   start(): void {
@@ -1113,7 +1112,23 @@ export class AgentActivityMonitor {
       }
     }
 
-    // One listSessions call per server (not one per candidate/operation window),
+    // Filter candidates whose mux_ref.kind doesn't match the server's runtime.
+    // These are stale rows (e.g. tmux windows left after migrating to herdr).
+    const filteredCandidates = candidates.filter((w) => {
+      if (!w.muxRef) return true;
+      const server = servers.get(w.serverName);
+      if (!server) return true;
+      const serverKind = muxKindForRuntime(server.muxRuntime ?? 'system');
+      if (w.muxRef.kind !== serverKind) {
+        const key = windowKey(w.serverName, w.tmuxTarget);
+        reasons.set(key, 'offline');
+        decide(key, w.serverName, w.tmuxTarget, 'none', 'offline', w.taskId ?? undefined);
+        return false;
+      }
+      return true;
+    });
+
+    // One listWorkspaces call per server (not one per candidate/operation window),
     // queried in parallel so one slow/offline server cannot stretch the tick past
     // the poll interval.
     const sessionsByServer = new Map<string, TmuxSession[]>();
@@ -1124,16 +1139,9 @@ export class AgentActivityMonitor {
     await Promise.all([...servers.entries()].map(async ([serverName, server]) => {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
-        const kind = muxKindForRuntime(server.muxRuntime ?? 'system');
-        if (kind === 'tmux') {
-          sessionsByServer.set(serverName, await this.tmux.listSessions(server));
-        } else if (this.muxDriverRegistry) {
-          const driver = this.muxDriverRegistry.resolve(server);
-          const workspaces = await driver.listWorkspaces(server);
-          sessionsByServer.set(serverName, workspacesToTmuxSessions(workspaces));
-        } else {
-          sessionsByServer.set(serverName, []);
-        }
+        const driver = this.muxDriverRegistry.resolve(server);
+        const workspaces = await driver.listWorkspaces(server);
+        sessionsByServer.set(serverName, workspacesToTmuxSessions(workspaces));
       } catch {
         sessionsByServer.set(serverName, []);
         sessionErrors.add(serverName);
@@ -1142,7 +1150,7 @@ export class AgentActivityMonitor {
 
     // Warm the screen-verdict cache before the per-key ladder runs, so its
     // capture-pane calls happen in bounded parallel instead of one at a time.
-    await this.prefetchScreenVerdicts(candidates, servers, sessionsByServer);
+    await this.prefetchScreenVerdicts(filteredCandidates, servers, sessionsByServer);
 
     // Post-check: operation-run entries whose supervisor didn't report blocked.
     // For claude workers, screen-check them now that sessions are available.
@@ -1168,7 +1176,7 @@ export class AgentActivityMonitor {
     }
 
     const nowSec = Math.floor(Date.now() / 1000);
-    for (const w of candidates) {
+    for (const w of filteredCandidates) {
       const key = windowKey(w.serverName, w.tmuxTarget);
 
       // Tier 0: an event-driven supervisor signal for this key is
@@ -1589,7 +1597,8 @@ export class AgentActivityMonitor {
     const activityAdvanced = prevHistory !== undefined && window.activity > prevHistory.lastActivity;
     if (!activityAdvanced) return 'unknown';
 
-    const screenTail = await this.captureScreenTail(server, asPaneHandle(w.tmuxTarget));
+    const ref = w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
   }
@@ -1754,7 +1763,8 @@ export class AgentActivityMonitor {
     paneIndex: number | null,
   ): Promise<ScreenVerdict> {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
-    const screenTail = await this.captureScreenTail(server, asPaneHandle(w.tmuxTarget));
+    const ref = w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget);
+    const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
     if (screenTail === null) return 'unknown';
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
@@ -1829,10 +1839,15 @@ export class AgentActivityMonitor {
     return titleOnly === 'working' || titleOnly === 'idle';
   }
 
-  /** Tail of `capture-pane` (~30 lines) for the classifier's screen-content rules. Null on any tmux error. */
-  private async captureScreenTail(server: ServerConfig, handle: PaneHandle): Promise<string | null> {
+  private async captureScreenTail(
+    server: ServerConfig,
+    muxRef: MuxRef,
+    paneOrdinal: number,
+  ): Promise<string | null> {
     try {
-      const { stdout, code } = await this.tmux.captureScreen(server, handle, -30);
+      const driver = this.muxDriverRegistry.resolve(server);
+      const handle = await driver.resolvePane(server, muxRef, paneOrdinal as PaneOrdinal);
+      const { stdout, code } = await driver.captureScreen(server, handle, -30);
       if (code !== 0) return null;
       return stdout;
     } catch {
