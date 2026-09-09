@@ -321,7 +321,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         body: {
           error: 'isolation_intent_blocked_by_live_sessions',
           message: `${liveWorkspaces.length} 件の稼働中ワークスペースがこのサーバー上に存在するため隔離を有効化できません。ワークスペースを終了してから再度有効化してください。`,
-          workspaceCount: liveWorkspaces.length,
+          sessionCount: liveWorkspaces.length,
         },
       };
     }
