@@ -101,31 +101,33 @@ herdr / zellij サーバーで `TmuxClient` 具象に依存するモジュール
 `IMuxClient` 経由（`MuxDriverRegistry.resolve()`）で呼ばれる箇所は herdr/zellij ドライバが透過的に処理するため問題なし。
 `TmuxClient.execCommand()` は tmux 固有のシェルコマンド実行であり、herdr/zellij には等価 API がない。
 
-| モジュール | 使用メソッド | 縮退動作 |
+### (a) IMuxClient / MuxDriverRegistry 経由で解決済み
+
+| モジュール | 移行 PR | 備考 |
 |---|---|---|
-| `operations/AgentActivityMonitor` | `listSessions`, `captureScreen` | `listSessions`: MuxDriverRegistry 経由で解決済み。`captureScreen`: Tier 2 画面取得で使用、herdr は `IMuxClient.captureScreen` で対応 |
-| `windows/WindowSleepService` | `closeWindow` | **MuxDriverRegistry 経由で解決済み（#409）。Fail Fast: closeWindow 失敗時は sleeping=1 にしない** |
-| `windows/WindowRespawnService` | `listWorkspaces`, `openWorkspace`, `openWindow`, `resolvePane`, `closeWindow`, `sendKeysToHandle`, `captureLayout`, `splitPaneByHandle`, `applyLayout`, `listPanesByRef` | **MuxDriverRegistry 経由で解決済み（#409）。herdr/zellij でもスリープ/復帰が動作** |
-| `git/RepoDiscoveryService` | `execCommand` | tmux 固有。herdr/zellij では `execCommand` 不可。agent サーバーは `AgentTransport.exec()` 経由で動作するため影響なし |
-| `files/FileBrowseService` | `execCommand` | 同上。agent サーバーは transport 経由 |
-| `tasks/execution/GitInfoCollector` | `execCommand` | 同上 |
-| `tasks/execution/PushVerifier` | `execCommand` | 同上 |
-| `tasks/execution/WorkerInputService` | `getPaneCurrentCommand`, `sendKeysToHandle` | MuxDriverRegistry fallback で解決済み |
-| `tasks/execution/WindowRotation` | `closeWindow`, `closePane`, `uiTokenEnvForServer` | IMuxClient 経由で解決済み |
-| `tasks/TaskRestoreService` | `createWindow`, `resolvePane`, `sendKeysToHandle`, `closeWindow` | tmux 直結。herdr サーバーでのタスク復元は未対応（要対応） |
-| `tasks/recovery/RecoverStuckTasksUseCase` | `resolvePane`, `probePane`, `sendKeysToHandle` | **7-H で MuxDriverRegistry 経由に修正済み** |
-| `tasks/TaskCleanupService` | `closeWindow` | MuxDriverRegistry fallback 済み |
-| `transcripts/WindowSessionResolver` | `execCommand`, `getPanePid`, `listAllPanes`, `listSessions` | tmux 固有。herdr サーバーでは縮退（セッション解決不可、機能低下） |
-| `transcripts/WindowInputService` | `sendLiteralText`, `sendKeysToHandle`, `isPaneInMode`, `cancelPaneMode`, `listAllPanes` | tmux 直結。herdr サーバーでは入力送信が低下（要対応） |
-| `transcripts/TranscriptPaneService` | `listAllPanes`, `checkPaneExists`, `sendLiteralText`, `sendKeysToHandle` | tmux 直結。herdr サーバーでは縮退 |
-| `servers/routes` | `listSessionsForSecurityGate`, `execCommand` | `listSessionsForSecurityGate`: 隔離ゲートで使用、herdr サーバーでは MuxDriverRegistry 経由の `listWorkspaces` に要移行。`execCommand`: tmux バージョン確認用、herdr では不要 |
-| `tasks/routes` | `windowExists`, `closeWindow` | tmux 直結。MuxDriverRegistry 経由への移行が望ましい |
+| `operations/AgentActivityMonitor` | #413 | `this.tmux` 削除、全呼び出し MuxDriverRegistry 経由 |
+| `windows/WindowSleepService` | #224 | |
+| `windows/WindowRespawnService` | #224 | |
+| `tasks/execution/WorkerInputService` | #225 | |
+| `tasks/execution/WindowRotation` | #222 | |
+| `tasks/TaskCleanupService` | — | MuxDriverRegistry fallback 済み |
+| `tasks/recovery/RecoverStuckTasksUseCase` | #225 | |
+| `tasks/TaskRestoreService` | #225 | |
+| `transcripts/WindowSessionResolver` | #226 | `windowSpecMatches` の値 import は `types.ts` 経由に移動 |
+| `transcripts/WindowInputService` | #226 | |
+| `transcripts/TranscriptPaneService` | #226 | |
+| `servers/routes` | #227 | 隔離ゲートは `listWorkspacesStrict` 経由、type import のみ残存 |
 
-### 分類
+### (b) `execCommand` 依存（tmux 固有コマンド実行）
 
-- **(a) IMuxClient / MuxDriverRegistry 経由で解決済み**: AgentActivityMonitor, WorkerInputService, WindowRotation, TaskCleanupService, RecoverStuckTasksUseCase, WindowSleepService, WindowRespawnService
-- **(b) `execCommand` 依存（tmux 固有コマンド実行）**: RepoDiscoveryService, FileBrowseService, GitInfoCollector, PushVerifier — agent サーバーは `AgentTransport.exec()` で動作するため herdr/zellij でも無害
-- **(c) 未対応（herdr/zellij 本格対応時に要移行）**: TaskRestoreService, WindowSessionResolver, WindowInputService, TranscriptPaneService, servers/routes (一部), tasks/routes (一部)
+agent サーバーは `AgentTransport.exec()` 経由で動作するため herdr/zellij でも無害。
+
+| モジュール | 備考 |
+|---|---|
+| `git/RepoDiscoveryService` | |
+| `files/FileBrowseService` | |
+| `tasks/execution/GitInfoCollector` | |
+| `tasks/execution/PushVerifier` | |
 
 ## 検証結果
 

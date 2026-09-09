@@ -68,8 +68,19 @@ function execCommand(command: string, timeoutMs: number): Promise<{ stdout: stri
   });
 }
 
+let runtimeMismatchWarned = false;
+
 function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
-  const rt = resolveTmuxRuntime(mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system', os.homedir());
+  let rt: ReturnType<typeof resolveTmuxRuntime>;
+  try {
+    rt = resolveTmuxRuntime(mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system', os.homedir());
+  } catch (err) {
+    if (!runtimeMismatchWarned) {
+      runtimeMismatchWarned = true;
+      console.warn(`[agent] ${(err as Error).message} — rejecting tmux mux request`);
+    }
+    return Promise.reject({ statusCode: 409, message: (err as Error).message });
+  }
   return new Promise((resolve) => {
     execFile(rt.bin, [...rt.baseArgs, ...args], { timeout: timeoutMs }, (err, stdout, stderr) => {
       const raw = (err as { code?: unknown } | null)?.code;

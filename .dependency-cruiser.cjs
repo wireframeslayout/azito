@@ -300,21 +300,10 @@ module.exports = {
         path: '^packages/server/src/modules',
         pathNot: [
           '^packages/server/src/modules/tmux',
-          // --- 暫定 allow-list（後続 Issue で削減） ---
+          // --- 暫定 allow-list（type import のみ残存） ---
           '^packages/server/src/modules/servers/routes\\.ts$',
           '^packages/server/src/modules/servers/ServerIsolationLock\\.ts$',
-          '^packages/server/src/modules/tasks/routes\\.ts$',
-          '^packages/server/src/modules/tasks/TaskRestoreService\\.ts$',
-          '^packages/server/src/modules/tasks/execution/ExecuteTaskUseCase\\.ts$',
-          '^packages/server/src/modules/tasks/execution/WorkerInputService\\.ts$',
           '^packages/server/src/modules/windows/routes\\.ts$',
-          '^packages/server/src/modules/windows/WindowRespawnService\\.ts$',
-          '^packages/server/src/modules/windows/WindowSleepService\\.ts$',
-          '^packages/server/src/modules/transcripts/WindowSessionResolver\\.ts$',
-          '^packages/server/src/modules/transcripts/TranscriptPaneService\\.ts$',
-          '^packages/server/src/modules/transcripts/WindowInputService\\.ts$',
-          '^packages/server/src/modules/operations/AgentActivityMonitor\\.ts$',
-          '^packages/server/src/modules/notifications/InteractionMonitor\\.ts$',
           '^packages/server/src/modules/projects/routes\\.ts$',
         ],
       },

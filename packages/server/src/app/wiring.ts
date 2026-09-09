@@ -518,7 +518,7 @@ function buildAgentActivityMonitor(
   return new AgentActivityMonitor(
     executeTaskUseCase,
     repos.windowRepo,
-    infra.tmuxClient,
+    muxDriverRegistry,
     repos.serverRepo,
     infra.notificationBus,
     processProbe,
@@ -534,7 +534,6 @@ function buildAgentActivityMonitor(
       }
     },
     paneHandleResolver,
-    muxDriverRegistry,
   );
 }
 

@@ -3,7 +3,7 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { MuxPaneInfo } from '@azito/shared';
 import { asPaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { windowSpecMatches } from '../tmux/TmuxClient';
+import { windowSpecMatches } from '../tmux/types';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';

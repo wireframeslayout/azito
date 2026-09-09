@@ -1,6 +1,6 @@
 import type { IWindowRepository } from '../windows/Window';
 import { isAgentWindow } from '../windows/Window';
-import { windowSpecMatches } from '../tmux/TmuxClient';
+import { windowSpecMatches } from '../tmux/types';
 import { parseWindowTarget } from '../operations/AgentActivityMonitor';
 import { asPaneHandle } from '@azito/shared';
 import type { PaneHandleResolver } from '../operations/PaneHandleResolver';

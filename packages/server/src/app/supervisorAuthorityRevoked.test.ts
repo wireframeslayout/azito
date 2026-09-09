@@ -9,9 +9,9 @@ import type { AuditLogService } from '../shared/audit/AuditLogService';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
 import type { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import type { IWindowRepository, Window } from '../modules/windows/Window';
-import type { TmuxClient } from '../modules/tmux/TmuxClient';
 import type { IServerRepository, ServerConfig } from '../modules/servers/Server';
 import type { NotificationBus } from '../modules/notifications/NotificationBus';
+import type { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 
 /**
  * Issue #28 third-party review (Important, fix 1): reproduces the exact
@@ -110,7 +110,7 @@ describe('SupervisorRegistry <-> AgentActivityMonitor bridge (Issue #28 third-pa
     monitor = new AgentActivityMonitor(
       { getRunning } as unknown as ExecuteTaskUseCase,
       { findAll } as unknown as IWindowRepository,
-      { listSessions, captureScreen } as unknown as TmuxClient,
+      { resolve: () => ({ listWorkspaces: listSessions, captureScreen, resolvePane: vi.fn().mockResolvedValue('resolved-pane') }) } as unknown as MuxDriverRegistry,
       { findByName } as unknown as IServerRepository,
       { emit } as unknown as NotificationBus,
     );
