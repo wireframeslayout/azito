@@ -300,5 +300,9 @@
     "pinTab": "Pin tab",
     "addWindowChip": "Window",
     "addBrowserChip": "Browser"
+  },
+  "herdrConflict": {
+    "title": "Session display limit",
+    "message": "Only one window per herdr session can be displayed at a time. Click this pane to switch the display."
   }
 }

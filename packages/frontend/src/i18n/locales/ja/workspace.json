@@ -300,5 +300,9 @@
     "pinTab": "タブをピン止め",
     "addWindowChip": "ウィンドウ",
     "addBrowserChip": "ブラウザ"
+  },
+  "herdrConflict": {
+    "title": "同一セッション表示制限",
+    "message": "同一 herdr セッションの窓は同時に 1 つしか表示できません。このペインをクリックすると表示が切り替わります。"
   }
 }
