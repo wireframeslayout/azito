@@ -340,7 +340,7 @@ export async function createSecondaryWindowInLock(
  * Non-task counterpart of {@link createSecondaryWindow} (Issue #29 review,
  * 9th pass, Important finding 1). A plain (non-task) window respawn/create
  * has no task token and no masked-secondary env to resolve — it only ever
- * needs {@link TmuxClient.uiTokenEnvForServer} — but the isolation-freshness
+ * needs {@link uiTokenEnvForServer} (shared/auth/uiTokenEnv) — but the isolation-freshness
  * requirement is identical to both other branches: env must be built from a
  * server row re-read AFTER this lock is actually held, never from whatever
  * `server` the caller happened to be holding before queuing for the lock.

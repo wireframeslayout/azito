@@ -318,7 +318,7 @@ module.exports = {
           '^packages/server/src/modules/projects/routes\\.ts$',
         ],
       },
-      to: { path: 'modules/tmux/TmuxClient\\.ts$' },
+      to: { path: '^packages/server/src/modules/tmux/TmuxClient\\.ts$' },
     },
   ],
 
