@@ -7,7 +7,8 @@ import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IUnitRepository } from '../units/Unit';
 import type { IWindowRepository } from '../windows/Window';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { IMuxClient } from '../tmux/IMuxClient';
 import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './execution/WindowRotation';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
@@ -45,7 +46,7 @@ export interface TaskRestoreDeps {
   // (Issue #328 tenth-round review) the same way every other execution
   // entry point does.
   projectSecretRepo: SqliteProjectSecretRepository;
-  tmux: TmuxClient;
+  muxDriverRegistry: MuxDriverRegistry;
   worktreeServiceFactory: WorktreeServiceFactory;
   transportFactory: TransportFactory;
   contentExtractor: IContentExtractor;
@@ -111,8 +112,12 @@ export class TaskRestoreService {
     return { serverIsolationMutex: this.deps.serverIsolationMutex, serverRepo: this.deps.serverRepo };
   }
 
+  private resolveDriver(server: Pick<ServerConfig, 'muxRuntime'>): IMuxClient {
+    return this.deps.muxDriverRegistry.resolve(server);
+  }
+
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, tmux, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -257,7 +262,7 @@ export class TaskRestoreService {
     // the rollback's killWindow, ...) sees it too.
     let sessionResult: { created: boolean; server: ServerConfig };
     try {
-      sessionResult = await ensureSessionWithLock(tmux, this.serverIsolationLock, server, tmuxSession);
+      sessionResult = await ensureSessionWithLock(this.resolveDriver(server), this.serverIsolationLock, server, tmuxSession);
     } catch (err) {
       // Issue #29 review, 12th pass, Critical finding 1: the server row
       // ensureSessionWithLock re-read once the isolation lock was actually
@@ -286,6 +291,7 @@ export class TaskRestoreService {
     // revoke-all, which could clobber a newer generation a concurrent
     // rotation for this task already persisted).
     let tokenId: number | null = null;
+    let createdRef: MuxRef | null = null;
 
     // Reassigned by the reverifyExecutionGateInLock preCheck below with the
     // project/projectServer snapshot the in-lock gate re-verification
@@ -321,8 +327,10 @@ export class TaskRestoreService {
       // rethrowing/throwing in both cases, so `windowName` staying null here
       // on failure is correct — there is nothing left for the outer catch to
       // roll back.
-      const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', (freshServer, env) =>
-        tmux.createWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env }),
+      const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', async (freshServer, env) => {
+        const opened = await this.resolveDriver(freshServer).openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
+        return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
+      },
         true,
         // Issue #29 Step 3a review, Important finding 2: re-verify the
         // untrusted-execution gate against `freshServer` — the row the lock
@@ -364,10 +372,11 @@ export class TaskRestoreService {
       // (resolvePaneId, the containment-check transport, the worktree
       // transport, sendKeys, and the rollback's killWindow below).
       server = created.server;
+      createdRef = created.ref ?? null;
 
-      const ref: MuxRef = { kind: 'tmux', workspace: tmuxSession, window: windowName };
+      const ref: MuxRef = createdRef!;
       const windowTarget = tmuxTargetFromMuxRef(ref);
-      const handle = await tmux.resolvePane(server, ref, 1);
+      const handle = await this.resolveDriver(server).resolvePane(server, ref, 1);
       const dbTarget = windowTarget;
       // `lockedProjectServer` (Issue #87 16th-round review, Important finding
       // 2), not the pre-lock `projectServer` — this line runs AFTER
@@ -596,7 +605,7 @@ export class TaskRestoreService {
           // effectiveDir is a resolved (symlink-free) real path — must be
           // shell-quoted before being typed into the pane; see the matching
           // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await tmux.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);
@@ -680,7 +689,7 @@ export class TaskRestoreService {
           // already persisted (Issue #28 third-party review, WindowRotation.ts
           // finding).
           await rollbackWindowReference(
-            tmux.closeWindow(server, { kind: 'tmux', workspace: tmuxSession, window: windowName }),
+            this.resolveDriver(server).closeWindow(server, createdRef!),
             paneEnvService,
             tokenId!,
             'restore_rollback',

@@ -325,12 +325,12 @@ export class WindowRespawnService {
       // itself all run inside its callback, against the SAME `freshServer`
       // row throughout.
       let createdViaNewSession = false;
-      let createdRef: MuxRef | null = null;
       const {
         newName,
         windowEnv,
         tokenId,
         server: respawnServer,
+        ref,
       } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
         // Issue #29 Step 3a review round, Important finding 2: re-verify the
         // untrusted-execution gate against `freshServer` — re-read once this
@@ -393,12 +393,10 @@ export class WindowRespawnService {
           createdViaNewSession = !freshWorkspaceExists;
           if (!freshWorkspaceExists) {
             const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: windowPart, exactName: true, extraEnv: env });
-            createdRef = opened.ref;
-            return { result: opened.result, windowName: opened.ref.window };
+            return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
           }
           const opened = await createDriver.openWindow(fs, sessionName, windowPart, { exactName: true, extraEnv: env });
-          createdRef = opened.ref;
-          return { result: opened.result, windowName: opened.windowName ?? opened.ref.window };
+          return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
         };
 
         if (isPrimary) {
@@ -406,10 +404,10 @@ export class WindowRespawnService {
           // confirmOldWindowGone, against this same `freshServer` snapshot
           // (see the comment at the top of this lock callback).
           const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
         } else if (task) {
           const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         } else {
           // Non-task window respawn — server-aware legacy default (Issue #29
           // review, Critical finding 1): withholds the token when the server
@@ -420,7 +418,7 @@ export class WindowRespawnService {
           // isolation lock as the primary/secondary branches, against the
           // freshly re-fetched `freshServer` row.
           const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate);
-          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         }
       });
       await sleep(createdViaNewSession ? 500 : 300);
@@ -451,7 +449,7 @@ export class WindowRespawnService {
       // no generation to protect, so it only needs the kill + discoverability
       // half (no revoke call).
       const restoreDriver = this.resolveDriver(respawnServer);
-      const newRef: MuxRef = createdRef ?? { kind: restoreDriver.kind, workspace: sessionName, window: newName };
+      const newRef: MuxRef = ref ?? { kind: restoreDriver.kind, workspace: sessionName, window: newName };
       try {
         if (win.paneLayout) {
           await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
@@ -659,12 +657,10 @@ export class WindowRespawnService {
     // WindowRotation.ts) so a concurrent rotation for this task cannot
     // revoke this generation out from under it.
     const { windowName } = await runExclusiveForTask(taskId, async () => {
-      let legacyCreatedRef: MuxRef | null = null;
       const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, task, 'resume_legacy_create_failed', async (freshServer, env) => {
           const d = this.resolveDriver(freshServer);
           const opened = await d.openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
-          legacyCreatedRef = opened.ref;
-          return { result: opened.result, windowName: opened.windowName ?? opened.ref.window };
+          return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
         },
         true,
         // Issue #29 Step 3a review round, Important finding 1: re-verify the
@@ -713,7 +709,7 @@ export class WindowRespawnService {
       // below, same as respawn()'s other two branches already do.
       server = created.server;
       const legacyDriver = this.resolveDriver(server);
-      const legacyRef: MuxRef = legacyCreatedRef ?? { kind: legacyDriver.kind, workspace: tmuxSession, window: created.windowName };
+      const legacyRef: MuxRef = created.ref ?? { kind: legacyDriver.kind, workspace: tmuxSession, window: created.windowName };
       const windowTarget = tmuxTargetFromMuxRef(legacyRef);
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);

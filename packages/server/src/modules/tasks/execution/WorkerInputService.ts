@@ -1,5 +1,5 @@
 import type { PaneHandle } from '@azito/shared';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ServerConfig } from '../../servers/Server';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { SupervisorCommandError } from '../../supervisors/SupervisorRegistry';
@@ -39,7 +39,7 @@ const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
  */
 export class WorkerInputService {
   constructor(
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private registry: SupervisorRegistry,
     private appendLog: AppendLogFn,
   ) {}
@@ -51,6 +51,7 @@ export class WorkerInputService {
     ctx?: WorkerInputContext,
     supervisorTarget?: string,
   ): Promise<void> {
+    const driver = this.muxDriverRegistry.resolve(server);
     const supervisorKey = supervisorTarget ?? handle;
     if (this.registry.isBoundConnected(server.name, supervisorKey)) {
       try {
@@ -63,7 +64,7 @@ export class WorkerInputService {
         }
         this.logFallback(ctx, (err as Error).message);
       }
-      const foreground = await this.tmux.getPaneCurrentCommand(server, handle);
+      const foreground = await driver.paneCommandByHandle(server, handle);
       if (foreground !== null && SHELL_COMMANDS.has(foreground)) {
         if (ctx) {
           this.appendLog(ctx.taskId, ctx.unitId, 'command', {
@@ -74,7 +75,7 @@ export class WorkerInputService {
         return;
       }
     }
-    await this.tmux.sendKeysToHandle(server, handle, [text, 'Enter']);
+    await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
   }
 
   async sendKeys(
@@ -84,6 +85,7 @@ export class WorkerInputService {
     ctx?: WorkerInputContext,
     supervisorTarget?: string,
   ): Promise<void> {
+    const driver = this.muxDriverRegistry.resolve(server);
     const supervisorKey = supervisorTarget ?? handle;
     if (this.registry.isBoundConnected(server.name, supervisorKey)) {
       try {
@@ -97,7 +99,7 @@ export class WorkerInputService {
         this.logFallback(ctx, (err as Error).message);
       }
     }
-    await this.tmux.sendKeysToHandle(server, handle, keys);
+    await driver.sendKeysToHandle(server, handle, keys);
   }
 
   private isAckTimeout(err: unknown): err is SupervisorCommandError {

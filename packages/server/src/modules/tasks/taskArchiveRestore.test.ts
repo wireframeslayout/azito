@@ -110,7 +110,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       update: vi.fn(),
       delete: vi.fn(),
     },
-    tmux: {
+    muxDriverRegistry: { resolve: vi.fn(() => ({
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
       createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
@@ -122,7 +122,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       killPane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       resolvePane: vi.fn(async () => '%0'),
       listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
-    } as unknown as TasksRouteOptions['tmux'],
+    })) } as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
       findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '' })),
@@ -181,7 +181,6 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
-    muxDriverRegistry: { resolve: () => ({ kind: 'tmux', closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) }) } as any,
   };
 }
 
