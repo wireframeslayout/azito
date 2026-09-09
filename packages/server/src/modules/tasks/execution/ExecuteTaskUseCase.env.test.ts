@@ -2959,7 +2959,7 @@ describe('ExecuteTaskUseCase final PR reference reuses the locked distributionRe
         if (cmd.includes('branch --show-current')) return { stdout: 'task/1-slug\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
       }),
-    }));
+    })) as unknown as typeof harness.transportFactory.getTransport;
     (harness.useCase as any).phaseLoopRunner.stateMachineLoop = vi.fn(async () => {});
 
     await harness.useCase.execute(10, 1);
@@ -4003,7 +4003,7 @@ describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distri
         if (cmd.includes('ls-remote')) return { stdout: `${fakeSha}\trefs/heads/task/1-slug\n`, stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
       }),
-    }));
+    })) as unknown as typeof harness.transportFactory.getTransport;
 
     const result = await harness.useCase.isPushCompleted(1);
 
