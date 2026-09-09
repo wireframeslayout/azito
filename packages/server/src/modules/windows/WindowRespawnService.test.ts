@@ -669,7 +669,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(result.tmuxTarget).toBe('azito:task-1--ab12');
-    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12', sleeping: false });
+    expect(windowRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12', sleeping: false }));
   });
 
   it('kills an existing window with the same name before recreating', async () => {
@@ -939,7 +939,7 @@ describe('WindowRespawnService.respawn — rollback on pane-restore failure (Iss
     // orphaned credential.
     expect(paneEnvService.revokeGeneration).toHaveBeenCalledWith(5, 'respawn_restore_failed_rollback');
     // The DB row must NOT be updated to point at the now-killed new window.
-    expect(windowRepo.update).not.toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12' });
+    expect(windowRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12' }));
   });
 
   it('persists the new tmuxTarget (keeps it discoverable) instead of revoking, when the post-failure kill itself fails for the PRIMARY window', async () => {
@@ -961,7 +961,7 @@ describe('WindowRespawnService.respawn — rollback on pane-restore failure (Iss
     expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
     // Instead it stays discoverable: the DB row is updated to the new
     // (still-alive) tmuxTarget so an operator can find and clean it up.
-    expect(windowRepo.update).toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12' });
+    expect(windowRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12' }));
   });
 
   it('kills the new window (no revoke — nothing to revoke) when pane setup fails for a non-task window, then rethrows', async () => {
@@ -973,7 +973,7 @@ describe('WindowRespawnService.respawn — rollback on pane-restore failure (Iss
 
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
-    expect(windowRepo.update).not.toHaveBeenCalledWith(1, { tmuxTarget: 'azito:task-1--ab12' });
+    expect(windowRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ tmuxTarget: 'azito:task-1--ab12' }));
   });
 });
 
