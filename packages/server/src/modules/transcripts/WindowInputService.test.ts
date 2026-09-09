@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle, type MuxPaneInfo } from '@azito/shared';
 import { WindowInputService } from './WindowInputService';
 import type { IWindowRepository, Window } from '../windows/Window';
@@ -188,6 +188,16 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
       expect(result).toBe('ok');
+      expect(calls.cancelPaneModeByHandle).toEqual([]);
+    });
+
+    it('skips copy-mode check entirely when caps.copyMode is false (herdr/zellij)', async () => {
+      const isPaneInModeByHandle = vi.fn(async () => true);
+      const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ isPaneInModeByHandle, copyMode: false });
+      const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
+      const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
+      expect(result).toBe('ok');
+      expect(isPaneInModeByHandle).not.toHaveBeenCalled();
       expect(calls.cancelPaneModeByHandle).toEqual([]);
     });
   });

@@ -94,7 +94,8 @@ export class WindowInputService {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) return 'window_not_found';
 
-    const pane = (await this.listWindowPanes(server, window)).find((p) => p.paneId === paneId);
+    const driver = this.muxDriverRegistry.resolve(server);
+    const pane = (await this.listWindowPanes(driver, server, window)).find((p) => p.paneId === paneId);
     return pane ? pane.paneIndex : 'pane_not_found';
   }
 
@@ -112,13 +113,12 @@ export class WindowInputService {
   }
 
   private async paneBelongsToWindow(driver: IMuxClient, server: ServerConfig, window: Window, paneId: string): Promise<boolean> {
-    const windowPanes = await this.listWindowPanes(server, window);
+    const windowPanes = await this.listWindowPanes(driver, server, window);
     return windowPanes.some((p) => p.paneId === paneId);
   }
 
-  private async listWindowPanes(server: ServerConfig, window: Window) {
+  private async listWindowPanes(driver: IMuxClient, server: ServerConfig, window: Window) {
     const ref = resolveWindowRef(window);
-    const driver = this.muxDriverRegistry.resolve(server);
     const allPanes = await driver.listAllPanes(server);
     return allPanes.filter((p) => p.sessionName === ref.workspace && windowSpecMatches(ref.window, p.windowIndex, p.windowName));
   }
