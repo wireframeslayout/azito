@@ -98,19 +98,25 @@ export class AgentTransport implements IServerTransport {
       const url = `${this.wsBaseUrl}/ws?mode=terminal&target=${encodeURIComponent(target)}&cols=${cols}&rows=${rows}&mux=${this.muxRuntime}`;
       const ws = new WebSocket(url, { headers: { authorization: this.authHeader } });
 
-      const timer = setTimeout(() => {
-        ws.removeAllListeners();
-        ws.terminate();
-        reject(new Error('openTerminal timed out'));
-      }, 15_000);
-
       const onError = (err: Error) => { clearTimeout(timer); reject(err); };
-      ws.on('error', onError);
-      ws.on('open', () => {
+      const onOpen = () => {
         clearTimeout(timer);
         ws.removeListener('error', onError);
         resolve(new AgentTerminalStream(ws));
-      });
+      };
+      const timer = setTimeout(() => {
+        // Issue #239: do NOT removeAllListeners() here. terminate() on a socket
+        // that is still CONNECTING makes `ws` emit 'error' ("WebSocket was
+        // closed before the connection was established"); with no listener
+        // attached that becomes an unhandled 'error' event and kills the hub.
+        ws.removeListener('open', onOpen);
+        ws.removeListener('error', onError);
+        ws.on('error', () => { /* swallow the terminate()-induced error */ });
+        ws.terminate();
+        reject(new Error('openTerminal timed out'));
+      }, 15_000);
+      ws.on('error', onError);
+      ws.on('open', onOpen);
     });
   }
 
