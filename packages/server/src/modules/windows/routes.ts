@@ -22,7 +22,6 @@ import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, t
 import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
-import type { HerdrEventBridge } from '../operations/HerdrEventBridge';
 
 export interface WindowsRouteOptions {
   windowRepo: IWindowRepository;
@@ -41,7 +40,6 @@ export interface WindowsRouteOptions {
   resourceGuard?: ResourceGuard;
   harnessPrefix?: string;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
-  herdrEventBridge?: HerdrEventBridge;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -75,8 +73,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
-      // Keep the driver kind of a supplied ref: deriving mux_ref from tmux_target later would
-      // record a herdr / zellij window as `kind: 'tmux'` and break findByServerAndRef.
       let givenRef: MuxRef | undefined;
       if (refJson) {
         try {
@@ -116,7 +112,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         launchCommand: (body['launch_command'] as string) || null,
         workingDirectory,
         paneLayout: null,
-        herdrNavigationLock: null,
         sleeping: false,
       });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
@@ -169,7 +164,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           launchCommand: null,
           workingDirectory: null,
           paneLayout: null,
-          herdrNavigationLock: null,
           sleeping: false,
         });
         addedIds.push(winId);
@@ -201,8 +195,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
-      // Keep the driver kind of a supplied ref: deriving mux_ref from tmux_target later would
-      // record a herdr / zellij window as `kind: 'tmux'` and break findByServerAndRef.
       let givenRef: MuxRef | undefined;
       if (refJson) {
         try {
@@ -252,7 +244,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         launchCommand: null,
         workingDirectory,
         paneLayout: null,
-        herdrNavigationLock: null,
         sleeping: false,
       });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
@@ -276,13 +267,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if ('launch_command' in body) data['launchCommand'] = body['launch_command'];
       if ('worker_model' in body) data['workerModel'] = body['worker_model'];
       if ('working_directory' in body) data['workingDirectory'] = body['working_directory'];
-
-      if ('herdr_navigation_lock' in body) {
-        const val = body['herdr_navigation_lock'] as string | null;
-        if (val !== null && val !== 'locked' && val !== 'free')
-          return reply.status(400).send({ error: 'herdr_navigation_lock must be "locked", "free", or null' });
-        data['herdrNavigationLock'] = val;
-      }
 
       if ('window_type' in body || 'worker_type' in body) {
         const windowType = ('window_type' in body ? body['window_type'] : win.windowType) as string;
@@ -551,7 +535,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       await driverFor(srv).focusWindow(srv, ref);
-      opts.herdrEventBridge?.recordFocusCommand(srv.name, ref.workspace);
       return { ok: true };
     },
   );

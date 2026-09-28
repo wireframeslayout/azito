@@ -18,7 +18,7 @@ export interface TmuxWindow {
   active: boolean;
   panes: TmuxPane[];
   activity: number;
-  /** Present only for non-tmux mux drivers (herdr/zellij) whose session structure differs from tmux. */
+  /** Present only for non-tmux mux drivers whose session structure differs from tmux. */
   ref?: MuxRef;
 }
 

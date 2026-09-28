@@ -24,7 +24,6 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
-    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -45,7 +44,6 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationReport: null,
     isolationCleanupReport: null,
     muxRuntime: 'system',
-    herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -137,14 +135,14 @@ describe('WindowSleepService', () => {
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 
-    it('uses muxRef from window when available (herdr)', async () => {
-      const herdrRef = { kind: 'herdr' as const, workspace: 'win--d299', window: 'main' };
-      const win = makeWindow({ muxRef: herdrRef });
+    it('uses muxRef from window when available', async () => {
+      const customRef = { kind: 'tmux' as const, workspace: 'win--d299', window: 'main' };
+      const win = makeWindow({ muxRef: customRef });
       const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
 
       await service.sleep(win.id);
 
-      expect(closeWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), herdrRef);
+      expect(closeWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), customRef);
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 

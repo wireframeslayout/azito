@@ -60,7 +60,6 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationReport: null,
     isolationCleanupReport: null,
     muxRuntime: 'system',
-    herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -104,13 +103,13 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // isolation flow unchanged. The dedicated C-1 describe block below
     // overrides this to false per-test.
     scopedAuthEnabled: true,
-    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspacesStrict: vi.fn(async () => []), caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspacesStrict: vi.fn(async () => []), caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     ...overrides,
   };
 }
 
 function makeMuxRegistry(listWorkspacesStrict: (...args: unknown[]) => Promise<unknown[]>): ServersRouteOptions['muxDriverRegistry'] {
-  return { resolve: vi.fn(() => ({ listWorkspacesStrict, caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
+  return { resolve: vi.fn(() => ({ listWorkspacesStrict, caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
 }
 
 async function buildApp(opts: ServersRouteOptions) {
@@ -986,7 +985,7 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     const res = await app.inject({
       method: 'PUT',
       url: '/api/servers/srv',
-      payload: { muxRuntime: 'herdr' },
+      payload: { muxRuntime: 'managed' },
     });
 
     expect(res.statusCode).toBe(200);
@@ -1003,7 +1002,7 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     const res = await app.inject({
       method: 'PUT',
       url: '/api/servers/srv',
-      payload: { muxRuntime: 'herdr', isolationIntent: false },
+      payload: { muxRuntime: 'managed', isolationIntent: false },
     });
 
     expect(res.statusCode).toBe(200);
@@ -1267,7 +1266,7 @@ describe('POST /api/servers/:name/agent/install — serialized via serverIsolati
 
     expect(res.statusCode).toBe(200);
     expect(install).toHaveBeenCalledWith('user@host', expect.any(Function), 'managed');
-    expect(opts.serverRepo.update).toHaveBeenCalledWith('srv', 'agent', '5.6.7.8', 5000, 'newtok', 'user@host', 'managed', 'locked');
+    expect(opts.serverRepo.update).toHaveBeenCalledWith('srv', 'agent', '5.6.7.8', 5000, 'newtok', 'user@host', 'managed');
   });
 
   it('serializes against a concurrent isolation-intent PUT on the same server (real KeyedMutex)', async () => {

@@ -313,12 +313,10 @@ export class WorkerWaiter {
 
         let activity: number | null = null;
         const heartbeatDriver = this.resolveDriver(server);
-        if (heartbeatDriver.caps.activityCounter) {
-          try {
-            const paneInfo = await heartbeatDriver.refFromPaneHandle(server, handle);
-            if (paneInfo) activity = await heartbeatDriver.windowActivity(server, paneInfo.ref);
-          } catch { /* best effort */ }
-        }
+        try {
+          const paneInfo = await heartbeatDriver.refFromPaneHandle(server, handle);
+          if (paneInfo) activity = await heartbeatDriver.windowActivity(server, paneInfo.ref);
+        } catch { /* best effort */ }
         if (resolved) return;
         if (activity !== null) {
           const activityAgeSec = Math.floor(Date.now() / 1000) - activity;

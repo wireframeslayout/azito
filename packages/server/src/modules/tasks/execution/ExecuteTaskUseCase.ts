@@ -1240,7 +1240,6 @@ export class ExecuteTaskUseCase {
       launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
       workingDirectory: effectiveDir || null,
       paneLayout: null,
-      herdrNavigationLock: null,
       sleeping: false,
     });
 
@@ -1305,8 +1304,7 @@ export class ExecuteTaskUseCase {
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
-        // Keep the historical "launch failure is not fatal here" behaviour, but never hide it:
-        // on rc.15 a herdr launch failed silently and the phase went on to a dead pane.
+        // Keep the historical "launch failure is not fatal here" behaviour, but never hide it.
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
       }
     }

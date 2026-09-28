@@ -17,7 +17,6 @@ const LOCAL_SERVER: ServerConfig = {
   agentVersion: null,
   sshHost: null,
   muxRuntime: 'system',
-  herdrNavigationLock: 'locked' as const,
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,

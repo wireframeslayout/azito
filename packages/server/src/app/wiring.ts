@@ -29,7 +29,6 @@ import { PaneClassifier } from '../modules/llm/PaneClassifier';
 import { LlmContentExtractor } from '../modules/llm/LlmContentExtractor';
 import type { IContentExtractor } from '../modules/llm/ContentExtractor';
 import { PaneStreamFactory } from '../modules/tmux/PaneStreamFactory';
-import { HerdrEventBridge } from '../modules/operations/HerdrEventBridge';
 import { GitProviderService } from '../modules/git/providers/GitProviderService';
 import { WorktreeServiceFactory } from '../modules/git/WorktreeServiceFactory';
 import { MinioStorageClient } from '../modules/files/storage/MinioStorageClient';
@@ -78,9 +77,6 @@ import { SqliteBrowserSnapshotRepository } from '../modules/browser/SqliteBrowse
 import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGroupRepository';
 
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
-import { HerdrClient } from '../modules/mux/herdr/HerdrClient';
-import { ZellijClient } from '../modules/mux/zellij/ZellijClient';
-import { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
@@ -110,9 +106,6 @@ export interface SharedInfra {
   transportFactory: TransportFactory;
   tmuxClient: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
-  herdrClient: HerdrClient;
-  zellijClient: ZellijClient;
-  zellijResident: ZellijResidentClient;
   llmClient: ILlmClient;
   agentRegistry: AgentRegistry;
   paneClassifier: PaneClassifier;
@@ -208,7 +201,6 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
-  herdrEventBridge: HerdrEventBridge;
   interactionMonitor: InteractionMonitor;
   paneHandleResolver: PaneHandleResolver;
   resourceGuard: ResourceGuard;
@@ -232,11 +224,6 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl);
   const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', tmuxClient);
-  const herdrClient = new HerdrClient(transportFactory);
-  muxDriverRegistry.register('herdr', herdrClient);
-  const zellijResident = new ZellijResidentClient();
-  const zellijClient = new ZellijClient(transportFactory, 'azito', zellijResident);
-  muxDriverRegistry.register('zellij', zellijClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
@@ -282,9 +269,6 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     transportFactory,
     tmuxClient,
     muxDriverRegistry,
-    herdrClient,
-    zellijClient,
-    zellijResident,
     llmClient,
     agentRegistry,
     paneClassifier,
@@ -603,7 +587,6 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
-  const herdrEventBridge = new HerdrEventBridge(agentActivityMonitor, infra.notificationBus, repos.serverRepo, repos.windowRepo);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
   const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
 
@@ -617,7 +600,6 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,
-    herdrEventBridge,
     interactionMonitor,
     paneHandleResolver,
     resourceGuard,

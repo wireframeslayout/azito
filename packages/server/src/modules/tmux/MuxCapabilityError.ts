@@ -9,11 +9,3 @@ export class MuxDriverUnavailableError extends Error {
   }
 }
 
-export class MuxCapabilityMissingError extends Error {
-  readonly capability: string;
-  constructor(capability: string) {
-    super(`Required mux capability "${capability}" is not supported`);
-    this.name = 'MuxCapabilityMissingError';
-    this.capability = capability;
-  }
-}

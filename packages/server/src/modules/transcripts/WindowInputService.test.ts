@@ -15,7 +15,6 @@ const LOCAL_SERVER: ServerConfig = {
   agentVersion: null,
   sshHost: null,
   muxRuntime: 'system',
-  herdrNavigationLock: 'locked' as const,
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -41,7 +40,6 @@ function buildWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
-    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -191,7 +189,7 @@ describe('WindowInputService', () => {
       expect(calls.cancelPaneModeByHandle).toEqual([]);
     });
 
-    it('skips copy-mode check entirely when caps.copyMode is false (herdr/zellij)', async () => {
+    it('skips copy-mode check entirely when caps.copyMode is false', async () => {
       const isPaneInModeByHandle = vi.fn(async () => true);
       const { windowRepo, muxDriverRegistry, serverRepo, calls } = buildDeps({ isPaneInModeByHandle, copyMode: false });
       const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);

@@ -32,7 +32,6 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
-    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -52,7 +51,6 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
   muxRuntime: 'system',
-  herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -182,7 +180,7 @@ function buildService(opts: {
   const sentCommands: string[] = [];
   const tmux = {
     kind: 'tmux' as const,
-    caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: false },
+    caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
     listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: false, created: 0, windows: [] as { name: string; index: number; active: boolean; panes: unknown[]; activity: number }[] }]),
     openWorkspace: vi.fn(async (_server: unknown, name: string, options?: { windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }) => ({
       ref: { kind: 'tmux' as const, workspace: name, window: options?.windowName || 'default' },
@@ -410,30 +408,6 @@ describe('WindowRespawnService.respawn — supervisor wrap', () => {
     for (const call of tmux.splitPaneByHandle.mock.calls) {
       expect(call[3]).toBe(rotatedEnv);
     }
-  });
-
-  it('skips split/applyLayout when caps.layoutSnapshot is false', async () => {
-    const win = makeWindow({
-      id: 1,
-      taskId: 5,
-      windowType: 'agent',
-      workerType: 'claude',
-      paneLayout: {
-        layout: 'some-layout',
-        panes: [
-          { index: 0, command: null, workingDirectory: null, title: null },
-          { index: 1, command: null, workingDirectory: null, title: null },
-        ],
-      },
-    });
-    const { service, tmux } = buildService({ window: win, task: makeTask({ id: 5 }) });
-    (tmux as any).caps = { ...(tmux as any).caps, layoutSnapshot: false };
-
-    await service.respawn(1, makeServer());
-
-    expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
-    expect(tmux.applyLayout).not.toHaveBeenCalled();
-    expect(tmux.sendKeysToHandle).toHaveBeenCalled();
   });
 
   it('passes the legacy uiTokenEnvForServer() to splitPane calls for a non-task multi-pane window', async () => {
@@ -1611,7 +1585,7 @@ describe('WindowRespawnService.respawn — concurrent respawns for the same task
     let createCounter = 0;
     const tmux = {
       kind: 'tmux' as const,
-      caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: false },
+      caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listWorkspaces: vi.fn(async () => {
         const bySession = new Map<string, string[]>();
         for (const key of aliveWindows) {

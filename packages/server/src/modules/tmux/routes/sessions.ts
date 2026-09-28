@@ -9,12 +9,11 @@ import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxWorkspace } from '@azito/shared';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
-import type { HerdrEventBridge } from '../../operations/HerdrEventBridge';
 
 // ─── Types ───
 
@@ -26,7 +25,6 @@ export interface SessionsRouteOptions {
   windowRepo?: SqliteWindowRepository;
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
-  herdrEventBridge?: HerdrEventBridge;
   /**
    * Issue #28 third-party review finding: kill-window here must revoke a
    * task-owned window's token generation the same way the task-execution
@@ -196,25 +194,6 @@ function enrichSessions(sessions: TmuxSession[], serverName: string, windowRepo?
   }));
 }
 
-function workspacesToSessions(workspaces: MuxWorkspace[], serverName: string, driverKind: 'herdr' | 'zellij', windowRepo?: SqliteWindowRepository) {
-  return workspaces.map(ws => ({
-    name: ws.name,
-    attached: ws.attached,
-    windowCount: ws.windowCount,
-    windows: ws.windows.map(win => {
-      const ref: MuxRef = win.ref ?? { kind: driverKind, workspace: ws.name, window: win.name };
-      const dbWin = windowRepo?.findByServerAndRef(serverName, ref);
-      return {
-        index: win.index,
-        name: win.name,
-        panes: win.panes,
-        activity: win.activity,
-        ref: formatMuxRef(ref),
-        windowId: dbWin?.id ?? null,
-      };
-    }),
-  }));
-}
 
 // ─── Plugin ───
 
@@ -237,20 +216,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      const driverKind = muxKindForRuntime(srv.muxRuntime ?? 'system');
-
-      // Non-tmux drivers: delegate to IMuxClient.listWorkspaces via registry
-      if (driverKind !== 'tmux' && opts.muxDriverRegistry) {
-        try {
-          const driver = opts.muxDriverRegistry.resolve(srv);
-          const workspaces = await driver.listWorkspaces(srv);
-          return workspacesToSessions(workspaces, request.params.name, driverKind as 'herdr' | 'zellij', opts.windowRepo);
-        } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
-        }
-      }
-
-      // tmux path: existing optimized flow with cache + linked-session GC
+      // tmux path: optimized flow with cache + linked-session GC
       const cached = sessionCache.get(request.params.name);
       if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) {
         return enrichSessions(cached.data, request.params.name, opts.windowRepo);
@@ -1033,14 +999,13 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const ref = resolveRefFromParam(refParam);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       await muxClient.focusWindow(srv, ref);
-      opts.herdrEventBridge?.recordFocusCommand(srv.name, ref.workspace);
       return { ok: true };
     },
   );
 
   // ═══════════════════════════════════════════════════════════════════
   // Driver-based workspace/window creation routes.
-  // Work for ALL mux drivers (tmux, herdr, zellij) via MuxDriverRegistry.
+  // Work for ALL mux drivers via MuxDriverRegistry.
   // ═══════════════════════════════════════════════════════════════════
 
   // ── POST /api/servers/:name/mux/workspaces ──
@@ -1052,10 +1017,6 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const driverKind = muxKindForRuntime(freshSrv.muxRuntime ?? 'system');
-        if (driverKind === 'herdr') {
-          return reply.status(400).send({ error: 'herdr uses a single session. Use POST /mux/workspaces/:ws/windows to add a window.' });
-        }
         const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);

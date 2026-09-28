@@ -33,7 +33,6 @@ export interface Window {
   launchCommand?: string;
   workingDirectory?: string;
   paneLayout?: WindowPaneLayout;
-  herdrNavigationLock?: 'locked' | 'free' | null;
   sleeping?: boolean;
 }
 export interface Repository { id: number; url: string; name?: string; provider?: string; owner?: string; repoName?: string; }
@@ -149,7 +148,7 @@ export interface Server {
   name: string;
   type: string;
   host?: string;
-  muxRuntime?: 'system' | 'managed' | 'herdr' | 'zellij';
+  muxRuntime?: 'system' | 'managed';
   /** Issue #29 Step 3a: whether this server has declared isolation intent — GET /api/servers already returns this (only agentToken/isolationReport/isolationCleanupReport are stripped from the list response), used to gate whether 'allow' is selectable for a project_servers row on this server. */
   isolationIntent?: boolean;
   /** ISO timestamp of the isolation doctor's last passing verification, or null. Used together with `isolationIntent` for the same UI hint. */

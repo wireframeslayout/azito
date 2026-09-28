@@ -2,7 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import { execSync } from 'child_process';
 import os from 'os';
 import fs from 'fs';
-import type { IServerRepository, MuxRuntime, HerdrNavigationLock, ServerConfig } from './Server';
+import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { muxKindForRuntime, type MuxWorkspace } from '@azito/shared';
@@ -25,7 +25,6 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
-import { HERDR_RECOMMENDED_UI } from '../mux/herdr/herdrClientConfig';
 import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
 
 // ─── Hub identity helpers ───
@@ -384,8 +383,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       muxRuntime?: string;
     };
     const validMuxRuntime = muxRuntime || undefined;
-    if (validMuxRuntime && !['system', 'managed', 'herdr', 'zellij'].includes(validMuxRuntime))
-      return reply.status(400).send({ error: 'muxRuntime must be "system", "managed", "herdr", or "zellij"' });
+    if (validMuxRuntime && !['system', 'managed'].includes(validMuxRuntime))
+      return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
@@ -437,15 +436,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, herdrNavigationLock: putHerdrLock, isolationIntent } = request.body as {
-        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; herdrNavigationLock?: string; isolationIntent?: boolean;
+      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, isolationIntent } = request.body as {
+        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; isolationIntent?: boolean;
       };
       const validPutMux = putMux || undefined;
-      if (validPutMux && !['system', 'managed', 'herdr', 'zellij'].includes(validPutMux))
-        return reply.status(400).send({ error: 'muxRuntime must be "system", "managed", "herdr", or "zellij"' });
-      const validHerdrLock = putHerdrLock || undefined;
-      if (validHerdrLock && !['locked', 'free'].includes(validHerdrLock))
-        return reply.status(400).send({ error: 'herdrNavigationLock must be "locked" or "free"' });
+      if (validPutMux && !['system', 'managed'].includes(validPutMux))
+        return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
       // Issue #29 review, Important finding 2: isolationIntent must be an
       // actual boolean, not merely truthy — `"false"` (a string) is truthy
       // in JS and would otherwise be persisted as `true` by
@@ -516,7 +512,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // could disagree about" as host/sshHost/agentPort/agentToken — a
       // local->agent switch changes which transport (and therefore which live
       // pane/session set) is being inspected. `muxRuntime` is intentionally
-      // excluded: it selects which local mux driver (tmux/herdr/zellij) to
+      // excluded: it selects which local mux driver to
       // talk to on the SAME server — a runtime configuration, not a network
       // endpoint change. The isolation guard exists to prevent endpoint
       // substitution; changing the mux driver does not change the server
@@ -644,7 +640,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             agentToken ?? srv.agentToken ?? undefined,
             sshHost ?? srv.sshHost ?? undefined,
             (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
-            (validHerdrLock as HerdrNavigationLock | undefined) ?? srv.herdrNavigationLock,
           );
         } else {
           serverRepo.update(
@@ -655,7 +650,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             agentToken ?? srv.agentToken ?? undefined,
             sshHost ?? srv.sshHost ?? undefined,
             (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
-            (validHerdrLock as HerdrNavigationLock | undefined) ?? srv.herdrNavigationLock,
           );
         }
         if (validPutMux !== undefined && validPutMux !== srv.muxRuntime) {
@@ -820,7 +814,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const result = await agentInstaller.install(sshHost, (p) => steps.push(p), srv.muxRuntime);
 
       if (result.success) {
-        serverRepo.update(srv.name, 'agent', result.host, result.port, result.token, sshHost, srv.muxRuntime, srv.herdrNavigationLock);
+        serverRepo.update(srv.name, 'agent', result.host, result.port, result.token, sshHost, srv.muxRuntime);
         serverRepo.updateAgentVersion(srv.name, result.version);
         transportFactory.invalidate(srv.name);
         return { ok: true, steps, startMethod: result.startMethod };
@@ -1422,42 +1416,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       ),
     };
   });
-
-  // ── GET /api/servers/:name/herdr/config-check ──
-  fastify.get<{ Params: { name: string } }>(
-    '/api/servers/:name/herdr/config-check',
-    async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      if (srv.muxRuntime !== 'herdr') return reply.status(404).send({ error: 'Server is not running herdr' });
-
-      const transport = transportFactory.getTransport(srv);
-      let content: string;
-      try {
-        const result = await transport.exec('cat ~/.config/herdr/config.toml', 5000);
-        if (result.code !== 0) return { ok: true, warnings: [] };
-        content = result.stdout;
-      } catch {
-        return { ok: true, warnings: [] };
-      }
-
-      const warnings: string[] = [];
-      for (const [key, expected] of Object.entries(HERDR_RECOMMENDED_UI)) {
-        const re = new RegExp(`^\\s*${key}\\s*=\\s*(.+)`, 'm');
-        const match = re.exec(content);
-        if (!match) {
-          warnings.push(`${key} is not set (recommended: ${expected})`);
-        } else {
-          const value = match[1].replace(/\s*#.*$/, '').trim();
-          if (value !== expected) {
-            warnings.push(`${key} = ${value} (recommended: ${expected})`);
-          }
-        }
-      }
-
-      return { ok: warnings.length === 0, warnings };
-    },
-  );
 
   // ── DELETE /api/servers/:name/ssh-fingerprint ──
   fastify.delete<{ Params: { name: string } }>(

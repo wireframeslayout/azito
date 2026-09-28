@@ -322,7 +322,6 @@ describe('GET /api/transcripts/:agent/:id', () => {
       launchCommand: null,
       workingDirectory: null,
       paneLayout: null,
-    herdrNavigationLock: null,
     sleeping: false,
       createdAt: '2026-01-01T00:00:00Z',
     };
@@ -825,7 +824,6 @@ describe('GET /api/transcripts/resolve-window', () => {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
-    herdrNavigationLock: null,
     sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
   };

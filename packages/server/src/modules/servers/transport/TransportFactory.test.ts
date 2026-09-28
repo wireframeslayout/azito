@@ -33,7 +33,7 @@ describe('TransportFactory', () => {
   it('recreates transport when muxRuntime changes', () => {
     const factory = new TransportFactory('http://hub:3001');
     const t1 = factory.getTransport(baseServer);
-    const t2 = factory.getTransport({ ...baseServer, muxRuntime: 'herdr' });
+    const t2 = factory.getTransport({ ...baseServer, muxRuntime: 'managed' });
     expect(t1).not.toBe(t2);
     expect(t2).toBeInstanceOf(AgentTransport);
   });

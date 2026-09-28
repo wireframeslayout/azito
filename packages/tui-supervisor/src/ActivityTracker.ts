@@ -48,8 +48,7 @@ const ACTIVE_CONSECUTIVE_TICKS = 2;
  * readings, or once IDLE_HOLD_CAP_MS has elapsed. Claude Code clears the
  * spinner line and paints the prompt box over several frames, so a single
  * idle frame in between is not a completed turn. Every other transition
- * (→working, →blocked) is immediate. Values follow herdr's
- * AGENT_PENDING_IDLE_* constants.
+ * (→working, →blocked) is immediate.
  */
 const IDLE_RECHECK_MS = 100;
 const IDLE_CONFIRMATIONS = 3;

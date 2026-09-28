@@ -1,18 +1,14 @@
 import { stripPaneSuffix, windowKey } from './windowKey';
 
-export type MuxDriverKind = 'tmux' | 'herdr' | 'zellij';
+export type MuxDriverKind = 'tmux';
 
-export type MuxRuntime = 'system' | 'managed' | 'herdr' | 'zellij';
+export type MuxRuntime = 'system' | 'managed';
 
 export function muxKindForRuntime(runtime: MuxRuntime): MuxDriverKind {
   switch (runtime) {
     case 'system':
     case 'managed':
       return 'tmux';
-    case 'herdr':
-      return 'herdr';
-    case 'zellij':
-      return 'zellij';
   }
 }
 
@@ -27,17 +23,10 @@ export type PaneHandle = string & { readonly __brand: 'PaneHandle' };
 export type PaneOrdinal = number;
 
 export interface MuxCapabilities {
-  outputStream: boolean;
   changeEvents: boolean;
   agentState: boolean;
   independentClients: boolean;
-  envInjection: boolean;
-  zoom: boolean;
   copyMode: boolean;
-  paneTitle: boolean;
-  activityCounter: boolean;
-  layoutSnapshot: boolean;
-  stablePaneHandle: boolean;
 }
 
 export interface MuxPane {
@@ -78,11 +67,7 @@ export interface MuxPaneInfo {
   currentCommand: string;
 }
 
-export type MuxExecRequest =
-  | { kind: 'tmux'; args: string[] }
-  | { kind: 'herdr'; method: string; params: unknown }
-  | { kind: 'zellij'; args: string[] }
-  | { kind: 'zellij-ctl'; action: 'ensure-resident' | 'detach-resident'; session: string };
+export type MuxExecRequest = { kind: 'tmux'; args: string[] };
 
 export function asPaneHandle(s: string): PaneHandle {
   return s as PaneHandle;
@@ -94,10 +79,10 @@ export function formatMuxRef(ref: MuxRef): string {
 
 export function parseMuxRef(json: string): MuxRef {
   const obj = JSON.parse(json) as { kind: string; workspace: string; window: string };
-  if (obj.kind !== 'tmux' && obj.kind !== 'herdr' && obj.kind !== 'zellij') {
-    throw new Error(`Unknown MuxDriverKind: ${obj.kind}`);
+  if (obj.kind !== 'tmux') {
+    throw new Error(`Unsupported MuxRef kind: ${obj.kind}`);
   }
-  return { kind: obj.kind as MuxDriverKind, workspace: obj.workspace, window: obj.window };
+  return { kind: 'tmux', workspace: obj.workspace, window: obj.window };
 }
 
 export function muxRefFromTmuxTarget(target: string): MuxRef {
@@ -121,40 +106,8 @@ export function windowKeyForRef(serverName: string, ref: MuxRef): string {
   return windowKey(serverName, tmuxTargetFromMuxRef(ref));
 }
 
-export function herdrPaneHandle(workspaceId: string, paneId: string): PaneHandle {
-  return `${workspaceId}:${paneId}` as PaneHandle;
-}
-
-export function parseHerdrPaneHandle(handle: PaneHandle): { workspaceId: string; paneId: string } {
-  const s = handle as string;
-  const idx = s.indexOf(':');
-  if (idx === -1) throw new Error(`Invalid herdr PaneHandle (missing ":"): ${s}`);
-  return { workspaceId: s.slice(0, idx), paneId: s.slice(idx + 1) };
-}
-
-/**
- * Returns true when `s` looks like a mux-native pane identifier from any
- * supported multiplexer: tmux `%N`, herdr `w<N>:p<N>`, zellij `terminal_<N>`.
- * Used to validate `muxPaneRef` values at system boundaries (supervisor
- * register, webhook payloads) so they pass through to PaneHandleResolver.
- */
-const PANE_HANDLE_LIKE_RE = /^(%\d+|w\d+:p\d+|terminal_\d+)$/;
+const PANE_HANDLE_LIKE_RE = /^%\d+$/;
 export function isPaneHandleLike(s: string): boolean {
   return PANE_HANDLE_LIKE_RE.test(s);
 }
 
-/** herdr MuxRef: workspace = workspace label, window = fixed default tab name ('main'). */
-export type HerdrNavigationLock = 'locked' | 'free';
-
-export function resolveHerdrLock(serverLock: HerdrNavigationLock, windowLock: HerdrNavigationLock | null): HerdrNavigationLock {
-  return windowLock ?? serverLock;
-}
-
-export function herdrMuxRef(workspaceName: string, tabName: string = 'main'): MuxRef {
-  return { kind: 'herdr', workspace: workspaceName, window: tabName };
-}
-
-/** zellij MuxRef: workspace = session name, window = tab name. */
-export function zellijMuxRef(session: string, tabName: string): MuxRef {
-  return { kind: 'zellij', workspace: session, window: tabName };
-}

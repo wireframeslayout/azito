@@ -4,11 +4,9 @@ import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
-import { HerdrSocketClient } from '../../mux/herdr/HerdrSocketClient';
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport>();
-  private herdrSockets = new Map<string, HerdrSocketClient>();
 
   constructor(private publicUrl: string) {}
 
@@ -28,17 +26,7 @@ export class TransportFactory {
 
     let transport: IServerTransport & IMuxTransport;
     if (server.type === 'local') {
-      let herdrSocket: HerdrSocketClient | undefined;
-      if (server.muxRuntime === 'herdr') {
-        const sessionName = 'azito';
-        herdrSocket = this.herdrSockets.get(sessionName);
-        if (!herdrSocket) {
-          herdrSocket = new HerdrSocketClient(sessionName);
-          this.herdrSockets.set(sessionName, herdrSocket);
-        }
-      }
-      const tmuxRuntime = (server.muxRuntime === 'herdr' || server.muxRuntime === 'zellij') ? 'system' as const : server.muxRuntime;
-      transport = new LocalTransport(resolveTmuxRuntime(tmuxRuntime, os.homedir()), this.publicUrl, herdrSocket);
+      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, os.homedir()), this.publicUrl);
     } else if (server.type === 'agent') {
       transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime);
     } else {

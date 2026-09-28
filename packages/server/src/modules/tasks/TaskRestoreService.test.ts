@@ -96,7 +96,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -693,7 +693,7 @@ describe('TaskRestoreService', () => {
         // tell exactly which generation a given tmux/transport call saw.
         agentVersion: `gen-${generation}`,
         sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const,
-        isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01',
+        isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01',
       };
     });
     deps = makeDeps({
@@ -798,7 +798,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -825,7 +825,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -854,7 +854,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -884,7 +884,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -921,7 +921,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -947,7 +947,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
         projectServerRepo: {
           ...deps.projectServerRepo,
@@ -982,7 +982,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -1010,7 +1010,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
         projectServerRepo: {
           ...deps.projectServerRepo,
@@ -1044,7 +1044,7 @@ describe('TaskRestoreService', () => {
         transportFactory: agentTransportFactory(),
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
       });
       service = new TaskRestoreService(deps);
@@ -1164,7 +1164,7 @@ describe('TaskRestoreService', () => {
           transportFactory: agentTransportFactory(),
           serverRepo: {
             ...deps.serverRepo,
-            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
           },
           projectServerRepo: projectServerRepoWithToggle(true),
         });
@@ -1186,7 +1186,7 @@ describe('TaskRestoreService', () => {
           transportFactory: agentTransportFactory(),
           serverRepo: {
             ...deps.serverRepo,
-            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+            findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
           },
           projectServerRepo: projectServerRepoWithToggle(false),
         });
@@ -1226,7 +1226,7 @@ describe('TaskRestoreService', () => {
         fetchDistributionService,
         serverRepo: {
           ...deps.serverRepo,
-          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' })),
+          findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
         transportFactory: {
           getTransport: vi.fn(() => ({
@@ -1350,7 +1350,7 @@ describe('TaskRestoreService', () => {
       // just the scalar distributionRepositoryId) also differs between A
       // and B — the full identity a human actually reviews on the approval
       // screen.
-      const isolatedServer = { name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, herdrNavigationLock: 'locked' as const, createdAt: '2026-01-01' };
+      const isolatedServer = { name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' };
       const projectServerAtA = { projectId: 10, serverName: 'test-server', workingDirectory: worktreeDir, branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 1 };
       const projectServerAtB = { ...projectServerAtA, distributionRepositoryId: 2 };
 
