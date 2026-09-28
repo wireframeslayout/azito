@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { MuxDriverRegistry } from './MuxDriverRegistry';
-import { MuxDriverUnavailableError, MuxCapabilityMissingError } from './MuxCapabilityError';
+import { MuxDriverUnavailableError } from './MuxCapabilityError';
 import type { IMuxClient } from './IMuxClient';
 import type { MuxRuntime } from '@azito/shared';
 
@@ -52,10 +52,4 @@ describe('MuxDriverRegistry', () => {
     expect(registry.resolve(serverWith('system'))).toBe(second);
   });
 
-  it('MuxCapabilityMissingError carries the capability name', () => {
-    const err = new MuxCapabilityMissingError('copyMode');
-    expect(err).toBeInstanceOf(Error);
-    expect(err.capability).toBe('copyMode');
-    expect(err.message).toContain('copyMode');
-  });
 });

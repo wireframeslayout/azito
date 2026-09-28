@@ -23,15 +23,27 @@ export function up(db: Database.Database): void {
     console.log(`Migration 075: normalized ${runtimeResult.changes} server(s) from herdr/zellij to system`);
   }
 
+  const unknownKindWindows = db.prepare(`
+    SELECT id, json_extract(mux_ref, '$.kind') AS kind FROM windows
+    WHERE mux_ref IS NOT NULL
+      AND json_valid(mux_ref)
+      AND json_extract(mux_ref, '$.kind') NOT IN ('tmux', 'herdr', 'zellij')
+  `).all() as Array<{ id: number; kind: string }>;
+
+  if (unknownKindWindows.length > 0) {
+    const ids = unknownKindWindows.map((r) => `${r.id}(${r.kind})`).join(', ');
+    throw new Error(`Migration 075: found ${unknownKindWindows.length} window(s) with unknown mux_ref kind: ${ids}. Manual cleanup required.`);
+  }
+
   const staleWindows = db.prepare(`
     SELECT id FROM windows
     WHERE mux_ref IS NOT NULL
       AND json_valid(mux_ref)
-      AND json_extract(mux_ref, '$.kind') != 'tmux'
+      AND json_extract(mux_ref, '$.kind') IN ('herdr', 'zellij')
   `).all() as Array<{ id: number }>;
 
   if (staleWindows.length > 0) {
-    console.log(`Migration 075: removing ${staleWindows.length} stale non-tmux window(s)`);
+    console.log(`Migration 075: removing ${staleWindows.length} stale herdr/zellij window(s)`);
 
     const ids = staleWindows.map((r) => r.id);
     const placeholders = ids.map(() => '?').join(',');

@@ -208,4 +208,17 @@ describe('migration 075: remove herdr remnants', () => {
     expect(() => freshDb.transaction(() => m075.up(freshDb))()).not.toThrow();
     expect(hasColumn(freshDb, 'servers', 'herdr_navigation_lock')).toBe(false);
   });
+
+  it('throws on unknown mux_ref kind and does not delete anything', () => {
+    insertServer(db, 'srv', 'system');
+    const unknownId = insertWindow(db, 'srv', 'azito:screen-win', '{"kind":"screen","workspace":"azito","window":"screen-win"}');
+    const herdrId = insertWindow(db, 'srv', 'azito:herdr-win', '{"kind":"herdr","workspace":"azito","window":"herdr-win"}');
+
+    expect(() => db.transaction(() => m075.up(db))()).toThrow(/unknown mux_ref kind/);
+
+    const unknownRow = db.prepare('SELECT id FROM windows WHERE id = ?').get(unknownId);
+    expect(unknownRow).toBeDefined();
+    const herdrRow = db.prepare('SELECT id FROM windows WHERE id = ?').get(herdrId);
+    expect(herdrRow).toBeDefined();
+  });
 });
