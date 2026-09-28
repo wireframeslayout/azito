@@ -7,7 +7,6 @@ import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import { LocalTransport } from '../modules/servers/transport/LocalTransport';
-import { HerdrSocketClient } from '../modules/mux/herdr/HerdrSocketClient';
 import type { MuxRuntime } from '../modules/servers/Server';
 import type { WebSocket } from 'ws';
 
@@ -20,18 +19,6 @@ import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
-import { ensureHerdrClientConfigs } from '../modules/mux/herdr/herdrClientConfig';
-import { HerdrEventSubscriber, type HerdrEvent, type HerdrSubscription } from '../modules/mux/herdr/HerdrEventSubscriber';
-import { herdrSocketPath } from '../modules/mux/herdr/HerdrSocketClient';
-import { ZellijResidentClient } from '../modules/mux/zellij/ZellijResidentClient';
-
-/** `session.snapshot` arrives as `{ id, result: { type, snapshot } }` (or, from tests, already unwrapped). */
-function unwrapHerdrSnapshot(resp: unknown): unknown {
-  const env = (resp && typeof resp === 'object' && 'result' in (resp as Record<string, unknown>)) ? (resp as { result: unknown }).result : resp;
-  if (env && typeof env === 'object' && 'snapshot' in (env as Record<string, unknown>)) return (env as { snapshot: unknown }).snapshot;
-  return env;
-}
-
 
 // ─── Environment validation ───
 
@@ -88,13 +75,9 @@ async function main(): Promise<void> {
 
   await app.register(websocket);
 
-  const zellijResident = new ZellijResidentClient();
-
   // Health endpoint (no auth) + tmux hook receiver + browser routes
   await app.register(agentRoutes, {
     agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS,
-    onHerdrMuxRequest: () => startHerdrRelay(),
-    zellijResident,
   });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
@@ -112,130 +95,7 @@ async function main(): Promise<void> {
   const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
   const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
 
-  // Build herdr socket for LocalTransport when running under herdr
-  const herdrSession = process.env.HERDR_SESSION || 'azito';
-  const herdrSocket = muxKind === 'herdr'
-    ? new HerdrSocketClient(herdrSession)
-    : undefined;
-
-  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '', herdrSocket);
-
-  ensureHerdrClientConfigs();
-
-  // herdr event relay: detect herdr socket presence (regardless of AZITO_MUX_RUNTIME)
-  // and subscribe to structural + agent_status events, relaying them to the hub
-  // as `mux-event` WS messages. Polls for the socket every 30s if not found initially.
-  let herdrSubscriber: HerdrEventSubscriber | undefined;
-  let herdrProbeTimer: ReturnType<typeof setInterval> | null = null;
-  const herdrSockPath = herdrSocketPath(herdrSession);
-  const herdrRelayPaneCache = new Map<string, { workspace_label: string }>();
-  const herdrRelayWsCache = new Map<string, string>();
-  let herdrRelaySocket: HerdrSocketClient | undefined;
-
-  function startHerdrRelay(): boolean {
-    if (herdrSubscriber) return false;
-    if (!fs.existsSync(herdrSockPath)) return false;
-    herdrRelaySocket = new HerdrSocketClient(herdrSession);
-    const subs: HerdrSubscription[] = [
-      { type: 'tab.created' },
-      { type: 'tab.closed' },
-      { type: 'tab.renamed' },
-      { type: 'workspace.created' },
-      { type: 'workspace.closed' },
-      { type: 'workspace.renamed' },
-      { type: 'pane.created' },
-      { type: 'pane.closed' },
-      { type: 'workspace.focused' },
-    ];
-    const rebuildPaneCache = async (): Promise<void> => {
-      try {
-        const resp = await herdrRelaySocket!.call('session.snapshot');
-        const snap = unwrapHerdrSnapshot(resp) as {
-          panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
-          workspaces: Array<{ workspace_id: string; label: string }>;
-          tabs: Array<{ tab_id: string; label: string }>;
-        };
-        herdrRelayPaneCache.clear();
-        herdrRelayWsCache.clear();
-        const wsLabels = new Map(snap.workspaces.map(w => [w.workspace_id, w.label]));
-        for (const [id, label] of wsLabels) herdrRelayWsCache.set(id, label);
-        const paneIds: string[] = [];
-        for (const p of snap.panes) {
-          const wl = wsLabels.get(p.workspace_id);
-          if (wl) {
-            herdrRelayPaneCache.set(p.pane_id, { workspace_label: wl });
-            paneIds.push(p.pane_id);
-          }
-        }
-        if (paneIds.length > 0) {
-          herdrSubscriber!.addSubscriptions(
-            paneIds.map(id => ({ type: 'pane.agent_status_changed', pane_id: id })),
-          );
-        }
-      } catch (err) {
-        console.error('[agent-herdr] Failed to rebuild pane cache:', (err as Error).message);
-      }
-    };
-    herdrSubscriber = new HerdrEventSubscriber(herdrSockPath, subs);
-    herdrSubscriber.on('connected', () => void rebuildPaneCache());
-    herdrSubscriber.on('event', (event: HerdrEvent) => {
-      if (event.type === 'pane.agent_status_changed') {
-        const paneId = event.pane_id as string | undefined;
-        if (!paneId) return;
-        const mapping = herdrRelayPaneCache.get(paneId);
-        if (!mapping) return;
-        agentEventBus.emit('mux-event', { ...event, workspace_label: mapping.workspace_label, tab_label: 'main' });
-        return;
-      }
-      if (event.type === 'workspace.focused') {
-        const wsId = event.workspace_id as string | undefined;
-        if (!wsId) return;
-        const label = herdrRelayWsCache.get(wsId);
-        if (!label) return;
-        agentEventBus.emit('mux-event', { ...event, workspace_label: label });
-        return;
-      }
-      agentEventBus.emit('mux-event', event);
-      agentEventBus.emit('tmux-event', { event: event.type });
-      if (event.type === 'pane.created' && event.pane_id) {
-        herdrSubscriber!.addSubscriptions([{
-          type: 'pane.agent_status_changed',
-          pane_id: event.pane_id as string,
-        }]);
-        void (async () => {
-          try {
-            const r = await herdrRelaySocket!.call('session.snapshot');
-            const s = unwrapHerdrSnapshot(r) as {
-              panes: Array<{ pane_id: string; workspace_id: string; tab_id: string }>;
-              workspaces: Array<{ workspace_id: string; label: string }>;
-            };
-            const pane = s.panes.find(p => p.pane_id === event.pane_id);
-            if (!pane) return;
-            const wl = s.workspaces.find(w => w.workspace_id === pane.workspace_id)?.label;
-            if (wl) herdrRelayPaneCache.set(event.pane_id as string, { workspace_label: wl });
-          } catch { /* non-fatal */ }
-        })();
-      }
-      if (event.type !== 'pane.created' && event.type !== 'pane.closed') {
-        void rebuildPaneCache();
-      } else if (event.type === 'pane.closed' && event.pane_id) {
-        herdrRelayPaneCache.delete(event.pane_id as string);
-      }
-    });
-    herdrSubscriber.start();
-    console.log(`[agent-herdr] Relay started (socket: ${herdrSockPath})`);
-    return true;
-  }
-
-  // Try at startup, then probe every 30s if not found.
-  if (!startHerdrRelay()) {
-    herdrProbeTimer = setInterval(() => {
-      if (startHerdrRelay() && herdrProbeTimer) {
-        clearInterval(herdrProbeTimer);
-        herdrProbeTimer = null;
-      }
-    }, 30_000);
-  }
+  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '');
 
   // WebSocket routes
   await app.register(async (fastify) => {
@@ -267,10 +127,8 @@ async function main(): Promise<void> {
           return;
         }
         const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
-        const herdrLockParam = url.searchParams.get('herdrLock');
-        const terminalOpts = herdrLockParam === 'locked' || herdrLockParam === 'free' ? { herdrLock: herdrLockParam as 'locked' | 'free' } : undefined;
 
-        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport, terminalOpts);
+        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
         return;
       }
 
@@ -312,7 +170,7 @@ async function main(): Promise<void> {
             socket.send(JSON.stringify({ type: 'tmux-hook', event: data.event }));
           }
         };
-        const onMuxEvent = (data: HerdrEvent) => {
+        const onMuxEvent = (data: unknown) => {
           if (socket.readyState === socket.OPEN) {
             socket.send(JSON.stringify({ type: 'mux-event', data }));
           }
@@ -350,9 +208,6 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    zellijResident.detachAll();
-    if (herdrProbeTimer) { clearInterval(herdrProbeTimer); herdrProbeTimer = null; }
-    herdrSubscriber?.stop();
     if (hookRt) {
       for (const event of hookEvents) {
         await new Promise<void>((resolve) => {

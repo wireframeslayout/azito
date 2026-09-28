@@ -431,8 +431,7 @@ export interface WindowContextExtra {
  *
  * Matching priority:
  * 1. windowId — session listing carries `windowId` when a DB row exists
- * 2. muxRef — serialized JSON comparison (needed for herdr/zellij where the
- *    tmuxTarget's session component doesn't match the actual session name)
+ * 2. muxRef — serialized JSON comparison
  * 3. tmuxTarget session:window split — legacy tmux path
  */
 export function resolveWindowContextExtra(

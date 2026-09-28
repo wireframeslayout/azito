@@ -56,7 +56,6 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
 import { useFocusSync } from '../hooks/useFocusSync';
-import { useHerdrTabFocus } from '../hooks/useHerdrTabFocus';
 
 export default function Workspace() {
   return (
@@ -510,7 +509,6 @@ function WorkspaceInner() {
 
   const focusSync = useFocusSync(activeTabId, allTasks, openTask, connectPane);
   useNotificationChannel({ onMuxFocus: focusSync.handleMuxFocus });
-  const { herdrConflictPaneIds } = useHerdrTabFocus(focusedActiveTabId, tabs, servers, layout.state);
 
   useEffect(() => {
     setOnOpenTask((taskId) => openTask(taskId, t('tasks:detail.taskRef', { id: taskId })));
@@ -1008,8 +1006,6 @@ function WorkspaceInner() {
       taskWindows={taskWindows}
       allProjects={allProjects}
       onAddWindowToProject={handleAddWindowToProject}
-      followHerdr={focusSync.followEnabled}
-      onFollowHerdrChange={focusSync.setFollowEnabled}
       onWindowFocus={focusSync.handleWindowSelect}
     />
   );
@@ -1220,11 +1216,10 @@ function WorkspaceInner() {
               // TaskPanel's `isPaneFocused` prop doc) — a visible-but-unfocused pane's
               // own background polling must not steal focus from the focused pane.
               const isPaneFocused = !!pane && pane.id === layout.state.focusedPaneId;
-              const herdrConflict = isVisible && !!pane && herdrConflictPaneIds.has(pane.id);
               const positionStyle: React.CSSProperties = rect
                 ? { position: 'absolute', top: rect.top, left: rect.left, width: rect.width, height: rect.height }
                 : { position: 'absolute', top: 0, left: 0, width: 0, height: 0, visibility: 'hidden' };
-              return renderTabContent(tab, { ...positionStyle, overflow: 'hidden' }, isVisible, closeTabPaneAware, isPaneFocused, herdrConflict);
+              return renderTabContent(tab, { ...positionStyle, overflow: 'hidden' }, isVisible, closeTabPaneAware, isPaneFocused);
             })}
           </div>
         )}
@@ -1248,7 +1243,7 @@ function WorkspaceInner() {
   // `isPaneFocused` is omitted by the mobile call site (single-pane concept doesn't
   // apply there) — TabContentRenderer/TaskPanel both default an omitted value to
   // "focused", preserving mobile's existing single-view behavior untouched.
-  function renderTabContent(tab: PersistedTab, wrapperStyle: React.CSSProperties, isVisible: boolean, closeTabFn: (tabId: string) => void, isPaneFocused?: boolean, herdrConflict?: boolean) {
+  function renderTabContent(tab: PersistedTab, wrapperStyle: React.CSSProperties, isVisible: boolean, closeTabFn: (tabId: string) => void, isPaneFocused?: boolean) {
     const interactive = isVisible && !paneDrag;
     const style: React.CSSProperties = { ...wrapperStyle, pointerEvents: interactive ? 'auto' : 'none' };
     const handlePointerDownCapture = interactive
@@ -1273,7 +1268,6 @@ function WorkspaceInner() {
           tab={tab}
           isPaneFocused={isPaneFocused}
           isVisible={isVisible}
-          herdrConflict={herdrConflict}
           tabs={tabs}
           allUnits={allUnits}
           tasks={tasks}

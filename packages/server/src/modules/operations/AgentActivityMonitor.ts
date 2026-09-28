@@ -72,12 +72,8 @@ function extractPaneIndex(windowSpec: string, windowIndex: number, windowName: s
 /**
  * Confirm the window still exists in a live `listSessions` snapshot.
  *
- * When `muxRef` is given (herdr/zellij DB windows carry one), matching is done
- * by comparing the serialized ref against each live window's `ref` field across
- * all sessions — this is necessary because non-tmux drivers may map multiple
- * workspaces into a single session (e.g. herdr uses session `azito` for all
- * workspaces), so the tmuxTarget's "session" component does not correspond to
- * the actual session name.
+ * When `muxRef` is given, matching is done by comparing the serialized ref
+ * against each live window's `ref` field across all sessions.
  *
  * Falls back to the legacy `parseWindowTarget` → session name → windowSpec
  * path when no `muxRef` is given or the ref-based search finds nothing.
@@ -343,7 +339,7 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
   await Promise.all(workers);
 }
 
-/** herdr `pane.agent_status_changed` status values. */
+/** Mux-native agent status values (e.g. pane.agent_status_changed). */
 export type MuxAgentStatus = 'working' | 'idle' | 'blocked' | 'done' | 'unknown';
 
 /** Which rung of the ladder decided a key's state on the last tick. */
@@ -568,7 +564,7 @@ export class AgentActivityMonitor {
   // inferring exit from a foreground-command fallback to a bare shell — so
   // Tier 0 needs no such fallback and bypasses Tier 1/2 entirely for its keys.
   private supervisorStates = new Map<string, SupervisorState>();
-  // Mux-native agent state (herdr pane.agent_status_changed events).
+  // Mux-native agent state (e.g. pane.agent_status_changed events).
   // Wired into the collect() ladder as Tier 0 mux — below supervisor, above
   // Tier 1 hooks. Keyed by windowKey(serverName, target).
   private muxStates = new Map<string, { status: MuxAgentStatus; at: number; serverName: string; target: string }>();
@@ -794,7 +790,7 @@ export class AgentActivityMonitor {
   }
 
   /**
-   * Record a mux-native agent state signal (herdr `pane.agent_status_changed`).
+   * Record a mux-native agent state signal (e.g. `pane.agent_status_changed`).
    * Wired into the `collect()` ladder as Tier 0 mux — below supervisor, above
    * Tier 1 hooks. `done` is treated as an explicit completion (the key is
    * removed from `muxStates` so lower tiers can take over). `unknown` is
@@ -1113,7 +1109,7 @@ export class AgentActivityMonitor {
     }
 
     // Filter candidates whose mux_ref.kind doesn't match the server's runtime.
-    // These are stale rows (e.g. tmux windows left after migrating to herdr).
+    // These are stale rows whose mux_ref.kind doesn't match the server's runtime.
     const filteredCandidates = candidates.filter((w) => {
       if (!w.muxRef) return true;
       const server = servers.get(w.serverName);
@@ -1243,9 +1239,8 @@ export class AgentActivityMonitor {
         continue;
       }
 
-      // Tier 0 mux: herdr's native agent_status for this key. Authoritative
-      // when no supervisor is present — herdr's paneStateClassifier is the
-      // same lineage as AZITO's Tier 2 screen classifier, but event-driven
+      // Tier 0 mux: native agent_status for this key. Authoritative
+      // when no supervisor is present — event-driven
       // rather than polled. Bypasses Tier 1/2/3 but sits below a supervisor
       // (whose rules are AZITO-controlled).
       const muxState = this.muxStates.get(key);
@@ -1272,7 +1267,7 @@ export class AgentActivityMonitor {
             continue;
           }
           // mux working/blocked — for claude, also check screen for blocked
-          // (herdr's blocked detection is unverified; same as supervisor path).
+          // (mux blocked detection is unverified; same as supervisor path).
           let effectiveMuxStatus = mapped.state === 'blocked' ? 'blocked' as const : undefined;
           if (w.workerType === 'claude' && effectiveMuxStatus !== 'blocked') {
             const server = servers.get(w.serverName);
@@ -1538,7 +1533,7 @@ export class AgentActivityMonitor {
       if (name) next.set(key, { ...entry, paneName: name });
     }
 
-    // Expire `done` mux entries: the agent session is finished, so herdr's
+    // Expire `done` mux entries: the agent session is finished, so the mux's
     // state is no longer authoritative. Removing the entry lets lower tiers
     // take over on subsequent ticks (e.g. the window may be reused).
     for (const [key, mux] of this.muxStates) {
@@ -1555,7 +1550,7 @@ export class AgentActivityMonitor {
    * `capture-pane` screen tail in two cases — a claude title that cannot be
    * trusted on its own (see below), and a title the classifier has no rule for
    * at all, which is additionally gated on this window's activity having
-   * advanced since the last tick (herdr-style cost containment: a window
+   * advanced since the last tick (cost containment: a window
    * producing no output has nothing new to read). Screen reads go through
    * screenVerdict(), so a pane that is not redrawing costs no repeat
    * `capture-pane` regardless of which case brought us here.

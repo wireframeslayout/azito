@@ -70,7 +70,6 @@ export interface MuxFocusPayload {
   serverName: string;
   windowId: number;
   taskId?: number;
-  source: 'herdr';
 }
 
 export interface BrowserOpenedPayload {

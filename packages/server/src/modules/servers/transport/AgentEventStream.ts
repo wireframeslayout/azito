@@ -14,7 +14,6 @@ export class AgentEventStream {
     private notificationBus: NotificationBus,
     /** Hub-side session-cache invalidation — called before notifying clients so they refetch fresh data. */
     private onTmuxEvent?: (serverName: string) => void,
-    private onMuxEvent?: (serverName: string, event: unknown) => void,
   ) {}
 
   start(): void {
@@ -55,7 +54,6 @@ export class AgentEventStream {
             payload: { serverName: this.serverName },
           });
         } else if (msg.type === 'mux-event') {
-          this.onMuxEvent?.(this.serverName, msg.data);
           this.notificationBus.emit({
             type: 'sessions:updated',
             payload: { serverName: this.serverName },

@@ -3,7 +3,7 @@ import type { MuxFocusPayload } from '../types/notification';
 import type { TerminalRef } from '../lib/terminalRef';
 import { api } from '../api/client';
 
-const LS_FOLLOW = 'follow-herdr';
+const LS_FOLLOW = 'focus-sync-follow';
 const LS_REVERSE = 'focus-sync-reverse';
 
 function readBool(key: string, fallback: boolean): boolean {

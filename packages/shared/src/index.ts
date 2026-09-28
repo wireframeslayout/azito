@@ -31,11 +31,5 @@ export {
   tmuxTargetFromMuxRef,
   windowKeyForRef,
   muxKindForRuntime,
-  herdrPaneHandle,
-  parseHerdrPaneHandle,
-  herdrMuxRef,
-  zellijMuxRef,
   isPaneHandleLike,
-  type HerdrNavigationLock,
-  resolveHerdrLock,
 } from './mux';

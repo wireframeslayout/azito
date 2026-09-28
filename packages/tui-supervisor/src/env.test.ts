@@ -127,27 +127,15 @@ describe('resolveHubEnv with AZITO_PREFIX', () => {
 });
 
 describe('resolveMuxPaneRef', () => {
-  it('returns HERDR_PANE_ID when set', () => {
-    expect(resolveMuxPaneRef({ HERDR_PANE_ID: 'w1:p3' })).toBe('w1:p3');
-  });
-
-  it('returns TMUX_PANE when HERDR_PANE_ID is absent', () => {
+  it('returns TMUX_PANE when set', () => {
     expect(resolveMuxPaneRef({ TMUX_PANE: '%42' })).toBe('%42');
   });
 
-  it('prefers HERDR_PANE_ID over TMUX_PANE', () => {
-    expect(resolveMuxPaneRef({ HERDR_PANE_ID: 'w1:p1', TMUX_PANE: '%99' })).toBe('w1:p1');
-  });
-
-  it('returns undefined when neither is set', () => {
+  it('returns undefined when TMUX_PANE is absent', () => {
     expect(resolveMuxPaneRef({})).toBeUndefined();
   });
 
   it('rejects invalid TMUX_PANE format', () => {
     expect(resolveMuxPaneRef({ TMUX_PANE: 'not-a-pane' })).toBeUndefined();
-  });
-
-  it('accepts any HERDR_PANE_ID format (herdr controls the value)', () => {
-    expect(resolveMuxPaneRef({ HERDR_PANE_ID: 'ws2:p7' })).toBe('ws2:p7');
   });
 });

@@ -4,7 +4,7 @@ import { MuxDriverUnavailableError, MuxCapabilityMissingError } from './MuxCapab
 import type { IMuxClient } from './IMuxClient';
 import type { MuxRuntime } from '@azito/shared';
 
-function makeMockDriver(kind: 'tmux' | 'herdr' | 'zellij'): IMuxClient {
+function makeMockDriver(kind: 'tmux'): IMuxClient {
   return { kind, caps: {} } as unknown as IMuxClient;
 }
 
@@ -27,20 +27,9 @@ describe('MuxDriverRegistry', () => {
     expect(registry.resolve(serverWith('managed'))).toBe(driver);
   });
 
-  it('resolve throws MuxDriverUnavailableError for unregistered kind', () => {
+  it('resolve throws MuxDriverUnavailableError when no driver registered', () => {
     const registry = new MuxDriverRegistry();
-    registry.register('tmux', makeMockDriver('tmux'));
-    expect(() => registry.resolve(serverWith('herdr'))).toThrow(MuxDriverUnavailableError);
-    try {
-      registry.resolve(serverWith('herdr'));
-    } catch (err) {
-      expect((err as MuxDriverUnavailableError).kind).toBe('herdr');
-    }
-  });
-
-  it('resolve throws for zellij when not registered', () => {
-    const registry = new MuxDriverRegistry();
-    expect(() => registry.resolve(serverWith('zellij'))).toThrow(MuxDriverUnavailableError);
+    expect(() => registry.resolve(serverWith('system'))).toThrow(MuxDriverUnavailableError);
   });
 
   it('has returns true for registered kind', () => {
@@ -51,7 +40,7 @@ describe('MuxDriverRegistry', () => {
 
   it('has returns false for unregistered kind', () => {
     const registry = new MuxDriverRegistry();
-    expect(registry.has('herdr')).toBe(false);
+    expect(registry.has('tmux')).toBe(false);
   });
 
   it('register overwrites a previous driver for the same kind', () => {
