@@ -109,10 +109,8 @@ const LINKED_SESSION_PREFIX = '_azito_';
 export class TmuxClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'tmux';
   readonly caps: MuxCapabilities = {
-    outputStream: true, changeEvents: true, agentState: false,
-    independentClients: true, envInjection: true, zoom: true,
-    copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true,
-    stablePaneHandle: true,
+    changeEvents: true, agentState: false,
+    independentClients: true, copyMode: true,
   };
 
   constructor(

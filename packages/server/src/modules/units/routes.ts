@@ -16,7 +16,7 @@ import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
 import { failAsyncTaskOperation } from '../tasks/execution/AppendLog';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { MuxDriverUnavailableError, MuxCapabilityMissingError } from '../tmux/MuxCapabilityError';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 
 // ─── Types ───
 
@@ -254,8 +254,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
           if (sn) {
             const srv = serverRepo.findByName(sn);
             if (srv) {
-              const driver = muxDriverRegistry.resolve(srv);
-              if (!driver.caps.outputStream) throw new MuxCapabilityMissingError('outputStream');
+              muxDriverRegistry.resolve(srv);
             }
           }
         }
@@ -264,8 +263,6 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       } catch (err: unknown) {
         if (err instanceof MuxDriverUnavailableError)
           return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind });
-        if (err instanceof MuxCapabilityMissingError)
-          return reply.status(409).send({ error: 'mux_capability_missing', capability: err.capability });
         if (err instanceof ResourceExhaustedError)
           return reply.status(409).send({ error: 'insufficient_resources', resources: err.status });
         if (replyToExecutionGateError(err, reply)) return;

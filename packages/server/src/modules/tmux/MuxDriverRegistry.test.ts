@@ -53,9 +53,9 @@ describe('MuxDriverRegistry', () => {
   });
 
   it('MuxCapabilityMissingError carries the capability name', () => {
-    const err = new MuxCapabilityMissingError('outputStream');
+    const err = new MuxCapabilityMissingError('copyMode');
     expect(err).toBeInstanceOf(Error);
-    expect(err.capability).toBe('outputStream');
-    expect(err.message).toContain('outputStream');
+    expect(err.capability).toBe('copyMode');
+    expect(err.message).toContain('copyMode');
   });
 });

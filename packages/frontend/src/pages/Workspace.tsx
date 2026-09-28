@@ -55,8 +55,6 @@ import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
-import { useFocusSync } from '../hooks/useFocusSync';
-
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -506,9 +504,6 @@ function WorkspaceInner() {
       openTaskRaw(taskId, title, taskProjectId ?? currentProjectId, fromOrProjectId);
     }
   }, [openTaskRaw, currentProjectId, allTasks]);
-
-  const focusSync = useFocusSync(activeTabId, allTasks, openTask, connectPane);
-  useNotificationChannel({ onMuxFocus: focusSync.handleMuxFocus });
 
   useEffect(() => {
     setOnOpenTask((taskId) => openTask(taskId, t('tasks:detail.taskRef', { id: taskId })));
@@ -1006,7 +1001,6 @@ function WorkspaceInner() {
       taskWindows={taskWindows}
       allProjects={allProjects}
       onAddWindowToProject={handleAddWindowToProject}
-      onWindowFocus={focusSync.handleWindowSelect}
     />
   );
 

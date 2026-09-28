@@ -12,9 +12,11 @@ describe('formatMuxRef / parseMuxRef', () => {
     const ref: MuxRef = { kind: 'tmux', workspace: 'sess', window: 'w' };
     expect(formatMuxRef(ref)).toBe('{"kind":"tmux","workspace":"sess","window":"w"}');
   });
-  it('coerces unknown kind to tmux', () => {
-    const ref = parseMuxRef('{"kind":"screen","workspace":"x","window":"y"}');
-    expect(ref).toEqual({ kind: 'tmux', workspace: 'x', window: 'y' });
+  it('throws on non-tmux kind', () => {
+    expect(() => parseMuxRef('{"kind":"screen","workspace":"x","window":"y"}')).toThrow('Unsupported MuxRef kind: screen');
+  });
+  it('throws on herdr kind', () => {
+    expect(() => parseMuxRef('{"kind":"herdr","workspace":"x","window":"y"}')).toThrow('Unsupported MuxRef kind: herdr');
   });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { AgentActivityPayload, BrowserOpenedPayload, MuxFocusPayload, NotificationEvent } from '../types/notification';
+import type { AgentActivityPayload, BrowserOpenedPayload, NotificationEvent } from '../types/notification';
 import { buildWsUrl } from '../api/wsUrl';
 
 export interface NotificationHandlers {
@@ -8,7 +8,6 @@ export interface NotificationHandlers {
   onPaneExited?: (serverName: string) => void;
   onAgentActivity?: (payload: AgentActivityPayload) => void;
   onBrowserOpened?: (payload: BrowserOpenedPayload) => void;
-  onMuxFocus?: (payload: MuxFocusPayload) => void;
   onSupervisorReady?: (payload: { serverName: string; target: string; taskId?: number }) => void;
   onWorkspaceRefresh?: () => void;
   /** Fired on every WebSocket (re)connect — use to re-fetch snapshot state. */
@@ -102,9 +101,6 @@ export function useNotificationChannel(handlers: NotificationHandlers): void {
           break;
         case 'browser:opened':
           h.onBrowserOpened?.(event.payload);
-          break;
-        case 'mux:focus':
-          h.onMuxFocus?.(event.payload);
           break;
         case 'supervisor:ready':
           h.onSupervisorReady?.(event.payload);
