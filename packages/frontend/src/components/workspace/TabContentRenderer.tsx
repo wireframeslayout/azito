@@ -33,7 +33,6 @@ interface TabContentRendererProps {
    * focused/true.
    */
   isPaneFocused?: boolean;
-  herdrConflict?: boolean;
   tabs: PersistedTab[];
   allUnits: Unit[];
   tasks: Task[];
@@ -75,7 +74,6 @@ export default function TabContentRenderer({
   tab,
   isVisible,
   isPaneFocused,
-  herdrConflict,
   tabs,
   allUnits,
   tasks,
@@ -149,9 +147,7 @@ export default function TabContentRenderer({
       inert={!isVisible}
       style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', visibility: isVisible ? 'visible' : 'hidden', pointerEvents: isVisible ? 'auto' : 'none' }}>
       {isTerminal && (
-        herdrConflict
-          ? <HerdrConflictOverlay />
-          : <TerminalContainer
+        <TerminalContainer
               serverName={tab.serverName!}
               target={tab.target!}
               terminalRef={tab.terminalRef}
@@ -420,31 +416,6 @@ export default function TabContentRenderer({
           onOpenTask={(taskId, title) => handleOpenTask({ id: taskId, title } as Task, 'workspace')}
         />
       )}
-    </div>
-  );
-}
-
-function HerdrConflictOverlay() {
-  const { t } = useTranslation(['workspace']);
-  return (
-    <div style={{
-      flex: 1,
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      justifyContent: 'center',
-      gap: 8,
-      background: 'var(--surface-base)',
-      color: 'var(--text-dim)',
-      padding: 24,
-      textAlign: 'center',
-    }}>
-      <div style={{ fontSize: 'var(--font-lg)', color: 'var(--text)' }}>
-        {t('workspace:herdrConflict.title')}
-      </div>
-      <div style={{ fontSize: 'var(--font-md)', maxWidth: 360, lineHeight: 1.5 }}>
-        {t('workspace:herdrConflict.message')}
-      </div>
     </div>
   );
 }

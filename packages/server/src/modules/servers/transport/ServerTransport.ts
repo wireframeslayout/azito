@@ -1,5 +1,5 @@
 import type { EventEmitter } from 'events';
-import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest, HerdrNavigationLock } from '@azito/shared';
+import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
 
 export interface ExecResult {
@@ -21,7 +21,6 @@ export interface IServerTransport {
 }
 
 export interface OpenTerminalOpts {
-  herdrLock?: HerdrNavigationLock;
 }
 
 export interface IMuxTransport {

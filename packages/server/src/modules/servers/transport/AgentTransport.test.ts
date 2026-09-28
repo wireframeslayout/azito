@@ -34,18 +34,9 @@ describe('AgentTransport', () => {
     expect(body.mux).toBe('managed');
   });
 
-  it('does not add mux field for herdr requests', async () => {
-    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'herdr');
-    await transport.execMux({ kind: 'herdr', method: 'list_windows', params: {} });
-
-    const body = JSON.parse(fetchSpy.mock.calls[0][1]!.body as string);
-    expect(body).toEqual({ kind: 'herdr', method: 'list_windows', params: {} });
-    expect(body.mux).toBeUndefined();
-  });
-
   it('matchesMuxRuntime returns true for same runtime', () => {
     const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system');
     expect(transport.matchesMuxRuntime('system')).toBe(true);
-    expect(transport.matchesMuxRuntime('herdr')).toBe(false);
+    expect(transport.matchesMuxRuntime('managed')).toBe(false);
   });
 });

@@ -75,12 +75,9 @@ function decodePercentQ(value: string): string {
 
 /**
  * Resolves the mux pane reference from environment variables.
- * herdr injects `HERDR_PANE_ID` (format varies, e.g. `w1:p1`); tmux injects
- * `TMUX_PANE` (format `%<digits>`). HERDR_PANE_ID takes priority — when a
- * process runs under herdr the tmux variable is absent or stale.
+ * tmux injects `TMUX_PANE` (format `%<digits>`).
  */
 export function resolveMuxPaneRef(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  if (env.HERDR_PANE_ID) return env.HERDR_PANE_ID;
   if (/^%\d+$/.test(env.TMUX_PANE ?? '')) return env.TMUX_PANE;
   return undefined;
 }

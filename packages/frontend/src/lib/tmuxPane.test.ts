@@ -154,7 +154,7 @@ describe('checkWindowExists', () => {
       {
         index: 0,
         name: 'main',
-        ref: '{"kind":"herdr","workspace":"azito","window":"main"}',
+        ref: '{"kind":"tmux","workspace":"azito","window":"main"}',
         windowId: 42,
         panes: [
           { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: true },
@@ -190,14 +190,14 @@ describe('checkWindowExists', () => {
     });
   });
 
-  describe('ref (herdr / mux)', () => {
+  describe('ref (mux)', () => {
     it('finds window by ref string', () => {
-      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"herdr","workspace":"azito","window":"main"}', pane: 0 };
+      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"tmux","workspace":"azito","window":"main"}', pane: 0 };
       expect(checkWindowExists(sessions, ref, '')).toEqual({ found: true, paneFound: true });
     });
 
     it('reports not found for mismatched ref', () => {
-      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"herdr","workspace":"azito","window":"gone"}', pane: 0 };
+      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"tmux","workspace":"azito","window":"gone"}', pane: 0 };
       expect(checkWindowExists(sessions, ref, '')).toEqual({ found: false, paneFound: false });
     });
   });
@@ -227,7 +227,7 @@ describe('resolveActivePaneByRef', () => {
     windows: [{
       index: 0,
       name: 'main',
-      ref: '{"kind":"herdr","workspace":"azito","window":"main"}',
+      ref: '{"kind":"tmux","workspace":"azito","window":"main"}',
       windowId: 42,
       panes: [
         { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: false },
@@ -242,7 +242,7 @@ describe('resolveActivePaneByRef', () => {
   });
 
   it('returns the active pane via mux ref', () => {
-    const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"herdr","workspace":"azito","window":"main"}', pane: 0 };
+    const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"tmux","workspace":"azito","window":"main"}', pane: 0 };
     expect(resolveActivePaneByRef(sessions, ref)).toEqual(sessions[0].windows[0].panes[1]);
   });
 
@@ -252,7 +252,7 @@ describe('resolveActivePaneByRef', () => {
       windows: [{
         index: 0,
         name: 'main',
-        ref: '{"kind":"herdr","workspace":"azito","window":"main"}',
+        ref: '{"kind":"tmux","workspace":"azito","window":"main"}',
         windowId: 42,
         panes: [
           { index: 0, title: 'bash', command: 'bash', width: 80, height: 24, active: false },

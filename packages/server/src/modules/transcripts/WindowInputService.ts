@@ -100,9 +100,8 @@ export class WindowInputService {
   }
 
   /**
-   * copy-mode 判定は MuxCapabilities.copyMode で分岐し、herdr/zellij は copy-mode 概念が
-   * 無いため no-op。tmux ではスクロールバック閲覧中の send-keys がバッファ選択操作に吸収される
-   * ため、解除してから短い待機を挟む。
+   * copy-mode 判定は MuxCapabilities.copyMode で分岐する。tmux ではスクロールバック閲覧中の
+   * send-keys がバッファ選択操作に吸収されるため、解除してから短い待機を挟む。
    */
   private async preparePaneForInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle): Promise<void> {
     if (!driver.caps.copyMode) return;

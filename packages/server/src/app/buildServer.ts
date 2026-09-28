@@ -75,8 +75,7 @@ import { MuxDriverUnavailableError, MuxCapabilityMissingError } from '../modules
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
-import { muxRefFromTmuxTarget, parseMuxRef, resolveHerdrLock, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import type { OpenTerminalOpts } from '../modules/servers/transport/ServerTransport';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
@@ -90,13 +89,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
-    executeTaskUseCase, agentActivityMonitor, herdrEventBridge, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
+    executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
     windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
     originationService, scopedAuthEnabled, taskPaneEnvironmentService,
-    zellijResident,
   } = wiring;
 
   // ─── Webhook token ───
@@ -481,7 +479,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   await app.register(sessionsRoutes, {
-    serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex, herdrEventBridge,
+    serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       // Issue #28 third-party review, D-track fix 2: resolve (and hold) the
       // launch BEFORE the kill runs — not a live-connection lookup at
@@ -555,7 +553,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
-    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, herdrEventBridge,
+    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
       return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
@@ -740,22 +738,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         return;
       }
 
-      const terminalOpts: OpenTerminalOpts = {};
-      if (resolvedServer.muxRuntime === 'herdr') {
-        terminalOpts.herdrLock = resolveHerdrLock(resolvedServer.herdrNavigationLock, resolvedWin?.herdrNavigationLock ?? null);
-        // The agent focuses the target workspace before spawning the herdr
-        // client (Issue #208). That `workspace.focus` is AZITO-issued, not a
-        // user action, so register it with the event bridge the same way
-        // POST /api/windows/:id/focus does — otherwise its `workspace.focused`
-        // echo is relayed as `mux:focus`, the follow-mode UI switches tabs,
-        // the newly shown terminal attaches and focuses again, and two herdr
-        // tabs of one session ping-pong indefinitely.
-        if (resolvedRef.kind === 'herdr') {
-          herdrEventBridge.recordFocusCommand(resolvedServer.name, resolvedRef.workspace);
-        }
-      }
-
-      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory, terminalOpts);
+      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory);
     });
   });
 
@@ -831,16 +814,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const agentEventStreams: AgentEventStream[] = [];
 
   agentActivityMonitor.start();
-  herdrEventBridge.startAll();
-
   app.addHook('onClose', async () => {
     // stopAll() first: playwright's own SIGTERM/SIGINT/SIGHUP handlers are disabled
     // (see BrowserSession.ts), so a Chromium session must be closed here before the
     // 8s hard cap in main.ts's graceful shutdown can starve it in favor of later steps.
     await browserSessionManager.stopAll();
-    zellijResident.detachAll();
     agentActivityMonitor.stop();
-    herdrEventBridge.stopAll();
     const localServers = serverRepo.findAll().filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
     for (const stream of agentEventStreams) stream.stop();

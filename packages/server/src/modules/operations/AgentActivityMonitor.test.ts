@@ -7,7 +7,7 @@ import type { TmuxSession, TmuxPane } from '../tmux/types';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { herdrMuxRef } from '@azito/shared';
+
 
 type RunningMap = Record<number, Array<{ taskId: number; target: string; serverName: string }>>;
 
@@ -28,7 +28,6 @@ function makeWindow(overrides: Partial<Window>): Window {
     launchCommand: null,
     workingDirectory: null,
     paneLayout: null,
-    herdrNavigationLock: null,
     sleeping: false,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
@@ -1412,20 +1411,6 @@ describe('AgentActivityMonitor', () => {
       expect(result!.name).toBe('task-42');
     });
 
-    it('findLiveWindow matches herdr window by muxRef when tmuxTarget session does not match', () => {
-      const ref = herdrMuxRef('win--8u83');
-      const sessions: TmuxSession[] = [{
-        name: 'azito',
-        windowCount: 1,
-        attached: false,
-        created: 0,
-        windows: [{ index: 0, name: 'win--8u83', active: true, activity: 0, panes: [makePane({})], ref }],
-      }];
-      const result = findLiveWindow(sessions, 'win--8u83:main', ref);
-      expect(result).not.toBeNull();
-      expect(result!.name).toBe('win--8u83');
-    });
-
     it('findLiveWindow falls back to tmuxTarget when muxRef is not provided', () => {
       const sessions = makeSessions('azito', 'task-42', 1, Math.floor(Date.now() / 1000));
       const result = findLiveWindow(sessions, 'azito:task-42');
@@ -1435,7 +1420,7 @@ describe('AgentActivityMonitor', () => {
 
     it('findLiveWindow falls back to tmuxTarget when muxRef does not match any live window', () => {
       const sessions = makeSessions('azito', 'task-42', 1, Math.floor(Date.now() / 1000));
-      const result = findLiveWindow(sessions, 'azito:task-42', herdrMuxRef('nonexistent'));
+      const result = findLiveWindow(sessions, 'azito:task-42', { kind: 'tmux', workspace: 'nonexistent', window: 'main' });
       expect(result).not.toBeNull();
       expect(result!.name).toBe('task-42');
     });
@@ -2152,9 +2137,9 @@ describe('AgentActivityMonitor', () => {
     expect(agent2).toBeDefined();
   });
 
-  // ─── Tier 0 mux (herdr agent_status) ───
+  // ─── Tier 0 mux ───
 
-  describe('Tier 0 mux (herdr agent_status)', () => {
+  describe('Tier 0 mux', () => {
     // recordMuxSignal calls void tick() internally, so we need to let that
     // complete before checking results. Helper to drain the microtask queue.
     const drain = () => new Promise<void>(r => setTimeout(r, 10));

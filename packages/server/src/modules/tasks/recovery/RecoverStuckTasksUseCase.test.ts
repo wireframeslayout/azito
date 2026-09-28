@@ -92,7 +92,6 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
   muxRuntime: 'system',
-  herdrNavigationLock: 'locked' as const,
     createdAt: '2026-06-16T00:00:00Z',
     ...overrides,
   };
@@ -828,35 +827,6 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.taskRepo.update).not.toHaveBeenCalled();
     expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalledWith(33, 'waiting_input');
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 33);
-  });
-
-  it('should use MuxDriverRegistry to resolve driver for herdr server recovery', async () => {
-    const task = makeTask({ id: 40 });
-    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
-      status === 'running' ? [task] : [],
-    );
-    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
-    mocks.serverRepo.findByName.mockReturnValue(makeServer({ type: 'agent', muxRuntime: 'herdr' }));
-    mocks.turnRepo.findLatestByTaskPhase.mockReturnValue(
-      makeAgentTurn({ id: 20, taskId: 40, phase: 'implementing', status: 'completed' }),
-    );
-
-    const mockDriver = {
-      kind: 'herdr' as const,
-      resolvePane: vi.fn().mockResolvedValue('herdr-pane-1'),
-      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
-      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
-    };
-    const registry = { resolve: vi.fn().mockReturnValue(mockDriver) };
-    const useCase = createUseCase(mocks, registry);
-    await useCase.run();
-
-    expect(registry.resolve).toHaveBeenCalled();
-    expect(mockDriver.resolvePane).toHaveBeenCalled();
-    expect(mockDriver.probePane).toHaveBeenCalledWith(expect.anything(), 'herdr-pane-1');
-    expect(mockDriver.sendKeysToHandle).toHaveBeenCalledWith(expect.anything(), 'herdr-pane-1', ['Escape']);
-    expect(mocks.tmuxClient.resolvePane).not.toHaveBeenCalled();
-    expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 40);
   });
 
   it('should use the default registry driver (tmuxClient) when no custom driver is registered', async () => {

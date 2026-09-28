@@ -32,7 +32,6 @@ function makeWindow(overrides: Partial<Window> = {}): Window {
     workingDirectory: null,
     paneLayout: null,
     sleeping: false,
-    herdrNavigationLock: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -52,7 +51,6 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
   muxRuntime: 'system',
-  herdrNavigationLock: 'locked' as const,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
