@@ -338,7 +338,7 @@ function buildUseCase(opts: {
 
   const tmux = {
     kind: 'tmux' as const,
-    caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: true },
+    caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
     listSessions: vi.fn(async (): Promise<{ name: string; windows: { name: string; index: number }[] }[]> => []),
     createSession: vi.fn(async () => {}),
     createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w1' })),
@@ -1489,7 +1489,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     // goes straight to sending the follow-up prompt + waiting.
     const tmux = {
       kind: 'tmux' as const,
-      caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: true },
+      caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listSessions: vi.fn(async () => [{ name: 'azito', windows: [{ name: 'task-1', index: 1 }] }]),
       listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 1, attached: true, created: 0, windows: [{ index: 0, name: 'task-1', active: true, panes: [], activity: 0 }] }]),
       openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
@@ -2511,7 +2511,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
 
     const tmux = {
       kind: 'tmux' as const,
-      caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true, stablePaneHandle: true },
+      caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true },
       listSessions: vi.fn(async () => []),
       listWorkspaces: vi.fn(async () => []),
       openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),

@@ -103,13 +103,13 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // isolation flow unchanged. The dedicated C-1 describe block below
     // overrides this to false per-test.
     scopedAuthEnabled: true,
-    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspacesStrict: vi.fn(async () => []), caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspacesStrict: vi.fn(async () => []), caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     ...overrides,
   };
 }
 
 function makeMuxRegistry(listWorkspacesStrict: (...args: unknown[]) => Promise<unknown[]>): ServersRouteOptions['muxDriverRegistry'] {
-  return { resolve: vi.fn(() => ({ listWorkspacesStrict, caps: { outputStream: true, changeEvents: true, agentState: false, independentClients: true, envInjection: true, zoom: true, copyMode: true, paneTitle: true, activityCounter: true, layoutSnapshot: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
+  return { resolve: vi.fn(() => ({ listWorkspacesStrict, caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
 }
 
 async function buildApp(opts: ServersRouteOptions) {

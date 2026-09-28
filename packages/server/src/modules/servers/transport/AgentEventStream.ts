@@ -53,11 +53,6 @@ export class AgentEventStream {
             type: 'sessions:updated',
             payload: { serverName: this.serverName },
           });
-        } else if (msg.type === 'mux-event') {
-          this.notificationBus.emit({
-            type: 'sessions:updated',
-            payload: { serverName: this.serverName },
-          });
         } else if (msg.type === 'browser-opened') {
           this.notificationBus.emit({
             type: 'browser:opened',

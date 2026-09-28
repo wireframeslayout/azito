@@ -197,13 +197,13 @@ describe('TmuxClient IMuxClient', () => {
   });
 
   describe('kind and caps', () => {
-    it('reports tmux kind with all caps except agentState', () => {
+    it('reports tmux kind with expected caps', () => {
       const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
       expect(client.kind).toBe('tmux');
-      expect(client.caps.outputStream).toBe(true);
+      expect(client.caps.changeEvents).toBe(true);
       expect(client.caps.agentState).toBe(false);
-      expect(client.caps.layoutSnapshot).toBe(true);
-      expect(client.caps.stablePaneHandle).toBe(true);
+      expect(client.caps.independentClients).toBe(true);
+      expect(client.caps.copyMode).toBe(true);
     });
   });
 });

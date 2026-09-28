@@ -23,17 +23,10 @@ export type PaneHandle = string & { readonly __brand: 'PaneHandle' };
 export type PaneOrdinal = number;
 
 export interface MuxCapabilities {
-  outputStream: boolean;
   changeEvents: boolean;
   agentState: boolean;
   independentClients: boolean;
-  envInjection: boolean;
-  zoom: boolean;
   copyMode: boolean;
-  paneTitle: boolean;
-  activityCounter: boolean;
-  layoutSnapshot: boolean;
-  stablePaneHandle: boolean;
 }
 
 export interface MuxPane {
@@ -86,6 +79,9 @@ export function formatMuxRef(ref: MuxRef): string {
 
 export function parseMuxRef(json: string): MuxRef {
   const obj = JSON.parse(json) as { kind: string; workspace: string; window: string };
+  if (obj.kind !== 'tmux') {
+    throw new Error(`Unsupported MuxRef kind: ${obj.kind}`);
+  }
   return { kind: 'tmux', workspace: obj.workspace, window: obj.window };
 }
 

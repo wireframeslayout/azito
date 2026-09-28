@@ -3,6 +3,13 @@ import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime, ServerMeta } from './Server';
 import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 
+function assertMuxRuntime(value: unknown): MuxRuntime {
+  if (value !== 'system' && value !== 'managed') {
+    throw new Error(`Invalid mux_runtime in database: '${String(value)}'. Expected 'system' or 'managed'. Run migration 075 to fix stale data.`);
+  }
+  return value;
+}
+
 const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
 
 export class SqliteServerRepository implements IServerRepository {
@@ -184,7 +191,7 @@ export class SqliteServerRepository implements IServerRepository {
       agentToken: open(row.agent_token as string | null),
       agentVersion: (row.agent_version as string) ?? null,
       sshHost: (row.ssh_host as string) ?? null,
-      muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+      muxRuntime: assertMuxRuntime(row.mux_runtime),
       sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
       isolationIntent: (row.isolation_intent as number) === 1,
       isolationVerifiedAt: (row.isolation_verified_at as string) ?? null,

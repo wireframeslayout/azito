@@ -170,22 +170,15 @@ async function main(): Promise<void> {
             socket.send(JSON.stringify({ type: 'tmux-hook', event: data.event }));
           }
         };
-        const onMuxEvent = (data: unknown) => {
-          if (socket.readyState === socket.OPEN) {
-            socket.send(JSON.stringify({ type: 'mux-event', data }));
-          }
-        };
         const onBrowserOpened = (data: { groupId: string; tabId: string; url: string | null; taskId?: number; label?: string }) => {
           if (socket.readyState === socket.OPEN) {
             socket.send(JSON.stringify({ type: 'browser-opened', groupId: data.groupId, tabId: data.tabId, url: data.url, taskId: data.taskId, label: data.label }));
           }
         };
         agentEventBus.on('tmux-event', onTmuxEvent);
-        agentEventBus.on('mux-event', onMuxEvent);
         agentEventBus.on('browser-opened', onBrowserOpened);
         socket.on('close', () => {
           agentEventBus.off('tmux-event', onTmuxEvent);
-          agentEventBus.off('mux-event', onMuxEvent);
           agentEventBus.off('browser-opened', onBrowserOpened);
         });
         return;

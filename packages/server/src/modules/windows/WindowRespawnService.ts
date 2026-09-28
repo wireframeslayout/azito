@@ -886,15 +886,13 @@ export class WindowRespawnService {
     const paneCount = paneLayout.panes.length;
     const firstPaneId = await driver.resolvePane(server, ref, 1);
 
-    if (driver.caps.layoutSnapshot) {
-      for (let i = 1; i < paneCount; i++) {
-        await driver.splitPaneByHandle(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
-        await sleep(200);
-      }
+    for (let i = 1; i < paneCount; i++) {
+      await driver.splitPaneByHandle(server, firstPaneId, i % 2 === 0 ? 'v' : 'h', paneEnv);
+      await sleep(200);
+    }
 
-      if (paneLayout.layout) {
-        await driver.applyLayout(server, ref, paneLayout.layout);
-      }
+    if (paneLayout.layout) {
+      await driver.applyLayout(server, ref, paneLayout.layout);
     }
 
     const paneIdMap = new Map<number, PaneHandle>();
@@ -903,7 +901,7 @@ export class WindowRespawnService {
       paneIdMap.set(entry.ordinal - 1, entry.handle);
     }
 
-    const panesToRestore = driver.caps.layoutSnapshot ? paneLayout.panes : paneLayout.panes.slice(0, 1);
+    const panesToRestore = paneLayout.panes;
     for (const pane of panesToRestore) {
       const paneId = paneIdMap.get(pane.index);
       if (!paneId) continue;
