@@ -1,29 +1,78 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowRowTitle, resolveWindowDisplay, buildWindowSearchText } from './windowRowTitle';
+import { resolveWindowDisplay, buildWindowSearchText } from './windowRowTitle';
 
-describe('resolveWindowRowTitle', () => {
+describe('resolveWindowDisplay', () => {
   it('uses the pane title when it is a real title', () => {
-    expect(resolveWindowRowTitle({
+    const result = resolveWindowDisplay({
       paneTitle: 'libghostty の wasm 版導入検討', paneCommand: 'node',
       label: 'task-231--x9oh', taskTitle: 'タスクのタイトル', tmuxTarget: 'azito:win--us73',
-    })).toBe('libghostty の wasm 版導入検討');
+    });
+    expect(result.title).toBe('libghostty の wasm 版導入検討');
   });
 
   it('skips internal label and falls back to task title when the pane title is only the command name', () => {
-    expect(resolveWindowRowTitle({
+    const result = resolveWindowDisplay({
       paneTitle: 'node', paneCommand: 'node',
       label: 'task-231--x9oh', taskTitle: 'タスクのタイトル', tmuxTarget: 'azito:win--us73',
-    })).toBe('タスクのタイトル');
+    });
+    expect(result.title).toBe('タスクのタイトル');
   });
 
   it('falls back to the task title when offline and no label is set', () => {
-    expect(resolveWindowRowTitle({ taskTitle: 'タスクのタイトル', tmuxTarget: 'azito:win--us73' }))
-      .toBe('タスクのタイトル');
+    const result = resolveWindowDisplay({ taskTitle: 'タスクのタイトル', tmuxTarget: 'azito:win--us73' });
+    expect(result.title).toBe('タスクのタイトル');
   });
 
   it('falls back to the tmux target when nothing else is available', () => {
-    expect(resolveWindowRowTitle({ paneTitle: '   ', label: '  ', tmuxTarget: 'azito:win--us73' }))
-      .toBe('azito:win--us73');
+    const result = resolveWindowDisplay({ paneTitle: '   ', label: '  ', tmuxTarget: 'azito:win--us73' });
+    expect(result.title).toBe('azito:win--us73');
+  });
+
+  it('skips internal label and falls back to task title', () => {
+    const result = resolveWindowDisplay({
+      label: 'task-231--x9oh', taskTitle: 'Issue対応', tmuxTarget: 'azito:0',
+    });
+    expect(result.title).toBe('Issue対応');
+    expect(result.hasDisplayName).toBe(true);
+  });
+
+  it('returns hasDisplayName: true for workerType label', () => {
+    const result = resolveWindowDisplay({ workerType: 'claude', windowId: 123, tmuxTarget: 'azito:0' });
+    expect(result.title).toBe('Claude');
+    expect(result.idLabel).toBe('W-123');
+    expect(result.hasDisplayName).toBe(true);
+  });
+
+  it('tab label shows "Claude · W-123" for workerType', () => {
+    const d = resolveWindowDisplay({ workerType: 'claude', windowId: 42, tmuxTarget: 'azito:0' });
+    const label = d.hasDisplayName && d.idLabel ? `${d.title} · ${d.idLabel}` : d.title;
+    expect(label).toBe('Claude · W-42');
+  });
+
+  it('tooltip does not duplicate when title equals idLabel', () => {
+    const d = resolveWindowDisplay({ windowId: 42, tmuxTarget: 'azito:0' });
+    const parts = [d.title];
+    if (d.idLabel && d.idLabel !== d.title) parts.push(d.idLabel);
+    parts.push('local');
+    expect(parts.join(' · ')).toBe('W-42 · local');
+  });
+
+  it('falls back to W-123 when only windowId is available', () => {
+    const result = resolveWindowDisplay({ windowId: 123, tmuxTarget: 'azito:0' });
+    expect(result.title).toBe('W-123');
+    expect(result.idLabel).toBeUndefined();
+    expect(result.hasDisplayName).toBe(false);
+  });
+
+  it('falls back to tmuxTarget for unregistered windows', () => {
+    const result = resolveWindowDisplay({ tmuxTarget: 'azito:0' });
+    expect(result.title).toBe('azito:0');
+  });
+
+  it('keeps human-readable label', () => {
+    const result = resolveWindowDisplay({ label: 'build server', tmuxTarget: 'azito:0' });
+    expect(result.title).toBe('build server');
+    expect(result.hasDisplayName).toBe(true);
   });
 });
 
@@ -55,39 +104,5 @@ describe('buildWindowSearchText', () => {
     expect(text).toContain('w-123');
     expect(text).toContain('w123');
     expect(text).toContain('123');
-  });
-});
-
-describe('resolveWindowDisplay', () => {
-  it('skips internal label and falls back to task title', () => {
-    const result = resolveWindowDisplay({
-      label: 'task-231--x9oh', taskTitle: 'Issue対応', tmuxTarget: 'azito:0',
-    });
-    expect(result.title).toBe('Issue対応');
-    expect(result.hasDisplayName).toBe(true);
-  });
-
-  it('returns workerType label', () => {
-    const result = resolveWindowDisplay({ workerType: 'claude', tmuxTarget: 'azito:0' });
-    expect(result.title).toBe('Claude');
-    expect(result.hasDisplayName).toBe(false);
-  });
-
-  it('falls back to W-123 when only windowId is available', () => {
-    const result = resolveWindowDisplay({ windowId: 123, tmuxTarget: 'azito:0' });
-    expect(result.title).toBe('W-123');
-    expect(result.idLabel).toBeUndefined();
-    expect(result.hasDisplayName).toBe(false);
-  });
-
-  it('falls back to tmuxTarget for unregistered windows', () => {
-    const result = resolveWindowDisplay({ tmuxTarget: 'azito:0' });
-    expect(result.title).toBe('azito:0');
-  });
-
-  it('keeps human-readable label', () => {
-    const result = resolveWindowDisplay({ label: 'build server', tmuxTarget: 'azito:0' });
-    expect(result.title).toBe('build server');
-    expect(result.hasDisplayName).toBe(true);
   });
 });

@@ -11,17 +11,6 @@
 
 import { formatWindowId, isInternalWindowName } from '@azito/shared';
 
-export interface WindowRowTitleInput {
-  /** 表示用ペインラベル（未設定時はコマンド名が入る。resolveWindowContextExtra 参照） */
-  paneTitle?: string;
-  /** ペインの実行コマンド。paneTitle がコマンド名の代替かを判別するために使う */
-  paneCommand?: string;
-  /** ウィンドウの登録ラベル（タスク所有ウィンドウでは内部生成ID: 例 task-231--x9oh） */
-  label?: string;
-  taskTitle?: string;
-  tmuxTarget: string;
-}
-
 /**
  * ペインの実タイトル（エージェントが設定した動的タイトル）。タイトル未設定のペインでは
  * tmux がコマンド名を返すため、その場合は「タイトルなし」として undefined を返す。
@@ -30,10 +19,6 @@ export function resolvePaneDisplayTitle(paneTitle?: string, paneCommand?: string
   const title = paneTitle?.trim();
   if (!title || title === paneCommand?.trim()) return undefined;
   return title;
-}
-
-export function resolveWindowRowTitle({ paneTitle, paneCommand, label, taskTitle, tmuxTarget }: WindowRowTitleInput): string {
-  return resolveWindowDisplay({ paneTitle, paneCommand, label, taskTitle, tmuxTarget }).title;
 }
 
 export interface WindowDisplayInput {
@@ -72,14 +57,19 @@ export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
   if (taskTitle) return { title: taskTitle, idLabel, hasDisplayName: true };
 
   const typeLabel = (i.workerType && TYPE_LABEL[i.workerType]) || (i.windowType && TYPE_LABEL[i.windowType]);
-  if (typeLabel) return { title: typeLabel, idLabel, hasDisplayName: false };
+  if (typeLabel) return { title: typeLabel, idLabel, hasDisplayName: true };
 
   if (idLabel) return { title: idLabel, idLabel: undefined, hasDisplayName: false };
 
   return { title: i.tmuxTarget ?? '', idLabel, hasDisplayName: false };
 }
 
-export interface WindowSearchTextInput extends WindowRowTitleInput {
+export interface WindowSearchTextInput {
+  paneTitle?: string;
+  paneCommand?: string;
+  label?: string;
+  taskTitle?: string;
+  tmuxTarget: string;
   serverName: string;
   taskId?: number;
   windowId?: number;

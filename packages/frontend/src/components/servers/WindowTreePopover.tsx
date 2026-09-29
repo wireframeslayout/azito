@@ -1,9 +1,8 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatWindowId } from '@azito/shared';
 import type { Session } from '../../hooks/useServerManagement';
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
-import { resolvePaneDisplayTitle } from '../workspace/objects/windowRowTitle';
+import { resolveWindowDisplay } from '../workspace/objects/windowRowTitle';
 import { Icon } from '../ui/Icon';
 
 interface WindowTreePopoverProps {
@@ -84,15 +83,17 @@ export default function WindowTreePopover({
                     <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                       <Icon name="chevron-right" size={14} />
                     </span>
-                    <span style={{ fontFamily: 'var(--mono)' }}>{
+                    <span style={{ fontFamily: 'var(--mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{
                       (() => {
-                        const pane = win.panes[0];
-                        const displayTitle = pane ? resolvePaneDisplayTitle(pane.title, pane.command) : undefined;
-                        const idLabel = win.windowId != null ? formatWindowId(win.windowId) : undefined;
-                        if (displayTitle && idLabel) return `${displayTitle} · ${idLabel}`;
-                        if (displayTitle) return displayTitle;
-                        if (idLabel) return idLabel;
-                        return win.name ?? `win-${win.index}`;
+                        const display = resolveWindowDisplay({
+                          windowId: win.windowId ?? undefined,
+                          paneTitle: win.panes[0]?.title,
+                          paneCommand: win.panes[0]?.command,
+                          tmuxTarget: `${sess.name}:${win.name}`,
+                        });
+                        return display.hasDisplayName && display.idLabel
+                          ? `${display.title} · ${display.idLabel}`
+                          : display.title;
                       })()
                     }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>

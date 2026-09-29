@@ -4,8 +4,8 @@ import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
-import { stripPaneSuffix, muxKindForRuntime, formatWindowId, type MuxRuntime } from '@azito/shared';
-import { resolvePaneDisplayTitle } from '../../workspace/objects/windowRowTitle';
+import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import { resolveWindowDisplay } from '../../workspace/objects/windowRowTitle';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -37,16 +37,19 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
   const activeLabel = useMemo(() => {
     if (!activeRef) return null;
     if (activeRef.kind === 'windowId') {
-      const idLabel = formatWindowId(activeRef.windowId);
-      for (const sess of sessions) {
-        const win = sess.windows.find((w) => w.windowId === activeRef.windowId);
-        if (win) {
-          const pane = (activeRef.pane != null ? win.panes.find(p => p.index === activeRef.pane) : undefined) ?? win.panes[0];
-          const displayTitle = pane ? resolvePaneDisplayTitle(pane.title, pane.command) : undefined;
-          return displayTitle ? `${displayTitle} · ${idLabel}` : idLabel;
-        }
-      }
-      return idLabel;
+      const sessWin = sessions.flatMap(s => s.windows).find(w => w.windowId === activeRef.windowId);
+      const pane = sessWin
+        ? (activeRef.pane != null ? sessWin.panes.find(p => p.index === activeRef.pane) : undefined) ?? sessWin.panes[0]
+        : undefined;
+      const display = resolveWindowDisplay({
+        windowId: activeRef.windowId,
+        paneTitle: pane?.title,
+        paneCommand: pane?.command,
+        tmuxTarget: sessWin ? `${sessions.find(s => s.windows.includes(sessWin!))?.name}:${sessWin.name}` : undefined,
+      });
+      return display.hasDisplayName && display.idLabel
+        ? `${display.title} · ${display.idLabel}`
+        : display.title;
     }
     const resolved = resolveTerminalTarget(activeRef, sessions);
     if (resolved) return stripPaneSuffix(resolved);
