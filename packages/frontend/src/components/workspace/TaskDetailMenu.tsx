@@ -7,6 +7,7 @@ import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import { isSameWindowTarget } from '@azito/shared';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import StatusDropdown from '../task/StatusDropdown';
 import type { Task, Window } from '../../pages/workspace/types';
 
@@ -171,7 +172,13 @@ function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.label || w.tmuxTarget}
+          {formatWindowDisplayLabel(resolveWindowDisplay({
+            windowId: w.id,
+            label: w.label,
+            workerType: w.workerType,
+            windowType: w.windowType,
+            tmuxTarget: w.tmuxTarget,
+          }))}
         </span>
         {w.workerType && (
           <span style={{

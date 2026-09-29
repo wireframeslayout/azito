@@ -6,6 +6,7 @@ import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import type { Task } from '../../pages/workspace/types';
 import { getProjectColorFallback } from '../../pages/workspace/types';
 
@@ -75,7 +76,7 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane,
       if (row.status !== 'running') continue;
       const task = row.taskId != null ? taskById.get(row.taskId) : undefined;
       const groupKey = row.taskId != null ? `task:${row.taskId}` : `window:${row.key}`;
-      const windowName = row.paneName || row.label || row.target;
+      const windowName = formatActiveWindowLabel(row);
       let group = map.get(groupKey);
       if (!group) {
         group = {

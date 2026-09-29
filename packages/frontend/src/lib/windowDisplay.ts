@@ -99,3 +99,29 @@ export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
 
   return { title: i.tmuxTarget ?? '', idLabel, hasDisplayName: false };
 }
+
+/**
+ * ActiveWindowRow (稼働中ウィンドウ行) のフィールドから表示ラベルを組み立てる。
+ * `paneName` をペインタイトルとして `resolveWindowDisplay` に渡し、
+ * `formatWindowDisplayLabel` で「表示名 · W-123」形式に整形する。
+ */
+export function formatActiveWindowLabel(row: {
+  windowId?: number;
+  label?: string;
+  paneName?: string;
+  taskTitle?: string;
+  workerType?: string;
+  windowType?: string;
+  tmuxTarget?: string;
+}): string {
+  const display = resolveWindowDisplay({
+    windowId: row.windowId,
+    paneTitle: row.paneName,
+    label: row.label,
+    taskTitle: row.taskTitle,
+    workerType: row.workerType,
+    windowType: row.windowType,
+    tmuxTarget: row.tmuxTarget,
+  });
+  return formatWindowDisplayLabel(display);
+}

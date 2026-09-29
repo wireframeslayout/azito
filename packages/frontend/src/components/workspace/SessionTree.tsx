@@ -6,6 +6,7 @@ import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
 import { lookupWindowTask } from '../../lib/windowTask';
 import { terminalTabId, terminalRefFromWindow, type TerminalRef } from '../../lib/terminalRef';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import { Icon } from '../ui/Icon';
 
 interface SessionTreeProps {
@@ -87,7 +88,11 @@ export default function SessionTree({
                       {...bindLongPress((x, y) => showContextMenuAt(x, y, getWindowMenuItems(serverName, session.name, win, session.windows)))}
                       style={{ ...longPressStyle, fontSize: 'var(--font-md)', color: 'var(--text-dim)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 6, minHeight: 40, cursor: 'context-menu' }}
                     >
-                      <span>{win.index}: {win.name}</span>
+                      <span title={win.windowId != null ? win.name : undefined}>
+                        {win.index}: {win.windowId != null
+                          ? formatWindowDisplayLabel(resolveWindowDisplay({ windowId: win.windowId, label: win.name, tmuxTarget: `${session.name}:${win.name}` }))
+                          : win.name}
+                      </span>
                       {(() => {
                         const taskId = windowTaskMap && (
                           lookupWindowTask(windowTaskMap, serverName, `${session.name}:${win.name}`)

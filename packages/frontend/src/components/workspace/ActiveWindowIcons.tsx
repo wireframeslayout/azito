@@ -5,6 +5,7 @@ import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { ActiveWindowDot } from '../ui/ActiveWindowDot';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
+import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import { selectTaskTerminal } from './TaskPanel';
 import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
 
@@ -151,7 +152,7 @@ export default function ActiveWindowIcons({ connectPane, openTask, taskWindows }
           </div>
           {rows.slice(maxVisible).map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = row.paneName || row.label || row.target;
+            const displayName = formatActiveWindowLabel(row);
             const isWorking = row.status === 'running' && row.activityStatus !== 'blocked';
             return (
               <button
@@ -218,7 +219,7 @@ interface ActiveWindowIconItemProps {
 
 function ActiveWindowIconItem({ row, onOpen, taskWindows }: ActiveWindowIconItemProps) {
   const taskId = row.taskId ?? lookupWindowTask(taskWindows, row.serverName, row.target);
-  const displayName = row.paneName || row.label || row.target;
+  const displayName = formatActiveWindowLabel(row);
   const isWorking = row.status === 'running' && row.activityStatus !== 'blocked';
 
   return (

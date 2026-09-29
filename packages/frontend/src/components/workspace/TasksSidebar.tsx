@@ -10,6 +10,7 @@ import { useRecentTasks } from '../../hooks/useRecentTasks';
 import { useBrowserGroups } from '../../hooks/useBrowserGroups';
 import { buildTaskSidebarGroups, findWindowActivity, type TaskGroupKey, type TaskSidebarGroup, type TaskSidebarRow } from './taskSidebarModel';
 import { listTaskChildren, type TaskChild } from './taskSidebarChildren';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import type { Task } from '../../pages/workspace/types';
 
 const EXPAND_STORAGE_KEY = 'tasks-sidebar-expanded';
@@ -533,7 +534,14 @@ interface ChildRowProps {
 function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowser, activity, t }: ChildRowProps) {
   if (child.kind === 'window') {
     const w = child.window;
-    const label = w.label || w.tmuxTarget;
+    const label = formatWindowDisplayLabel(resolveWindowDisplay({
+      windowId: w.id,
+      label: w.label,
+      taskTitle: taskTitle,
+      workerType: w.workerType,
+      windowType: w.windowType,
+      tmuxTarget: w.tmuxTarget,
+    }));
     return (
       <div
         role="treeitem"

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, formatActiveWindowLabel, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { buildWindowSearchText } from './windowRowTitle';
 
 describe('resolveWindowDisplay', () => {
@@ -281,5 +281,35 @@ describe('buildWindowIndex', () => {
     const taskWin = mkWin(20, { workerType: 'codex' });
     const map = buildWindowIndex([], [{ windows: [taskWin] }], null);
     expect(map.get(20)?.workerType).toBe('codex');
+  });
+});
+
+describe('formatActiveWindowLabel', () => {
+  it('uses paneName as pane title', () => {
+    expect(formatActiveWindowLabel({ windowId: 10, paneName: 'building...', tmuxTarget: 'azito:0' })).toBe('building... · W-10');
+  });
+
+  it('falls back to workerType', () => {
+    expect(formatActiveWindowLabel({ windowId: 10, workerType: 'claude', tmuxTarget: 'azito:0' })).toBe('Claude · W-10');
+  });
+
+  it('falls back to label when no paneName', () => {
+    expect(formatActiveWindowLabel({ windowId: 5, label: 'my-window', tmuxTarget: 'azito:0' })).toBe('my-window · W-5');
+  });
+
+  it('falls back to W-ID when only windowId is available', () => {
+    expect(formatActiveWindowLabel({ windowId: 42, tmuxTarget: 'azito:0' })).toBe('W-42');
+  });
+
+  it('falls back to tmuxTarget when nothing else is available', () => {
+    expect(formatActiveWindowLabel({ tmuxTarget: 'azito:0' })).toBe('azito:0');
+  });
+
+  it('uses taskTitle when no paneName or label', () => {
+    expect(formatActiveWindowLabel({ windowId: 7, taskTitle: 'Deploy fix', tmuxTarget: 'azito:0' })).toBe('Deploy fix · W-7');
+  });
+
+  it('skips internal label and uses taskTitle', () => {
+    expect(formatActiveWindowLabel({ windowId: 10, label: 'task-42--ab12', taskTitle: 'Bug fix', tmuxTarget: 'azito:0' })).toBe('Bug fix · W-10');
   });
 });
