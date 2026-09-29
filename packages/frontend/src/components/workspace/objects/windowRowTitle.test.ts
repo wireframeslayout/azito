@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowDisplay, buildWindowSearchText } from './windowRowTitle';
+import { resolveWindowDisplay } from '../../../lib/windowDisplay';
+import { buildWindowSearchText } from './windowRowTitle';
 
 describe('resolveWindowDisplay', () => {
   it('uses the pane title when it is a real title', () => {
@@ -73,6 +74,19 @@ describe('resolveWindowDisplay', () => {
     const result = resolveWindowDisplay({ label: 'build server', tmuxTarget: 'azito:0' });
     expect(result.title).toBe('build server');
     expect(result.hasDisplayName).toBe(true);
+  });
+
+  it('旧タブ tab.id から windowId が取れる場合も W-ID が付く', () => {
+    const d = resolveWindowDisplay({
+      paneTitle: 'node', paneCommand: 'node',
+      label: 'task-42--ab12',
+      taskTitle: 'Deploy fix',
+      windowId: 42,
+      tmuxTarget: 'azito:win--ab12',
+    });
+    expect(d.title).toBe('Deploy fix');
+    expect(d.idLabel).toBe('W-42');
+    expect(d.hasDisplayName).toBe(true);
   });
 });
 

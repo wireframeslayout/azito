@@ -5,7 +5,7 @@ import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
 import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
-import { resolveWindowDisplay } from '../../workspace/objects/windowRowTitle';
+import { resolveWindowDisplay } from '../../../lib/windowDisplay';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';

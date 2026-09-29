@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Session } from '../../hooks/useServerManagement';
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowDisplay } from '../workspace/objects/windowRowTitle';
+import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { Icon } from '../ui/Icon';
 
 interface WindowTreePopoverProps {

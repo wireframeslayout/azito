@@ -4,7 +4,7 @@ import { Icon } from './Icon';
 import { api } from '../../api/client';
 import { AgentIcon } from './AgentIcons';
 import { WindowIdChip } from './WindowIdChip';
-import { resolveWindowDisplay } from '../workspace/objects/windowRowTitle';
+import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, Window } from '../../pages/workspace/types';
@@ -176,7 +176,9 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const title = renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title;
+  const display = resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const title = renderTitle?.(w) ?? display.title;
+  const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -199,7 +201,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-          {w.id != null && <WindowIdChip id={w.id} />}
+          {showIdChip && <WindowIdChip id={w.id!} />}
         </div>
         {subtitle != null && (
           <div style={{
@@ -234,7 +236,9 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const title = renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title;
+  const display = resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const title = renderTitle?.(w) ?? display.title;
+  const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -257,7 +261,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-          {w.id != null && <WindowIdChip id={w.id} />}
+          {showIdChip && <WindowIdChip id={w.id!} />}
         </div>
         {subtitle != null && (
           <div style={{
@@ -325,6 +329,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         const isUniqueName = session.windows.filter((w2) => w2.name === sw.name).length === 1;
         const windowId = isUniqueName ? sw.name : String(sw.index);
 
+        // resolveWindowDisplay を先に計算し、idChip の重複を防ぐ
+        const winDisplay = resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+        const winTitle = renderTitle?.(w) ?? winDisplay.title;
+        const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
+
         if (paneCount <= 1) {
           const pane = sw.panes[0];
           if (!pane) return null;
@@ -354,10 +363,10 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title}
+                    {winTitle}
                   </span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-                  {w.id != null && <WindowIdChip id={w.id} />}
+                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                 </div>
                 <div style={{
                   fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
@@ -371,7 +380,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
           );
         }
 
-        const windowLabel = renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title;
+        const windowLabel = winTitle;
         const windowHasActive = sw.panes.some((pane) => {
           const target = `${sessionName}:${windowId}.${pane.index}`;
           return isActive?.(w.serverName, target, 'window') ?? false;
@@ -416,7 +425,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                     style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
                   >{windowLabel}</span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-                  {w.id != null && <WindowIdChip id={w.id} />}
+                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                 </div>
                 {parentSubtitle != null && (
                   <div style={{

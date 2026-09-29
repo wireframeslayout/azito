@@ -56,7 +56,7 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
 import { formatWindowId } from '@azito/shared';
-import { resolveWindowDisplay } from '../components/workspace/objects/windowRowTitle';
+import { resolveWindowDisplay } from '../lib/windowDisplay';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -813,6 +813,17 @@ function WorkspaceInner() {
     return map;
   }, [project, allTasks]);
 
+  const windowByLegacyKey = useMemo(() => {
+    const map = new Map<string, Window>();
+    for (const [, w] of windowById) {
+      const parts = w.tmuxTarget.split(':');
+      if (parts.length >= 2) {
+        map.set(`${w.serverName}::${parts[0]}::${parts[1]}`, w);
+      }
+    }
+    return map;
+  }, [windowById]);
+
   const taskById = useMemo(() => {
     const map = new Map<number, Task>();
     for (const t of allTasks) map.set(t.id, t);
@@ -831,13 +842,20 @@ function WorkspaceInner() {
     return map;
   }, [sessionData]);
 
-  const getTerminalTabLabel = useCallback((serverName: string, target: string, ref?: TerminalRef | null): { label: string; title?: string } => {
+  const getTerminalTabLabel = useCallback((serverName: string, target: string, ref?: TerminalRef | null, tabId?: string): { label: string; title?: string } => {
     // windowId を複数経路から取得
     let windowId: number | undefined;
     let paneOrdinal: number | undefined;
     if (ref?.kind === 'windowId') {
       windowId = ref.windowId;
       paneOrdinal = ref.pane;
+    }
+    if (windowId == null && tabId) {
+      const fromTab = parseTerminalTabId(tabId);
+      if (fromTab?.kind === 'windowId') {
+        windowId = fromTab.windowId;
+        paneOrdinal = paneOrdinal ?? fromTab.pane;
+      }
     }
     if (windowId == null) {
       const parsed = parseTerminalTabId(`terminal:${serverName}::${target}`);
@@ -894,15 +912,8 @@ function WorkspaceInner() {
         if (pane) pt = pane.title && pane.title !== pane.command ? pane.title : '';
       }
     }
-    // windowById (full Window objects) から旧形式タブに対応するウィンドウを探す
-    let projWin: Window | undefined;
-    for (const [, w] of windowById) {
-      const parts = w.tmuxTarget.split(':');
-      if (w.serverName === serverName && parts[0] === sessionName && (parts[1] == null || parseInt(parts[1], 10) === parseInt(winIdx, 10))) {
-        projWin = w;
-        break;
-      }
-    }
+    // 旧形式: serverName::sessionName::windowIndex でマップ引き
+    const projWin = windowByLegacyKey.get(`${serverName}::${sessionName}::${winIdx}`);
     const displayName = pt || projWin?.label || winName || sessionName;
     const hasManyPanes = (session?.windows.find((w) => w.index === parseInt(winIdx, 10))?.panes.length ?? 0) > 1;
     const paneSuffix = hasManyPanes ? `.${paneIdx}` : '';
@@ -913,7 +924,7 @@ function WorkspaceInner() {
       return { label: `${baseLabel} · ${idLabel}`, title: `${baseLabel} · ${idLabel} · ${serverName}` };
     }
     return { label: baseLabel };
-  }, [sessionData, sessionWindowByWindowId, windowById, taskById, allProjects]);
+  }, [sessionData, sessionWindowByWindowId, windowById, windowByLegacyKey, taskById]);
 
   const buildTabItem = useCallback((tab: PersistedTab): TabItem => {
     const iconName: IconName | null = tab.type === 'terminal' ? 'terminal'
@@ -936,7 +947,7 @@ function WorkspaceInner() {
       ? <span style={{ display: 'inline-flex', verticalAlign: '-2px' }}><Icon name={iconName} size={14} /></span>
       : '•';
     const terminalInfo = tab.type === 'terminal' && tab.serverName && tab.target
-      ? getTerminalTabLabel(tab.serverName, tab.target, tab.terminalRef)
+      ? getTerminalTabLabel(tab.serverName, tab.target, tab.terminalRef, tab.id)
       : undefined;
     const displayLabel = terminalInfo?.label ?? tab.label;
     const running = tab.type === 'terminal' && tab.serverName && tab.target
