@@ -536,6 +536,7 @@ function ChildRow({ child, taskId, taskTitle, onOpenTaskWindow, onOpenTaskBrowse
     const w = child.window;
     const label = formatWindowDisplayLabel(resolveWindowDisplay({
       windowId: w.id,
+      paneTitle: activity?.paneName,
       label: w.label,
       taskTitle: taskTitle,
       workerType: w.workerType,

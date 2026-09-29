@@ -112,7 +112,7 @@ export function formatActiveWindowLabel(row: {
   taskTitle?: string;
   workerType?: string;
   windowType?: string;
-  tmuxTarget?: string;
+  target?: string;
 }): string {
   const display = resolveWindowDisplay({
     windowId: row.windowId,
@@ -121,7 +121,7 @@ export function formatActiveWindowLabel(row: {
     taskTitle: row.taskTitle,
     workerType: row.workerType,
     windowType: row.windowType,
-    tmuxTarget: row.tmuxTarget,
+    tmuxTarget: row.target,
   });
   return formatWindowDisplayLabel(display);
 }

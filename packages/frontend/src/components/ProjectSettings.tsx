@@ -14,7 +14,6 @@ import ResourceWarningDialog from './ResourceWarningDialog';
 import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
 import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDisplay';
-import { formatWindowId } from '@azito/shared';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
 import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';
@@ -900,7 +899,7 @@ function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<
                 key={w.id}
                 icon={<Icon name="terminal" size={14} />}
                 title={formatWindowDisplayLabel(display)}
-                description={<span style={{ fontFamily: 'monospace' }}>{formatWindowId(w.id)} · {w.serverName} · tmux {w.tmuxTarget}</span>}
+                description={<span style={{ fontFamily: 'monospace' }}>{w.serverName} · tmux {w.tmuxTarget}</span>}
                 rightActions={<Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>}
               />
             );

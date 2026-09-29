@@ -135,8 +135,9 @@ function IdleDot() {
   );
 }
 
-function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
+function WindowMenuRow({ w, taskTitle, isCurrent, onSelect, onLongPress, onDelete }: {
   w: Window;
+  taskTitle?: string;
   isCurrent: boolean;
   onSelect: () => void;
   /** 長押し（タッチ座標）: デスクトップと同じコンテキストメニューを開く。省略時は長押し無効。 */
@@ -175,6 +176,7 @@ function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
           {formatWindowDisplayLabel(resolveWindowDisplay({
             windowId: w.id,
             label: w.label,
+            taskTitle,
             workerType: w.workerType,
             windowType: w.windowType,
             tmuxTarget: w.tmuxTarget,
@@ -468,6 +470,7 @@ export default function TaskDetailMenu({
                       <WindowMenuRow
                         key={w.id}
                         w={w}
+                        taskTitle={task.title}
                         isCurrent={isCurrent}
                         onSelect={() => { onSelectWindow(w.serverName, w.tmuxTarget); onClose(); }}
                         onLongPress={onLongPressWindow ? (x, y) => onLongPressWindow(x, y, w) : undefined}

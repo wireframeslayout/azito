@@ -90,7 +90,16 @@ export default function SessionTree({
                     >
                       <span title={win.windowId != null ? win.name : undefined}>
                         {win.index}: {win.windowId != null
-                          ? formatWindowDisplayLabel(resolveWindowDisplay({ windowId: win.windowId, label: win.name, tmuxTarget: `${session.name}:${win.name}` }))
+                          ? (() => {
+                              const activePane = win.panes.find((p) => p.active) ?? win.panes[0];
+                              return formatWindowDisplayLabel(resolveWindowDisplay({
+                                windowId: win.windowId,
+                                label: win.name,
+                                paneTitle: activePane?.title,
+                                paneCommand: activePane?.command,
+                                tmuxTarget: `${session.name}:${win.name}`,
+                              }));
+                            })()
                           : win.name}
                       </span>
                       {(() => {

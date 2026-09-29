@@ -929,7 +929,7 @@ export default function TaskPanel({
       };
     }
     return { key: tabId, label: tabId, closable: true };
-  }, [windows, windowActions.respawningWindowIds, windowIndicator, findFinished, browserTabIds]);
+  }, [windows, windowActions.respawningWindowIds, windowIndicator, findFinished, sessionData, task, browserTabIds]);
 
   const handlePaneSelectTab = useCallback((paneId: string, tabId: string) => {
     layout.setActive(paneId, tabId);
