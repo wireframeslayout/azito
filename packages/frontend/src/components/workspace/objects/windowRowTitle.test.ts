@@ -168,6 +168,30 @@ describe('formatWindowDisplayLabel with pane suffix', () => {
     expect(formatWindowDisplayLabel(d)).toBe('Claude · W-42');
   });
 
+  it('windowId タブで複数ペイン時はタイトルにペイン番号が付く', () => {
+    const d = resolveWindowDisplay({
+      paneTitle: 'building CI pipeline',
+      paneCommand: 'node',
+      windowId: 42,
+      tmuxTarget: 'azito:win--ab12',
+    });
+    const titleWithPane = `${d.title}.2`;
+    const displayWithPane = { ...d, title: titleWithPane };
+    expect(formatWindowDisplayLabel(displayWithPane)).toBe('building CI pipeline.2 · W-42');
+  });
+
+  it('tmuxTarget のみのフォールバックで resolveWindowDisplay を通る', () => {
+    const d = resolveWindowDisplay({ tmuxTarget: 'W-42' });
+    expect(d.title).toBe('W-42');
+    expect(d.hasDisplayName).toBe(false);
+    expect(formatWindowDisplayLabel(d)).toBe('W-42');
+  });
+
+  it('tmuxTarget のみでラベルがフォーマットされる', () => {
+    const d = resolveWindowDisplay({ tmuxTarget: 'sess:win' });
+    expect(formatWindowDisplayLabel(d)).toBe('sess:win');
+  });
+
   it('同じ windowId で異なるサーバーの窓が正しくラベル表示される', () => {
     // Both servers have windowId 10 but different worker types
     const displayA = resolveWindowDisplay({

@@ -166,7 +166,9 @@
     "noWindowSelected": "No window selected",
     "windowCountSummary": "{{windowCount}} · Sessions {{sessionCount}}",
     "split": "Split",
-    "session": "Session"
+    "session": "Session",
+    "metaFetchError": "Couldn't load window names.",
+    "retry": "Retry"
   },
   "danger": {
     "resetFingerprint": "Reset SSH Fingerprint",

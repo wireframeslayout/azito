@@ -103,9 +103,19 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     refresh();
   }, [server.name, refresh, useMuxRoutes]);
 
+  const metaErrorBar = windowMetaError ? (
+    <div style={{ padding: '6px 12px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
+      {t('windows.metaFetchError')}
+      <button onClick={refresh} className="icon-btn" style={{ fontSize: 'var(--font-xs)', color: 'var(--accent)', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}>
+        {t('windows.retry')}
+      </button>
+    </div>
+  ) : null;
+
   if (sessions.length === 0) {
     return (
       <div>
+        {metaErrorBar}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>
           <button
@@ -126,14 +136,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
-      {windowMetaError && (
-        <div style={{ padding: '6px 12px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
-          {t('windows.metaFetchError', 'ウィンドウ名の取得に失敗しました')}
-          <button onClick={refresh} className="icon-btn" style={{ fontSize: 'var(--font-xs)', color: 'var(--accent)', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}>
-            {t('common:actions.retry', '再試行')}
-          </button>
-        </div>
-      )}
+      {metaErrorBar}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 14px',

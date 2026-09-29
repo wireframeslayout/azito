@@ -235,14 +235,16 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       setInstallStatus(installRes);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
       let metaFailed = false;
-      if (projResult.status === 'fulfilled') {
-        setAllProjects(Array.isArray(projResult.value) ? projResult.value : []);
+      if (projResult.status === 'fulfilled' && Array.isArray(projResult.value)) {
+        setAllProjects(projResult.value);
       } else {
+        setAllProjects([]);
         metaFailed = true;
       }
-      if (taskResult.status === 'fulfilled') {
-        setAllTasks(Array.isArray(taskResult.value) ? taskResult.value : []);
+      if (taskResult.status === 'fulfilled' && Array.isArray(taskResult.value)) {
+        setAllTasks(taskResult.value);
       } else {
+        setAllTasks([]);
         metaFailed = true;
       }
       setWindowMetaError(metaFailed);

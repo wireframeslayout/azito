@@ -166,7 +166,9 @@
     "noWindowSelected": "ウィンドウが選択されていません",
     "windowCountSummary": "{{windowCount}} · セッション {{sessionCount}}",
     "split": "分割",
-    "session": "セッション"
+    "session": "セッション",
+    "metaFetchError": "ウィンドウ名の取得に失敗しました",
+    "retry": "再試行"
   },
   "danger": {
     "resetFingerprint": "SSH fingerprint をリセット",
