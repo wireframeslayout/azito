@@ -73,6 +73,12 @@ export function buildWindowIndex<T extends WindowIndexEntry>(
   return map;
 }
 
+export function formatWindowDisplayLabel(display: WindowDisplay): string {
+  return display.hasDisplayName && display.idLabel
+    ? `${display.title} · ${display.idLabel}`
+    : display.title;
+}
+
 export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
   const idLabel = i.windowId != null ? formatWindowId(i.windowId) : undefined;
   const paneDisplay = resolvePaneDisplayTitle(i.paneTitle, i.paneCommand);

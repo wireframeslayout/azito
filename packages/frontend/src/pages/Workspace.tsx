@@ -56,7 +56,7 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
 import { formatWindowId } from '@azito/shared';
-import { resolveWindowDisplay, buildWindowIndex } from '../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex } from '../lib/windowDisplay';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -879,9 +879,7 @@ function WorkspaceInner() {
         workerType: projWin?.workerType,
         windowType: projWin?.windowType,
       });
-      const label = display.hasDisplayName && display.idLabel
-        ? `${display.title} · ${display.idLabel}`
-        : display.title;
+      const label = formatWindowDisplayLabel(display);
       // ツールチップ: 重複を除く (title === idLabel のときは並べない)
       const titleParts = [display.title];
       if (display.idLabel && display.idLabel !== display.title) titleParts.push(display.idLabel);
@@ -904,8 +902,16 @@ function WorkspaceInner() {
         if (pane) pt = pane.title && pane.title !== pane.command ? pane.title : '';
       }
     }
-    // 旧形式: serverName::sessionName::windowIndex でマップ引き
-    const projWin = windowByLegacyKey.get(`${serverName}::${sessionName}::${winIdx}`);
+    // 旧形式: まずセッション情報から windowId を取得し windowById で引く
+    let projWin: Window | undefined;
+    if (session) {
+      const sw = session.windows.find((w) => w.index === parseInt(winIdx, 10));
+      if (sw?.windowId != null) projWin = windowById.get(sw.windowId) as Window | undefined;
+    }
+    // セッション情報が無いときは windowByLegacyKey で窓名ベースで引く
+    if (!projWin) {
+      projWin = windowByLegacyKey.get(`${serverName}::${sessionName}::${winName}`);
+    }
     const displayName = pt || projWin?.label || winName || sessionName;
     const hasManyPanes = (session?.windows.find((w) => w.index === parseInt(winIdx, 10))?.panes.length ?? 0) > 1;
     const paneSuffix = hasManyPanes ? `.${paneIdx}` : '';

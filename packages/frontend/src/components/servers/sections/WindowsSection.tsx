@@ -5,7 +5,7 @@ import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
 import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
-import { resolveWindowDisplay } from '../../../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -15,9 +15,11 @@ interface WindowsSectionProps {
   server: Server;
   sessions: Session[];
   refresh: () => void;
+  windowById?: Map<number, WindowIndexEntry>;
+  taskById?: Map<number, { title?: string }>;
 }
 
-export default function WindowsSection({ server, sessions, refresh }: WindowsSectionProps) {
+export default function WindowsSection({ server, sessions, refresh, windowById, taskById }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
@@ -41,15 +43,18 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
       const pane = sessWin
         ? (activeRef.pane != null ? sessWin.panes.find(p => p.index === activeRef.pane) : undefined) ?? sessWin.panes[0]
         : undefined;
+      const regWin = windowById?.get(activeRef.windowId);
       const display = resolveWindowDisplay({
         windowId: activeRef.windowId,
         paneTitle: pane?.title,
         paneCommand: pane?.command,
+        label: regWin?.label,
+        workerType: regWin?.workerType,
+        windowType: regWin?.windowType,
+        taskTitle: regWin?.taskId != null ? taskById?.get(regWin.taskId)?.title : undefined,
         tmuxTarget: sessWin ? `${sessions.find(s => s.windows.includes(sessWin!))?.name}:${sessWin.name}` : undefined,
       });
-      return display.hasDisplayName && display.idLabel
-        ? `${display.title} · ${display.idLabel}`
-        : display.title;
+      return formatWindowDisplayLabel(display);
     }
     const resolved = resolveTerminalTarget(activeRef, sessions);
     if (resolved) return stripPaneSuffix(resolved);
@@ -174,6 +179,8 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
           onAddWindow={handleAddWindow}
           onSplitPane={handleSplitPane}
           isMobile={isMobile}
+          windowById={windowById}
+          taskById={taskById}
         />
       )}
     </div>

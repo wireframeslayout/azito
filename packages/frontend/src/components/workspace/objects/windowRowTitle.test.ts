@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowDisplay, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { buildWindowSearchText } from './windowRowTitle';
 
 describe('resolveWindowDisplay', () => {
@@ -46,8 +46,7 @@ describe('resolveWindowDisplay', () => {
 
   it('tab label shows "Claude · W-123" for workerType', () => {
     const d = resolveWindowDisplay({ workerType: 'claude', windowId: 42, tmuxTarget: 'azito:0' });
-    const label = d.hasDisplayName && d.idLabel ? `${d.title} · ${d.idLabel}` : d.title;
-    expect(label).toBe('Claude · W-42');
+    expect(formatWindowDisplayLabel(d)).toBe('Claude · W-42');
   });
 
   it('tooltip does not duplicate when title equals idLabel', () => {
@@ -114,6 +113,25 @@ describe('resolveWindowDisplay', () => {
     expect(renderTitleResult).toBeUndefined();
     const showIdChip = renderTitleResult != null ? true : !!d.idLabel;
     expect(showIdChip).toBe(false);
+  });
+});
+
+describe('formatWindowDisplayLabel', () => {
+  it('formats display with name and id', () => {
+    expect(formatWindowDisplayLabel({ title: 'Claude', idLabel: 'W-42', hasDisplayName: true })).toBe('Claude · W-42');
+  });
+
+  it('formats display with id only', () => {
+    expect(formatWindowDisplayLabel({ title: 'W-42', hasDisplayName: false })).toBe('W-42');
+  });
+
+  it('formats display without idLabel', () => {
+    expect(formatWindowDisplayLabel({ title: 'azito:0', hasDisplayName: false })).toBe('azito:0');
+  });
+
+  it('workerType が渡されればアイドル中でも Claude · W-123 になる', () => {
+    const d = resolveWindowDisplay({ windowId: 123, workerType: 'claude', tmuxTarget: 'azito:win--ab12' });
+    expect(formatWindowDisplayLabel(d)).toBe('Claude · W-123');
   });
 });
 
