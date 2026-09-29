@@ -376,9 +376,9 @@ export default function ObjectsSidebar({
   // 主題: ペインタイトル（claude 等がペインに出す動的タイトル）。sessionData（既存のサーバー単位
   // tmux スナップショット）から解決するので追加のポーリングは発生しない。取得できない場合
   // （オフライン・タイトル未設定）は ウィンドウラベル → タスクタイトル → tmux ターゲット の順で代替。
-  const resolveOperationTitle = useCallback((w: WindowItem): string => {
+  const resolveOperationTitle = useCallback((w: WindowItem): string | undefined => {
     const extra = resolveWindowContextExtra(w, sessionData);
-    return resolveWindowDisplay({
+    const display = resolveWindowDisplay({
       paneTitle: extra.paneTitle,
       paneCommand: extra.paneCommand,
       label: w.label,
@@ -387,7 +387,8 @@ export default function ObjectsSidebar({
       windowId: w.id,
       workerType: w.workerType,
       windowType: w.windowType,
-    }).title;
+    });
+    return display.hasDisplayName ? display.title : undefined;
   }, [sessionData, taskById]);
 
   // 副題: 「タスクタイトル · サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）。

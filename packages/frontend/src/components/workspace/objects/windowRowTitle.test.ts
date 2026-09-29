@@ -88,6 +88,33 @@ describe('resolveWindowDisplay', () => {
     expect(d.idLabel).toBe('W-42');
     expect(d.hasDisplayName).toBe(true);
   });
+
+  it('別プロジェクトの窓でも workerType があればラベル付きで表示される', () => {
+    const d = resolveWindowDisplay({
+      windowId: 99,
+      workerType: 'codex',
+      label: 'win--ab12',
+      tmuxTarget: 'azito:win--ab12',
+    });
+    expect(d.title).toBe('Codex');
+    expect(d.idLabel).toBe('W-99');
+    expect(d.hasDisplayName).toBe(true);
+  });
+
+  it('ID のみの窓は hasDisplayName: false で idLabel: undefined（二重表示防止）', () => {
+    const d = resolveWindowDisplay({ windowId: 50, tmuxTarget: 'azito:0' });
+    expect(d.title).toBe('W-50');
+    expect(d.idLabel).toBeUndefined();
+    expect(d.hasDisplayName).toBe(false);
+  });
+
+  it('renderTitle が undefined を返したとき行側は idLabel で判定する（Objects 二重表示テスト）', () => {
+    const d = resolveWindowDisplay({ windowId: 50, tmuxTarget: 'azito:0' });
+    const renderTitleResult = d.hasDisplayName ? d.title : undefined;
+    expect(renderTitleResult).toBeUndefined();
+    const showIdChip = renderTitleResult != null ? true : !!d.idLabel;
+    expect(showIdChip).toBe(false);
+  });
 });
 
 describe('buildWindowSearchText', () => {
