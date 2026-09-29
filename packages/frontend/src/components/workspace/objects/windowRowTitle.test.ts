@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowDisplay } from '../../../lib/windowDisplay';
+import { resolveWindowDisplay, buildWindowIndex, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { buildWindowSearchText } from './windowRowTitle';
 
 describe('resolveWindowDisplay', () => {
@@ -145,5 +145,43 @@ describe('buildWindowSearchText', () => {
     expect(text).toContain('w-123');
     expect(text).toContain('w123');
     expect(text).toContain('123');
+  });
+});
+
+describe('buildWindowIndex', () => {
+  const mkWin = (id: number, extra?: Partial<WindowIndexEntry>): WindowIndexEntry => ({
+    id,
+    serverName: 'local',
+    tmuxTarget: `azito:win--${id}`,
+    windowType: 'agent',
+    ...extra,
+  });
+
+  it('別プロジェクトのプロジェクト所有窓が引ける', () => {
+    const otherProjectWin = mkWin(10, { workerType: 'claude', label: 'win--ab12' });
+    const map = buildWindowIndex(
+      [{ windows: [otherProjectWin] }],
+      [],
+      null,
+    );
+    expect(map.get(10)).toBe(otherProjectWin);
+    expect(map.get(10)?.workerType).toBe('claude');
+  });
+
+  it('表示中プロジェクトの値で上書きされる', () => {
+    const listVersion = mkWin(5, { label: 'stale' });
+    const detailVersion = mkWin(5, { label: 'fresh' });
+    const map = buildWindowIndex(
+      [{ windows: [listVersion] }],
+      [],
+      { windows: [detailVersion] },
+    );
+    expect(map.get(5)?.label).toBe('fresh');
+  });
+
+  it('タスク所有窓も含まれる', () => {
+    const taskWin = mkWin(20, { workerType: 'codex' });
+    const map = buildWindowIndex([], [{ windows: [taskWin] }], null);
+    expect(map.get(20)?.workerType).toBe('codex');
   });
 });

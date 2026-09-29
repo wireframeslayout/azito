@@ -45,6 +45,34 @@ export const TYPE_LABEL: Record<string, string> = {
   terminal: 'Terminal',
 };
 
+export interface WindowIndexEntry {
+  id: number;
+  serverName: string;
+  tmuxTarget: string;
+  label?: string;
+  workerType?: string;
+  windowType?: string;
+  taskId?: number;
+}
+
+export function buildWindowIndex<T extends WindowIndexEntry>(
+  allProjects: Array<{ windows?: T[] }>,
+  allTasks: Array<{ windows?: T[] }>,
+  currentProject?: { windows: T[] } | null,
+): Map<number, T> {
+  const map = new Map<number, T>();
+  for (const p of allProjects) {
+    for (const w of p.windows ?? []) map.set(w.id, w);
+  }
+  for (const t of allTasks) {
+    for (const w of t.windows ?? []) map.set(w.id, w);
+  }
+  if (currentProject) {
+    for (const w of currentProject.windows) map.set(w.id, w);
+  }
+  return map;
+}
+
 export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
   const idLabel = i.windowId != null ? formatWindowId(i.windowId) : undefined;
   const paneDisplay = resolvePaneDisplayTitle(i.paneTitle, i.paneCommand);

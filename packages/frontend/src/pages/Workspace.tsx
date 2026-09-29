@@ -56,7 +56,7 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
 import { formatWindowId } from '@azito/shared';
-import { resolveWindowDisplay } from '../lib/windowDisplay';
+import { resolveWindowDisplay, buildWindowIndex } from '../lib/windowDisplay';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -801,17 +801,9 @@ function WorkspaceInner() {
     return { projectId: pid, projectName: proj?.name ?? null };
   }, [allTasks, allProjects]);
 
-  const windowById = useMemo(() => {
-    const map = new Map<number, Window>();
-    if (project) {
-      for (const w of project.windows) map.set(w.id, w);
-    }
-    for (const t of allTasks) {
-      if (!t.windows) continue;
-      for (const w of t.windows) map.set(w.id, w);
-    }
-    return map;
-  }, [project, allTasks]);
+  const windowById = useMemo(() =>
+    buildWindowIndex(allProjects, allTasks, project),
+  [allProjects, allTasks, project]);
 
   const windowByLegacyKey = useMemo(() => {
     const map = new Map<string, Window>();
