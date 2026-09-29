@@ -203,7 +203,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
           {showIdChip && <WindowIdChip id={w.id!} />}
         </div>
-        {subtitle != null && (
+        {subtitle != null && (typeof subtitle !== 'string' || subtitle !== title) && (
           <div style={{
             fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
@@ -263,7 +263,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
           {showIdChip && <WindowIdChip id={w.id!} />}
         </div>
-        {subtitle != null && (
+        {subtitle != null && (typeof subtitle !== 'string' || subtitle !== title) && (
           <div style={{
             fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
@@ -368,12 +368,14 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                   {winShowIdChip && <WindowIdChip id={w.id!} />}
                 </div>
-                <div style={{
-                  fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
-                  textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
-                }}>
-                  {subtitle}
-                </div>
+                {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
+                  <div style={{
+                    fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+                  }}>
+                    {subtitle}
+                  </div>
+                )}
               </div>
               {extra}
             </div>
@@ -427,7 +429,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                   {winShowIdChip && <WindowIdChip id={w.id!} />}
                 </div>
-                {parentSubtitle != null && (
+                {parentSubtitle != null && (typeof parentSubtitle !== 'string' || parentSubtitle !== windowLabel) && (
                   <div style={{
                     fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
                     textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,

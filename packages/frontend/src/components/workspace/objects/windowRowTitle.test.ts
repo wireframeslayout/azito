@@ -85,6 +85,12 @@ describe('resolveWindowDisplay', () => {
     expect(result.hasDisplayName).toBe(true);
   });
 
+  it('strips generated suffix from user label', () => {
+    const d = resolveWindowDisplay({ label: 'editor--ab12', windowId: 123, tmuxTarget: 'azito:0' });
+    expect(d.title).toBe('editor');
+    expect(d.idLabel).toBe('W-123');
+  });
+
   it('旧タブ tab.id から windowId が取れる場合も W-ID が付く', () => {
     const d = resolveWindowDisplay({
       paneTitle: 'node', paneCommand: 'node',

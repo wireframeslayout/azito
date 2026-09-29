@@ -9,7 +9,7 @@
  * ウィンドウラベル → タスクタイトル → tmux ターゲット の順。
  */
 
-import { formatWindowId, isInternalWindowName } from '@azito/shared';
+import { formatWindowId, isInternalWindowName, stripGeneratedSuffix } from '@azito/shared';
 
 /**
  * ペインの実タイトル（エージェントが設定した動的タイトル）。タイトル未設定のペインでは
@@ -85,7 +85,9 @@ export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
   if (paneDisplay) return { title: paneDisplay, idLabel, hasDisplayName: true };
 
   const label = i.label?.trim();
-  if (label && !isInternalWindowName(label)) return { title: label, idLabel, hasDisplayName: true };
+  if (label && !isInternalWindowName(label)) {
+    return { title: stripGeneratedSuffix(label), idLabel, hasDisplayName: true };
+  }
 
   const taskTitle = i.taskTitle?.trim();
   if (taskTitle) return { title: taskTitle, idLabel, hasDisplayName: true };

@@ -212,19 +212,21 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       // isolationReportUnavailable below), so this uses apiWithStatus and
       // treats non-2xx / a thrown error / an unrecognized body shape as
       // "unavailable", not as "no warning".
-      const [srvList, installRes, sessionsRes, detailResult] = await Promise.all([
+      // Window metadata (projects/tasks) fetched in parallel with the main
+      // requests so they don't wait for install-status / sessions to finish.
+      const metaPromise = Promise.allSettled([
+        api<Array<{ windows?: Window[] }>>('/projects'),
+        api<Array<{ id: number; title?: string; windows?: Window[] }>>('/tasks'),
+      ]);
+      const mainPromise = Promise.all([
         refreshStatuses(),
         api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
-      // Window metadata (projects/tasks) fetched independently so a failure
-      // does not block the rest of the page — errors are surfaced via
-      // windowMetaError instead of swallowed silently.
-      const [projResult, taskResult] = await Promise.allSettled([
-        api<Array<{ windows?: Window[] }>>('/projects'),
-        api<Array<{ id: number; title?: string; windows?: Window[] }>>('/tasks'),
-      ]);
+      const [mainResult, metaResult] = await Promise.all([mainPromise, metaPromise]);
+      const [srvList, installRes, sessionsRes, detailResult] = mainResult;
+      const [projResult, taskResult] = metaResult;
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
       // Issue #29 review (8th pass), Important finding 3: a newer fetchAll
       // call (triggered by a serverName change or an external refresh())

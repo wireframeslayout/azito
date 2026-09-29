@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatWindowId, isInternalWindowName } from './windowId';
+import { formatWindowId, isInternalWindowName, stripGeneratedSuffix } from './windowId';
 
 describe('formatWindowId', () => {
   it('formats a window id with W- prefix', () => {
@@ -30,5 +30,23 @@ describe('isInternalWindowName', () => {
 
   it('returns false for null', () => {
     expect(isInternalWindowName(null)).toBe(false);
+  });
+});
+
+describe('stripGeneratedSuffix', () => {
+  it('strips --xxxx suffix', () => {
+    expect(stripGeneratedSuffix('editor--ab12')).toBe('editor');
+  });
+  it('strips from win--xxxx', () => {
+    expect(stripGeneratedSuffix('win--6t61')).toBe('win');
+  });
+  it('strips from task-231--x9oh', () => {
+    expect(stripGeneratedSuffix('task-231--x9oh')).toBe('task-231');
+  });
+  it('returns name unchanged when no suffix', () => {
+    expect(stripGeneratedSuffix('build server')).toBe('build server');
+  });
+  it('returns name unchanged for short names', () => {
+    expect(stripGeneratedSuffix('main')).toBe('main');
   });
 });
