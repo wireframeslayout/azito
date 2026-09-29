@@ -836,10 +836,10 @@ function WorkspaceInner() {
 
   const sessionWindowIdByRef = useMemo(() => {
     const map = new Map<string, number>();
-    for (const sessions of Object.values(sessionData)) {
+    for (const [serverName, sessions] of Object.entries(sessionData)) {
       for (const sess of sessions) {
         for (const win of sess.windows) {
-          if (win.ref && win.windowId != null) map.set(win.ref, win.windowId);
+          if (win.ref && win.windowId != null) map.set(`${serverName}::${win.ref}`, win.windowId);
         }
       }
     }
@@ -854,7 +854,7 @@ function WorkspaceInner() {
       windowId = ref.windowId;
       paneOrdinal = ref.pane;
     } else if (ref?.kind === 'ref') {
-      const wid = sessionWindowIdByRef.get(ref.ref);
+      const wid = sessionWindowIdByRef.get(`${ref.serverName}::${ref.ref}`);
       if (wid != null) { windowId = wid; paneOrdinal = ref.pane; }
     }
     if (windowId == null && tabId) {
@@ -941,12 +941,13 @@ function WorkspaceInner() {
         workerType: projWin.workerType,
         windowType: projWin.windowType,
       });
-      const label = formatWindowDisplayLabel(display);
-      const fullLabel = hasManyPanes ? `${label}${paneSuffix}` : label;
-      const titleParts = [display.title];
-      if (display.idLabel && display.idLabel !== display.title) titleParts.push(display.idLabel);
+      const titleWithPane = hasManyPanes ? `${display.title}${paneSuffix}` : display.title;
+      const displayWithPane = { ...display, title: titleWithPane };
+      const label = formatWindowDisplayLabel(displayWithPane);
+      const titleParts = [titleWithPane];
+      if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
       titleParts.push(serverName);
-      return { label: fullLabel, title: titleParts.join(' · ') };
+      return { label, title: titleParts.join(' · ') };
     }
     const displayName = pt || winName || sessionName;
     const baseLabel = `${sessionName} / ${displayName}${paneSuffix}`;

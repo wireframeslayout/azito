@@ -145,6 +145,46 @@ describe('formatWindowDisplayLabel', () => {
   });
 });
 
+describe('formatWindowDisplayLabel with pane suffix', () => {
+  it('旧形式タブのペイン番号は title に付く（名前.2 · W-42 の形式）', () => {
+    const d = resolveWindowDisplay({
+      label: 'task-42--ab12',
+      taskTitle: 'Deploy fix',
+      windowId: 42,
+      tmuxTarget: 'azito:win--ab12',
+    });
+    // Simulate the legacy tab pane suffix logic: append to title before formatting
+    const titleWithPane = `${d.title}.2`;
+    const displayWithPane = { ...d, title: titleWithPane };
+    expect(formatWindowDisplayLabel(displayWithPane)).toBe('Deploy fix.2 · W-42');
+  });
+
+  it('ペインが1つのときはサフィックスなし', () => {
+    const d = resolveWindowDisplay({
+      workerType: 'claude',
+      windowId: 42,
+      tmuxTarget: 'azito:win--ab12',
+    });
+    expect(formatWindowDisplayLabel(d)).toBe('Claude · W-42');
+  });
+
+  it('同じ windowId で異なるサーバーの窓が正しくラベル表示される', () => {
+    // Both servers have windowId 10 but different worker types
+    const displayA = resolveWindowDisplay({
+      windowId: 10,
+      workerType: 'claude',
+      tmuxTarget: 'azito:win--a',
+    });
+    const displayB = resolveWindowDisplay({
+      windowId: 10,
+      workerType: 'codex',
+      tmuxTarget: 'azito:win--b',
+    });
+    expect(formatWindowDisplayLabel(displayA)).toBe('Claude · W-10');
+    expect(formatWindowDisplayLabel(displayB)).toBe('Codex · W-10');
+  });
+});
+
 describe('buildWindowSearchText', () => {
   const base = {
     paneTitle: '◐ libghosttyのwasm版導入検討', paneCommand: 'node',

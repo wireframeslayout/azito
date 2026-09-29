@@ -148,6 +148,7 @@ interface UseServerDetailResult {
   // must not be silently read as "no cleanup report", independent of
   // whether the verification field parsed fine.
   isolationCleanupReportUnavailable: boolean;
+  windowMetaError: boolean;
   loading: boolean;
   error: string | null;
   refresh: () => void;
@@ -165,6 +166,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
   const [isolationCleanupReport, setIsolationCleanupReport] = useState<IsolationReport | null>(null);
   const [isolationCleanupReportUnavailable, setIsolationCleanupReportUnavailable] = useState(false);
+  const [windowMetaError, setWindowMetaError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   // Issue #29 review (8th pass), Important finding 3: fetchAll's four
@@ -197,6 +199,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setIsolationReportUnavailable(false);
     setIsolationCleanupReport(null);
     setIsolationCleanupReportUnavailable(false);
+    setWindowMetaError(false);
     setLoading(true);
     setError(null);
     try {
@@ -209,13 +212,18 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       // isolationReportUnavailable below), so this uses apiWithStatus and
       // treats non-2xx / a thrown error / an unrecognized body shape as
       // "unavailable", not as "no warning".
-      const [srvList, installRes, sessionsRes, detailResult, allProj, allTsk] = await Promise.all([
+      const [srvList, installRes, sessionsRes, detailResult] = await Promise.all([
         refreshStatuses(),
         api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
-        api<Array<{ windows?: Window[] }>>('/projects').catch(() => [] as Array<{ windows?: Window[] }>),
-        api<Array<{ id: number; title?: string; windows?: Window[] }>>('/tasks').catch(() => [] as Array<{ id: number; title?: string; windows?: Window[] }>),
+      ]);
+      // Window metadata (projects/tasks) fetched independently so a failure
+      // does not block the rest of the page — errors are surfaced via
+      // windowMetaError instead of swallowed silently.
+      const [projResult, taskResult] = await Promise.allSettled([
+        api<Array<{ windows?: Window[] }>>('/projects'),
+        api<Array<{ id: number; title?: string; windows?: Window[] }>>('/tasks'),
       ]);
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
       // Issue #29 review (8th pass), Important finding 3: a newer fetchAll
@@ -226,8 +234,18 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       if (fetchGenRef.current !== gen) return;
       setInstallStatus(installRes);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
-      setAllProjects(Array.isArray(allProj) ? allProj : []);
-      setAllTasks(Array.isArray(allTsk) ? allTsk : []);
+      let metaFailed = false;
+      if (projResult.status === 'fulfilled') {
+        setAllProjects(Array.isArray(projResult.value) ? projResult.value : []);
+      } else {
+        metaFailed = true;
+      }
+      if (taskResult.status === 'fulfilled') {
+        setAllTasks(Array.isArray(taskResult.value) ? taskResult.value : []);
+      } else {
+        metaFailed = true;
+      }
+      setWindowMetaError(metaFailed);
 
       // Review round (Important finding 4): the server now returns the
       // verification report and the cleanup report as two independent
@@ -301,6 +319,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     windowById, taskById,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
+    windowMetaError,
     loading, error, refresh: fetchAll,
   };
 }
