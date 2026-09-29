@@ -834,6 +834,18 @@ function WorkspaceInner() {
     return map;
   }, [sessionData]);
 
+  const sessionWindowIdByRef = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const sessions of Object.values(sessionData)) {
+      for (const sess of sessions) {
+        for (const win of sess.windows) {
+          if (win.ref && win.windowId != null) map.set(win.ref, win.windowId);
+        }
+      }
+    }
+    return map;
+  }, [sessionData]);
+
   const getTerminalTabLabel = useCallback((serverName: string, target: string, ref?: TerminalRef | null, tabId?: string): { label: string; title?: string } => {
     // windowId を複数経路から取得
     let windowId: number | undefined;
@@ -841,6 +853,9 @@ function WorkspaceInner() {
     if (ref?.kind === 'windowId') {
       windowId = ref.windowId;
       paneOrdinal = ref.pane;
+    } else if (ref?.kind === 'ref') {
+      const wid = sessionWindowIdByRef.get(ref.ref);
+      if (wid != null) { windowId = wid; paneOrdinal = ref.pane; }
     }
     if (windowId == null && tabId) {
       const fromTab = parseTerminalTabId(tabId);
@@ -912,17 +927,31 @@ function WorkspaceInner() {
     if (!projWin) {
       projWin = windowByLegacyKey.get(`${serverName}::${sessionName}::${winName}`);
     }
-    const displayName = pt || projWin?.label || winName || sessionName;
     const hasManyPanes = (session?.windows.find((w) => w.index === parseInt(winIdx, 10))?.panes.length ?? 0) > 1;
     const paneSuffix = hasManyPanes ? `.${paneIdx}` : '';
-    const baseLabel = `${sessionName} / ${displayName}${paneSuffix}`;
-    // 旧形式でも登録済み窓なら W-ID を付ける
+    // 旧形式でも登録済み窓なら resolveWindowDisplay で内部名を除外する
     if (projWin) {
-      const idLabel = formatWindowId(projWin.id);
-      return { label: `${baseLabel} · ${idLabel}`, title: `${baseLabel} · ${idLabel} · ${serverName}` };
+      const display = resolveWindowDisplay({
+        paneTitle: pt || undefined,
+        paneCommand: undefined,
+        label: projWin.label,
+        taskTitle: projWin.taskId != null ? taskById.get(projWin.taskId)?.title : undefined,
+        tmuxTarget: projWin.tmuxTarget,
+        windowId: projWin.id,
+        workerType: projWin.workerType,
+        windowType: projWin.windowType,
+      });
+      const label = formatWindowDisplayLabel(display);
+      const fullLabel = hasManyPanes ? `${label}${paneSuffix}` : label;
+      const titleParts = [display.title];
+      if (display.idLabel && display.idLabel !== display.title) titleParts.push(display.idLabel);
+      titleParts.push(serverName);
+      return { label: fullLabel, title: titleParts.join(' · ') };
     }
+    const displayName = pt || winName || sessionName;
+    const baseLabel = `${sessionName} / ${displayName}${paneSuffix}`;
     return { label: baseLabel };
-  }, [sessionData, sessionWindowByWindowId, windowById, windowByLegacyKey, taskById]);
+  }, [sessionData, sessionWindowByWindowId, sessionWindowIdByRef, windowById, windowByLegacyKey, taskById]);
 
   const buildTabItem = useCallback((tab: PersistedTab): TabItem => {
     const iconName: IconName | null = tab.type === 'terminal' ? 'terminal'

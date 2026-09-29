@@ -30,6 +30,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const isMobile = useIsMobile();
   const {
     server, servers, status, installStatus, sessions,
+    windowById, taskById,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     loading, error, refresh,
@@ -114,7 +115,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
             <SetupSection server={server} installStatus={installStatus} refresh={refresh} />
           )}
           {activeSection === 'windows' && (
-            <WindowsSection server={server} sessions={sessions} refresh={refresh} />
+            <WindowsSection server={server} sessions={sessions} refresh={refresh} windowById={windowById} taskById={taskById} />
           )}
           {activeSection === 'danger' && (
             <DangerSection

@@ -64,6 +64,16 @@ describe('resolveWindowDisplay', () => {
     expect(result.hasDisplayName).toBe(false);
   });
 
+  it('formatWindowDisplayLabel で内部名ラベルが除外される', () => {
+    const d = resolveWindowDisplay({
+      label: 'task-42--ab12',
+      taskTitle: 'Deploy fix',
+      windowId: 42,
+      tmuxTarget: 'azito:win--ab12',
+    });
+    expect(formatWindowDisplayLabel(d)).toBe('Deploy fix · W-42');
+  });
+
   it('falls back to tmuxTarget for unregistered windows', () => {
     const result = resolveWindowDisplay({ tmuxTarget: 'azito:0' });
     expect(result.title).toBe('azito:0');

@@ -15,8 +15,8 @@ interface WindowsSectionProps {
   server: Server;
   sessions: Session[];
   refresh: () => void;
-  windowById?: Map<number, WindowIndexEntry>;
-  taskById?: Map<number, { title?: string }>;
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title?: string }>;
 }
 
 export default function WindowsSection({ server, sessions, refresh, windowById, taskById }: WindowsSectionProps) {
@@ -43,7 +43,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
       const pane = sessWin
         ? (activeRef.pane != null ? sessWin.panes.find(p => p.index === activeRef.pane) : undefined) ?? sessWin.panes[0]
         : undefined;
-      const regWin = windowById?.get(activeRef.windowId);
+      const regWin = windowById.get(activeRef.windowId);
       const display = resolveWindowDisplay({
         windowId: activeRef.windowId,
         paneTitle: pane?.title,
@@ -51,7 +51,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
         label: regWin?.label,
         workerType: regWin?.workerType,
         windowType: regWin?.windowType,
-        taskTitle: regWin?.taskId != null ? taskById?.get(regWin.taskId)?.title : undefined,
+        taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
         tmuxTarget: sessWin ? `${sessions.find(s => s.windows.includes(sessWin!))?.name}:${sessWin.name}` : undefined,
       });
       return formatWindowDisplayLabel(display);
@@ -59,7 +59,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     const resolved = resolveTerminalTarget(activeRef, sessions);
     if (resolved) return stripPaneSuffix(resolved);
     return terminalRefDisplayLabel(activeRef);
-  }, [activeRef, sessions]);
+  }, [activeRef, sessions, windowById, taskById]);
 
   const handleSelect = useCallback((ref: TerminalRef) => {
     setSelectedRef(ref);

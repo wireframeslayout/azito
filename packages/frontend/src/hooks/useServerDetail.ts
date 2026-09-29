@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
+import type { Window } from '../pages/workspace/types';
+import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
 
 // Issue #29 review, Important finding 2: isolation_report (cleanup/doctor
 // outcome JSON) is a detail-only field the servers-list API deliberately
@@ -125,6 +127,8 @@ interface UseServerDetailResult {
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
   sessions: Session[];
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title?: string }>;
   isolationReport: IsolationReport | null;
   // Review round (Important finding 4): the cleanup-outcome counterpart to
   // isolationReport above — parsed independently from its own
@@ -155,6 +159,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const { servers, statuses, refresh: refreshStatuses } = useServerStatuses();
   const [installStatus, setInstallStatus] = useState<InstallStatusResponse | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [allProjects, setAllProjects] = useState<Array<{ windows?: Window[] }>>([]);
+  const [allTasks, setAllTasks] = useState<Array<{ id: number; title?: string; windows?: Window[] }>>([]);
   const [isolationReport, setIsolationReport] = useState<IsolationReport | null>(null);
   const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
   const [isolationCleanupReport, setIsolationCleanupReport] = useState<IsolationReport | null>(null);
@@ -203,11 +209,13 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       // isolationReportUnavailable below), so this uses apiWithStatus and
       // treats non-2xx / a thrown error / an unrecognized body shape as
       // "unavailable", not as "no warning".
-      const [srvList, installRes, sessionsRes, detailResult] = await Promise.all([
+      const [srvList, installRes, sessionsRes, detailResult, allProj, allTsk] = await Promise.all([
         refreshStatuses(),
         api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
+        api<Array<{ windows?: Window[] }>>('/projects').catch(() => [] as Array<{ windows?: Window[] }>),
+        api<Array<{ id: number; title?: string; windows?: Window[] }>>('/tasks').catch(() => [] as Array<{ id: number; title?: string; windows?: Window[] }>),
       ]);
       if (!srvList.some((s) => s.name === serverName)) throw new Error(`Server "${serverName}" not found`);
       // Issue #29 review (8th pass), Important finding 3: a newer fetchAll
@@ -218,6 +226,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       if (fetchGenRef.current !== gen) return;
       setInstallStatus(installRes);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
+      setAllProjects(Array.isArray(allProj) ? allProj : []);
+      setAllTasks(Array.isArray(allTsk) ? allTsk : []);
 
       // Review round (Important finding 4): the server now returns the
       // verification report and the cleanup report as two independent
@@ -279,8 +289,16 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const server = servers.find((s) => s.name === serverName) ?? null;
   const status = serverName ? statuses[serverName] ?? null : null;
 
+  const windowById = useMemo(() => buildWindowIndex(allProjects, allTasks, null), [allProjects, allTasks]);
+  const taskById = useMemo(() => {
+    const map = new Map<number, { title?: string }>();
+    for (const t of allTasks) map.set(t.id, t);
+    return map;
+  }, [allTasks]);
+
   return {
     server, servers, status, installStatus, sessions,
+    windowById, taskById,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     loading, error, refresh: fetchAll,

@@ -15,8 +15,8 @@ interface WindowTreePopoverProps {
   onAddWindow: (sessionName: string) => void;
   onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
   isMobile: boolean;
-  windowById?: Map<number, WindowIndexEntry>;
-  taskById?: Map<number, { title?: string }>;
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title?: string }>;
 }
 
 export default function WindowTreePopover({
@@ -88,7 +88,7 @@ export default function WindowTreePopover({
                     </span>
                     <span style={{ fontFamily: 'var(--mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{
                       (() => {
-                        const regWin = win.windowId != null ? windowById?.get(win.windowId) : undefined;
+                        const regWin = win.windowId != null ? windowById.get(win.windowId) : undefined;
                         const display = resolveWindowDisplay({
                           windowId: win.windowId ?? undefined,
                           paneTitle: win.panes[0]?.title,
@@ -96,7 +96,7 @@ export default function WindowTreePopover({
                           label: regWin?.label,
                           workerType: regWin?.workerType,
                           windowType: regWin?.windowType,
-                          taskTitle: regWin?.taskId != null ? taskById?.get(regWin.taskId)?.title : undefined,
+                          taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
                           tmuxTarget: `${sess.name}:${win.name}`,
                         });
                         return formatWindowDisplayLabel(display);
