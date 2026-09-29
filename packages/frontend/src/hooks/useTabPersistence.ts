@@ -376,9 +376,7 @@ export function useTabPersistence(storageKey?: string) {
         return;
       }
     }
-    const label = ref.kind === 'windowId'
-      ? `w${ref.windowId}`
-      : terminalRefDisplayLabel(ref);
+    const label = terminalRefDisplayLabel(ref);
     openTab({
       id: tabId,
       type: 'terminal',

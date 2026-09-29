@@ -17,6 +17,7 @@ export { SecretNamesValue } from './SecretNamesValue';
 export type { SecretNamesState } from './SecretNamesValue';
 export { WindowPaneTree } from './WindowPaneTree';
 export type { WindowItem } from './WindowPaneTree';
+export { WindowIdChip } from './WindowIdChip';
 export { InstallSteps } from './InstallSteps';
 export type { InstallStep } from './InstallSteps';
 export { default as SubagentConfigCard } from './SubagentConfigCard';

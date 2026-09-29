@@ -55,6 +55,8 @@ import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, type TerminalRef } from '../lib/terminalRef';
+import { formatWindowId } from '@azito/shared';
+import { resolveWindowDisplay } from '../components/workspace/objects/windowRowTitle';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -799,9 +801,43 @@ function WorkspaceInner() {
     return { projectId: pid, projectName: proj?.name ?? null };
   }, [allTasks, allProjects]);
 
-  const getTerminalTabLabel = useCallback((serverName: string, target: string): string => {
+  const getTerminalTabLabel = useCallback((serverName: string, target: string, paneOrdinal?: number): { label: string; title?: string } => {
+    const wm = target.match(/^w(\d+)$/);
+    if (wm) {
+      const windowId = parseInt(wm[1], 10);
+      let paneTitle: string | undefined;
+      let paneCommand: string | undefined;
+      for (const sessions of Object.values(sessionData)) {
+        for (const sess of sessions) {
+          const win = sess.windows.find((w) => w.windowId === windowId);
+          if (win) {
+            const pane = (paneOrdinal != null ? win.panes.find(p => p.index === paneOrdinal) : undefined) ?? win.panes[0];
+            if (pane) { paneTitle = pane.title; paneCommand = pane.command; }
+            break;
+          }
+        }
+      }
+      const projWin = project?.windows.find((w) => w.id === windowId);
+      const display = resolveWindowDisplay({
+        paneTitle,
+        paneCommand,
+        label: projWin?.label,
+        taskTitle: projWin?.taskId != null ? allTasks.find((t) => t.id === projWin.taskId)?.title : undefined,
+        tmuxTarget: projWin?.tmuxTarget,
+        windowId,
+        workerType: projWin?.workerType,
+        windowType: projWin?.windowType,
+      });
+      const idLabel = formatWindowId(windowId);
+      const label = display.hasDisplayName && display.idLabel
+        ? `${display.title} · ${display.idLabel}`
+        : display.title;
+      const titleParts = [display.title, idLabel, serverName].filter(Boolean);
+      return { label, title: titleParts.join(' · ') };
+    }
+
     const m = target.match(/^(.+):(\d+)\.(\d+)$/);
-    if (!m) return target;
+    if (!m) return { label: target };
     const [, sessionName, winIdx, paneIdx] = m;
     const srvSessions = sessionData[serverName] || [];
     const session = srvSessions.find((s) => s.name === sessionName);
@@ -821,8 +857,8 @@ function WorkspaceInner() {
     const displayName = paneTitle || projWin?.label || winName || sessionName;
     const hasManyPanes = (session?.windows.find((w) => w.index === parseInt(winIdx, 10))?.panes.length ?? 0) > 1;
     const paneSuffix = hasManyPanes ? `.${paneIdx}` : '';
-    return `${sessionName} / ${displayName}${paneSuffix}`;
-  }, [sessionData, project]);
+    return { label: `${sessionName} / ${displayName}${paneSuffix}` };
+  }, [sessionData, project, allTasks]);
 
   const buildTabItem = useCallback((tab: PersistedTab): TabItem => {
     const iconName: IconName | null = tab.type === 'terminal' ? 'terminal'
@@ -844,9 +880,10 @@ function WorkspaceInner() {
     const icon = iconName
       ? <span style={{ display: 'inline-flex', verticalAlign: '-2px' }}><Icon name={iconName} size={14} /></span>
       : '•';
-    const displayLabel = tab.type === 'terminal' && tab.serverName && tab.target
-      ? getTerminalTabLabel(tab.serverName, tab.target)
-      : tab.label;
+    const terminalInfo = tab.type === 'terminal' && tab.serverName && tab.target
+      ? getTerminalTabLabel(tab.serverName, tab.target, tab.terminalRef?.pane)
+      : undefined;
+    const displayLabel = terminalInfo?.label ?? tab.label;
     const running = tab.type === 'terminal' && tab.serverName && tab.target
       ? shouldShowActivity(tab.serverName, tab.target)
       : tab.type === 'task' && tab.entityId !== undefined
@@ -855,6 +892,7 @@ function WorkspaceInner() {
     return {
       id: tab.id,
       label: displayLabel,
+      title: terminalInfo?.title,
       icon,
       pinned: tab.pinned,
       className: running ? 'tab-active-comet' : undefined,

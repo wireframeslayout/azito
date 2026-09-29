@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatWindowId } from '@azito/shared';
 import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
@@ -218,6 +219,10 @@ export function useWindowActions(
     items.push(
       { label: t('windows.detachFromProject'), icon: <Icon name="external-link" size={16} />, onClick: () => handleDetachWindow(w.id) },
       { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
+    );
+    items.push(
+      { label: '', separator: true, onClick: () => {} },
+      { label: `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`, disabled: true, onClick: () => {} },
     );
     return items;
   }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);

@@ -1,4 +1,4 @@
-import { formatMuxRef, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
+import { formatMuxRef, formatWindowId, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 
 export type TerminalRef =
@@ -196,7 +196,7 @@ export function paneApiPath(r: TerminalRef, action?: string): string {
 }
 
 export function terminalRefDisplayLabel(r: TerminalRef): string {
-  if (r.kind === 'windowId') return `w${r.windowId}`;
+  if (r.kind === 'windowId') return formatWindowId(r.windowId);
   try {
     const parsed = parseMuxRef(r.ref);
     return `${parsed.workspace}:${parsed.window}`;

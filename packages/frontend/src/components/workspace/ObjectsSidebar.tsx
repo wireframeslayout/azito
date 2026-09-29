@@ -16,7 +16,7 @@ import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
 import { useToast } from '../../hooks/useToast';
 import type { ContextMenuItem } from '../ContextMenu';
-import { resolveWindowRowTitle, buildWindowSearchText } from './objects/windowRowTitle';
+import { resolveWindowDisplay, buildWindowSearchText } from './objects/windowRowTitle';
 import ObjectSection from './objects/ObjectSection';
 import BrowserSection from './objects/BrowserSection';
 import { RUNNING_STATUSES } from '../task/StatusDropdown';
@@ -191,6 +191,7 @@ export default function ObjectsSidebar({
       tmuxTarget: w.tmuxTarget,
       serverName: w.serverName,
       taskId: w.taskId ?? undefined,
+      windowId: w.id,
       taskTitle: task?.title,
       branch: task?.branch,
       worktreeBranch: task?.worktreeBranch,
@@ -376,13 +377,16 @@ export default function ObjectsSidebar({
   // （オフライン・タイトル未設定）は ウィンドウラベル → タスクタイトル → tmux ターゲット の順で代替。
   const resolveOperationTitle = useCallback((w: WindowItem): string => {
     const extra = resolveWindowContextExtra(w, sessionData);
-    return resolveWindowRowTitle({
+    return resolveWindowDisplay({
       paneTitle: extra.paneTitle,
       paneCommand: extra.paneCommand,
       label: w.label,
       taskTitle: w.taskId != null ? taskById.get(w.taskId)?.title : undefined,
       tmuxTarget: w.tmuxTarget,
-    });
+      windowId: w.id,
+      workerType: w.workerType,
+      windowType: w.windowType,
+    }).title;
   }, [sessionData, taskById]);
 
   // 副題: 「タスクタイトル · サーバー · フェーズ · ブランチ」。取得できない項目は省く（ダミー値で埋めない）。

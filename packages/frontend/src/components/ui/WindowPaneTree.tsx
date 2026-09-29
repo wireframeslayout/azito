@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { api } from '../../api/client';
 import { AgentIcon } from './AgentIcons';
+import { WindowIdChip } from './WindowIdChip';
+import { resolveWindowDisplay } from '../workspace/objects/windowRowTitle';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, Window } from '../../pages/workspace/types';
@@ -174,7 +176,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const title = renderTitle?.(w) ?? (w.label || w.tmuxTarget);
+  const title = renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title;
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -197,6 +199,7 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+          {w.id != null && <WindowIdChip id={w.id} />}
         </div>
         {subtitle != null && (
           <div style={{
@@ -231,7 +234,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const title = renderTitle?.(w) ?? (w.label || w.tmuxTarget);
+  const title = renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title;
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -254,6 +257,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+          {w.id != null && <WindowIdChip id={w.id} />}
         </div>
         {subtitle != null && (
           <div style={{
@@ -350,9 +354,10 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {renderTitle?.(w) ?? (w.label || sw.name)}
+                    {renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title}
                   </span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+                  {w.id != null && <WindowIdChip id={w.id} />}
                 </div>
                 <div style={{
                   fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
@@ -366,7 +371,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
           );
         }
 
-        const windowLabel = renderTitle?.(w) ?? (w.label || sw.name);
+        const windowLabel = renderTitle?.(w) ?? resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget }).title;
         const windowHasActive = sw.panes.some((pane) => {
           const target = `${sessionName}:${windowId}.${pane.index}`;
           return isActive?.(w.serverName, target, 'window') ?? false;
@@ -411,6 +416,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                     style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
                   >{windowLabel}</span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+                  {w.id != null && <WindowIdChip id={w.id} />}
                 </div>
                 {parentSubtitle != null && (
                   <div style={{

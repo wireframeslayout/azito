@@ -8,6 +8,9 @@
  * 取得できないとき（オフライン・タイトル空）のフォールバックは
  * ウィンドウラベル → タスクタイトル → tmux ターゲット の順。
  */
+
+import { formatWindowId, isInternalWindowName } from '@azito/shared';
+
 export interface WindowRowTitleInput {
   /** 表示用ペインラベル（未設定時はコマンド名が入る。resolveWindowContextExtra 参照） */
   paneTitle?: string;
@@ -30,13 +33,56 @@ export function resolvePaneDisplayTitle(paneTitle?: string, paneCommand?: string
 }
 
 export function resolveWindowRowTitle({ paneTitle, paneCommand, label, taskTitle, tmuxTarget }: WindowRowTitleInput): string {
-  return resolvePaneDisplayTitle(paneTitle, paneCommand)
-    ?? (label?.trim() || taskTitle?.trim() || tmuxTarget);
+  return resolveWindowDisplay({ paneTitle, paneCommand, label, taskTitle, tmuxTarget }).title;
+}
+
+export interface WindowDisplayInput {
+  paneTitle?: string;
+  paneCommand?: string;
+  label?: string;
+  taskTitle?: string;
+  tmuxTarget?: string;
+  windowId?: number;
+  workerType?: string;
+  windowType?: string;
+}
+
+export interface WindowDisplay {
+  title: string;
+  idLabel?: string;
+  hasDisplayName: boolean;
+}
+
+const TYPE_LABEL: Record<string, string> = {
+  claude: 'Claude',
+  codex: 'Codex',
+  generic: 'Terminal',
+  terminal: 'Terminal',
+};
+
+export function resolveWindowDisplay(i: WindowDisplayInput): WindowDisplay {
+  const idLabel = i.windowId != null ? formatWindowId(i.windowId) : undefined;
+  const paneDisplay = resolvePaneDisplayTitle(i.paneTitle, i.paneCommand);
+  if (paneDisplay) return { title: paneDisplay, idLabel, hasDisplayName: true };
+
+  const label = i.label?.trim();
+  if (label && !isInternalWindowName(label)) return { title: label, idLabel, hasDisplayName: true };
+
+  const taskTitle = i.taskTitle?.trim();
+  if (taskTitle) return { title: taskTitle, idLabel, hasDisplayName: true };
+
+  const typeLabel = (i.workerType && TYPE_LABEL[i.workerType]) || (i.windowType && TYPE_LABEL[i.windowType]);
+  if (typeLabel) return { title: typeLabel, idLabel, hasDisplayName: false };
+
+  if (idLabel) return { title: idLabel, idLabel: undefined, hasDisplayName: false };
+
+  return { title: i.tmuxTarget ?? '', idLabel, hasDisplayName: false };
 }
 
 export interface WindowSearchTextInput extends WindowRowTitleInput {
   serverName: string;
   taskId?: number;
+  windowId?: number;
   branch?: string;
   worktreeBranch?: string;
 }
@@ -46,11 +92,14 @@ export interface WindowSearchTextInput extends WindowRowTitleInput {
  * 検索できるよう、実ペインタイトルを含める。
  */
 export function buildWindowSearchText(input: WindowSearchTextInput): string {
-  const { paneTitle, paneCommand, label, tmuxTarget, serverName, taskId, taskTitle, branch, worktreeBranch } = input;
+  const { paneTitle, paneCommand, label, tmuxTarget, serverName, taskId, taskTitle, branch, worktreeBranch, windowId } = input;
   return [
     resolvePaneDisplayTitle(paneTitle, paneCommand),
     label, tmuxTarget, serverName,
     taskId != null ? `#${taskId}` : undefined,
     taskTitle, branch, worktreeBranch,
+    windowId != null ? formatWindowId(windowId) : undefined,
+    windowId != null ? `w${windowId}` : undefined,
+    windowId != null ? String(windowId) : undefined,
   ].filter(Boolean).join(' ').toLowerCase();
 }

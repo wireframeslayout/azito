@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { formatWindowId } from '@azito/shared';
 import type { Session } from '../../hooks/useServerManagement';
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
+import { resolvePaneDisplayTitle } from '../workspace/objects/windowRowTitle';
 import { Icon } from '../ui/Icon';
 
 interface WindowTreePopoverProps {
@@ -82,7 +84,17 @@ export default function WindowTreePopover({
                     <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                       <Icon name="chevron-right" size={14} />
                     </span>
-                    <span style={{ fontFamily: 'var(--mono)' }}>{win.name ?? `win-${win.index}`}</span>
+                    <span style={{ fontFamily: 'var(--mono)' }}>{
+                      (() => {
+                        const pane = win.panes[0];
+                        const displayTitle = pane ? resolvePaneDisplayTitle(pane.title, pane.command) : undefined;
+                        const idLabel = win.windowId != null ? formatWindowId(win.windowId) : undefined;
+                        if (displayTitle && idLabel) return `${displayTitle} · ${idLabel}`;
+                        if (displayTitle) return displayTitle;
+                        if (idLabel) return idLabel;
+                        return win.name ?? `win-${win.index}`;
+                      })()
+                    }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                       {win.panes.length} pane{win.panes.length > 1 ? 's' : ''}
                     </span>
