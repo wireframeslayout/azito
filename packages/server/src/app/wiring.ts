@@ -198,6 +198,7 @@ export interface SystemUpdateModule {
 
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
   uiToken: string;
+  dataPaths: DataPaths;
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
@@ -596,6 +597,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
 
   return {
     uiToken,
+    dataPaths,
     agentBundler,
     ...infra,
     ...repos,

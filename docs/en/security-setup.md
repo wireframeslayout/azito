@@ -40,10 +40,10 @@ Both are git-ignored. Templates live in `.env.example`.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `AZITO_UI_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/ui-token` | Token for API / WebSocket auth (the operator's full-power credential). Resolution order: env -> file -> auto-generate. Use `azito token show` to view, `azito token rotate` to rotate. For source checkouts, check `packages/server/.env` or `data/ui-token` directly. `azito token rotate` auto-updates the local `~/.azito/operator.env` and the MCP token in `~/.claude/settings.json` (only if already present). **It does not touch `~/.azito/azitoctl*.env`** (Issue #28 Phase B — that file must never carry this token) |
-| `AZITO_DATA_DIR` | No | repo root (`data.db`, `data/*`) | Persistent data directory. When set, `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` are consolidated under this directory (mode 700). Required for versioned directory deployments |
+| `AZITO_DATA_DIR` | No | repo root (`data.db`, `data/*`) | Persistent data directory. When set, `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `webhook-token`, `browser-profile/`, `sidekicks/` are consolidated under this directory (mode 700). Required for versioned directory deployments |
 | `AZITO_BIND` | No | `127.0.0.1` | Listen address. `0.0.0.0` and `::` are explicitly rejected. Use a Tailscale IP for remote access |
 | `AZITO_ALLOWED_ORIGINS` | No | `http://localhost:5173,http://localhost:3001` | Comma-separated origins allowed by CORS and the WebSocket Origin check |
-| `AZITO_WEBHOOK_TOKEN` | No | random per start | Shared token for hooks / agent-signal / supervisor. Set it to keep it stable |
+| `AZITO_WEBHOOK_TOKEN` | No | auto-generates `$AZITO_DATA_DIR/webhook-token` | Shared token for hooks / agent-signal / supervisor. Resolution: env -> file -> auto-generate |
 | `AZITO_MASTER_KEY` | No | auto-generates `$AZITO_DATA_DIR/master.key` | Encryption key for DB secret columns (64 hex chars). Takes precedence over the file |
 | `AZITO_SIDEKICKS_DIR` | No | `$AZITO_DATA_DIR/sidekicks` | User-layer Sidekick package directory. Defaults to `sidekicks/` under `AZITO_DATA_DIR` |
 | `AZITO_VAPID_SUBJECT` | No | `mailto:admin@example.com` | VAPID subject for push notifications |
@@ -416,7 +416,7 @@ chmod 600 packages/server/.env
 cat packages/server/.env   # note the tokens — needed for the browser and harness
 ```
 
-`AZITO_WEBHOOK_TOKEN` is optional (randomly generated per start), but pinning it is easier to operate since the harness must share the same value.
+`AZITO_WEBHOOK_TOKEN` is optional. When unset, the hub reads from `$AZITO_DATA_DIR/webhook-token`; if that file does not exist, a token is auto-generated and persisted there (mode 600). To rotate, change the value or delete `$AZITO_DATA_DIR/webhook-token` and restart the hub.
 
 ### 3. MinIO (optional)
 

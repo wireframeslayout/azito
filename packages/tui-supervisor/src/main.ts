@@ -81,8 +81,11 @@ if (hubEnv) {
   readiness.onReady(() => hub.sendReady());
   hub.connect();
 } else {
+  const hasUrl = !!(process.env.AZITO_URL || process.env.AZITO_PUBLIC_URL);
+  const hasToken = !!process.env.AZITO_WEBHOOK_TOKEN;
+  const missing = [!hasUrl && 'AZITO_URL', !hasToken && 'AZITO_WEBHOOK_TOKEN'].filter(Boolean);
   process.stderr.write(
-    'tui-supervisor: AZITO_URL/AZITO_WEBHOOK_TOKEN not resolved; running pass-through without hub connection\n',
+    `tui-supervisor: missing ${missing.join(' and ')}; running pass-through without hub connection\n`,
   );
 }
 

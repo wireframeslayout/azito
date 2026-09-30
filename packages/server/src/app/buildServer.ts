@@ -12,12 +12,12 @@ import multipart from '@fastify/multipart';
 import compress from '@fastify/compress';
 import fastifyStatic from '@fastify/static';
 import cors from '@fastify/cors';
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import type { WebSocket } from 'ws';
 
 import { resolveRoot } from '../shared/releaseInfo';
+import { resolveWebhookToken } from '../shared/uiToken';
 import type { Wiring } from './wiring';
 
 import serversRoutes from '../modules/servers/routes';
@@ -99,12 +99,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── Webhook token ───
 
-  const webhookToken = process.env.AZITO_WEBHOOK_TOKEN || crypto.randomBytes(32).toString('hex');
+  const webhookToken = resolveWebhookToken(wiring.dataPaths.webhookToken);
   const verifyWebhookToken = createTokenVerifier(webhookToken);
-  if (!process.env.AZITO_WEBHOOK_TOKEN) {
-    console.log(`[webhook] Auto-generated token: ${webhookToken}`);
-    console.log('[webhook] Set AZITO_WEBHOOK_TOKEN env to use a fixed token');
-  }
 
   // ─── Global error handler for mux driver errors ───
   const defaultErrorHandler = app.errorHandler;
