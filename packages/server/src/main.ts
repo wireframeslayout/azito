@@ -6,7 +6,7 @@ import { migrateDataIfNeeded } from './shared/dataMigration';
 import { initSecretBox } from './shared/crypto/SecretBox';
 import { initVapidKeyManager } from './modules/notifications/push/VapidKeyManager';
 import { openDatabase } from './shared/db/Database';
-import { resolveUiToken } from './shared/uiToken';
+import { resolveUiToken, resolveWebhookToken } from './shared/uiToken';
 import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
@@ -84,6 +84,7 @@ async function main(): Promise<void> {
 
   const db = openDatabase(paths.db);
   const uiToken = resolveUiToken(paths.uiToken);
+  const webhookToken = resolveWebhookToken(paths.webhookToken);
 
   const app = Fastify({ logger: true });
   const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -95,7 +96,7 @@ async function main(): Promise<void> {
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
-  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken);
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
   const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);

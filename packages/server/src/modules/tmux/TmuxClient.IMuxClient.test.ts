@@ -8,7 +8,7 @@ function makeClient(handler: (args: string[]) => Promise<{ stdout: string; stder
   const factory = {
     getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
-  return new TmuxClient(factory, '', '', '');
+  return new TmuxClient(factory, '', '', '', 'wh-tok');
 }
 
 const server = { name: 'local', type: 'local' as const, muxRuntime: 'system' as const } as any;

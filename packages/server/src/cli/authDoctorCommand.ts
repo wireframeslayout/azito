@@ -454,7 +454,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       return config;
     }
 
-    const tmux = new TmuxClient(new TransportFactory(''), '', '', '');
+    const tmux = new TmuxClient(new TransportFactory(''), '', '', '', '');
 
     const alive: string[] = [];
     const unverifiable: string[] = [];

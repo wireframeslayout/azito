@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { resolveUiToken } from './uiToken';
+import { resolveUiToken, resolveWebhookToken } from './uiToken';
 
 describe('resolveUiToken', () => {
   let tmpDir: string;
@@ -68,5 +68,50 @@ describe('resolveUiToken', () => {
     } finally {
       Object.defineProperty(process.stdout, 'isTTY', { value: origIsTTY, configurable: true });
     }
+  });
+});
+
+describe('resolveWebhookToken', () => {
+  let tmpDir: string;
+  const origEnv: Record<string, string | undefined> = {};
+  let consoleSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-webhooktoken-test-'));
+    origEnv.AZITO_WEBHOOK_TOKEN = process.env.AZITO_WEBHOOK_TOKEN;
+    consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    process.env.AZITO_WEBHOOK_TOKEN = origEnv.AZITO_WEBHOOK_TOKEN;
+    consoleSpy.mockRestore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns env token when AZITO_WEBHOOK_TOKEN is set', () => {
+    const tokenPath = path.join(tmpDir, 'webhook-token');
+    fs.writeFileSync(tokenPath, 'file-token');
+    process.env.AZITO_WEBHOOK_TOKEN = 'env-webhook-token';
+
+    expect(resolveWebhookToken(tokenPath)).toBe('env-webhook-token');
+  });
+
+  it('reads token from file when env is not set', () => {
+    delete process.env.AZITO_WEBHOOK_TOKEN;
+    const tokenPath = path.join(tmpDir, 'webhook-token');
+    fs.writeFileSync(tokenPath, 'persisted-webhook', { mode: 0o600 });
+
+    expect(resolveWebhookToken(tokenPath)).toBe('persisted-webhook');
+  });
+
+  it('generates token with mode 600 when neither env nor file exists', () => {
+    delete process.env.AZITO_WEBHOOK_TOKEN;
+    const tokenPath = path.join(tmpDir, 'subdir', 'webhook-token');
+
+    const result = resolveWebhookToken(tokenPath);
+    expect(result).toMatch(/^[0-9a-f]{64}$/);
+
+    expect(fs.readFileSync(tokenPath, 'utf-8')).toBe(result);
+    expect(fs.statSync(tokenPath).mode & 0o777).toBe(0o600);
   });
 });

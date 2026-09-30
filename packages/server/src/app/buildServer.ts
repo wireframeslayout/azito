@@ -17,7 +17,6 @@ import path from 'path';
 import type { WebSocket } from 'ws';
 
 import { resolveRoot } from '../shared/releaseInfo';
-import { resolveWebhookToken } from '../shared/uiToken';
 import type { Wiring } from './wiring';
 
 import serversRoutes from '../modules/servers/routes';
@@ -99,7 +98,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   // ─── Webhook token ───
 
-  const webhookToken = resolveWebhookToken(wiring.dataPaths.webhookToken);
+  const { webhookToken } = wiring;
   const verifyWebhookToken = createTokenVerifier(webhookToken);
 
   // ─── Global error handler for mux driver errors ───

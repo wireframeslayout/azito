@@ -78,7 +78,7 @@ describe('TaskPaneEnvironmentService x real tmux: session-env leak', () => {
     expect(env.AZITO_UI_TOKEN).toBe('');
 
     const transportFactory = new TransportFactory('http://127.0.0.1:1');
-    const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1');
+    const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     const { windowName } = await tmuxClient.createWindow(LOCAL_SERVER, SESSION, 'task-window', { exactName: true, extraEnv: env });
     const target = `${SESSION}:${windowName}`;
 

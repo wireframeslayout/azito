@@ -9,7 +9,7 @@ function makeClient(execMux: (args: string[]) => Promise<{ stdout: string; stder
   const factory = {
     getTransport: () => ({ execMux: vi.fn(execMux) }),
   } as unknown as TransportFactory;
-  return new TmuxClient(factory, 'http://localhost:3001', '', 'http://127.0.0.1:3001');
+  return new TmuxClient(factory, 'http://localhost:3001', '', 'http://127.0.0.1:3001', 'wh-tok');
 }
 
 describe('TmuxClient.getWindowIdentity', () => {

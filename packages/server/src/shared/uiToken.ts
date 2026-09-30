@@ -9,7 +9,10 @@ function resolvePersistedToken(envVar: string, filePath: string): string {
   if (fs.existsSync(filePath)) {
     try { fs.chmodSync(filePath, 0o600); } catch {}
     const token = fs.readFileSync(filePath, 'utf-8').trim();
-    if (token) return token;
+    if (token) {
+      console.log(`[${path.basename(filePath)}] Using persisted token at ${filePath}`);
+      return token;
+    }
   }
 
   const tag = path.basename(filePath);
