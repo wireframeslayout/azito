@@ -94,7 +94,8 @@
   "tokenGate": {
     "title": "AZITO",
     "instruction": "UIトークンを入力してください。",
-    "tokenRequired": "トークンは必須です"
+    "tokenRequired": "トークンは必須です",
+    "storageDuration": "このブラウザに60日間保存されます（使うたびに延長）"
   },
   "windowPaneTree": {
     "noWindows": "ウィンドウが割り当てられていません",

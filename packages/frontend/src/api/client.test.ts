@@ -33,6 +33,7 @@ function jsonResponse(status: number, body: unknown): Response {
 describe('api()', () => {
   beforeEach(() => {
     (globalThis as unknown as { sessionStorage: Storage }).sessionStorage = new FakeStorage() as unknown as Storage;
+    (globalThis as unknown as { localStorage: Storage }).localStorage = new FakeStorage() as unknown as Storage;
     (globalThis as unknown as { window: EventTarget }).window = new EventTarget();
     globalThis.fetch = vi.fn();
   });
@@ -71,6 +72,7 @@ describe('api()', () => {
 describe('uploadFile()', () => {
   beforeEach(() => {
     (globalThis as unknown as { sessionStorage: Storage }).sessionStorage = new FakeStorage() as unknown as Storage;
+    (globalThis as unknown as { localStorage: Storage }).localStorage = new FakeStorage() as unknown as Storage;
     (globalThis as unknown as { window: EventTarget }).window = new EventTarget();
     globalThis.fetch = vi.fn();
   });
