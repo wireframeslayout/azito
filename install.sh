@@ -317,9 +317,8 @@ PORT=3001
 # Origins allowed for CORS and WebSocket. Add entries here when you reach AZITO
 # from a new hostname, then restart the service.
 AZITO_ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-# Listen address. Keep 127.0.0.1 when a reverse proxy (e.g. tailscale serve)
-# terminates TLS and forwards to localhost. Keep 127.0.0.1 (the default).
-# Use 'tailscale serve' for remote access. 0.0.0.0 is rejected.
+# Listen address. Default is 127.0.0.1 — keep it and use a reverse proxy
+# (e.g. tailscale serve) for remote access. 0.0.0.0 is rejected.
 ${BIND_LINE}
 # URL that supervisors and remote agents use to reach this hub.
 # Must be reachable from tmux panes. When using tailscale serve,
