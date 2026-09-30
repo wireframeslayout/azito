@@ -49,7 +49,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
@@ -331,6 +331,7 @@ export class ExecuteTaskUseCase {
     task: Task,
     unitId: number,
     operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
+    baseBranchOverride?: string | null,
   ) {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
     // project.defaultUnitId) / serverName the caller already resolved via
@@ -358,7 +359,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, operation === 'execute' ? 'execute' : 'continuation');
+    }, operation === 'execute' ? 'execute' : 'continuation', undefined, undefined, baseBranchOverride);
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
     // every entry point, not just resolved once at approval time — see
@@ -450,6 +451,7 @@ export class ExecuteTaskUseCase {
     unitId: number,
     operation: NonNullable<Task['pendingOperation']>,
     freshServer: ServerConfig,
+    baseBranchOverride?: string | null,
   ): { project: ReturnType<typeof resolveExecutionManifest>['project']; projectServer: ReturnType<typeof resolveExecutionManifest>['projectServer'] } {
     // Same 'execute' vs 'continuation' mapping as enforceExecutionGate()
     // above — only a FRESH execute() (never distributed anything this run)
@@ -464,7 +466,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, operation === 'execute' ? 'execute' : 'continuation');
+    }, operation === 'execute' ? 'execute' : 'continuation', undefined, undefined, baseBranchOverride);
     const manifestHash = hashExecutionManifest(manifest);
     reverifyExecutionGateInLock(
       { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
@@ -679,11 +681,33 @@ export class ExecuteTaskUseCase {
     // to `ServerConfig | null`.
     let server: ServerConfig = serverAtStart;
 
+    // Issue #63: detect baseBranch BEFORE the execution gate so the
+    // fingerprint includes the auto-detected value. The approval screen
+    // computes the same detection, so the hashes match. When detection
+    // succeeds and no configured value existed, persist it so all
+    // subsequent resolveBaseBranch calls (PhaseLoopRunner re-verification,
+    // resume gate checks) return the same value.
+    const prelimProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const prelimProject = this.projectRepo.findById(task.projectId);
+    const prelimWorkingDir = prelimProjectServer?.workingDirectory || null;
+    const detectedBaseBranch = await resolveAndDetectBaseBranch(
+      task, prelimProjectServer, prelimProject,
+      this.transportFactory.getTransport(server), prelimWorkingDir,
+    );
+    if (!detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
+      this.appendLog(taskId, unitId, 'command', { type: 'base_branch_unresolvable' });
+      throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
+    }
+    if (detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
+      this.taskRepo.update(taskId, { baseBranch: detectedBaseBranch } as Partial<Task>);
+      task.baseBranch = detectedBaseBranch;
+    }
+
     // Untrusted-input execution gate (Issue #328): must run before the
     // resource guard, before any tmux window, before any worktree, before
     // any secret is injected. Resolves project/projectServer once for reuse
     // below.
-    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute');
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute', detectedBaseBranch);
 
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
@@ -868,7 +892,7 @@ export class ExecuteTaskUseCase {
             return { result, windowName: createdRef.window, ref: createdRef };
           },
             (fs) => {
-              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs);
+              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs, detectedBaseBranch);
               lockedProject = locked.project;
               lockedProjectServer = locked.projectServer;
             },
@@ -902,16 +926,13 @@ export class ExecuteTaskUseCase {
     const windowTarget = tmuxTargetFromMuxRef(ref);
     const handle = await executeDriver.resolvePane(server, ref, 1);
 
-    // Canonicalized ONCE, immediately after resolution (Issue #87
-    // third-party review, 11th round, Important finding 1) — see
-    // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Computed
-    // unconditionally (not only when `workingDir` is set) because fetch
-    // distribution's own prerequisite checks (via performDistribution) need
-    // it regardless of whether a working directory happens to be configured.
-    // Resolved from `lockedProjectServer`/`lockedProject` (Issue #87
-    // 16th-round review, Important finding 2), not the pre-lock
-    // `projectServer`/`project` — see reverifyGateInLock's doc comment.
-    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
+    // Issue #63: baseBranch was already detected and persisted BEFORE
+    // enforceExecutionGate, but that used pre-lock snapshots. Re-resolve
+    // from the locked row: resolveBaseBranch returns the persisted value
+    // (execute() persisted it above), or, as a safety net, falls back to
+    // the pre-lock detection.
+    const configuredBranch = resolveBaseBranch(task, lockedProjectServer, lockedProject);
+    const baseBranch = configuredBranch ? canonicalizeBaseBranch(configuredBranch) : detectedBaseBranch!;
 
     // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
     // — they hold no git credentials of their own, so distribution is not
@@ -1436,6 +1457,22 @@ export class ExecuteTaskUseCase {
     // why this is explicitly typed `ServerConfig` rather than inferred.
     let server: ServerConfig = serverAtStart;
 
+    // Issue #63: ensure baseBranch is persisted so the gate fingerprint
+    // matches the approval screen. Normally execute() already persisted it,
+    // but if execute() crashed before persistence this is the safety net.
+    const fuProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const fuProject = this.projectRepo.findById(task.projectId);
+    let fuBaseBranch: string | null | undefined;
+    if (!resolveBaseBranch(task, fuProjectServer, fuProject)) {
+      fuBaseBranch = await resolveAndDetectBaseBranch(
+        task, fuProjectServer, fuProject,
+        this.transportFactory.getTransport(serverAtStart), fuProjectServer?.workingDirectory || null,
+      );
+      if (fuBaseBranch) {
+        this.taskRepo.update(taskId, { baseBranch: fuBaseBranch } as Partial<Task>);
+      }
+    }
+
     // Same gate as execute() (Issue #328). A follow-up can resume a worker
     // just as much as a fresh execute() can — e.g. a description edit on an
     // untrusted task invalidates its approval hash while the task is
@@ -1443,7 +1480,7 @@ export class ExecuteTaskUseCase {
     // endpoint issues) must not resume it unattended. The `comment` for this
     // particular call is not persisted anywhere and is lost when blocked;
     // the caller must resubmit it after approval (see approve-execution).
-    this.enforceExecutionGate(task, unitId, 'resume');
+    this.enforceExecutionGate(task, unitId, 'resume', fuBaseBranch);
 
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
@@ -1534,7 +1571,7 @@ export class ExecuteTaskUseCase {
           return { result, windowName: fuRef.window, ref: fuRef };
         },
           true,
-          (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs),
+          (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs, fuBaseBranch),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
@@ -1883,12 +1920,26 @@ export class ExecuteTaskUseCase {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
 
+    // Issue #63: same baseBranch detection safety net as followUp().
+    const rsmProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const rsmProject = this.projectRepo.findById(task.projectId);
+    let rsmBaseBranch: string | null | undefined;
+    if (!resolveBaseBranch(task, rsmProjectServer, rsmProject)) {
+      rsmBaseBranch = await resolveAndDetectBaseBranch(
+        task, rsmProjectServer, rsmProject,
+        this.transportFactory.getTransport(server), rsmProjectServer?.workingDirectory || null,
+      );
+      if (rsmBaseBranch) {
+        this.taskRepo.update(taskId, { baseBranch: rsmBaseBranch } as Partial<Task>);
+      }
+    }
+
     // Same gate as execute()/followUp() (Issue #328). Reached from
     // approve-plan's "resume from implementing" flow and from startup
     // recovery (RecoverStuckTasksUseCase) — both resume a worker that may
     // have gone stale for an untrusted task (description edited since the
     // approval this run started under).
-    this.enforceExecutionGate(task, unitId, 'resume');
+    this.enforceExecutionGate(task, unitId, 'resume', rsmBaseBranch);
 
     // Validate currentPhase against unitType phases
     if (task.currentPhase) {

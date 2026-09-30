@@ -1905,6 +1905,12 @@ export default function TaskPanel({
                 </div>
               </div>
 
+              {approvalData.execution.baseBranchUnresolvable && (
+                <Notice tone="warning">
+                  {t('executionApproval.baseBranchUnresolvable')}
+                </Notice>
+              )}
+
               <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                 {t('executionApproval.reapprovalNote')}
               </div>

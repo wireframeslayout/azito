@@ -709,24 +709,34 @@ describe('TaskRestoreService', () => {
     await service.restore(task, log);
 
     // findByName is called once at the top of restore() (serverAtStart),
-    // once inside resolveExecutionManifest() for the execution-gate
-    // manifest, then once per lock-and-refetch span below — so
-    // openWorkspace/resolvePane/getTransport must each see whichever
-    // generation its OWN span produced, never an earlier one.
+    // once for pre-gate baseBranch detection (Issue #63), once inside
+    // resolveExecutionManifest() for the execution-gate manifest, then once
+    // per lock-and-refetch span below — so openWorkspace/resolvePane/
+    // getTransport must each see whichever generation its OWN span produced.
+    const transportCalls = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls;
     const createSessionServer = (mockDriver().openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (mockDriver().resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const getTransportServer = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Issue #63: getTransport is called once BEFORE the lock for baseBranch
+    // auto-detection (calls[0], using serverAtStart = gen-1). Post-lock
+    // transport usage (worktree/distribution) is calls[1+].
+    const preGateTransportServer = transportCalls[0][0];
+    expect(preGateTransportServer.agentVersion).toBe('gen-1');
 
     // ensureSessionWithLock's own lock span re-read the server for the
     // session bootstrap — createSession must see that row, not the one
     // resolved at the very top of restore() or inside resolveExecutionManifest().
     expect(createSessionServer.agentVersion).not.toBe('gen-1');
     // createRotatedWindow's own, LATER lock span re-read the server again
-    // for the real task window — resolvePane/getTransport (called after,
-    // with the reassigned `server`) must see that STRICTLY NEWER row, not
-    // the one ensureSessionWithLock's span produced.
+    // for the real task window — resolvePane (called after, with the
+    // reassigned `server`) must see that STRICTLY NEWER row, not the one
+    // ensureSessionWithLock's span produced.
     expect(resolvePaneServer.agentVersion).not.toBe(createSessionServer.agentVersion);
-    expect(getTransportServer.agentVersion).toBe(resolvePaneServer.agentVersion);
+    // Post-lock getTransport (for worktree creation) must see the post-lock
+    // server row, not the pre-lock one used for detection.
+    if (transportCalls.length > 1) {
+      const postLockTransportServer = transportCalls[transportCalls.length - 1][0];
+      expect(postLockTransportServer.agentVersion).toBe(resolvePaneServer.agentVersion);
+    }
   });
 
   // Issue #87 13th-round review, Important finding 1: restore() must run
@@ -1439,5 +1449,44 @@ describe('TaskRestoreService', () => {
 
       expect(result.tmuxTarget).toBe('azito:task-1');
     });
+  });
+});
+
+describe('TaskRestoreService base-branch detection and persistence (Issue #63 review)', () => {
+  const log = { warn: vi.fn() };
+
+  it('detects and persists baseBranch before the execution gate when task has no configured base branch', async () => {
+    const task = makeTask({ baseBranch: null });
+    let deps = makeDeps();
+    // Override project to have no defaultBranch, projectServer to have no branch
+    deps = {
+      ...deps,
+      projectRepo: {
+        ...deps.projectRepo,
+        findById: vi.fn(() => ({ id: 10, name: 'Project', slug: 'project', description: null, repositoryUrl: null, defaultBranch: null, sidekickPrompt: null, icon: null, color: null, defaultUnitId: 20, servers: [], repositories: [], windows: [], createdAt: '2026-01-01', updatedAt: '2026-01-01' })),
+      },
+      projectServerRepo: {
+        ...deps.projectServerRepo,
+        findByProject: vi.fn(() => [{ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
+        find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
+      },
+      transportFactory: {
+        getTransport: vi.fn(() => ({
+          exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/develop', stderr: '', code: 0 })),
+        })),
+      } as unknown as TaskRestoreDeps['transportFactory'],
+    };
+    const service = new TaskRestoreService(deps);
+
+    // Gate will block (untrusted task, manual-approval), but detection+persistence
+    // should happen BEFORE the gate check.
+    task.inputTrust = 'untrusted';
+    try { await service.restore(task, log); } catch {}
+
+    const updateCalls = (deps.taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 1 && (c[1] as { baseBranch?: string }).baseBranch === 'develop',
+    );
+    expect(persistCall).toBeDefined();
   });
 });

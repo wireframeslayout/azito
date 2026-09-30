@@ -67,6 +67,7 @@
         "verification_failed": "対象サーバーの最新の isolation doctor 実行が検証に失敗しています。再検証してください。"
       }
     },
+    "baseBranchUnresolvable": "既定ブランチを検出できませんでした。このままでは実行が失敗します。プロジェクトの既定ブランチを設定してください。",
     "reapprovalNote": "承認後にこのタスクのタイトルまたは本文を編集すると、再承認が必要になります。",
     "approve": "承認",
     "deny": "拒否",

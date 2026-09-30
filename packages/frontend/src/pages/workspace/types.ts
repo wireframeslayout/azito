@@ -140,6 +140,10 @@ export interface ExecutionApprovalData {
     repository: { id: number; provider: string; url: string; owner: string | null; repoName: string | null } | null;
     /** Issue #29 review, Critical finding 2: whether the resolved target server is declared isolation_intent=1 — shown as a one-line notice on the approval screen so a human approver can see that no secrets/UI tokens will reach this run's pane. */
     isolationIntent: boolean;
+    /** Issue #63: true when no configured base branch exists and auto-detection
+     * will be attempted at execution time. Warns the approver that execution
+     * may fail if the repository's default branch cannot be detected. */
+    baseBranchUnresolvable?: boolean;
   };
   secretNames: string[];
 }

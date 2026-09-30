@@ -513,7 +513,11 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const getTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Issue #63: getTransport is now called once BEFORE the lock (for
+    // baseBranch auto-detection, a read-only git query) with the initial
+    // server row — that's calls[0]. Post-lock transport usage goes through
+    // performDistribution's transportFactory reference.
+    const preGateTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's lock span re-read the server for the session
     // bootstrap — openWorkspace must see that row.
@@ -523,11 +527,13 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // than ensureSessionWithLock's, never the same or an earlier one.
     expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
     // Everything execute() does after createRotatedWindow returns
-    // (resolvePane, the worktree transport) must keep using THAT exact
-    // fresh row, not fall back to the `server` resolved before either lock
-    // span ran.
+    // (resolvePane) must keep using THAT exact fresh row, not fall back to
+    // the `server` resolved before either lock span ran.
     expect(resolvePaneServer.agentVersion).toBe(createWindowServer.agentVersion);
-    expect(getTransportServer.agentVersion).toBe(createWindowServer.agentVersion);
+    // Pre-gate baseBranch detection uses the initial server (pre-lock) —
+    // this is intentional: the detection is a read-only git query that
+    // does not need the post-lock freshness guarantee.
+    expect(preGateTransportServer.agentVersion).toBe('gen-1');
   });
 
   // Same Issue #29 review (10th pass) fix as execute()'s own test above,
@@ -2782,7 +2788,7 @@ function buildDistributionGateHarness(opts: {
   taskWorkingDirectory?: string | null;
   /** Overrides task.branch (default null) — for the localBranchSynced fail-fast tests (Important finding 1). */
   taskBranch?: string | null;
-  /** Overrides task.baseBranch (default null, which resolveBaseBranch falls back to 'main' for). */
+  /** Overrides task.baseBranch (default null — triggers auto-detection via detectDefaultBranch). */
   taskBaseBranch?: string | null;
   /** Issue #87 review, 6th pass, Important finding 1: set false to construct the
    * use case WITHOUT a fetchDistributionService (mirrors an unwired hub) — for the
@@ -3923,6 +3929,87 @@ describe('ExecuteTaskUseCase base-branch canonicalization before distribution (I
     expect(worktreeCreate).toHaveBeenCalledWith(
       '/srv/repo', 1, expect.any(String), 'origin/main', undefined,
     );
+  });
+});
+
+describe('ExecuteTaskUseCase base_branch_unresolvable fail-fast (Issue #63 review)', () => {
+  it('throws and logs base_branch_unresolvable when no configured or auto-detected base branch exists', async () => {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70, baseBranch: null });
+    const { useCase, logRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    // resolveAndDetectBaseBranch calls transport.exec for `git remote show origin`;
+    // simulate a repo with no HEAD branch detected.
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    });
+
+    await expect(useCase.execute(70, 70)).rejects.toThrow('ベースブランチを自動検出できません');
+
+    const logCalls = (logRepo.append as ReturnType<typeof vi.fn>).mock.calls;
+    const unresolvableLog = logCalls.find(
+      (c: unknown[]) => typeof c[2] === 'string' && c[2] === 'command' && (c[3] as { type: string }).type === 'base_branch_unresolvable',
+    );
+    expect(unresolvableLog).toBeDefined();
+  });
+
+  it('succeeds when auto-detection returns a branch and persists it on the task', async () => {
+    const unit = makeUnit({ id: 71, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 71, serverName: 'local-server', unitId: 71, baseBranch: null });
+    const { useCase, taskRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    // detectDefaultBranch first tries `git symbolic-ref refs/remotes/origin/HEAD`,
+    // then falls back to checking main/master refs.
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/develop', stderr: '', code: 0 })),
+    });
+
+    // execute() will throw later (phase loop mock), but baseBranch persistence
+    // happens before the phase loop.
+    try { await useCase.execute(71, 71); } catch {}
+
+    const updateCalls = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 71 && (c[1] as { baseBranch?: string }).baseBranch === 'develop',
+    );
+    expect(persistCall).toBeDefined();
+  });
+});
+
+describe('ExecuteTaskUseCase.followUp base-branch detection safety net (Issue #63 review)', () => {
+  it('detects and persists baseBranch when task.baseBranch is null (crash before persistence in execute)', async () => {
+    const unit = makeUnit({ id: 72, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 72, serverName: 'local-server', unitId: 72,
+      baseBranch: null, status: 'in_progress', tmuxWindow: 'task-72',
+    });
+    const { useCase, taskRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/main', stderr: '', code: 0 })),
+    });
+
+    // followUp throws later (phase loop mock), but detection+persistence
+    // happens before the gate.
+    try { await useCase.followUp(72, 72, 'test comment'); } catch {}
+
+    const updateCalls = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 72 && (c[1] as { baseBranch?: string }).baseBranch === 'main',
+    );
+    expect(persistCall).toBeDefined();
   });
 });
 

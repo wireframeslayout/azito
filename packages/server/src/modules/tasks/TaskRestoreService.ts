@@ -16,7 +16,7 @@ import { PathResolverFactory, assertDirectoryContained } from '../git/PathContai
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch, resolveWorktreeCreateBaseBranch } from './execution/TaskExecutionEnv';
 import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
@@ -158,7 +158,21 @@ export class TaskRestoreService {
     // config) the moment the project server was re-pointed. See
     // `ExecutionOperationKind`'s own doc comment (ExecutionManifest.ts) for
     // the full rationale.
-    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'redistribute');
+    // Issue #63: detect baseBranch before the gate so the fingerprint
+    // matches the approval screen's own resolution (resolvePendingApprovalManifest).
+    const restoreProjectServer = projectServerRepo.find(task.projectId, serverName);
+    const restoreProject = projectRepo.findById(task.projectId);
+    const restoreBaseBranch = await resolveAndDetectBaseBranch(
+      task, restoreProjectServer, restoreProject,
+      transportFactory.getTransport(serverAtStart), restoreProjectServer?.workingDirectory || null,
+    );
+    // Persist auto-detected baseBranch so subsequent resolveBaseBranch calls
+    // return the same value (same pattern as execute()).
+    if (restoreBaseBranch && !resolveBaseBranch(task, restoreProjectServer, restoreProject)) {
+      taskRepo.update(task.id, { baseBranch: restoreBaseBranch } as Partial<Task>);
+    }
+
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'redistribute', undefined, undefined, restoreBaseBranch);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` here is the already-resolved ServerConfig
@@ -345,7 +359,7 @@ export class TaskRestoreService {
           // `task.distributionRepositoryId`.
           const { manifest, project: freshProject, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
             unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
-          }, 'redistribute');
+          }, 'redistribute', undefined, undefined, restoreBaseBranch);
           reverifyExecutionGateInLock(
             { taskRepo, logRepo, events },
             task,
@@ -407,19 +421,21 @@ export class TaskRestoreService {
         effectiveDir = workingDir;
       }
 
-      // Canonicalized the same way ExecuteTaskUseCase.execute() and
-      // resolveExecutionManifest() both do (see `canonicalizeBaseBranch`'s
-      // doc comment in TaskExecutionEnv.ts) — restore resolves
-      // `baseBranch` independently of the manifest it builds above (for
-      // the actual worktree creation call below, not for hashing), so
-      // without this it could still create the worktree from an
-      // `origin/`- or `refs/heads/`-qualified value even though the
-      // approved manifest's `branches.base` (ExecutionManifest.ts) records
-      // the canonicalized one (Issue #87 third-party review, 12th round,
-      // Important finding 3). Resolved from `lockedProjectServer`/
+      // Resolved via `resolveAndDetectBaseBranch` — the same auto-detection
+      // path ExecuteTaskUseCase.execute() uses (Issue #63). Already
+      // canonicalized by the helper. Resolved from `lockedProjectServer`/
       // `lockedProject` (Issue #87 16th-round review, Important finding 2),
       // not the pre-lock `projectServer`/`project`.
-      const baseBranch: string = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
+      const transport = transportFactory.getTransport(server);
+      const baseBranch = await resolveAndDetectBaseBranch(task, lockedProjectServer, lockedProject, transport, workingDir);
+      if (!baseBranch) {
+        throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
+      }
+      // Persist auto-detected baseBranch so subsequent phases use the same value.
+      if (!resolveBaseBranch(task, lockedProjectServer, lockedProject)) {
+        taskRepo.update(task.id, { baseBranch } as Partial<Task>);
+        task.baseBranch = baseBranch;
+      }
 
       // Fetch distribution (Issue #87 13th-round review, Important finding 1;
       // 14th-round review, Important finding 1): restoring an archived task
