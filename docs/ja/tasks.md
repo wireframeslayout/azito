@@ -197,6 +197,21 @@ AZITO_QUESTIONS_<taskId>_<nonce>: [
 2. **2分アイドル → LLM分類** — 出力が2分間変化しない場合、LLM（PaneClassifier）でフォールバック判定を実施（`IDLE_TIMEOUT = 120_000`）
 3. **最大5分（延長あり）** — 5分間完全に無応答の場合に停滞と判定（`MAX_IDLE = 300_000`）。フェーズ全体の最大実行時間は30分（延長で60分）
 
+### ランタイム定期検知
+
+5分間隔で、`running` / `in_progress` のタスクが実行ランに登録されているかを確認します。
+登録がなく、かつ `updatedAt` から5分を超えて経過した孤立タスクは、自動的に `failed` に遷移します。
+復旧は `POST /api/units/:id/follow-up` で人が行います。
+
+### Request timed out 復旧手順
+
+Claude Code ワーカーが API エラー（`Request timed out` 等）で停止した場合の流れです。
+
+1. 稼働検知が API エラー停止を検出し、「API エラーで停止しました」通知を出す（[稼働検知](activity-detection.md) の `api_error`）
+2. タスク実行中（WorkerWaiter 管理下）であれば、`MAX_IDLE`（5分）以内に `stopped` → `failed` へ自動遷移する
+3. 実行ランが孤立した場合は、ランタイム定期検知が5分間隔で `failed` に遷移させる
+4. `follow-up` で再開できる。API 障害が継続している場合は、時間を置いてから再開する
+
 ### UI 表示
 
 タスクログ画面（TaskLogView）にて、タスクログ接続が stale（長時間更新なし）になると警告バーが表示されます。経過時間の表示とともに **Retry** ボタンが表示され、クリックすると接続を再確立します。
