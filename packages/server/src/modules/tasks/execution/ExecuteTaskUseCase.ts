@@ -35,7 +35,7 @@ import { shellQuote } from '../../../shared/shellQuote';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
-import { WorkerInputService } from './WorkerInputService';
+import { WorkerInputService, WorkerNotRunningError } from './WorkerInputService';
 import { PushVerifier } from './PushVerifier';
 import { GitInfoCollector } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
@@ -1639,6 +1639,19 @@ export class ExecuteTaskUseCase {
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
         } catch (launchErr) {
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+          this.taskRepo.updateStatus(taskId, 'failed');
+          if (tokenId) {
+            try {
+              await rollbackWindowReference(
+                fuMainDriver.closeWindow(server, ref),
+                this.paneEnvService, tokenId,
+                'followup_worker_launch_failed_rollback',
+                () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+                () => {},
+              );
+            } catch {}
+          }
+          return;
         }
       }
     }
@@ -1727,7 +1740,11 @@ export class ExecuteTaskUseCase {
       } catch (err: unknown) {
         followUpStream.stop();
         followUpSignalStream.stop();
-        this.appendLog(taskId, unitId, 'status_change', { status: 'send_error', message: (err as Error).message });
+        const isDeadWorker = err instanceof WorkerNotRunningError;
+        this.appendLog(taskId, unitId, 'status_change', {
+          status: isDeadWorker ? 'worker_not_running' : 'send_error',
+          message: (err as Error).message,
+        });
         this.taskRepo.updateStatus(taskId, 'failed');
         return;
       }

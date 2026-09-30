@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
-import { WorkerInputService } from './WorkerInputService';
+import { WorkerInputService, WorkerNotRunningError } from './WorkerInputService';
 import { SupervisorCommandError } from '../../supervisors/SupervisorRegistry';
 import type { ServerConfig } from '../../servers/Server';
 
@@ -228,15 +228,15 @@ describe('WorkerInputService.sendPrompt', () => {
       }));
     });
 
-    it('when supervisor is not connected, goes straight to tmux without checking foreground command', async () => {
+    it('when supervisor is not connected but foreground is a shell, the no-supervisor guard catches it (not the supervised-fallback guard)', async () => {
       const { service, mockDriver, registry } = makeHarness();
       registry.isBoundConnected.mockReturnValue(false);
       mockDriver.paneCommandByHandle.mockResolvedValue('bash');
 
-      await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+      await expect(service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }))
+        .rejects.toThrow(WorkerNotRunningError);
 
-      expect(mockDriver.paneCommandByHandle).not.toHaveBeenCalled();
-      expect(mockDriver.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+      expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
     });
 
     it('does not run the guard on sendKeys (y/Enter is harmless in a shell) — autoConfirm keeps its exact previous behavior', async () => {
@@ -249,6 +249,46 @@ describe('WorkerInputService.sendPrompt', () => {
       expect(mockDriver.paneCommandByHandle).not.toHaveBeenCalled();
       expect(mockDriver.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['y', 'Enter']);
     });
+  });
+});
+
+describe('WorkerInputService.sendPrompt — no-supervisor shell guard (sleep follow-up fix)', () => {
+  it('throws WorkerNotRunningError when supervisor is not connected and foreground is a bare shell', async () => {
+    const { service, mockDriver, registry, appendLog } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(false);
+    mockDriver.paneCommandByHandle.mockResolvedValue('bash');
+
+    await expect(service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }))
+      .rejects.toThrow(WorkerNotRunningError);
+
+    expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
+    expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
+      type: 'send_aborted_dead_worker',
+      foreground: 'bash',
+    }));
+  });
+
+  it('sends normally when supervisor is not connected and foreground is a live worker (claude)', async () => {
+    const { service, mockDriver, registry } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(false);
+    mockDriver.paneCommandByHandle.mockResolvedValue('claude');
+
+    await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+
+    expect(mockDriver.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+  });
+
+  it('sends normally when supervisor is not connected and foreground is null (tmux error)', async () => {
+    const { service, mockDriver, registry, appendLog } = makeHarness();
+    registry.isBoundConnected.mockReturnValue(false);
+    mockDriver.paneCommandByHandle.mockResolvedValue(null);
+
+    await service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 });
+
+    expect(mockDriver.sendKeysToHandle).toHaveBeenCalledWith(server, target, ['hello worker', 'Enter']);
+    expect(appendLog).not.toHaveBeenCalledWith(1, 2, 'command', expect.objectContaining({
+      type: 'send_aborted_dead_worker',
+    }));
   });
 });
 

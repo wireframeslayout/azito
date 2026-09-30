@@ -37,6 +37,13 @@ const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
  * below; an unbound (or absent) connection falls through to the tmux
  * send-keys path, same as "no supervisor" always has.
  */
+export class WorkerNotRunningError extends Error {
+  constructor(public readonly foreground: string) {
+    super(`Worker is not running (foreground: ${foreground})`);
+    this.name = 'WorkerNotRunningError';
+  }
+}
+
 export class WorkerInputService {
   constructor(
     private muxDriverRegistry: MuxDriverRegistry,
@@ -75,6 +82,19 @@ export class WorkerInputService {
         return;
       }
     }
+
+    // No supervisor — guard against sending to a bare shell
+    const foreground = await driver.paneCommandByHandle(server, handle);
+    if (foreground !== null && SHELL_COMMANDS.has(foreground)) {
+      if (ctx) {
+        this.appendLog(ctx.taskId, ctx.unitId, 'command', {
+          type: 'send_aborted_dead_worker',
+          foreground,
+        });
+      }
+      throw new WorkerNotRunningError(foreground);
+    }
+
     await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
   }
 
