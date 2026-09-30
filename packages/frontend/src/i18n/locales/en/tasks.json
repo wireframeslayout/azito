@@ -67,6 +67,7 @@
         "verification_failed": "The target server's last isolation doctor run did not pass — re-verify it."
       }
     },
+    "baseBranchUnresolvable": "No base branch is configured. The repository's default branch will be auto-detected at execution time, but execution will fail if detection is unsuccessful.",
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
     "approve": "Approve",
     "deny": "Deny",

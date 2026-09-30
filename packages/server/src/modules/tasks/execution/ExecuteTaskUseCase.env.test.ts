@@ -3932,6 +3932,87 @@ describe('ExecuteTaskUseCase base-branch canonicalization before distribution (I
   });
 });
 
+describe('ExecuteTaskUseCase base_branch_unresolvable fail-fast (Issue #63 review)', () => {
+  it('throws and logs base_branch_unresolvable when no configured or auto-detected base branch exists', async () => {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70, baseBranch: null });
+    const { useCase, logRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    // resolveAndDetectBaseBranch calls transport.exec for `git remote show origin`;
+    // simulate a repo with no HEAD branch detected.
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    });
+
+    await expect(useCase.execute(70, 70)).rejects.toThrow('ベースブランチを自動検出できません');
+
+    const logCalls = (logRepo.append as ReturnType<typeof vi.fn>).mock.calls;
+    const unresolvableLog = logCalls.find(
+      (c: unknown[]) => typeof c[2] === 'string' && c[2] === 'command' && (c[3] as { type: string }).type === 'base_branch_unresolvable',
+    );
+    expect(unresolvableLog).toBeDefined();
+  });
+
+  it('succeeds when auto-detection returns a branch and persists it on the task', async () => {
+    const unit = makeUnit({ id: 71, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 71, serverName: 'local-server', unitId: 71, baseBranch: null });
+    const { useCase, taskRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    // detectDefaultBranch first tries `git symbolic-ref refs/remotes/origin/HEAD`,
+    // then falls back to checking main/master refs.
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/develop', stderr: '', code: 0 })),
+    });
+
+    // execute() will throw later (phase loop mock), but baseBranch persistence
+    // happens before the phase loop.
+    try { await useCase.execute(71, 71); } catch {}
+
+    const updateCalls = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 71 && (c[1] as { baseBranch?: string }).baseBranch === 'develop',
+    );
+    expect(persistCall).toBeDefined();
+  });
+});
+
+describe('ExecuteTaskUseCase.followUp base-branch detection safety net (Issue #63 review)', () => {
+  it('detects and persists baseBranch when task.baseBranch is null (crash before persistence in execute)', async () => {
+    const unit = makeUnit({ id: 72, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 72, serverName: 'local-server', unitId: 72,
+      baseBranch: null, status: 'in_progress', tmuxWindow: 'task-72',
+    });
+    const { useCase, taskRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/main', stderr: '', code: 0 })),
+    });
+
+    // followUp throws later (phase loop mock), but detection+persistence
+    // happens before the gate.
+    try { await useCase.followUp(72, 72, 'test comment'); } catch {}
+
+    const updateCalls = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 72 && (c[1] as { baseBranch?: string }).baseBranch === 'main',
+    );
+    expect(persistCall).toBeDefined();
+  });
+});
+
 // Issue #87 13th-round review, Important finding: isPushCompleted() (the
 // startup-recovery fallback for a task stuck mid-pushing, see
 // RecoverStuckTasksUseCase) must resolve the SAME repository fetch

@@ -158,7 +158,21 @@ export class TaskRestoreService {
     // config) the moment the project server was re-pointed. See
     // `ExecutionOperationKind`'s own doc comment (ExecutionManifest.ts) for
     // the full rationale.
-    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'redistribute');
+    // Issue #63: detect baseBranch before the gate so the fingerprint
+    // matches the approval screen's own resolution (resolvePendingApprovalManifest).
+    const restoreProjectServer = projectServerRepo.find(task.projectId, serverName);
+    const restoreProject = projectRepo.findById(task.projectId);
+    const restoreBaseBranch = await resolveAndDetectBaseBranch(
+      task, restoreProjectServer, restoreProject,
+      transportFactory.getTransport(serverAtStart), restoreProjectServer?.workingDirectory || null,
+    );
+    // Persist auto-detected baseBranch so subsequent resolveBaseBranch calls
+    // return the same value (same pattern as execute()).
+    if (restoreBaseBranch && !resolveBaseBranch(task, restoreProjectServer, restoreProject)) {
+      taskRepo.update(task.id, { baseBranch: restoreBaseBranch } as Partial<Task>);
+    }
+
+    const { manifest, project, unit, projectServer } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'redistribute', undefined, undefined, restoreBaseBranch);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` here is the already-resolved ServerConfig
@@ -345,7 +359,7 @@ export class TaskRestoreService {
           // `task.distributionRepositoryId`.
           const { manifest, project: freshProject, projectServer: freshProjectServer } = resolveExecutionManifest(task, {
             unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader,
-          }, 'redistribute');
+          }, 'redistribute', undefined, undefined, restoreBaseBranch);
           reverifyExecutionGateInLock(
             { taskRepo, logRepo, events },
             task,
