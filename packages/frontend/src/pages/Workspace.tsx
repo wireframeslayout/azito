@@ -1207,6 +1207,7 @@ function WorkspaceInner() {
         agentModel={addWindowModal.awAgentModel}
         onAgentModelChange={addWindowModal.setAwAgentModel}
         workerModels={addWindowModal.awWorkerModels}
+        workerType={addWindowModal.awQuickAddAgent}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}

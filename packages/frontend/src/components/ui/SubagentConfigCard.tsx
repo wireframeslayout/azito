@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import FormField from '../FormField';
 import { FormSelect } from './FormInput';
+import { ModelSelect } from './ModelSelect';
 
 export interface SubagentConfig {
   enabled: boolean;
@@ -79,12 +80,13 @@ export default function SubagentConfigCard({ title, description, value, onChange
             </FormSelect>
           </FormField>
           <FormField label={t('subagentConfig.model')}>
-            <FormSelect value={value?.model ?? ''} onChange={(e) => handleModelChange(e.target.value)}>
-              <option value="">{t('subagentConfig.selectModel')}</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </FormSelect>
+            <ModelSelect
+              models={models}
+              value={value?.model ?? ''}
+              onChange={handleModelChange}
+              placeholder={t('subagentConfig.selectModel')}
+              note={value?.provider === 'codex' ? 'gpt-6 系は Codex CLI 0.159 以降が必要です' : undefined}
+            />
           </FormField>
         </div>
       )}

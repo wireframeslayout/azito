@@ -7,7 +7,7 @@ import type { AgentDefinition } from '../hooks/useAgentDefinitions';
 import { useUnitTypes, findUnitType } from '../hooks/useUnitTypes';
 import { useConfirm } from '../hooks/useConfirm';
 import FormField from './FormField';
-import { FormInput, FormTextarea, FormSelect, LoadingState, SubagentConfigCard, PhaseConfigCard, Button, FormPage } from './ui';
+import { FormInput, FormTextarea, FormSelect, LoadingState, SubagentConfigCard, PhaseConfigCard, Button, FormPage, ModelSelect } from './ui';
 import type { SubagentConfig, PhaseConfigEntry } from './ui';
 import type { Unit } from '../pages/workspace/types';
 
@@ -244,9 +244,13 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
         </FormSelect>
       </FormField>
       <FormField label={t('runtime.model')}>
-        <FormSelect value={workerModel} onChange={(e) => setWorkerModel(e.target.value)}>
-          {modelOptions.length === 0 ? <option value="">{t('runtime.freeInput')}</option> : modelOptions.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-        </FormSelect>
+        <ModelSelect
+          models={modelOptions}
+          value={workerModel}
+          onChange={setWorkerModel}
+          placeholder={modelOptions.length === 0 ? t('runtime.freeInput') : undefined}
+          note={workerType === 'codex' ? 'gpt-6 系は Codex CLI 0.159 以降が必要です' : undefined}
+        />
       </FormField>
       {agentDefsError && (
         <div role="alert" style={{

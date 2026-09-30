@@ -1,9 +1,8 @@
-import React from 'react';
 import { useTranslation } from 'react-i18next';
 import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
-import { FormSelect, baseInputStyle, Button } from '../ui';
+import { baseInputStyle, Button, ModelSelect } from '../ui';
 
 interface QuickAddWindowModalProps {
   open: boolean;
@@ -18,6 +17,7 @@ interface QuickAddWindowModalProps {
   agentModel: string;
   onAgentModelChange: (model: string) => void;
   workerModels: { id: string; label: string }[];
+  workerType?: string;
 }
 
 /**
@@ -30,6 +30,7 @@ export default function QuickAddWindowModal({
   serverName, agentLabel, showModel,
   workDir, onWorkDirChange,
   agentModel, onAgentModelChange, workerModels,
+  workerType,
 }: QuickAddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
   return (
@@ -55,10 +56,13 @@ export default function QuickAddWindowModal({
       </FormField>
       {showModel && (
         <FormField label={t('addWindow.model')}>
-          <FormSelect value={agentModel} onChange={(e) => onAgentModelChange(e.target.value)}>
-            <option value="">{t('common:labels.default')}</option>
-            {workerModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-          </FormSelect>
+          <ModelSelect
+            models={workerModels}
+            value={agentModel}
+            onChange={onAgentModelChange}
+            placeholder={t('common:labels.default')}
+            note={workerType === 'codex' ? 'gpt-6 系は Codex CLI 0.159 以降が必要です' : undefined}
+          />
         </FormField>
       )}
     </Modal>

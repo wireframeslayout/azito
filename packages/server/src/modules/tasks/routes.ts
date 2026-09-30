@@ -33,7 +33,7 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
-import { type MuxRef, tmuxTargetFromMuxRef, muxRefFromTmuxTarget } from '@azito/shared';
+import { type MuxRef, tmuxTargetFromMuxRef, muxRefFromTmuxTarget, isValidModelId } from '@azito/shared';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -42,6 +42,9 @@ function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConf
   if (typeof obj['enabled'] !== 'boolean') throw new Error(`${fieldName}.enabled must be boolean`);
   if (typeof obj['provider'] !== 'string') throw new Error(`${fieldName}.provider must be string`);
   if (typeof obj['model'] !== 'string') throw new Error(`${fieldName}.model must be string`);
+  if (obj['model'] && !isValidModelId(obj['model'] as string)) {
+    throw new Error(`${fieldName}.model contains invalid characters`);
+  }
   if (obj['enabled'] && (!obj['provider'] || !obj['model'])) {
     throw new Error(`${fieldName}: provider and model are required when enabled is true`);
   }

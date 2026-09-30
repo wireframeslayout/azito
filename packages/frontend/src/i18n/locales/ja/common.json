@@ -219,5 +219,9 @@
   },
   "docs": {
     "learnMore": "詳しくはドキュメント"
+  },
+  "modelSelect": {
+    "custom": "その他（ID を入力）",
+    "invalidId": "A-Z, a-z, 0-9, ., _, :, - のみ使用可（64文字以内）"
   }
 }
