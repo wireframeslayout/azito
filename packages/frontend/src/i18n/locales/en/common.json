@@ -94,7 +94,8 @@
   "tokenGate": {
     "title": "AZITO",
     "instruction": "Enter the UI token to continue.",
-    "tokenRequired": "Token is required"
+    "tokenRequired": "Token is required",
+    "storageDuration": "Saved in this browser for 60 days (extended on each visit)"
   },
   "windowPaneTree": {
     "noWindows": "No windows attached",
