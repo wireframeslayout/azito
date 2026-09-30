@@ -49,7 +49,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
@@ -331,6 +331,7 @@ export class ExecuteTaskUseCase {
     task: Task,
     unitId: number,
     operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
+    baseBranchOverride?: string | null,
   ) {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
     // project.defaultUnitId) / serverName the caller already resolved via
@@ -358,7 +359,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, operation === 'execute' ? 'execute' : 'continuation');
+    }, operation === 'execute' ? 'execute' : 'continuation', undefined, undefined, baseBranchOverride);
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
     // every entry point, not just resolved once at approval time — see
@@ -679,11 +680,32 @@ export class ExecuteTaskUseCase {
     // to `ServerConfig | null`.
     let server: ServerConfig = serverAtStart;
 
+    // Issue #63: detect baseBranch BEFORE the execution gate so the
+    // fingerprint includes the auto-detected value. The approval screen
+    // computes the same detection, so the hashes match. When detection
+    // succeeds and no configured value existed, persist it so all
+    // subsequent resolveBaseBranch calls (PhaseLoopRunner re-verification,
+    // resume gate checks) return the same value.
+    const prelimProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const prelimProject = this.projectRepo.findById(task.projectId);
+    const prelimWorkingDir = task.workingDirectory || prelimProjectServer?.workingDirectory || null;
+    const detectedBaseBranch = await resolveAndDetectBaseBranch(
+      task, prelimProjectServer, prelimProject,
+      this.transportFactory.getTransport(server), prelimWorkingDir,
+    );
+    if (!detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
+      this.appendLog(taskId, unitId, 'command', { type: 'base_branch_unresolvable' });
+      throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
+    }
+    if (detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
+      this.taskRepo.update(taskId, { baseBranch: detectedBaseBranch } as Partial<Task>);
+    }
+
     // Untrusted-input execution gate (Issue #328): must run before the
     // resource guard, before any tmux window, before any worktree, before
     // any secret is injected. Resolves project/projectServer once for reuse
     // below.
-    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute');
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute', detectedBaseBranch);
 
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
@@ -902,30 +924,11 @@ export class ExecuteTaskUseCase {
     const windowTarget = tmuxTargetFromMuxRef(ref);
     const handle = await executeDriver.resolvePane(server, ref, 1);
 
-    // Resolved ONCE, via `resolveAndDetectBaseBranch` which tries the
-    // configured precedence chain first and, only when that returns null,
-    // auto-detects from the repository's git state (Issue #63: the previous
-    // hard-coded 'main' fallback broke repositories whose default branch is
-    // 'master'). Already canonicalized by `resolveAndDetectBaseBranch`.
-    // Computed unconditionally (not only when `workingDir` is set) because
-    // fetch distribution's own prerequisite checks (via performDistribution)
-    // need it regardless of whether a working directory happens to be
-    // configured. Resolved from `lockedProjectServer`/`lockedProject` (Issue
-    // #87 16th-round review, Important finding 2), not the pre-lock
-    // `projectServer`/`project` — see reverifyGateInLock's doc comment.
-    const transport = this.transportFactory.getTransport(server);
-    const baseBranch = await resolveAndDetectBaseBranch(task, lockedProjectServer, lockedProject, transport, workingDir);
-    if (!baseBranch) {
-      this.appendLog(taskId, unitId, 'command', { type: 'base_branch_unresolvable' });
-      await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, 'base_branch_unresolvable_rollback');
-      throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
-    }
-    // Persist the auto-detected baseBranch so that PhaseLoopRunner's
-    // reverification (via resolveBaseBranch) returns the same value
-    // without needing to re-detect from git state.
-    if (!resolveBaseBranch(task, lockedProjectServer, lockedProject)) {
-      this.taskRepo.update(taskId, { baseBranch } as Partial<Task>);
-    }
+    // Issue #63: baseBranch was already resolved (and persisted when
+    // auto-detected) BEFORE enforceExecutionGate, so that the gate's
+    // fingerprint includes the detected value. Reuse it here — no
+    // second detection (Resolve at the Boundary).
+    const baseBranch = detectedBaseBranch!;
 
     // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
     // — they hold no git credentials of their own, so distribution is not

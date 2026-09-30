@@ -421,13 +421,13 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // window throws rather than silently falling back to the wrong
       // manifest; surfaced here as a 409, not a display of stale/incorrect
       // data.
-      let manifest: ReturnType<typeof resolvePendingApprovalManifest>['manifest'];
-      let unit: ReturnType<typeof resolvePendingApprovalManifest>['unit'];
-      let serverName: ReturnType<typeof resolvePendingApprovalManifest>['serverName'];
-      let projectServer: ReturnType<typeof resolvePendingApprovalManifest>['projectServer'];
+      let manifest: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['manifest'];
+      let unit: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['unit'];
+      let serverName: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['serverName'];
+      let projectServer: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['projectServer'];
       try {
-        ({ manifest, unit, serverName, projectServer } = resolvePendingApprovalManifest(task, {
-          unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo,
+        ({ manifest, unit, serverName, projectServer } = await resolvePendingApprovalManifest(task, {
+          unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, transportFactory,
         }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -580,16 +580,16 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // Denial is not meaningful here (nothing is blocked to deny) — the
       // caller falls through to the ordinary 400 below.
       if (task.status === 'open' && task.inputTrust === 'untrusted' && task.pendingOperation === null && body.approved) {
-        const outcome = decideExecutionPreApproval(
-          { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events: executeTaskUseCase.events },
+        const outcome = await decideExecutionPreApproval(
+          { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events: executeTaskUseCase.events, transportFactory },
           { taskId, unitId, fingerprint: body.fingerprint as string, origin: origin ?? 'creation_form' },
           request.log,
         );
         return reply.status(outcome.status).send(outcome.body);
       }
 
-      const outcome = decideExecutionApproval(
-        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog: auditLogService },
+      const outcome = await decideExecutionApproval(
+        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog: auditLogService, transportFactory },
         { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin, actor: request.principal ?? OPERATOR_PRINCIPAL },
         request.log,
       );

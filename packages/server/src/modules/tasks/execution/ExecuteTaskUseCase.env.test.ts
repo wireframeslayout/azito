@@ -513,7 +513,11 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const getTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Issue #63: getTransport is now called once BEFORE the lock (for
+    // baseBranch auto-detection, a read-only git query) with the initial
+    // server row — that's calls[0]. Post-lock transport usage goes through
+    // performDistribution's transportFactory reference.
+    const preGateTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's lock span re-read the server for the session
     // bootstrap — openWorkspace must see that row.
@@ -523,11 +527,13 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // than ensureSessionWithLock's, never the same or an earlier one.
     expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
     // Everything execute() does after createRotatedWindow returns
-    // (resolvePane, the worktree transport) must keep using THAT exact
-    // fresh row, not fall back to the `server` resolved before either lock
-    // span ran.
+    // (resolvePane) must keep using THAT exact fresh row, not fall back to
+    // the `server` resolved before either lock span ran.
     expect(resolvePaneServer.agentVersion).toBe(createWindowServer.agentVersion);
-    expect(getTransportServer.agentVersion).toBe(createWindowServer.agentVersion);
+    // Pre-gate baseBranch detection uses the initial server (pre-lock) —
+    // this is intentional: the detection is a read-only git query that
+    // does not need the post-lock freshness guarantee.
+    expect(preGateTransportServer.agentVersion).toBe('gen-1');
   });
 
   // Same Issue #29 review (10th pass) fix as execute()'s own test above,
