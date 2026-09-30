@@ -26,6 +26,23 @@ function isClaudeLaunchCommand(command: string): boolean {
   return /\bclaude\b/i.test(command) && !/\bcodex\b/i.test(command);
 }
 
+export class TuiNotReadyError extends Error {
+  constructor(public readonly trustDialogDetected: boolean, public readonly lastScreen: string) {
+    super(
+      trustDialogDetected
+        ? 'Claude Code の信頼確認ダイアログで起動が停止しました'
+        : 'Claude Code TUI did not become ready within 30s',
+    );
+    this.name = 'TuiNotReadyError';
+  }
+}
+
+function hasTrustDialog(output: string): boolean {
+  const stripped = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').toLowerCase();
+  return stripped.includes('trust this folder') ||
+    (stripped.includes('no,') && stripped.includes('exit') && stripped.includes('yes,') && stripped.includes('trust'));
+}
+
 function isTuiReady(output: string): boolean {
   const stripped = output.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '');
   const lower = stripped.toLowerCase();
@@ -80,14 +97,19 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
 
     if (!strict) return;
 
+    let lastScreen = '';
     const deadline = Date.now() + 27000;
     while (Date.now() < deadline) {
       const result = await driver.captureScreen(server, handle, -50);
-      if (isTuiReady(result.stdout)) return;
+      lastScreen = result.stdout;
+      if (isTuiReady(lastScreen)) return;
+      if (hasTrustDialog(lastScreen)) {
+        throw new TuiNotReadyError(true, lastScreen);
+      }
       await sleep(1000);
     }
 
-    throw new Error('Claude Code TUI did not become ready within 30s');
+    throw new TuiNotReadyError(hasTrustDialog(lastScreen), lastScreen);
   }
 
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
@@ -50,6 +50,14 @@ describe('ensureClaudeTrust (local)', () => {
       action: 'skipped',
       reason: '~/.claude.json not found',
     });
+  });
+
+  it('preserves file permissions after write', async () => {
+    writeFileSync(configPath(), JSON.stringify({ projects: {} }), { mode: 0o600 });
+    chmodSync(configPath(), 0o600);
+    await ensureClaudeTrust('local', transportStub, '/wt');
+    const mode = statSync(configPath()).mode & 0o777;
+    expect(mode).toBe(0o600);
   });
 
   it('preserves existing fields and other projects', async () => {

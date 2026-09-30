@@ -49,7 +49,7 @@ import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
-import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
+import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
@@ -1233,13 +1233,18 @@ export class ExecuteTaskUseCase {
 
       if (unit.workerType === 'claude' && workingDir) {
         try {
+          const transport = this.transportFactory.getTransport(server);
+          const resolver = this.pathResolverFactory.create(server.type, transport);
+          const resolvedWorkingDir = await resolver.resolveRealPath(workingDir);
           const trustResult = await ensureClaudeTrust(
             server.type,
-            this.transportFactory.getTransport(server),
-            workingDir,
+            transport,
+            resolvedWorkingDir,
           );
           if (trustResult.action === 'registered') {
-            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: workingDir });
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: resolvedWorkingDir });
+          } else if (trustResult.action === 'skipped') {
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_skipped', reason: trustResult.reason });
           } else if (trustResult.action === 'failed') {
             this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_failed', reason: trustResult.reason });
           }
@@ -1372,12 +1377,15 @@ export class ExecuteTaskUseCase {
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
-        // Keep the historical "launch failure is not fatal here" behaviour, but never hide it.
-        let launchMessage = (launchErr as Error).message;
-        if (unit.workerType === 'claude' && launchMessage.includes('did not become ready')) {
-          launchMessage += ' — Claude Code の信頼確認ダイアログで起動がブロックされた可能性があります';
+        if (launchErr instanceof TuiNotReadyError && launchErr.trustDialogDetected) {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'claude_trust_dialog_detected',
+            message: `Claude Code の信頼確認ダイアログで起動が停止しました。作業ディレクトリ ${effectiveDir || workingDir} を信頼済みにしてください`,
+          });
+          this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+          return;
         }
-        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: launchMessage });
+        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
       }
     }
 
@@ -1831,13 +1839,9 @@ export class ExecuteTaskUseCase {
         followUpStream.stop();
         followUpSignalStream.stop();
         const isDeadWorker = err instanceof WorkerNotRunningError;
-        let sendMessage = (err as Error).message;
-        if (isDeadWorker && unit.workerType === 'claude') {
-          sendMessage += ' — Claude Code の信頼確認で終了した可能性があります。作業ディレクトリを信頼済みにしてください';
-        }
         this.appendLog(taskId, unitId, 'status_change', {
           status: isDeadWorker ? 'worker_not_running' : 'send_error',
-          message: sendMessage,
+          message: (err as Error).message,
         });
         this.taskRepo.updateStatus(taskId, 'failed');
         return;

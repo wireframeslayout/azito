@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs';
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
 import { homedir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
@@ -18,8 +18,8 @@ const REMOTE_SCRIPT = [
   'if(!d.projects)d.projects={};',
   'if(d.projects[dir]&&d.projects[dir].hasTrustDialogAccepted){console.log("TRUSTED");process.exit(0)}',
   'd.projects[dir]=Object.assign({},d.projects[dir],{hasTrustDialogAccepted:true});',
-  'const tmp=p+".tmp."+process.pid;',
-  'fs.writeFileSync(tmp,JSON.stringify(d,null,2));fs.renameSync(tmp,p);console.log("REGISTERED")',
+  'const m=fs.statSync(p).mode&0o777,tmp=p+".tmp."+process.pid;',
+  'fs.writeFileSync(tmp,JSON.stringify(d,null,2),{mode:m});fs.renameSync(tmp,p);console.log("REGISTERED")',
 ].join('');
 
 function ensureLocalClaudeTrust(projectPath: string): EnsureClaudeTrustResult {
@@ -40,9 +40,10 @@ function ensureLocalClaudeTrust(projectPath: string): EnsureClaudeTrustResult {
     ...config,
     projects: { ...config.projects, [projectPath]: { ...existing, hasTrustDialogAccepted: true } },
   };
+  const originalMode = statSync(configPath).mode & 0o777;
   const tmpPath = `${configPath}.tmp.${process.pid}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify(updated, null, 2));
+    writeFileSync(tmpPath, JSON.stringify(updated, null, 2), { mode: originalMode });
     renameSync(tmpPath, configPath);
   } catch (err) {
     try { unlinkSync(tmpPath); } catch {}
