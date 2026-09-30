@@ -11,6 +11,7 @@ import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
+import { isValidModelId } from '@azito/shared';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
@@ -42,6 +43,9 @@ function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConf
   if (typeof obj['enabled'] !== 'boolean') throw new Error(`${fieldName}.enabled must be boolean`);
   if (typeof obj['provider'] !== 'string') throw new Error(`${fieldName}.provider must be string`);
   if (typeof obj['model'] !== 'string') throw new Error(`${fieldName}.model must be string`);
+  if (obj['model'] && !isValidModelId(obj['model'] as string)) {
+    throw new Error(`${fieldName}.model contains invalid characters`);
+  }
   if (obj['enabled'] && (!obj['provider'] || !obj['model'])) {
     throw new Error(`${fieldName}: provider and model are required when enabled is true`);
   }
@@ -119,6 +123,9 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
     if (!name) {
       return reply.status(400).send({ error: 'name required' });
     }
+    if (worker_model && !isValidModelId(worker_model as string)) {
+      return reply.code(400).send({ error: 'Invalid worker_model format' });
+    }
     try {
       const unitTypeName = (unit_type as string) ?? 'devops';
       const unitType = unitTypeLoader.get(unitTypeName);
@@ -184,6 +191,9 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         worker_runtime,
         sleep_after_push,
       } = request.body as Record<string, unknown>;
+      if (worker_model && !isValidModelId(worker_model as string)) {
+        return reply.code(400).send({ error: 'Invalid worker_model format' });
+      }
       try {
         const unitTypeName = (unit_type as string | undefined) ?? existing.unitType;
         const unitType = unitTypeLoader.get(unitTypeName);

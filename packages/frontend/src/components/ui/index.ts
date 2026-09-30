@@ -1,6 +1,7 @@
 export { TabBar } from './TabBar';
 export type { TabItem, TabBarProps } from './TabBar';
 export { FormInput, FormTextarea, FormSelect, baseInputStyle } from './FormInput';
+export { ModelSelect } from './ModelSelect';
 export { LoadingState } from './LoadingState';
 export { Spinner } from './Spinner';
 export { EmptyState } from './EmptyState';

@@ -1,9 +1,9 @@
-import React from 'react';
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
-import { FormSelect, baseInputStyle, Button } from '../ui';
+import { baseInputStyle, Button, ModelSelect } from '../ui';
 
 interface QuickAddWindowModalProps {
   open: boolean;
@@ -18,6 +18,7 @@ interface QuickAddWindowModalProps {
   agentModel: string;
   onAgentModelChange: (model: string) => void;
   workerModels: { id: string; label: string }[];
+  workerType?: string;
 }
 
 /**
@@ -30,8 +31,12 @@ export default function QuickAddWindowModal({
   serverName, agentLabel, showModel,
   workDir, onWorkDirChange,
   agentModel, onAgentModelChange, workerModels,
+  workerType,
 }: QuickAddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
+  const [modelInvalid, setModelInvalid] = useState(false);
+  const handleModelValidityChange = useCallback((valid: boolean) => setModelInvalid(!valid), []);
+
   return (
     <Modal
       title={t('windows.quickAddTitle', { label: agentLabel, serverName })}
@@ -39,7 +44,7 @@ export default function QuickAddWindowModal({
       onClose={onClose}
       maxWidth={400}
       actions={
-        <Button variant="primary" onClick={onSubmit} loading={loading} loadingLabel={t('addWindow.adding')}>
+        <Button variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid} loadingLabel={t('addWindow.adding')}>
           {t('addWindow.createAndAdd')}
         </Button>
       }
@@ -55,10 +60,14 @@ export default function QuickAddWindowModal({
       </FormField>
       {showModel && (
         <FormField label={t('addWindow.model')}>
-          <FormSelect value={agentModel} onChange={(e) => onAgentModelChange(e.target.value)}>
-            <option value="">{t('common:labels.default')}</option>
-            {workerModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-          </FormSelect>
+          <ModelSelect
+            models={workerModels}
+            value={agentModel}
+            onChange={onAgentModelChange}
+            onValidityChange={handleModelValidityChange}
+            placeholder={t('common:labels.default')}
+            note={workerType === 'codex' ? t('common:modelSelect.codexVersionNote') : undefined}
+          />
         </FormField>
       )}
     </Modal>

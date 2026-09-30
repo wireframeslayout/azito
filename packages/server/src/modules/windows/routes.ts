@@ -17,7 +17,7 @@ import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
-import { isSameWindowTarget } from '@azito/shared';
+import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -95,6 +95,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
 
       const workerType = (body['worker_type'] as string) || null;
+      const workerModel = (body['worker_model'] as string) || null;
+      if (workerModel && !isValidModelId(workerModel)) {
+        return reply.code(400).send({ error: 'Invalid worker_model format' });
+      }
       const workingDirectory = (body['working_directory'] as string) || null;
       const winId = windowRepo.add({
         ownerType: 'project',
@@ -107,7 +111,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         isPrimary: false,
         windowType: (body['window_type'] as string) === 'agent' ? 'agent' : 'terminal',
         workerType,
-        workerModel: (body['worker_model'] as string) || null,
+        workerModel,
         agentSessionId: null,
         launchCommand: (body['launch_command'] as string) || null,
         workingDirectory,
@@ -226,6 +230,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return { ok: true, id: existing.id };
       }
 
+      if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
+        return reply.code(400).send({ error: 'Invalid worker_model format' });
+      }
       const workerType = (body['worker_type'] as string) || null;
       const workingDirectory = (body['working_directory'] as string) || null;
       const winId = windowRepo.add({
@@ -265,7 +272,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if ('label' in body) data['label'] = (body['label'] as string)?.trim() || null;
       if ('agent_session_id' in body) data['agentSessionId'] = body['agent_session_id'];
       if ('launch_command' in body) data['launchCommand'] = body['launch_command'];
-      if ('worker_model' in body) data['workerModel'] = body['worker_model'];
+      if ('worker_model' in body) {
+        if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
+          return reply.code(400).send({ error: 'Invalid worker_model format' });
+        }
+        data['workerModel'] = body['worker_model'];
+      }
       if ('working_directory' in body) data['workingDirectory'] = body['working_directory'];
 
       if ('window_type' in body || 'worker_type' in body) {

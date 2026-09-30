@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import FormField from '../FormField';
 import { FormSelect } from './FormInput';
+import { ModelSelect } from './ModelSelect';
 
 export interface SubagentConfig {
   enabled: boolean;
@@ -27,9 +28,10 @@ interface SubagentConfigCardProps {
   value: SubagentConfig | null;
   onChange: (next: SubagentConfig | null) => void;
   workerType?: string;
+  onModelValidityChange?: (valid: boolean) => void;
 }
 
-export default function SubagentConfigCard({ title, description, value, onChange, workerType }: SubagentConfigCardProps) {
+export default function SubagentConfigCard({ title, description, value, onChange, workerType, onModelValidityChange }: SubagentConfigCardProps) {
   const { t } = useTranslation('common');
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
 
@@ -79,12 +81,14 @@ export default function SubagentConfigCard({ title, description, value, onChange
             </FormSelect>
           </FormField>
           <FormField label={t('subagentConfig.model')}>
-            <FormSelect value={value?.model ?? ''} onChange={(e) => handleModelChange(e.target.value)}>
-              <option value="">{t('subagentConfig.selectModel')}</option>
-              {models.map((m) => (
-                <option key={m.id} value={m.id}>{m.label}</option>
-              ))}
-            </FormSelect>
+            <ModelSelect
+              models={models}
+              value={value?.model ?? ''}
+              onChange={handleModelChange}
+              onValidityChange={onModelValidityChange}
+              placeholder={t('subagentConfig.selectModel')}
+              note={value?.provider === 'codex' ? t('modelSelect.codexVersionNote') : undefined}
+            />
           </FormField>
         </div>
       )}

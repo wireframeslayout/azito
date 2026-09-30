@@ -219,5 +219,10 @@
   },
   "docs": {
     "learnMore": "Learn more in the docs"
+  },
+  "modelSelect": {
+    "custom": "Other (enter ID)",
+    "invalidId": "Only A-Z, a-z, 0-9, ., _, :, - allowed (max 64 chars)",
+    "codexVersionNote": "gpt-6 models require Codex CLI 0.159 or later"
   }
 }

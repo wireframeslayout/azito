@@ -1,9 +1,9 @@
-import React from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
-import { FormInput, FormSelect, baseInputStyle, Button } from '../ui';
+import { FormInput, FormSelect, baseInputStyle, Button, ModelSelect } from '../ui';
 import { api } from '../../api/client';
 import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
@@ -77,8 +77,11 @@ export default function AddWindowModal({
   servers, projectServers, project,
 }: AddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
+  const [modelInvalid, setModelInvalid] = useState(false);
+  const handleModelValidityChange = useCallback((valid: boolean) => setModelInvalid(!valid), []);
+
   return (
-    <Modal title={t('addWindow.title')} open={open} onClose={onClose} actions={<Button variant="primary" onClick={onSubmit} loading={loading} loadingLabel={t('addWindow.adding')}>{awMode === 'new' ? t('addWindow.createAndAdd') : awMode === 'session' ? t('addWindow.addAllWindows') : t('addWindow.add')}</Button>}>
+    <Modal title={t('addWindow.title')} open={open} onClose={onClose} actions={<Button variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid} loadingLabel={t('addWindow.adding')}>{awMode === 'new' ? t('addWindow.createAndAdd') : awMode === 'session' ? t('addWindow.addAllWindows') : t('addWindow.add')}</Button>}>
       {awMode === 'new' ? (
         <>
           {projectServers.length > 1 && (
@@ -139,12 +142,16 @@ export default function AddWindowModal({
               </div>
             )}
           </FormField>
-          {awAgent !== 'none' && awAgent !== 'custom' && awWorkerModels.length > 0 && (
+          {awAgent !== 'none' && awAgent !== 'custom' && (
             <FormField label={t('addWindow.model')}>
-              <FormSelect value={awAgentModel} onChange={(e) => setAwAgentModel(e.target.value)}>
-                <option value="">{t('common:labels.default')}</option>
-                {awWorkerModels.map((m) => <option key={m.id} value={m.id}>{m.label}</option>)}
-              </FormSelect>
+              <ModelSelect
+                models={awWorkerModels}
+                value={awAgentModel}
+                onChange={setAwAgentModel}
+                onValidityChange={handleModelValidityChange}
+                placeholder={t('common:labels.default')}
+                note={awAgent === 'codex' ? t('common:modelSelect.codexVersionNote') : undefined}
+              />
             </FormField>
           )}
           {awAgent === 'custom' && (
