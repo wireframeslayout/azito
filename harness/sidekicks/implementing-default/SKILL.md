@@ -18,8 +18,7 @@ Working directory: {{projectServer.workingDirectory}}
 {{project.sidekickPrompt}}
 
 If this is a git repository:
-- Create a working branch from {{project.defaultBranch}}
-- Name the branch based on the task content
+- Work on the current branch (`{{task.branchName}}`). Do not create new branches or switch branches.
 - Commit frequently with clear messages
 </rules>
 

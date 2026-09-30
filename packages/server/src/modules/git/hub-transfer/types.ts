@@ -113,12 +113,18 @@ export interface PushNotaryParams {
    * read `repo.token` itself — see `resolvePushCredential`'s doc comment.
    */
   token: string;
+  /** The task's explicit target branch (PR base), if set. Used by effectiveBranch validation. */
+  targetBranch: string | null;
+  /** The project's default branch (e.g. 'main'). Used by effectiveBranch validation. */
+  defaultBranch: string | null;
 }
 
 export interface PushNotaryResult {
   status: 'notarized' | 'already_up_to_date' | 'failed';
   sha?: string;
   error?: string;
+  /** Set when the worker's actual HEAD branch differs from `params.branch`. */
+  actualBranch?: string;
 }
 
 export interface CleanPushResult {
