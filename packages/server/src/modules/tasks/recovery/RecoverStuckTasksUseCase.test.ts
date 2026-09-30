@@ -878,4 +878,83 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('dead'));
   });
+
+  describe('runPeriodic', () => {
+    const OLD = '2026-06-16 00:00:00';
+
+    function stubStatuses(byStatus: Partial<Record<TaskStatus, Task[]>>): void {
+      mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) => byStatus[status] ?? []);
+    }
+
+    it('marks an orphaned running task as failed and logs the reason', async () => {
+      stubStatuses({ running: [makeTask({ id: 50, updatedAt: OLD })] });
+
+      await createUseCase(mocks).runPeriodic({});
+
+      expect(mocks.taskRepo.updateStatus).toHaveBeenCalledWith(50, 'failed');
+      expect(mocks.logRepo.append).toHaveBeenCalledWith(
+        50,
+        1,
+        'status_change',
+        expect.objectContaining({ status: 'error', message: expect.stringContaining('periodic') }),
+      );
+      expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    });
+
+    it('does not fail orphaned in_progress tasks (only run() handles those)', async () => {
+      stubStatuses({ in_progress: [makeTask({ id: 51, status: 'in_progress', updatedAt: OLD })] });
+
+      await createUseCase(mocks).runPeriodic({});
+
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not fail a manually set in_progress task that has no execution run', async () => {
+      stubStatuses({
+        in_progress: [makeTask({ id: 54, status: 'in_progress', currentPhase: null, updatedAt: OLD })],
+      });
+
+      await createUseCase(mocks).runPeriodic({ 1: [{ taskId: 999 }] });
+
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+      expect(mocks.logRepo.append).not.toHaveBeenCalled();
+    });
+
+    it('skips tasks registered in running executions', async () => {
+      stubStatuses({ running: [makeTask({ id: 52, updatedAt: OLD })] });
+
+      await createUseCase(mocks).runPeriodic({ 1: [{ taskId: 52 }] });
+
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+      expect(mocks.logRepo.append).not.toHaveBeenCalled();
+    });
+
+    it('skips tasks updated less than 5 minutes ago', async () => {
+      const recent = new Date(Date.now() - 4 * 60_000).toISOString().slice(0, 19).replace('T', ' ');
+      stubStatuses({ running: [makeTask({ id: 53, updatedAt: recent })] });
+
+      await createUseCase(mocks).runPeriodic({});
+
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('fails tasks updated more than 5 minutes ago', async () => {
+      const stale = new Date(Date.now() - 6 * 60_000).toISOString().slice(0, 19).replace('T', ' ');
+      stubStatuses({ running: [makeTask({ id: 54, updatedAt: stale })] });
+
+      await createUseCase(mocks).runPeriodic({});
+
+      expect(mocks.taskRepo.updateStatus).toHaveBeenCalledWith(54, 'failed');
+    });
+
+    it('skips a task whose unit cannot be resolved', async () => {
+      stubStatuses({ running: [makeTask({ id: 55, unitId: null, updatedAt: OLD })] });
+      mocks.projectRepo.findById.mockReturnValue({ id: 1, defaultUnitId: null });
+
+      await createUseCase(mocks).runPeriodic({});
+
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+      expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('no unit resolvable'));
+    });
+  });
 });

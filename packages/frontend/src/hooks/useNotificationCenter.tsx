@@ -283,6 +283,10 @@ export function NotificationCenterProvider({ children }: { children: React.React
         && !isWatched(payload.serverName, payload.target, payload.taskId)) {
         pushNotification(buildAgentNotification('agent_finished', 'notifications:kinds.agentFinished', { label: agentLabelOf(payload) }, payload));
       }
+      if (!payload.running && payload.reason === 'api_error'
+        && !isWatched(payload.serverName, payload.target, payload.taskId)) {
+        pushNotification(buildAgentNotification('agent_finished', 'notifications:kinds.agentApiError', { label: agentLabelOf(payload) }, payload));
+      }
     }, [pushNotification, isWatched]),
   });
 

@@ -26,6 +26,13 @@ export interface RecoveryLogger {
 
 const RECOVERABLE_STATUSES: TaskStatus[] = ['running', 'in_progress'];
 const MAX_CONCURRENT = 3;
+const ORPHAN_GRACE_MS = 5 * 60_000;
+
+type RunningExecutions = Record<number, Array<{ taskId: number }>>;
+
+function collectRunningTaskIds(running: RunningExecutions): Set<number> {
+  return new Set(Object.values(running).flat().map((e) => e.taskId));
+}
 
 export class RecoverStuckTasksUseCase {
   constructor(
@@ -54,6 +61,44 @@ export class RecoverStuckTasksUseCase {
     }
   }
 
+  async runPeriodic(running: RunningExecutions): Promise<void> {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    try {
+      this.failOrphanedTasks(running);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  private failOrphanedTasks(running: RunningExecutions): void {
+    const runningTaskIds = collectRunningTaskIds(running);
+    const now = Date.now();
+    // in_progress is intentionally excluded: it can be set manually from the UI
+    // and is never registered as an execution run.
+    for (const task of this.taskRepo.findByStatus('running')) {
+      if (runningTaskIds.has(task.id)) continue;
+      const updatedAtMs = Date.parse(`${task.updatedAt.replace(' ', 'T')}Z`);
+      if (now - updatedAtMs < ORPHAN_GRACE_MS) continue;
+      this.failOrphanedTask(task);
+    }
+  }
+
+  private failOrphanedTask(task: Task): void {
+    const project = this.projectRepo.findById(task.projectId);
+    const unitId = resolveUnitId(task, project);
+    if (unitId === null) {
+      this.logger.warn(`Periodic recovery skip: no unit resolvable for task ${task.id}`);
+      return;
+    }
+    this.logRepo.append(task.id, unitId, 'status_change', {
+      status: 'error',
+      message: 'Task has no running execution; marked failed by periodic stuck-task detection',
+    });
+    this.taskRepo.updateStatus(task.id, 'failed');
+    this.logger.warn(`Periodic recovery: task ${task.id} (${task.status}) has no running execution -> failed`);
+  }
+
   private async doRun(): Promise<void> {
     const stuckTasks: Task[] = [];
     for (const status of RECOVERABLE_STATUSES) {
@@ -61,10 +106,7 @@ export class RecoverStuckTasksUseCase {
     }
     if (stuckTasks.length === 0) return;
 
-    const running = this.executeTaskUseCase.getRunning();
-    const runningTaskIds = new Set(
-      Object.values(running).flat().map((e) => e.taskId),
-    );
+    const runningTaskIds = collectRunningTaskIds(this.executeTaskUseCase.getRunning());
     const candidates = stuckTasks.filter((t) => !runningTaskIds.has(t.id));
     if (candidates.length === 0) return;
 

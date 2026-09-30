@@ -164,7 +164,7 @@ async function main(): Promise<void> {
 
   // ─── Startup: recover stuck tasks ───
 
-  new RecoverStuckTasksUseCase(
+  const recoverStuckTasks = new RecoverStuckTasksUseCase(
     wiring.taskRepo,
     wiring.unitRepo,
     wiring.serverRepo,
@@ -176,7 +176,14 @@ async function main(): Promise<void> {
     wiring.agentTurnRepo,
     app.log,
     wiring.unitTypeLoader,
-  ).run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+  );
+  recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+
+  setInterval(() => {
+    recoverStuckTasks.runPeriodic(wiring.executeTaskUseCase.getRunning()).catch((err) => {
+      app.log.warn(`Periodic stuck task recovery failed: ${err}`);
+    });
+  }, 5 * 60_000);
 
   // ─── Startup: check agent versions ───
 

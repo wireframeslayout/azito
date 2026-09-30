@@ -18,7 +18,8 @@
     "executionApproval": "実行承認待ち: {{title}}",
     "taskDone": "タスク完了: {{title}}",
     "taskFailed": "タスク失敗: {{title}}",
-    "agentFinished": "エージェント終了: {{label}}"
+    "agentFinished": "エージェント終了: {{label}}",
+    "agentApiError": "{{label}} が API エラーで停止しました"
   },
   "toast": {
     "dismissAriaLabel": "通知を閉じる"

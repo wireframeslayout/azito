@@ -208,6 +208,15 @@ supervisor の `register` 受理時に `muxPaneRef` がある場合、ハブは�
 `claude` / `codex` 以外（`generic` 等）は常に `unknown` を返し、Tier 3 へ落ちます
 （`CLASSIFIABLE_AGENT_TYPES`）。
 
+### `api_error` ルール（error 状態）
+
+claude の画面規則には `api_error` があります。Claude Code の API エラー表示（`API Error` に
+`Request timed out` / `Overloaded` / `Connection error` / `Service unavailable` のいずれかが続く行）を、
+プロンプト箱の上部（`above` 領域）で検出し、`error` 状態として分類します。
+
+- 通常の `idle`（正常完了）とは区別され、停止遷移の reason は `api_error` になります（§7）
+- priority は 80 で、`permission_prompt`（85）より低い。選択/確認プロンプトが出ている間は blocked が優先されます
+
 ### 画面確認の3値（blocked / not_blocked / unknown）
 
 画面確認（`screenVerdict()`）の答えは3値です。`unknown` は「blocked でない」の同義語ではなく
@@ -310,6 +319,7 @@ housekeeping レコードで埋まることが常態です。固定 16KB の単�
 |---|---|---|
 | `completed` | supervisor の active→idle ／ hook の Stop ／ Tier 2 の working→idle ／ Tier 4 の `terminal_final` 観測（合成含む） | 「完了」行を生成（60分 TTL、再完了で更新・未読化）。完了 push 通知 |
 | `interrupted` | 末尾が中断マーカー（停止ボタン・Esc） | 完了行を作らない |
+| `api_error` | Tier 2 がペイン画面に Claude の API エラーメッセージを検出（§4）。エージェントは停止しているが、正常完了ではない | 完了行を作らない。「API エラーで停止しました」通知 |
 | `deleted` | tmux ウィンドウ消滅（live→gone のエッジで一度だけ）／ `windows` 行の削除 | 該当の完了行も即時除去 |
 | `offline` | プロセス消滅・クラッシュフェイルセーフ・supervisor の `child_exit` / 切断 | 完了行を作らない |
 | `unknown` | 活動が枯れた等、終端の証拠が無い停止 | 完了行を作らない |

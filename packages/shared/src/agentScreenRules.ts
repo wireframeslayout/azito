@@ -1,5 +1,5 @@
 export type AgentKind = 'claude' | 'codex';
-export type PaneAgentState = 'working' | 'idle' | 'blocked' | 'unknown';
+export type PaneAgentState = 'working' | 'idle' | 'blocked' | 'error' | 'unknown';
 
 /**
  * A screen split around Claude Code's prompt box (the `❯` input framed by two
@@ -69,6 +69,26 @@ export const CLAUDE_SCREEN_RULES: ScreenRule[] = [
         t.includes('do you want to proceed?') ||
         t.includes('requires approval') ||
         (/(❯|1\.)\s*yes/.test(t) && /2\.\s*no/.test(t))
+      );
+    },
+  },
+  {
+    id: 'api_error',
+    state: 'error',
+    priority: 60,
+    region: 'above',
+    test: (ls) => {
+      // Only the lines right above the prompt box: stale errors higher up
+      // (e.g. right after a follow-up resumes) must not count.
+      const t = text(ls.slice(-4));
+      // Claude Code keeps working while it auto-retries.
+      if (t.includes('retrying in')) return false;
+      return (
+        t.includes('api error') &&
+        (t.includes('request timed out') ||
+          t.includes('overloaded') ||
+          t.includes('connection error') ||
+          t.includes('service unavailable'))
       );
     },
   },

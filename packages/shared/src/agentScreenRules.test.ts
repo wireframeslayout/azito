@@ -98,6 +98,65 @@ describe('agentScreenRules', () => {
     });
   });
 
+  describe('api_error rule', () => {
+    const errorScreen = (message: string) =>
+      classifyScreen('claude', { above: [`  ⎿  ${message}`], promptBox: ['  ❯ '] });
+
+    it.each([
+      'API Error: Request timed out.',
+      'API Error: 529 overloaded_error',
+      'API Error: Connection error.',
+      'API Error: 503 Service Unavailable',
+    ])('classifies "%s" as error', (message) => {
+      expect(errorScreen(message)).toBe('error');
+    });
+
+    it('does not match "api error" without a known cause', () => {
+      expect(errorScreen('API Error: something else')).not.toBe('error');
+    });
+
+    it('does not match a known cause without "api error"', () => {
+      expect(errorScreen('request timed out')).not.toBe('error');
+    });
+
+    it('is outranked by a permission prompt', () => {
+      const result = classifyScreen('claude', {
+        above: ['API Error: Request timed out.', 'Do you want to proceed?'],
+        promptBox: ['  ❯ '],
+      });
+      expect(result).toBe('blocked');
+    });
+
+    it('is outranked by the interrupt line', () => {
+      const result = classifyScreen('claude', {
+        above: ['API Error: Request timed out.'],
+        promptBox: ['  ❯ '],
+        below: ['  ⏸ manual mode on · esc to interrupt'],
+      });
+      expect(result).toBe('working');
+    });
+
+    it('does not classify an auto-retrying error as error', () => {
+      expect(
+        errorScreen('API Error (Request timed out.) · Retrying in 5 seconds… (attempt 2/10)'),
+      ).not.toBe('error');
+    });
+
+    it('ignores a stale API Error outside the last 4 lines above the prompt box', () => {
+      const result = classifyScreen('claude', {
+        above: [
+          '  ⎿  API Error: Request timed out.',
+          'line 1',
+          'line 2',
+          'line 3',
+          'line 4',
+        ],
+        promptBox: ['  ❯ '],
+      });
+      expect(result).not.toBe('error');
+    });
+  });
+
   describe('classifyTitle', () => {
     describe('claude', () => {
       it.each(['⠐', '⠙', '◐', '◑', '◒', '◓', '✻', '✶', '✽', '✢', '∗'])(

@@ -208,6 +208,7 @@
     "colTransition": "最終遷移",
     "stateWorking": "稼働中",
     "stateBlocked": "確認待ち",
+    "stateError": "APIエラー",
     "stateIdle": "待機",
     "stateOffline": "オフライン",
     "stateNone": "判定なし",
