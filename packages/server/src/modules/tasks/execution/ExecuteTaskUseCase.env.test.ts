@@ -594,6 +594,37 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(supervisorRegistry.clearExitMarker).toHaveBeenCalledWith('local-server', 'azito:w1');
   });
 
+  it('followUp() rejects and marks the task as failed when runtime.resume() throws (Issue #421 regression)', async () => {
+    const unit = makeUnit({ id: 50, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 5, serverName: 'local-server', unitId: 50, tmuxWindow: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    // Make the worker launch fail: sendKeysToHandle throws when the claude
+    // launch command is sent (the second call — the first is `cd`).
+    (tmux.sendKeysToHandle as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, _handle: unknown, keys: string[]) => {
+      if ((keys as string[])[0]?.includes('claude')) {
+        throw new Error('TUI launch failed');
+      }
+    });
+
+    await expect(useCase.followUp(50, 5, 'please continue')).rejects.toThrow(/Follow-up worker launch failed/);
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(5, 'failed');
+    // sendPrompt must NOT have been called — the prompt text is never sent
+    // when the worker launch fails.
+    const promptCalls = tmux.sendKeysToHandle.mock.calls.filter(
+      (call: unknown[]) => {
+        const keys = call[2] as string[];
+        return keys[0]?.includes('please continue');
+      },
+    );
+    expect(promptCalls).toHaveLength(0);
+  });
+
   it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (http-signal mode)', async () => {
     const unit = makeUnit({ id: 47, workerType: 'claude', workerModel: 'opus', workerExecutionMode: 'http-signal' });
     const task = makeTask({ id: 3, serverName: 'local-server', unitId: 47 });

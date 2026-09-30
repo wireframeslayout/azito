@@ -1649,9 +1649,11 @@ export class ExecuteTaskUseCase {
                 () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
                 () => {},
               );
-            } catch {}
+            } catch (rollbackErr) {
+              this.appendLog(taskId, unitId, 'command', { type: 'followup_rollback_failed', message: (rollbackErr as Error).message });
+            }
           }
-          return;
+          throw new Error(`Follow-up worker launch failed: ${(launchErr as Error).message}`);
         }
       }
     }
