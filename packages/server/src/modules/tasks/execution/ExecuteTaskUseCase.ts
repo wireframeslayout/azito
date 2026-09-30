@@ -1769,6 +1769,13 @@ export class ExecuteTaskUseCase {
         return;
       }
 
+      if (classification.status === 'stopped') {
+        this.appendLog(taskId, unitId, 'output', output);
+        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Agent stopped unexpectedly during follow-up' });
+        this.taskRepo.updateStatus(taskId, 'failed');
+        return;
+      }
+
       // Handle phase_complete during planning: extract plan and go to phase_review
       // Use task.currentPhase (original at followUp entry) for phase resolution, not DB status
       // (DB was updated to in_progress at entry, losing the original phase context)
