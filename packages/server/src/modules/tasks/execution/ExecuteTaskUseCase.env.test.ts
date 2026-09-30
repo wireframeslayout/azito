@@ -2788,7 +2788,7 @@ function buildDistributionGateHarness(opts: {
   taskWorkingDirectory?: string | null;
   /** Overrides task.branch (default null) — for the localBranchSynced fail-fast tests (Important finding 1). */
   taskBranch?: string | null;
-  /** Overrides task.baseBranch (default null, which resolveBaseBranch falls back to 'main' for). */
+  /** Overrides task.baseBranch (default null — triggers auto-detection via detectDefaultBranch). */
   taskBaseBranch?: string | null;
   /** Issue #87 review, 6th pass, Important finding 1: set false to construct the
    * use case WITHOUT a fetchDistributionService (mirrors an unwired hub) — for the

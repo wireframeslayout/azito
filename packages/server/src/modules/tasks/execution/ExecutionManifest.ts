@@ -1029,12 +1029,10 @@ export function resolveExecutionManifest(
   // 3). Every manifest consumer (approval, restore's own gate check,
   // respawn) resolves through this one function, so applying it here is
   // sufficient — no other resolveBaseBranch() call site feeds a manifest.
+  const rawFallback = baseBranchOverride === undefined ? resolveBaseBranch(task, projectServer, project) : null;
   const baseBranch: string | null = baseBranchOverride !== undefined
     ? baseBranchOverride
-    : (() => {
-        const raw = resolveBaseBranch(task, projectServer, project);
-        return raw ? canonicalizeBaseBranch(raw) : null;
-      })();
+    : rawFallback ? canonicalizeBaseBranch(rawFallback) : null;
   // Resolved via the same `serverRepo.findByName()` TransportFactory's
   // callers use at run time to pick local/SSH/agent — see the `server`
   // manifest field's doc comment above (Issue #328 tenth-round review).
