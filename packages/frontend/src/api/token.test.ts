@@ -98,6 +98,27 @@ describe('ui token storage', () => {
     expect(local.getItem(KEY)).toBeNull();
   });
 
+  it('localStorage が使えない環境で再読み込みしてもトークンが消えない', async () => {
+    const throwingLocal = new FakeStorage();
+    const origSet = throwingLocal.setItem.bind(throwingLocal);
+    throwingLocal.setItem = (_key: string, _value: string) => {
+      throw new DOMException('QuotaExceededError');
+    };
+    (globalThis as unknown as { localStorage: Storage }).localStorage = throwingLocal as unknown as Storage;
+    const { setUiToken } = await import('./token');
+    setUiToken('tok');
+    expect(session.getItem(KEY)).not.toBeNull();
+
+    vi.resetModules();
+    const freshThrowingLocal = new FakeStorage();
+    freshThrowingLocal.setItem = () => { throw new DOMException('QuotaExceededError'); };
+    (globalThis as unknown as { localStorage: Storage }).localStorage = freshThrowingLocal as unknown as Storage;
+    (globalThis as unknown as { window: EventTarget }).window = new EventTarget();
+    const { getUiToken: getUiToken2 } = await import('./token');
+    expect(getUiToken2()).toBe('tok');
+    expect(session.getItem(KEY)).not.toBeNull();
+  });
+
   it('clearUiToken は localStorage と sessionStorage の両方を消す', async () => {
     const { setUiToken, clearUiToken, hasUiToken } = await import('./token');
     setUiToken('tok');

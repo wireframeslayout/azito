@@ -53,10 +53,10 @@ export function TokenGate({ children }: TokenGateProps) {
         maxWidth: 400,
       }}>
         <h2 style={{ fontSize: 'var(--font-xl)', marginBottom: 8 }}>{t('tokenGate.title')}</h2>
-        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-secondary)', marginBottom: 4 }}>
+        <p style={{ fontSize: 'var(--font-base)', color: 'var(--text-dim)', marginBottom: 4 }}>
           {t('tokenGate.instruction')}
         </p>
-        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-secondary)', marginBottom: 16 }}>
+        <p style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 16 }}>
           {t('tokenGate.storageDuration')}
         </p>
         <form onSubmit={(e) => { e.preventDefault(); handleSubmit(); }}>

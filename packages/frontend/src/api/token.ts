@@ -44,17 +44,23 @@ function write(entry: StoredToken): void {
   }
 }
 
-function migrateFromSessionStorage(): void {
+function migrateFromSessionStorage(now: number): void {
   if (migrated) return;
   migrated = true;
   const legacy = sessionStorage.getItem(STORAGE_KEY);
   if (legacy === null || localStorage.getItem(STORAGE_KEY) !== null) return;
-  write({ token: legacy, expiresAt: Date.now() + TTL_MS });
-  sessionStorage.removeItem(STORAGE_KEY);
+  // Only migrate old-format bare tokens; new-format JSON is not a migration candidate
+  if (parseStored(legacy, now) !== null) return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ token: legacy, expiresAt: now + TTL_MS }));
+    sessionStorage.removeItem(STORAGE_KEY);
+  } catch {
+    // localStorage unavailable — leave sessionStorage intact for this tab
+  }
 }
 
 export function getUiToken(now: number = Date.now()): string {
-  migrateFromSessionStorage();
+  migrateFromSessionStorage(now);
   const stored = readStored(now);
   if (stored === null) return '';
   if (stored.expiresAt - TTL_MS + REFRESH_INTERVAL_MS < now) {
