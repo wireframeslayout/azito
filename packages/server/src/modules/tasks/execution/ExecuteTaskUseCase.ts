@@ -700,6 +700,7 @@ export class ExecuteTaskUseCase {
     }
     if (detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
       this.taskRepo.update(taskId, { baseBranch: detectedBaseBranch } as Partial<Task>);
+      task.baseBranch = detectedBaseBranch;
     }
 
     // Untrusted-input execution gate (Issue #328): must run before the

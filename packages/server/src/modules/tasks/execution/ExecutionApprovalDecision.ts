@@ -120,7 +120,7 @@ export async function resolvePendingApprovalManifest(
   const serverConfig = serverName ? deps.serverRepo.findByName(serverName) : null;
   const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
   const project = deps.projectRepo.findById(task.projectId);
-  const workingDir = task.workingDirectory || projectServer?.workingDirectory || null;
+  const workingDir = projectServer?.workingDirectory || null;
   const transport = serverConfig ? deps.transportFactory.getTransport(serverConfig) : null;
   const baseBranchOverride = await resolveAndDetectBaseBranch(task, projectServer, project, transport, workingDir);
 
@@ -752,7 +752,7 @@ export async function decideExecutionPreApproval(
   const preApprovalServer = preApprovalServerName ? serverRepo.findByName(preApprovalServerName) : null;
   const preApprovalProjectServer = preApprovalServerName ? projectServerRepo.find(task.projectId, preApprovalServerName) : null;
   const preApprovalProject = projectRepo.findById(task.projectId);
-  const preApprovalWorkingDir = task.workingDirectory || preApprovalProjectServer?.workingDirectory || null;
+  const preApprovalWorkingDir = preApprovalProjectServer?.workingDirectory || null;
   const preApprovalTransport = preApprovalServer ? transportFactory.getTransport(preApprovalServer) : null;
   const preApprovalBaseBranch = await resolveAndDetectBaseBranch(task, preApprovalProjectServer, preApprovalProject, preApprovalTransport, preApprovalWorkingDir);
   const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'execute', undefined, undefined, preApprovalBaseBranch);

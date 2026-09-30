@@ -434,6 +434,7 @@ export class TaskRestoreService {
       // Persist auto-detected baseBranch so subsequent phases use the same value.
       if (!resolveBaseBranch(task, lockedProjectServer, lockedProject)) {
         taskRepo.update(task.id, { baseBranch } as Partial<Task>);
+        task.baseBranch = baseBranch;
       }
 
       // Fetch distribution (Issue #87 13th-round review, Important finding 1;

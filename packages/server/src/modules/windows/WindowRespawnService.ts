@@ -22,7 +22,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
-import { resolveMuxWorkspace } from '../tasks/execution/TaskExecutionEnv';
+import { resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch } from '../tasks/execution/TaskExecutionEnv';
 import {
   confirmOldWindowGone,
   createPlainWindowInLock,
@@ -210,11 +210,26 @@ export class WindowRespawnService {
     // applies (Issue #328 fifth-round review).
     let task: Task | null = null;
     let unitId: number | null = null;
+    let respawnBaseBranch: string | null | undefined;
     if (win.taskId !== null) {
       task = this.taskRepo.findById(win.taskId);
     }
     if (task) {
-      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win));
+      // Issue #63: detect and persist baseBranch before the gate so the
+      // fingerprint matches the approval screen's detection.
+      const rspProjectServer = this.projectServerRepo.find(task.projectId, server.name);
+      const rspProject = this.projectRepo.findById(task.projectId);
+      if (!resolveBaseBranch(task, rspProjectServer, rspProject)) {
+        respawnBaseBranch = await resolveAndDetectBaseBranch(
+          task, rspProjectServer, rspProject,
+          this.transportFactory.getTransport(server), rspProjectServer?.workingDirectory || null,
+        );
+        if (respawnBaseBranch) {
+          this.taskRepo.update(task.id, { baseBranch: respawnBaseBranch } as Partial<Task>);
+          task.baseBranch = respawnBaseBranch;
+        }
+      }
+      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win), respawnBaseBranch);
     }
 
     // Whether `win` is the task's PRIMARY worker window — the only window a
@@ -357,7 +372,7 @@ export class WindowRespawnService {
             projectSecretRepo: this.projectSecretRepo,
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
-          }, 'continuation', buildRespawnManifestInput(currentWin), freshServer.name);
+          }, 'continuation', buildRespawnManifestInput(currentWin), freshServer.name, respawnBaseBranch);
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task!,
@@ -532,6 +547,7 @@ export class WindowRespawnService {
     operation: 'respawn' | 'recover_session_legacy',
     windowId: number | null,
     respawnInput?: RespawnManifestInput,
+    baseBranchOverride?: string | null,
   ): number | null {
     // `server` here is the ACTUAL server this respawn/legacy-recover will
     // run on (respawn()/resumeLegacySession() both resolve it from the
@@ -553,7 +569,7 @@ export class WindowRespawnService {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, 'continuation', respawnInput, server.name);
+    }, 'continuation', respawnInput, server.name, baseBranchOverride);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` is the caller-resolved ACTUAL target
@@ -642,7 +658,20 @@ export class WindowRespawnService {
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
 
-    const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
+    // Issue #63: same detection safety net as respawn().
+    let legacyBaseBranch: string | null | undefined;
+    const legacyPs = this.projectServerRepo.find(task.projectId, server.name);
+    const legacyPj = this.projectRepo.findById(task.projectId);
+    if (!resolveBaseBranch(task, legacyPs, legacyPj)) {
+      legacyBaseBranch = await resolveAndDetectBaseBranch(
+        task, legacyPs, legacyPj,
+        this.transportFactory.getTransport(server), legacyPs?.workingDirectory || null,
+      );
+      if (legacyBaseBranch) {
+        this.taskRepo.update(task.id, { baseBranch: legacyBaseBranch } as Partial<Task>);
+      }
+    }
+    const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null, undefined, legacyBaseBranch);
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, server.name, this.projectServerRepo);
     // Window generation point — rotates the task token via createRotatedWindow,
@@ -688,7 +717,7 @@ export class WindowRespawnService {
             projectSecretRepo: this.projectSecretRepo,
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
-          }, 'continuation', undefined, freshServer.name);
+          }, 'continuation', undefined, freshServer.name, legacyBaseBranch);
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task,

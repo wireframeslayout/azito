@@ -504,11 +504,10 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           // injected" notice, matching what `secretNames` above already
           // reflects (empty for an isolated server).
           isolationIntent: manifest.server.isolationIntent,
-          // Issue #63: true when resolveBaseBranch returned null (no
-          // configured base branch) and auto-detection will be attempted at
-          // execution time. Surfaced so the approval screen can warn that
-          // execution may fail if the repository's default branch cannot be
-          // detected.
+          // Issue #63: true when auto-detection of the repository's default
+          // branch failed (the approval screen already attempted detection
+          // via resolveAndDetectBaseBranch). Surfaced so the approval screen
+          // can warn that execution will fail without a configured base branch.
           baseBranchUnresolvable: manifest.branches.base === null,
         },
         secretNames,
