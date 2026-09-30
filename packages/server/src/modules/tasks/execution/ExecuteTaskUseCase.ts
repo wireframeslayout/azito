@@ -1769,7 +1769,7 @@ export class ExecuteTaskUseCase {
         return;
       }
 
-      if (classification.status === 'stopped') {
+      if (classification.status === 'stopped' && !abortController.signal.aborted) {
         this.appendLog(taskId, unitId, 'output', output);
         this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Agent stopped unexpectedly during follow-up' });
         this.taskRepo.updateStatus(taskId, 'failed');
