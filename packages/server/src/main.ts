@@ -93,6 +93,9 @@ async function main(): Promise<void> {
     app.log.error('AZITO_BIND must not be 0.0.0.0 or :: — bind to 127.0.0.1 or a Tailscale IP');
     process.exit(1);
   }
+  if (HOST !== '127.0.0.1' && HOST !== '::1' && HOST !== 'localhost') {
+    app.log.warn(`AZITO_BIND is set to a non-loopback address (${HOST}). Local tmux panes use http://127.0.0.1:${PORT} to reach the hub, which will fail when the hub does not listen on loopback. Consider removing AZITO_BIND and using 'tailscale serve' instead.`);
+  }
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
