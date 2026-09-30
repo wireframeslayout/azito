@@ -49,6 +49,7 @@ describe('SystemUpdateService', () => {
       masterKey: path.join(tmpDir, 'master.key'),
       vapidKeys: path.join(tmpDir, 'vapid-keys.json'),
       uiToken: path.join(tmpDir, 'ui-token'),
+      webhookToken: path.join(tmpDir, 'webhook-token'),
       browserProfile: path.join(tmpDir, 'browser-profile'),
       sidekicks: path.join(tmpDir, 'sidekicks'),
       updateState: path.join(tmpDir, 'update-state.json'),

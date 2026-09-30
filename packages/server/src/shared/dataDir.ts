@@ -9,6 +9,7 @@ export interface DataPaths {
   masterKey: string;
   vapidKeys: string;
   uiToken: string;
+  webhookToken: string;
   browserProfile: string;
   sidekicks: string;
   updateState: string;
@@ -34,6 +35,7 @@ export function resolveDataDir(): DataPaths {
       masterKey: path.join(dir, 'master.key'),
       vapidKeys: path.join(dir, 'vapid-keys.json'),
       uiToken: path.join(dir, 'ui-token'),
+      webhookToken: path.join(dir, 'webhook-token'),
       browserProfile: path.join(dir, 'browser-profile'),
       sidekicks,
       updateState: path.join(dir, 'update-state.json'),
@@ -59,6 +61,7 @@ export function resolveDataDir(): DataPaths {
       masterKey: path.join(dir, 'master.key'),
       vapidKeys: path.join(dir, 'vapid-keys.json'),
       uiToken: path.join(dir, 'ui-token'),
+      webhookToken: path.join(dir, 'webhook-token'),
       browserProfile: path.join(dir, 'browser-profile'),
       sidekicks,
       updateState: path.join(dir, 'update-state.json'),
@@ -79,6 +82,7 @@ export function resolveDataDir(): DataPaths {
     masterKey: path.join(dataSubdir, 'master.key'),
     vapidKeys: path.join(dataSubdir, 'vapid-keys.json'),
     uiToken: path.join(dataSubdir, 'ui-token'),
+    webhookToken: path.join(dataSubdir, 'webhook-token'),
     browserProfile: path.join(dataSubdir, 'browser-profile'),
     sidekicks,
     updateState: path.join(dataSubdir, 'update-state.json'),

@@ -19,30 +19,38 @@ describe('env', () => {
 
   it('parses plain %q values', () => {
     fs.writeFileSync(file, 'AZITO_URL=http://localhost:3001\nAZITO_WEBHOOK_TOKEN=abc123\n');
-    const env = resolveHubEnv({}, file);
-    expect(env).toEqual({ url: 'http://localhost:3001', token: 'abc123' });
+    const result = resolveHubEnv({}, file);
+    expect(result).toEqual({ ok: true, env: { url: 'http://localhost:3001', token: 'abc123' } });
   });
 
   it('decodes backslash-escaped %q values (spaces, quotes, dollars)', () => {
     // printf '%q' 'a b$c"d' -> a\ b\$c\"d
     fs.writeFileSync(file, 'AZITO_URL=http://h/\nAZITO_WEBHOOK_TOKEN=a\\ b\\$c\\"d\n');
-    const env = resolveHubEnv({}, file);
-    expect(env?.token).toBe('a b$c"d');
+    const result = resolveHubEnv({}, file);
+    expect(result.ok && result.env.token).toBe('a b$c"d');
   });
 
   it('prefers process env over the file', () => {
     fs.writeFileSync(file, 'AZITO_URL=http://from-file\nAZITO_WEBHOOK_TOKEN=file-token\n');
-    const env = resolveHubEnv({ AZITO_URL: 'http://from-env' }, file);
-    expect(env).toEqual({ url: 'http://from-env', token: 'file-token' });
+    const result = resolveHubEnv({ AZITO_URL: 'http://from-env' }, file);
+    expect(result).toEqual({ ok: true, env: { url: 'http://from-env', token: 'file-token' } });
   });
 
-  it('returns null when the file is missing and env is empty', () => {
-    expect(resolveHubEnv({}, path.join(dir, 'nope.env'))).toBeNull();
+  it('reports both missing when the file is missing and env is empty', () => {
+    const result = resolveHubEnv({}, path.join(dir, 'nope.env'));
+    expect(result).toEqual({ ok: false, missing: ['AZITO_URL', 'AZITO_WEBHOOK_TOKEN'] });
   });
 
-  it('returns null when only one of the two values resolves', () => {
+  it('reports AZITO_WEBHOOK_TOKEN missing when only URL resolves', () => {
     fs.writeFileSync(file, 'AZITO_URL=http://localhost:3001\n');
-    expect(resolveHubEnv({}, file)).toBeNull();
+    const result = resolveHubEnv({}, file);
+    expect(result).toEqual({ ok: false, missing: ['AZITO_WEBHOOK_TOKEN'] });
+  });
+
+  it('reports AZITO_URL missing when only token resolves', () => {
+    fs.writeFileSync(file, 'AZITO_WEBHOOK_TOKEN=some-token\n');
+    const result = resolveHubEnv({}, file);
+    expect(result).toEqual({ ok: false, missing: ['AZITO_URL'] });
   });
 
   it('never throws on unreadable/garbage content', () => {
@@ -107,22 +115,22 @@ describe('resolveHubEnv with AZITO_PREFIX', () => {
   it('reads azitoctl-dev.env when AZITO_PREFIX=dev (via resolveEnvFilePath default)', () => {
     const prefixFile = path.join(dir, 'azitoctl-dev.env');
     fs.writeFileSync(prefixFile, 'AZITO_URL=http://dev-hub\nAZITO_WEBHOOK_TOKEN=dev-token\n');
-    const env = resolveHubEnv({ AZITO_PREFIX: 'dev' }, prefixFile);
-    expect(env).toEqual({ url: 'http://dev-hub', token: 'dev-token' });
+    const result = resolveHubEnv({ AZITO_PREFIX: 'dev' }, prefixFile);
+    expect(result).toEqual({ ok: true, env: { url: 'http://dev-hub', token: 'dev-token' } });
   });
 
   it('falls back to azitoctl.env when AZITO_PREFIX is invalid', () => {
     const defaultFile = path.join(dir, 'azitoctl.env');
     fs.writeFileSync(defaultFile, 'AZITO_URL=http://default-hub\nAZITO_WEBHOOK_TOKEN=default-token\n');
-    const env = resolveHubEnv({ AZITO_PREFIX: '../x' }, defaultFile);
-    expect(env).toEqual({ url: 'http://default-hub', token: 'default-token' });
+    const result = resolveHubEnv({ AZITO_PREFIX: '../x' }, defaultFile);
+    expect(result).toEqual({ ok: true, env: { url: 'http://default-hub', token: 'default-token' } });
   });
 
   it('process env AZITO_URL still takes priority over env file with prefix', () => {
     const prefixFile = path.join(dir, 'azitoctl-dev.env');
     fs.writeFileSync(prefixFile, 'AZITO_URL=http://file-url\nAZITO_WEBHOOK_TOKEN=file-token\n');
-    const env = resolveHubEnv({ AZITO_PREFIX: 'dev', AZITO_URL: 'http://env-url' }, prefixFile);
-    expect(env).toEqual({ url: 'http://env-url', token: 'file-token' });
+    const result = resolveHubEnv({ AZITO_PREFIX: 'dev', AZITO_URL: 'http://env-url' }, prefixFile);
+    expect(result).toEqual({ ok: true, env: { url: 'http://env-url', token: 'file-token' } });
   });
 });
 

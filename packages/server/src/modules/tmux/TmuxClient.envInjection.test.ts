@@ -10,16 +10,18 @@ const remoteSrv: ServerConfig = { name: 'remote', type: 'agent', host: '100.64.1
 const PUBLIC_URL = 'http://100.64.1.42:3001';
 const LOCAL_URL = 'http://127.0.0.1:3001';
 const UI_TOKEN = 'test-ui-token-123';
+const WEBHOOK_TOKEN = 'test-webhook-token-456';
 
 function makeClient(
   handler: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
   uiToken: string = UI_TOKEN,
+  webhookToken: string = WEBHOOK_TOKEN,
 ): TmuxClient {
   const execMux = vi.fn((req: { kind: string; args: string[] }) => handler(req.args));
   const factory = {
     getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
-  return new TmuxClient(factory, PUBLIC_URL, uiToken, LOCAL_URL);
+  return new TmuxClient(factory, PUBLIC_URL, uiToken, LOCAL_URL, webhookToken);
 }
 
 function envValue(args: string[], key: string): string | undefined {
@@ -74,6 +76,38 @@ describe('TmuxClient AZITO_URL injection', () => {
     });
     await client.createSession(remoteSrv, 'test-session', { windowName: 'win' });
     expect(envValue(calls[0], 'AZITO_URL')).toBe(PUBLIC_URL);
+  });
+});
+
+describe('TmuxClient AZITO_WEBHOOK_TOKEN injection (#427)', () => {
+  it('createSession injects AZITO_WEBHOOK_TOKEN for a non-isolated local server', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.createSession(srv, 'test-session', { windowName: 'win' });
+    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBe(WEBHOOK_TOKEN);
+  });
+
+  it('createWindow injects AZITO_WEBHOOK_TOKEN for a non-isolated local server', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.createWindow(srv, 'test-session', 'win');
+    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBe(WEBHOOK_TOKEN);
+  });
+
+  it('createSession does NOT inject AZITO_WEBHOOK_TOKEN for an isolated server', async () => {
+    const isolatedSrv: ServerConfig = { ...srv, isolationIntent: true };
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.createSession(isolatedSrv, 'test-session', { windowName: 'win' });
+    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBeUndefined();
+  });
+
+  it('createWindow does NOT inject AZITO_WEBHOOK_TOKEN for an isolated server', async () => {
+    const isolatedSrv: ServerConfig = { ...srv, isolationIntent: true };
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.createWindow(isolatedSrv, 'test-session', 'win');
+    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBeUndefined();
   });
 });
 

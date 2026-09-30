@@ -24,11 +24,11 @@ npm run dev
 | Variable | Required | Notes |
 |---|---|---|
 | `AZITO_UI_TOKEN` | no | API/WS auth token. Resolution: env -> `$AZITO_DATA_DIR/ui-token` -> auto-generate. Use `azito token show/rotate` to manage |
-| `AZITO_DATA_DIR` | no | Persistent data directory. Consolidates `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` under one path (mode 700). Default: repo root (`data.db` + `data/`) |
+| `AZITO_DATA_DIR` | no | Persistent data directory. Consolidates `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `webhook-token`, `browser-profile/`, `sidekicks/` under one path (mode 700). Default: repo root (`data.db` + `data/`) |
 | `AZITO_BIND` | no | Listen address, default `127.0.0.1`. `0.0.0.0`/`::` are rejected — use a Tailscale IP for remote access |
 | `AZITO_PUBLIC_URL` | no | URL that supervisors / remote agents use to reach the hub. Required when using `tailscale serve` (set to `https://<MagicDNS>`). Auto-detected from Tailscale IP if unset, but unreachable when bind is `127.0.0.1` |
 | `AZITO_ALLOWED_ORIGINS` | no | CORS + WS Origin allowlist, default `http://localhost:5173,http://localhost:3001` |
-| `AZITO_WEBHOOK_TOKEN` | no | hook/agent-signal/supervisor shared token; set to persist a fixed value across restarts |
+| `AZITO_WEBHOOK_TOKEN` | no | hook/agent-signal/supervisor shared token. Resolution: env -> `$AZITO_DATA_DIR/webhook-token` -> auto-generate |
 | `AZITO_MASTER_KEY` | no | DB secret-column encryption key; falls back to auto-generated `$AZITO_DATA_DIR/master.key` (back it up) |
 | `AZITO_BROWSER_UA` | no | CDP ブラウザの User-Agent 文字列を上書き。未設定時は Chrome 130 相当の既定値 |
 

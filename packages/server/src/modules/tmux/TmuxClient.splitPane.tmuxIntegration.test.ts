@@ -53,7 +53,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     await waitForPane(target, (text) => text.trim().length > 0);
 
     const transportFactory = new TransportFactory('http://127.0.0.1:1');
-    const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1');
+    const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     await tmuxClient.splitPane(LOCAL_SERVER, target, 'v');
 
     const paneIds = tmux('list-panes', '-t', target, '-F', '#{pane_id}').trim().split('\n');
@@ -72,7 +72,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     await waitForPane(target, (text) => text.trim().length > 0);
 
     const transportFactory = new TransportFactory('http://127.0.0.1:1');
-    const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1');
+    const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     // Same masking env TaskPaneEnvironmentService.buildEnvForNewWindow emits
     // in scoped-auth mode: an explicit empty override plus the task token.
     await tmuxClient.splitPane(LOCAL_SERVER, target, 'v', { AZITO_UI_TOKEN: '', AZITO_TASK_TOKEN: 'azt.task.42.' + 'a'.repeat(64) });
