@@ -23,10 +23,12 @@ export interface AgentActivityPayload {
    * - 'interrupted'  ユーザー中断（停止ボタン・Esc）
    * - 'deleted'      ウィンドウ（または windows 行）が消えた
    * - 'offline'      エージェントプロセス消滅・サーバー到達不能
+   * - 'api_error'    Tier 2 がペイン画面に Claude API エラーメッセージを検出。
+   *                  停止しているが正常完了ではない。
    * - 'unknown'      どのソースも理由を特定できない（Tier 3 のヒューリスティックの時間切れ等）
    * 完了表示・完了通知は必ず 'completed' でゲートすること。
    */
-  reason?: 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
+  reason?: 'completed' | 'interrupted' | 'deleted' | 'offline' | 'api_error' | 'unknown';
 }
 
 export type AppNotificationKind =
