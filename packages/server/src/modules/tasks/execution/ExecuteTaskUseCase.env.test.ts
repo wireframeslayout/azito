@@ -351,6 +351,7 @@ function buildUseCase(opts: {
     closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeysToHandle: vi.fn(async () => {}),
+    paneCommandByHandle: vi.fn(async () => 'claude'),
     checkPaneExists: vi.fn(async () => true),
     windowExists: vi.fn(async () => true),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -591,6 +592,37 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // A leftover exit marker from the previous run on this exact target must not
     // suppress `supervised` while the new supervisor isn't registered yet.
     expect(supervisorRegistry.clearExitMarker).toHaveBeenCalledWith('local-server', 'azito:w1');
+  });
+
+  it('followUp() rejects and marks the task as failed when runtime.resume() throws (Issue #421 regression)', async () => {
+    const unit = makeUnit({ id: 50, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 5, serverName: 'local-server', unitId: 50, tmuxWindow: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    // Make the worker launch fail: sendKeysToHandle throws when the claude
+    // launch command is sent (the second call — the first is `cd`).
+    (tmux.sendKeysToHandle as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, _handle: unknown, keys: string[]) => {
+      if ((keys as string[])[0]?.includes('claude')) {
+        throw new Error('TUI launch failed');
+      }
+    });
+
+    await expect(useCase.followUp(50, 5, 'please continue')).rejects.toThrow(/Follow-up worker launch failed/);
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(5, 'failed');
+    // sendPrompt must NOT have been called — the prompt text is never sent
+    // when the worker launch fails.
+    const promptCalls = tmux.sendKeysToHandle.mock.calls.filter(
+      (call: unknown[]) => {
+        const keys = call[2] as string[];
+        return keys[0]?.includes('please continue');
+      },
+    );
+    expect(promptCalls).toHaveLength(0);
   });
 
   it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (http-signal mode)', async () => {
@@ -1502,6 +1534,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeysToHandle: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
+      paneCommandByHandle: vi.fn(async () => 'claude'),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
       startOutputStream: vi.fn(async () => {}),
@@ -2524,6 +2557,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeysToHandle: vi.fn(async () => {}),
+      paneCommandByHandle: vi.fn(async () => 'claude'),
       checkPaneExists: vi.fn(async () => true),
       windowExists: vi.fn(async () => true),
       listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
