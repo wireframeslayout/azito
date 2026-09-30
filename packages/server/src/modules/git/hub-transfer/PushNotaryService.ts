@@ -45,9 +45,18 @@ export class PushNotaryService {
         return { status: 'failed', error: 'Could not read HEAD SHA from worker worktree' };
       }
 
-      const remoteSha = await this.gitProvider.getBranchHeadSha(repo, branch);
+      // #423: detect branch mismatch — worker may have committed on a
+      // different branch than the one recorded in the task.
+      const headBranch = await this.remoteBundleOps.getHeadBranch(transport, worktreePath);
+      const effectiveBranch = headBranch && headBranch !== branch ? headBranch : branch;
+
+      const remoteSha = await this.gitProvider.getBranchHeadSha(repo, effectiveBranch);
       if (remoteSha === workerHeadSha) {
-        return { status: 'already_up_to_date', sha: workerHeadSha };
+        return {
+          status: 'already_up_to_date',
+          sha: workerHeadSha,
+          ...(effectiveBranch !== branch ? { actualBranch: effectiveBranch } : {}),
+        };
       }
 
       // #124 Bug 1: when baseBranch is set, ensure the hub's repo-cache has
@@ -63,20 +72,24 @@ export class PushNotaryService {
         }
       }
 
-      const pushResult = await this.attemptPush(params, identity.identity, token, branch, baseBranch, seedDir);
+      const pushResult = await this.attemptPush(params, identity.identity, token, effectiveBranch, baseBranch, seedDir);
 
       // #124 Bug 4: SHA verification with retry for remote propagation lag.
       // GitHub's API can take 1-3s to reflect a just-pushed branch.
-      const verifiedSha = await this.verifyPushWithRetry(repo, branch, pushResult.pushedSha);
+      const verifiedSha = await this.verifyPushWithRetry(repo, effectiveBranch, pushResult.pushedSha);
       if (!verifiedSha) {
         return {
           status: 'failed',
           error: `Push completed (SHA: ${pushResult.pushedSha}) but remote verification timed out after 3 attempts (3s)`
-            + ` — branch may exist on remote, verify with: git ls-remote --heads origin ${branch}`,
+            + ` — branch may exist on remote, verify with: git ls-remote --heads origin ${effectiveBranch}`,
         };
       }
 
-      return { status: 'notarized', sha: pushResult.pushedSha };
+      return {
+        status: 'notarized',
+        sha: pushResult.pushedSha,
+        ...(effectiveBranch !== branch ? { actualBranch: effectiveBranch } : {}),
+      };
     } catch (err) {
       return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
     }
@@ -103,6 +116,12 @@ export class PushNotaryService {
         if (workerHead && remoteHead === workerHead) {
           return { pushedSha: workerHead };
         }
+        // #423: enrich the error with branch diagnostic info so the root
+        // cause (branch mismatch) is visible in logs.
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `${msg} (expectedBranch=${params.branch}, headBranch=${branch}, workerHead=${workerHead}, remoteHead=${remoteHead})`,
+        );
       }
       throw err;
     }

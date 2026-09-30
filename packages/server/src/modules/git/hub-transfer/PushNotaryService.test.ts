@@ -4,6 +4,7 @@ import { PushNotaryService } from './PushNotaryService';
 function mockRemoteBundleOps(overrides: Partial<Record<string, any>> = {}) {
   return {
     getHeadSha: vi.fn(async () => 'a'.repeat(40)),
+    getHeadBranch: vi.fn(async () => null),
     createFromWorktree: vi.fn(async () => '/tmp/azito-push-test.bundle'),
     cleanup: vi.fn(async () => {}),
     ...overrides,
@@ -250,6 +251,47 @@ describe('PushNotaryService', () => {
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('Permission denied');
+  });
+
+  it('pushes actual HEAD branch when it differs from params.branch (#423)', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      getHeadBranch: vi.fn(async () => 'fix/xxx'),
+    });
+    const gitProvider = { getBranchHeadSha: vi.fn()
+      .mockResolvedValueOnce(null)   // pre-push check on effective branch 'fix/xxx'
+      .mockResolvedValueOnce(sha),   // verification on 'fix/xxx'
+    } as any;
+    const cleanPusher = mockCleanPusher(sha);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), cleanPusher, gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'task/123-xxx', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+    });
+    expect(result.status).toBe('notarized');
+    expect(result.actualBranch).toBe('fix/xxx');
+    expect(remoteBundleOps.createFromWorktree).toHaveBeenCalledWith(expect.anything(), '/wt', 'fix/xxx', 'main');
+    expect(cleanPusher.push).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'ghp_test', 'fix/xxx', expect.anything());
+    // Verification must check the effective branch, not the original
+    expect(gitProvider.getBranchHeadSha).toHaveBeenNthCalledWith(1, expect.anything(), 'fix/xxx');
+  });
+
+  it('does not set actualBranch when HEAD matches params.branch (#423)', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      getHeadBranch: vi.fn(async () => 'task/123-xxx'),
+    });
+    const gitProvider = { getBranchHeadSha: vi.fn()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(sha),
+    } as any;
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(sha), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'task/123-xxx', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+    });
+    expect(result.status).toBe('notarized');
+    expect(result.actualBranch).toBeUndefined();
   });
 
   it('returns failed when worker HEAD cannot be read', async () => {

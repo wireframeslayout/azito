@@ -17,6 +17,7 @@
 # 環境変数（引数ではなく env で受ける規約。呼び出し元 SKILL.md 参照）:
 #   AZITO_GIT_PROVIDER    (optional) "github"（デフォルト）または "gitlab"。PR/MR操作に使うCLIを切り替える
 #   AZITO_COMMIT_MESSAGE  (required) コミットメッセージ（Conventional Commits）
+#   AZITO_WORK_BRANCH     (optional) タスクの想定ブランチ名。HEAD と異なる場合に警告を出す
 #   AZITO_PR_BASE         (optional) PR の base ブランチ。未指定なら gh のリポジトリデフォルトに任せる
 #   AZITO_PR_BASE_FROM    (optional) AZITO_PR_BASE がリモートに存在しない場合の作成元ブランチ
 #   AZITO_SKIP_PR         (optional) "1" なら PR を作成しない。デフォルトは作成する
@@ -42,6 +43,10 @@ WORK_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 if [ "$WORK_BRANCH" = "HEAD" ]; then
   echo "ERROR: detached HEAD; cannot determine the work branch to push." >&2
   exit 1
+fi
+
+if [ -n "${AZITO_WORK_BRANCH:-}" ] && [ "$WORK_BRANCH" != "$AZITO_WORK_BRANCH" ]; then
+  echo "[WARN] HEAD branch '$WORK_BRANCH' differs from expected '$AZITO_WORK_BRANCH'" >&2
 fi
 
 # ─── ブランチ名の ref 検証 ───

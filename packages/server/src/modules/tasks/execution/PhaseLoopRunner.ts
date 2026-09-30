@@ -552,6 +552,11 @@ export class PhaseLoopRunner {
           // follow-up, Important finding 1), never a fresh re-resolution —
           // see this method's parameter doc comment.
           const probeRepo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : null;
+          // #423: resolve actual HEAD branch inside the closure at first
+          // invocation — the worker may commit on a different branch than
+          // `probeBranch` (which was captured at closure-build time, before
+          // the worker ran). Cached so getBranch runs at most once per probe.
+          let resolvedEffectiveBranch: string | undefined;
           pushingProbe = async () => {
             // Issue #87 review (forge/87-mirror follow-up), Important
             // finding 2: fail closed — same rule as
@@ -570,6 +575,19 @@ export class PhaseLoopRunner {
               this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
               return false;
             }
+            // #423: resolve actual HEAD branch once per probe lifetime.
+            if (resolvedEffectiveBranch === undefined) {
+              const headBranch = await this.getWorktreeService(server).getBranch(probeDir);
+              if (headBranch && headBranch !== probeBranch) {
+                this.appendLog(task.id, unit.id, 'command', {
+                  type: 'push_branch_mismatch', expected: probeBranch, actual: headBranch,
+                });
+                this.taskRepo.update(task.id, { worktreeBranch: headBranch });
+                resolvedEffectiveBranch = headBranch;
+              } else {
+                resolvedEffectiveBranch = probeBranch;
+              }
+            }
             // Create the PR (if due) before verifying — verifyPushCompleted's own
             // PR-existence check then sees what this call just created.
             // PullRequestCreator itself never rejects (best-effort, self-contained
@@ -577,14 +595,14 @@ export class PhaseLoopRunner {
             // here must never take down the pushing completion check with it.
             if (!currentTaskForProbe?.skipPr) {
               try {
-                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, probeBranch, {
+                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, resolvedEffectiveBranch, {
                   title: currentTaskForProbe?.title ?? task.title,
                   description: currentTaskForProbe?.description ?? null,
                   targetBranch: currentTaskForProbe?.targetBranch ?? null,
                 });
               } catch { /* best-effort: never block push verification on PR creation */ }
             }
-            return this.pushVerifier.verifyPushCompleted(server, probeDir, probeBranch, currentTaskForProbe?.skipPr, probeRepo);
+            return this.pushVerifier.verifyPushCompleted(server, probeDir, resolvedEffectiveBranch, currentTaskForProbe?.skipPr, probeRepo);
           };
         }
       }
@@ -763,9 +781,19 @@ export class PhaseLoopRunner {
             // configuration changing, so a later reader of this log must be
             // able to tell which credential a past push actually used.
             this.appendLog(task.id, unit.id, 'command', { type: 'hub_push_completed', sha: notaryResult.sha, status: notaryResult.status, resolvedCredentialSource: pushCredential.source });
+            // #423: when the worker committed on a different branch, update
+            // the task record and use the actual branch for PR creation.
+            let notaryBranch = probeBranch;
+            if (notaryResult.actualBranch) {
+              this.appendLog(task.id, unit.id, 'command', {
+                type: 'push_branch_mismatch', expected: probeBranch, actual: notaryResult.actualBranch,
+              });
+              this.taskRepo.update(task.id, { worktreeBranch: notaryResult.actualBranch });
+              notaryBranch = notaryResult.actualBranch;
+            }
             if (!currentTaskForPush?.skipPr) {
               try {
-                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, probeBranch, {
+                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, notaryBranch, {
                   title: currentTaskForPush?.title ?? task.title,
                   description: currentTaskForPush?.description ?? null,
                   targetBranch: currentTaskForPush?.targetBranch ?? null,

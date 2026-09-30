@@ -119,6 +119,8 @@ export interface PushNotaryResult {
   status: 'notarized' | 'already_up_to_date' | 'failed';
   sha?: string;
   error?: string;
+  /** Set when the worker's actual HEAD branch differs from `params.branch`. */
+  actualBranch?: string;
 }
 
 export interface CleanPushResult {

@@ -320,6 +320,17 @@ export class RemoteBundleOps {
   }
 
   /**
+   * Resolves the current branch name via `symbolic-ref`. Same defensive
+   * approach as `getHeadSha` above — detached HEAD or failure returns `null`,
+   * never throws, never consults `r.code`.
+   */
+  async getHeadBranch(transport: IServerTransport, dir: string): Promise<string | null> {
+    const r = await transport.exec(`cd ${shellQuote(dir)} && git symbolic-ref --short HEAD 2>/dev/null`, 10_000);
+    const branch = r.stdout?.trim();
+    return branch && branch.length > 0 ? branch : null;
+  }
+
+  /**
    * "Not a repo yet" is a normal branch (decides clone vs. fetch in
    * `FetchDistributionService.ensureWorkingDir`), not a failure. The
    * `echo yes || echo no` shell construct encodes the answer directly into

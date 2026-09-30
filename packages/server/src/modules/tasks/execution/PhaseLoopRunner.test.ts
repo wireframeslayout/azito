@@ -164,7 +164,7 @@ function makeRunner(overrides: {
   };
   const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
-  const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false) }));
+  const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false), getBranch: vi.fn(async () => null) }));
   const appendLog = vi.fn();
   const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
