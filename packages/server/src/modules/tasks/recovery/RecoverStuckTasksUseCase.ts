@@ -74,13 +74,13 @@ export class RecoverStuckTasksUseCase {
   private failOrphanedTasks(running: RunningExecutions): void {
     const runningTaskIds = collectRunningTaskIds(running);
     const now = Date.now();
-    for (const status of RECOVERABLE_STATUSES) {
-      for (const task of this.taskRepo.findByStatus(status)) {
-        if (runningTaskIds.has(task.id)) continue;
-        const updatedAtMs = Date.parse(`${task.updatedAt.replace(' ', 'T')}Z`);
-        if (now - updatedAtMs < ORPHAN_GRACE_MS) continue;
-        this.failOrphanedTask(task);
-      }
+    // in_progress is intentionally excluded: it can be set manually from the UI
+    // and is never registered as an execution run.
+    for (const task of this.taskRepo.findByStatus('running')) {
+      if (runningTaskIds.has(task.id)) continue;
+      const updatedAtMs = Date.parse(`${task.updatedAt.replace(' ', 'T')}Z`);
+      if (now - updatedAtMs < ORPHAN_GRACE_MS) continue;
+      this.failOrphanedTask(task);
     }
   }
 

@@ -901,12 +901,23 @@ describe('RecoverStuckTasksUseCase', () => {
       expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
     });
 
-    it('also fails orphaned in_progress tasks', async () => {
+    it('does not fail orphaned in_progress tasks (only run() handles those)', async () => {
       stubStatuses({ in_progress: [makeTask({ id: 51, status: 'in_progress', updatedAt: OLD })] });
 
       await createUseCase(mocks).runPeriodic({});
 
-      expect(mocks.taskRepo.updateStatus).toHaveBeenCalledWith(51, 'failed');
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('does not fail a manually set in_progress task that has no execution run', async () => {
+      stubStatuses({
+        in_progress: [makeTask({ id: 54, status: 'in_progress', currentPhase: null, updatedAt: OLD })],
+      });
+
+      await createUseCase(mocks).runPeriodic({ 1: [{ taskId: 999 }] });
+
+      expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalled();
+      expect(mocks.logRepo.append).not.toHaveBeenCalled();
     });
 
     it('skips tasks registered in running executions', async () => {

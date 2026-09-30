@@ -75,10 +75,14 @@ export const CLAUDE_SCREEN_RULES: ScreenRule[] = [
   {
     id: 'api_error',
     state: 'error',
-    priority: 80,
+    priority: 60,
     region: 'above',
     test: (ls) => {
-      const t = text(ls);
+      // Only the lines right above the prompt box: stale errors higher up
+      // (e.g. right after a follow-up resumes) must not count.
+      const t = text(ls.slice(-4));
+      // Claude Code keeps working while it auto-retries.
+      if (t.includes('retrying in')) return false;
       return (
         t.includes('api error') &&
         (t.includes('request timed out') ||

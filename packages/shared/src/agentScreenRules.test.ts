@@ -127,13 +127,33 @@ describe('agentScreenRules', () => {
       expect(result).toBe('blocked');
     });
 
-    it('outranks the interrupt line', () => {
+    it('is outranked by the interrupt line', () => {
       const result = classifyScreen('claude', {
         above: ['API Error: Request timed out.'],
         promptBox: ['  ❯ '],
         below: ['  ⏸ manual mode on · esc to interrupt'],
       });
-      expect(result).toBe('error');
+      expect(result).toBe('working');
+    });
+
+    it('does not classify an auto-retrying error as error', () => {
+      expect(
+        errorScreen('API Error (Request timed out.) · Retrying in 5 seconds… (attempt 2/10)'),
+      ).not.toBe('error');
+    });
+
+    it('ignores a stale API Error outside the last 4 lines above the prompt box', () => {
+      const result = classifyScreen('claude', {
+        above: [
+          '  ⎿  API Error: Request timed out.',
+          'line 1',
+          'line 2',
+          'line 3',
+          'line 4',
+        ],
+        promptBox: ['  ❯ '],
+      });
+      expect(result).not.toBe('error');
     });
   });
 
