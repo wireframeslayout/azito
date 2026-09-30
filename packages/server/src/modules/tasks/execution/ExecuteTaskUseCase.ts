@@ -49,7 +49,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
@@ -902,16 +902,30 @@ export class ExecuteTaskUseCase {
     const windowTarget = tmuxTargetFromMuxRef(ref);
     const handle = await executeDriver.resolvePane(server, ref, 1);
 
-    // Canonicalized ONCE, immediately after resolution (Issue #87
-    // third-party review, 11th round, Important finding 1) — see
-    // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Computed
-    // unconditionally (not only when `workingDir` is set) because fetch
-    // distribution's own prerequisite checks (via performDistribution) need
-    // it regardless of whether a working directory happens to be configured.
-    // Resolved from `lockedProjectServer`/`lockedProject` (Issue #87
-    // 16th-round review, Important finding 2), not the pre-lock
+    // Resolved ONCE, via `resolveAndDetectBaseBranch` which tries the
+    // configured precedence chain first and, only when that returns null,
+    // auto-detects from the repository's git state (Issue #63: the previous
+    // hard-coded 'main' fallback broke repositories whose default branch is
+    // 'master'). Already canonicalized by `resolveAndDetectBaseBranch`.
+    // Computed unconditionally (not only when `workingDir` is set) because
+    // fetch distribution's own prerequisite checks (via performDistribution)
+    // need it regardless of whether a working directory happens to be
+    // configured. Resolved from `lockedProjectServer`/`lockedProject` (Issue
+    // #87 16th-round review, Important finding 2), not the pre-lock
     // `projectServer`/`project` — see reverifyGateInLock's doc comment.
-    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
+    const transport = this.transportFactory.getTransport(server);
+    const baseBranch = await resolveAndDetectBaseBranch(task, lockedProjectServer, lockedProject, transport, workingDir);
+    if (!baseBranch) {
+      this.appendLog(taskId, unitId, 'command', { type: 'base_branch_unresolvable' });
+      await this.rollbackWindowAfterPostCreationFailure(taskId, server, muxWorkspace, windowName, tokenId, 'base_branch_unresolvable_rollback');
+      throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
+    }
+    // Persist the auto-detected baseBranch so that PhaseLoopRunner's
+    // reverification (via resolveBaseBranch) returns the same value
+    // without needing to re-detect from git state.
+    if (!resolveBaseBranch(task, lockedProjectServer, lockedProject)) {
+      this.taskRepo.update(taskId, { baseBranch } as Partial<Task>);
+    }
 
     // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
     // — they hold no git credentials of their own, so distribution is not

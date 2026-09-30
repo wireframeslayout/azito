@@ -719,7 +719,7 @@ export interface ResolvedExecutionManifest {
     distributionRepositoryId: number | null;
   };
   branches: {
-    base: string;
+    base: string | null;
     target: string;
     work: string;
   };
@@ -1003,12 +1003,21 @@ export function resolveExecutionManifest(
   operationKind: ExecutionOperationKind,
   respawnInput?: RespawnManifestInput,
   serverNameOverride?: string,
+  baseBranchOverride?: string | null,
 ): ExecutionManifestResolution {
   const project = deps.projectRepo.findById(task.projectId);
   const unitId = resolveUnitId(task, project);
   const unit = unitId !== null ? deps.unitRepo.findById(unitId) : null;
   const serverName = serverNameOverride ?? resolveTaskServerName(task, deps.projectServerRepo);
   const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
+  // baseBranchOverride (Issue #63): when the caller has already resolved
+  // the base branch (e.g. via `resolveAndDetectBaseBranch`, which includes
+  // auto-detection from git state), use that value directly — it is already
+  // canonicalized. When `baseBranchOverride` is `undefined` (not passed),
+  // fall back to the existing resolveBaseBranch chain for backward
+  // compatibility. When `baseBranchOverride` is explicitly `null`, the
+  // base branch is unresolvable — `branches.base` will be `null`.
+  //
   // Canonicalized the same way, and at the same point in the resolution
   // chain, as ExecuteTaskUseCase.execute() (see `canonicalizeBaseBranch`'s
   // doc comment in TaskExecutionEnv.ts) — otherwise a pre-existing task
@@ -1020,7 +1029,12 @@ export function resolveExecutionManifest(
   // 3). Every manifest consumer (approval, restore's own gate check,
   // respawn) resolves through this one function, so applying it here is
   // sufficient — no other resolveBaseBranch() call site feeds a manifest.
-  const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, projectServer, project));
+  const baseBranch: string | null = baseBranchOverride !== undefined
+    ? baseBranchOverride
+    : (() => {
+        const raw = resolveBaseBranch(task, projectServer, project);
+        return raw ? canonicalizeBaseBranch(raw) : null;
+      })();
   // Resolved via the same `serverRepo.findByName()` TransportFactory's
   // callers use at run time to pick local/SSH/agent — see the `server`
   // manifest field's doc comment above (Issue #328 tenth-round review).
@@ -1370,7 +1384,7 @@ export function hashExecutionManifest(manifest: ResolvedExecutionManifest): stri
       distributionRepositoryId: manifest.server.distributionRepositoryId,
     },
     branches: {
-      base: manifest.branches.base,
+      base: manifest.branches.base ?? '',
       target: manifest.branches.target,
       work: manifest.branches.work,
     },

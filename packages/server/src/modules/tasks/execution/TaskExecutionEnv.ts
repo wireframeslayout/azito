@@ -2,6 +2,8 @@ import type { Task } from '../Task';
 import type { ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
+import type { IServerTransport } from '../../servers/transport/ServerTransport';
+import { detectDefaultBranch } from '../../git/detectDefaultBranch';
 
 const DEFAULT_TMUX_SESSION = 'azito';
 
@@ -53,12 +55,15 @@ export function resolveUnitId(
 /**
  * Resolves the base branch a worktree is created from: the task's own
  * override, falling back to the project_servers row's branch, falling back
- * to the project's default branch, falling back to 'main'. Single source for
- * this precedence — ExecuteTaskUseCase.execute() and TaskRestoreService.
- * restore() both create a worktree from this same value, and
- * ExecutionManifest.ts hashes it via the same call, so the value a human
- * approves is guaranteed to be the value the run actually uses (Issue #328
- * fifth-round review).
+ * to the project's default branch. Returns null when none of the three
+ * sources provides a value — callers that need an actual branch must then
+ * detect the repository's default branch via `detectDefaultBranch()`
+ * (Issue #63: the previous hard-coded `'main'` fallback broke repositories
+ * whose default branch is `master`). Single source for this precedence —
+ * ExecuteTaskUseCase.execute() and TaskRestoreService.restore() both create
+ * a worktree from this same value, and ExecutionManifest.ts hashes it via
+ * the same call, so the value a human approves is guaranteed to be the
+ * value the run actually uses (Issue #328 fifth-round review).
  *
  * Returns the RAW resolved value — a candidate that may still be
  * `origin/`- or `refs/heads/`-qualified (pre-existing data from before
@@ -73,8 +78,8 @@ export function resolveBaseBranch(
   task: Pick<Task, 'baseBranch'>,
   projectServer: Pick<ProjectServer, 'branch'> | null,
   project: Pick<ProjectDetail, 'defaultBranch'> | null,
-): string {
-  return task.baseBranch || projectServer?.branch || project?.defaultBranch || 'main';
+): string | null {
+  return task.baseBranch || projectServer?.branch || project?.defaultBranch || null;
 }
 
 /**
@@ -116,6 +121,30 @@ export function stripOriginPrefix(branch: string): string {
  */
 export function canonicalizeBaseBranch(baseBranch: string): string {
   return stripOriginPrefix(normalizeBranchRef(baseBranch));
+}
+
+/**
+ * Resolves the base branch by first trying the configured precedence chain
+ * (`resolveBaseBranch`) and, when that returns null (no configured value),
+ * falling back to auto-detection from the repository's git state via
+ * `detectDefaultBranch()`. The result is already canonicalized.
+ *
+ * `transport` and `workingDir` are nullable: when either is unavailable
+ * (e.g. no server resolved, or no working directory configured), detection
+ * is skipped and `null` is returned — the caller must fail fast on that.
+ */
+export async function resolveAndDetectBaseBranch(
+  task: Pick<Task, 'baseBranch'>,
+  projectServer: Pick<ProjectServer, 'branch'> | null,
+  project: Pick<ProjectDetail, 'defaultBranch'> | null,
+  transport: IServerTransport | null,
+  workingDir: string | null,
+): Promise<string | null> {
+  const configured = resolveBaseBranch(task, projectServer, project);
+  if (configured) return canonicalizeBaseBranch(configured);
+  if (!transport || !workingDir) return null;
+  const detected = await detectDefaultBranch(transport, workingDir);
+  return detected ? canonicalizeBaseBranch(detected) : null;
 }
 
 /**
