@@ -7,6 +7,7 @@ import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import { isSameWindowTarget } from '@azito/shared';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import StatusDropdown from '../task/StatusDropdown';
 import type { Task, Window } from '../../pages/workspace/types';
 
@@ -134,8 +135,9 @@ function IdleDot() {
   );
 }
 
-function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
+function WindowMenuRow({ w, taskTitle, isCurrent, onSelect, onLongPress, onDelete }: {
   w: Window;
+  taskTitle?: string;
   isCurrent: boolean;
   onSelect: () => void;
   /** 長押し（タッチ座標）: デスクトップと同じコンテキストメニューを開く。省略時は長押し無効。 */
@@ -171,7 +173,14 @@ function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.label || w.tmuxTarget}
+          {formatWindowDisplayLabel(resolveWindowDisplay({
+            windowId: w.id,
+            label: w.label,
+            taskTitle,
+            workerType: w.workerType,
+            windowType: w.windowType,
+            tmuxTarget: w.tmuxTarget,
+          }))}
         </span>
         {w.workerType && (
           <span style={{
@@ -461,6 +470,7 @@ export default function TaskDetailMenu({
                       <WindowMenuRow
                         key={w.id}
                         w={w}
+                        taskTitle={task.title}
                         isCurrent={isCurrent}
                         onSelect={() => { onSelectWindow(w.serverName, w.tmuxTarget); onClose(); }}
                         onLongPress={onLongPressWindow ? (x, y) => onLongPressWindow(x, y, w) : undefined}

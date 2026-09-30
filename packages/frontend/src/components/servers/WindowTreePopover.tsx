@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Session } from '../../hooks/useServerManagement';
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
+import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
 import { Icon } from '../ui/Icon';
 
 interface WindowTreePopoverProps {
@@ -14,11 +15,14 @@ interface WindowTreePopoverProps {
   onAddWindow: (sessionName: string) => void;
   onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
   isMobile: boolean;
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title?: string }>;
 }
 
 export default function WindowTreePopover({
   sessions, serverName, selectedRef,
   onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, isMobile,
+  windowById, taskById,
 }: WindowTreePopoverProps) {
   const { t } = useTranslation('servers');
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(() => new Set(sessions.map((s) => s.name)));
@@ -82,7 +86,22 @@ export default function WindowTreePopover({
                     <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                       <Icon name="chevron-right" size={14} />
                     </span>
-                    <span style={{ fontFamily: 'var(--mono)' }}>{win.name ?? `win-${win.index}`}</span>
+                    <span style={{ fontFamily: 'var(--mono)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{
+                      (() => {
+                        const regWin = win.windowId != null ? windowById.get(win.windowId) : undefined;
+                        const display = resolveWindowDisplay({
+                          windowId: win.windowId ?? undefined,
+                          paneTitle: win.panes[0]?.title,
+                          paneCommand: win.panes[0]?.command,
+                          label: regWin?.label,
+                          workerType: regWin?.workerType,
+                          windowType: regWin?.windowType,
+                          taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
+                          tmuxTarget: `${sess.name}:${win.name}`,
+                        });
+                        return formatWindowDisplayLabel(display);
+                      })()
+                    }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                       {win.panes.length} pane{win.panes.length > 1 ? 's' : ''}
                     </span>

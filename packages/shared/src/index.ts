@@ -1,4 +1,5 @@
 export { stripPaneSuffix, isSameWindowTarget, windowKey } from './windowKey';
+export { formatWindowId, isInternalWindowName, stripGeneratedSuffix } from './windowId';
 export {
   type AgentKind,
   type PaneAgentState,

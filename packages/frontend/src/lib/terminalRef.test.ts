@@ -184,8 +184,8 @@ describe('terminalRefFromTarget', () => {
 });
 
 describe('terminalRefDisplayLabel', () => {
-  it('shows wN for windowId refs', () => {
-    expect(terminalRefDisplayLabel({ kind: 'windowId', serverName: 'x', windowId: 42, pane: 1 })).toBe('w42');
+  it('shows W-N for windowId refs', () => {
+    expect(terminalRefDisplayLabel({ kind: 'windowId', serverName: 'x', windowId: 42, pane: 1 })).toBe('W-42');
   });
 
   it('shows workspace:window for valid mux ref', () => {

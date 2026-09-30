@@ -33,10 +33,10 @@ export function useWorkspaceData(
   const [projectList, setProjectList] = useState<{ id: number; name: string }[]>([]);
 
   // Project list for the project switcher menu
-  const [allProjects, setAllProjects] = useState<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>>([]);
+  const [allProjects, setAllProjects] = useState<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Window[] }>>([]);
   const [projectsLoaded, setProjectsLoaded] = useState(false);
   useEffect(() => {
-    api<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>>('/projects').then((data) => {
+    api<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Window[] }>>('/projects').then((data) => {
       setAllProjects(data);
       setProjectsLoaded(true);
     }).catch(() => {});
@@ -60,7 +60,7 @@ export function useWorkspaceData(
       api<Unit[]>('/units'),
       api<Task[]>('/tasks'),
       api<Server[]>('/servers'),
-      api<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>>('/projects'),
+      api<Array<{ id: number; name: string; icon?: string; color?: string; windows?: Window[] }>>('/projects'),
     ]);
     if (projectIdRef.current !== requestedProjectId) return; // stale response, a newer project is now active
     if ((proj as any).error) return;

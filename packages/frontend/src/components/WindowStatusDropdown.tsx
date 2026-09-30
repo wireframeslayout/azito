@@ -7,6 +7,7 @@ import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
 import { Icon } from './ui/Icon';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDisplay';
 
 interface WindowStatusDropdownProps {
   serverName: string;
@@ -273,7 +274,9 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
 
           {!win ? (
             <div style={{ padding: '12px' }}>
-              <InfoRow label="Target">{target}</InfoRow>
+              <InfoRow label="tmux">
+                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>{target}</span>
+              </InfoRow>
               <InfoRow label="Status">
                 <span style={{ color: 'var(--text-dim)' }}>not registered</span>
               </InfoRow>
@@ -302,9 +305,19 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
           ) : (
             <>
               <div style={{ padding: '8px 12px' }}>
-                <InfoRow label="Window">
+                {win.id != null && (() => {
+                  const display = resolveWindowDisplay({
+                    windowId: win.id, label: win.label,
+                    workerType: win.workerType, windowType: win.windowType,
+                    tmuxTarget: win.tmuxTarget,
+                  });
+                  return (
+                    <InfoRow label="Window">{formatWindowDisplayLabel(display)}</InfoRow>
+                  );
+                })()}
+                <InfoRow label="tmux">
                   <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>
-                    {win.tmuxTarget.split(':')[1]?.split('.')[0] || win.tmuxTarget}
+                    {win.tmuxTarget}
                   </span>
                 </InfoRow>
                 <InfoRow label="Type">
