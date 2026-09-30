@@ -29,7 +29,11 @@ describe('buildAgentCommand', () => {
   });
 
   it('appends model to base command', () => {
-    expect(buildAgentCommand('claude', 'opus', 'claude-code')).toBe('claude-code --model opus');
+    expect(buildAgentCommand('claude', 'opus', 'claude-code')).toBe("claude-code --model 'opus'");
+  });
+
+  it('shell-quotes model IDs with brackets', () => {
+    expect(buildAgentCommand('claude', 'claude-opus-5-5[1m]', 'claude-code')).toBe("claude-code --model 'claude-opus-5-5[1m]'");
   });
 
   it('returns base command when model is empty', () => {
