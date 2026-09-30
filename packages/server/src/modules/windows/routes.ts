@@ -94,9 +94,6 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return { ok: true, id: existing.id };
       }
 
-      if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
-        return reply.code(400).send({ error: 'Invalid worker_model format' });
-      }
       const workerType = (body['worker_type'] as string) || null;
       const workerModel = (body['worker_model'] as string) || null;
       if (workerModel && !isValidModelId(workerModel)) {

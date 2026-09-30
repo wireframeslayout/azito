@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isValidModelId } from '@azito/shared';
 import { FormSelect, FormInput } from './FormInput';
@@ -19,6 +19,16 @@ export function ModelSelect({ models, value, onChange, placeholder, note, disabl
   const isCustom = value !== '' && !models.some((m) => m.id === value);
   const [customMode, setCustomMode] = useState(isCustom);
   const [localCustom, setLocalCustom] = useState(isCustom ? value : '');
+  const prevValueRef = useRef(value);
+
+  useEffect(() => {
+    if (value === prevValueRef.current) return;
+    prevValueRef.current = value;
+    if (value !== '' && !models.some((m) => m.id === value)) {
+      setCustomMode(true);
+      setLocalCustom(value);
+    }
+  }, [value, models]);
 
   const showCustomInput = customMode || isCustom;
   const selectValue = showCustomInput ? CUSTOM_SENTINEL : value;
@@ -42,7 +52,7 @@ export function ModelSelect({ models, value, onChange, placeholder, note, disabl
     setLocalCustom(v);
     if (v && isValidModelId(v)) {
       onChange(v);
-    } else {
+    } else if (value !== '') {
       onChange('');
     }
   };
@@ -69,7 +79,7 @@ export function ModelSelect({ models, value, onChange, placeholder, note, disabl
             placeholder="e.g. claude-opus-5-5[1m]"
             disabled={disabled}
             aria-label="Custom model ID"
-            aria-invalid={validationError}
+            aria-invalid={validationError ? 'true' : undefined}
             style={validationError ? { borderColor: 'var(--danger)' } : undefined}
           />
           {validationError && (
