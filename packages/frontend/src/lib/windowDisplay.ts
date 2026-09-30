@@ -75,7 +75,7 @@ export function buildWindowIndex<T extends WindowIndexEntry>(
 
 export function formatWindowDisplayLabel(display: WindowDisplay): string {
   return display.hasDisplayName && display.idLabel
-    ? `${display.title} · ${display.idLabel}`
+    ? `${display.idLabel} · ${display.title}`
     : display.title;
 }
 

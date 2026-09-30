@@ -197,11 +197,11 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
       </span>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {showIdChip && <WindowIdChip id={w.id!} />}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-          {showIdChip && <WindowIdChip id={w.id!} />}
         </div>
         {subtitle != null && (typeof subtitle !== 'string' || subtitle !== title) && (
           <div style={{
@@ -257,11 +257,11 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
       </span>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {showIdChip && <WindowIdChip id={w.id!} />}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-          {showIdChip && <WindowIdChip id={w.id!} />}
         </div>
         {subtitle != null && (typeof subtitle !== 'string' || subtitle !== title) && (
           <div style={{
@@ -362,11 +362,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               </span>
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {winTitle}
                   </span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                 </div>
                 {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
                   <div style={{
@@ -422,12 +422,12 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               </span>
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                   <span
                     onClick={() => onToggle(expandKey)}
                     style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
                   >{windowLabel}</span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                 </div>
                 {parentSubtitle != null && (typeof parentSubtitle !== 'string' || parentSubtitle !== windowLabel) && (
                   <div style={{

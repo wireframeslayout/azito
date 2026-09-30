@@ -899,8 +899,9 @@ function WorkspaceInner() {
       const displayWithPane = paneSuffix ? { ...display, title: titleWithPane } : display;
       const label = formatWindowDisplayLabel(displayWithPane);
       // ツールチップ: 重複を除く (title === idLabel のときは並べない)
-      const titleParts = [titleWithPane];
+      const titleParts: string[] = [];
       if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
+      titleParts.push(titleWithPane);
       titleParts.push(serverName);
       return { label, title: titleParts.join(' · ') };
     }
@@ -951,8 +952,9 @@ function WorkspaceInner() {
       const titleWithPane = hasManyPanes ? `${display.title}${paneSuffix}` : display.title;
       const displayWithPane = { ...display, title: titleWithPane };
       const label = formatWindowDisplayLabel(displayWithPane);
-      const titleParts = [titleWithPane];
+      const titleParts: string[] = [];
       if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
+      titleParts.push(titleWithPane);
       titleParts.push(serverName);
       return { label, title: titleParts.join(' · ') };
     }
