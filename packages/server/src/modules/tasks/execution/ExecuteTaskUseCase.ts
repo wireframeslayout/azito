@@ -21,6 +21,7 @@ import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
+import { ensureClaudeTrust } from '../../agents/claude/ensureClaudeTrust';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository, ProjectRepository as ProjectRepositoryEntry } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -1230,6 +1231,26 @@ export class ExecuteTaskUseCase {
         });
       }
 
+      if (unit.workerType === 'claude' && workingDir) {
+        try {
+          const trustResult = await ensureClaudeTrust(
+            server.type,
+            this.transportFactory.getTransport(server),
+            workingDir,
+          );
+          if (trustResult.action === 'registered') {
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: workingDir });
+          } else if (trustResult.action === 'failed') {
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_failed', reason: trustResult.reason });
+          }
+        } catch (err) {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'claude_trust_failed',
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       effectiveDir = wt.path;
 
       try {
@@ -1352,7 +1373,11 @@ export class ExecuteTaskUseCase {
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
         // Keep the historical "launch failure is not fatal here" behaviour, but never hide it.
-        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+        let launchMessage = (launchErr as Error).message;
+        if (unit.workerType === 'claude' && launchMessage.includes('did not become ready')) {
+          launchMessage += ' — Claude Code の信頼確認ダイアログで起動がブロックされた可能性があります';
+        }
+        this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: launchMessage });
       }
     }
 
@@ -1806,9 +1831,13 @@ export class ExecuteTaskUseCase {
         followUpStream.stop();
         followUpSignalStream.stop();
         const isDeadWorker = err instanceof WorkerNotRunningError;
+        let sendMessage = (err as Error).message;
+        if (isDeadWorker && unit.workerType === 'claude') {
+          sendMessage += ' — Claude Code の信頼確認で終了した可能性があります。作業ディレクトリを信頼済みにしてください';
+        }
         this.appendLog(taskId, unitId, 'status_change', {
           status: isDeadWorker ? 'worker_not_running' : 'send_error',
-          message: (err as Error).message,
+          message: sendMessage,
         });
         this.taskRepo.updateStatus(taskId, 'failed');
         return;
