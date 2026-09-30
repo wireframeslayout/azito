@@ -4,6 +4,8 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { TaskRestoreService, type TaskRestoreDeps } from './TaskRestoreService';
+vi.mock('../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () => ({ action: 'already_set' })) }));
+
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
 // resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
 // the no-credential path deterministically, instead of depending on whoever
@@ -246,6 +248,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     // tests exercising `shouldClearRecordedDistributionRepository` wire a
     // real/mocked repo via `overrides`.
     distributionStateRepo: null,
+    hubGitIdentity: null,
     ...overrides,
   };
 }

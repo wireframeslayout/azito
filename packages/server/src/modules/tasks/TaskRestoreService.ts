@@ -20,6 +20,7 @@ import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, resolveA
 import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
+import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
@@ -101,6 +102,7 @@ export interface TaskRestoreDeps {
   // site below and ExecuteTaskUseCase's matching field for the full
   // rationale.
   distributionStateRepo: IDistributionStateRepository | null;
+  hubGitIdentity: GitIdentity | null;
 }
 
 export class TaskRestoreService {
@@ -117,7 +119,7 @@ export class TaskRestoreService {
   }
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, hubGitIdentity } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -604,6 +606,13 @@ export class TaskRestoreService {
         worktreePath = wt.path;
         worktreeBranch = wt.branch;
         effectiveDir = wt.path;
+
+        const identityResult = await ensureGitIdentity(server.type, transport, wt.path, hubGitIdentity);
+        if (unitId !== null && identityResult.action === 'applied') {
+          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
+        } else if (unitId !== null && identityResult.action === 'hub_missing') {
+          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_missing' });
+        }
 
         if (allowedRoot) {
           // Same containment check ExecuteTaskUseCase applies to a freshly

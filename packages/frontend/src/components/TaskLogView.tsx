@@ -43,7 +43,7 @@ function parseContent(raw: string): any {
 }
 
 /** Classify a log entry into a visual style bucket */
-function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | null {
+function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | 'warning' | null {
   if (type === 'user_comment') return 'user-comment';
   if (type === 'status_change') {
     if (typeof parsed === 'object' && parsed !== null) {
@@ -62,6 +62,7 @@ function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worke
   }
   if (type === 'command') {
     if (typeof parsed === 'object' && parsed !== null) {
+      if (parsed.type === 'git_identity_missing') return 'warning';
       if (parsed.type === 'wait_poll' || parsed.type === 'wait_start' || parsed.type === 'llm_classify') return null;
       if (parsed.type === 'worker_prompt') return 'worker-prompt';
       if (parsed.type === 'worker_launch') return 'launch';
@@ -82,6 +83,23 @@ function SystemBubble({ children, time }: { children: React.ReactNode; time: str
         {children}
         <span style={{ marginLeft: 8, fontSize: 'var(--font-2xs)', opacity: 0.7 }}>{timeAgo(time)}</span>
       </span>
+    </div>
+  );
+}
+
+function WarningBubble({ children, time }: { children: React.ReactNode; time: string }) {
+  return (
+    <div role="status" style={{ display: 'flex', justifyContent: 'center', padding: '8px 16px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '8px 14px', borderRadius: 'var(--radius-md)',
+        background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-card))',
+        fontSize: 'var(--font-xs)', color: 'var(--warning)',
+      }}>
+        <Icon name="warning" size={14} />
+        <span>{children}</span>
+        <span style={{ fontSize: 'var(--font-2xs)', opacity: 0.7 }}>{timeAgo(time)}</span>
+      </div>
     </div>
   );
 }
@@ -295,6 +313,11 @@ function UserCommentBubble({ parsed, time }: { parsed: any; time: string }) {
   );
 }
 
+function GitIdentityMissingBubble({ time }: { time: string }) {
+  const { t } = useTranslation('tasks');
+  return <WarningBubble time={time}>{t('log.gitIdentityMissing')}</WarningBubble>;
+}
+
 // ── Render a single log entry ──
 
 function ChatBubble({ log }: { log: LogEntry }) {
@@ -334,6 +357,8 @@ function ChatBubble({ log }: { log: LogEntry }) {
       return <UserCommentBubble parsed={parsed} time={log.createdAt} />;
     case 'session-resumed':
       return <SessionResumedBubble parsed={parsed} time={log.createdAt} />;
+    case 'warning':
+      return <GitIdentityMissingBubble time={log.createdAt} />;
     default:
       return <SystemBubble time={log.createdAt}>{String(parsed)}</SystemBubble>;
   }

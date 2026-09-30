@@ -20,6 +20,7 @@ import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService'
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
+import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository, ProjectRepository as ProjectRepositoryEntry } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -169,6 +170,7 @@ export class ExecuteTaskUseCase {
     private distributionStateRepo: IDistributionStateRepository | null = null,
     private muxDriverRegistry: MuxDriverRegistry,
     private harnessPrefix?: string,
+    private hubGitIdentity: GitIdentity | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
     this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
@@ -1203,6 +1205,23 @@ export class ExecuteTaskUseCase {
         worktreeBranch: wt.branch,
         baseBranch,
       });
+
+      const identityResult = await ensureGitIdentity(
+        server.type,
+        this.transportFactory.getTransport(server),
+        wt.path,
+        this.hubGitIdentity,
+      );
+      if (identityResult.action === 'applied') {
+        this.appendLog(taskId, unitId, 'command', {
+          type: 'git_identity_applied',
+          fields: identityResult.fields,
+        });
+      } else if (identityResult.action === 'hub_missing') {
+        this.appendLog(taskId, unitId, 'command', {
+          type: 'git_identity_missing',
+        });
+      }
 
       effectiveDir = wt.path;
 

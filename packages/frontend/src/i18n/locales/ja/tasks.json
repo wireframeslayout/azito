@@ -195,6 +195,8 @@
     "created": "作成日"
   },
   "log": {
+    "gitIdentityMissing": "コミット作者が未設定です。ハブで git config --global user.name / user.email を設定してください",
+    "gitIdentityApplied": "Git 作者情報を補完しました",
     "orchestratorRequest": "オーケストレーターリクエスト #{{iteration}}",
     "orchestratorThinking": "オーケストレーター思考中...",
     "workerPrompt": "ワーカープロンプト",
