@@ -6,6 +6,7 @@ import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
+import * as detectDefaultBranchModule from '../git/detectDefaultBranch';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
@@ -1812,5 +1813,90 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
       manifestHash: expect.any(String),
       pendingOperationWindowId: 1,
     });
+  });
+});
+
+describe('WindowRespawnService.respawn — baseBranch auto-detection (Issue #63)', () => {
+  function manualApprovalProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: '/repo', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
+  }
+
+  it('passes detected baseBranch as override to resolveExecutionManifest and persists it', async () => {
+    vi.spyOn(detectDefaultBranchModule, 'detectDefaultBranch').mockResolvedValue('master');
+    const task = makeTask({ id: 7, unitId: 10, inputTrust: 'untrusted', baseBranch: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7, windowType: 'agent', workerType: 'claude' });
+    const { service, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: manualApprovalProjectServerRepo(),
+    });
+
+    // The approval fingerprint uses the same detection; the respawn gate
+    // computes the same hash. Compute the expected hash the approval screen
+    // would produce:
+    const approvalManifest = resolveExecutionManifest(
+      task, {
+        unitRepo: { findById: vi.fn(() => unit) } as any,
+        projectRepo: { findById: vi.fn(() => null) } as any,
+        projectServerRepo: manualApprovalProjectServerRepo() as any,
+        serverRepo: { findByName: vi.fn(() => makeServer()) } as any,
+        projectSecretRepo: { findByProject: vi.fn(() => []) } as any,
+        unitTypeLoader: { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error(); }) } as any,
+        sidekickLoader: { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any,
+      },
+      'continuation',
+      buildRespawnManifestInput(win),
+      'local-server',
+      'master',
+    );
+    const approvedHash = hashExecutionManifest(approvalManifest.manifest);
+    // Pre-approve so the gate passes:
+    task.executionApprovedFingerprintHash = approvedHash;
+
+    await service.respawn(1, makeServer());
+
+    // Detection result persisted:
+    expect(taskRepo.update).toHaveBeenCalledWith(7, { baseBranch: 'master' });
+    // In-memory task updated:
+    expect(task.baseBranch).toBe('master');
+
+    vi.restoreAllMocks();
+  });
+
+  it('persists detected baseBranch on respawn even when the gate blocks (pending_approval)', async () => {
+    vi.spyOn(detectDefaultBranchModule, 'detectDefaultBranch').mockResolvedValue('master');
+    const task = makeTask({ id: 8, unitId: 10, inputTrust: 'untrusted', baseBranch: null, executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 8, windowType: 'agent', workerType: 'claude' });
+    const { service, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: manualApprovalProjectServerRepo(),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    // Detection + persistence still happens before the gate:
+    expect(taskRepo.update).toHaveBeenCalledWith(8, { baseBranch: 'master' });
+
+    vi.restoreAllMocks();
+  });
+
+  it('does not persist baseBranch when detection returns null (fail fast at gate)', async () => {
+    vi.spyOn(detectDefaultBranchModule, 'detectDefaultBranch').mockResolvedValue(null);
+    const task = makeTask({ id: 9, unitId: 10, inputTrust: 'untrusted', baseBranch: null, executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9, windowType: 'agent', workerType: 'claude' });
+    const { service, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: manualApprovalProjectServerRepo(),
+    });
+
+    // null detection → manifest has branches.base = null → gate blocks
+    // with pending_approval (hash mismatch against the null-approved hash)
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    // baseBranch was NOT persisted (nothing to persist):
+    expect(taskRepo.update).not.toHaveBeenCalledWith(9, expect.objectContaining({ baseBranch: expect.anything() }));
+    expect(task.baseBranch).toBeNull();
+
+    vi.restoreAllMocks();
   });
 });
