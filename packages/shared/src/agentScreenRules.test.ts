@@ -98,6 +98,45 @@ describe('agentScreenRules', () => {
     });
   });
 
+  describe('api_error rule', () => {
+    const errorScreen = (message: string) =>
+      classifyScreen('claude', { above: [`  ⎿  ${message}`], promptBox: ['  ❯ '] });
+
+    it.each([
+      'API Error: Request timed out.',
+      'API Error: 529 overloaded_error',
+      'API Error: Connection error.',
+      'API Error: 503 Service Unavailable',
+    ])('classifies "%s" as error', (message) => {
+      expect(errorScreen(message)).toBe('error');
+    });
+
+    it('does not match "api error" without a known cause', () => {
+      expect(errorScreen('API Error: something else')).not.toBe('error');
+    });
+
+    it('does not match a known cause without "api error"', () => {
+      expect(errorScreen('request timed out')).not.toBe('error');
+    });
+
+    it('is outranked by a permission prompt', () => {
+      const result = classifyScreen('claude', {
+        above: ['API Error: Request timed out.', 'Do you want to proceed?'],
+        promptBox: ['  ❯ '],
+      });
+      expect(result).toBe('blocked');
+    });
+
+    it('outranks the interrupt line', () => {
+      const result = classifyScreen('claude', {
+        above: ['API Error: Request timed out.'],
+        promptBox: ['  ❯ '],
+        below: ['  ⏸ manual mode on · esc to interrupt'],
+      });
+      expect(result).toBe('error');
+    });
+  });
+
   describe('classifyTitle', () => {
     describe('claude', () => {
       it.each(['⠐', '⠙', '◐', '◑', '◒', '◓', '✻', '✶', '✽', '✢', '∗'])(
