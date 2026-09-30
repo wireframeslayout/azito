@@ -607,23 +607,25 @@ export class TaskRestoreService {
         worktreeBranch = wt.branch;
         effectiveDir = wt.path;
 
-        const identityResult = await ensureGitIdentity(server.type, transport, wt.path, hubGitIdentity);
-        if (unitId !== null && identityResult.action === 'applied') {
-          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
-        } else if (unitId !== null && identityResult.action === 'hub_missing') {
-          appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_missing' });
-        }
-
         if (allowedRoot) {
-          // Same containment check ExecuteTaskUseCase applies to a freshly
-          // created worktree path; the outer try/catch below already rolls
-          // back the worktree (worktreePath + repoDir are set) and tmux
-          // window on any throw, so rejection here needs no separate cleanup.
           const resolvedWtPath = await assertDirectoryContained(
             this.pathResolverFactory, server.type, transport, { target: worktreePath, allowedRoot }, 'worktree path',
           );
           worktreePath = resolvedWtPath;
           effectiveDir = resolvedWtPath;
+        }
+
+        try {
+          const identityResult = await ensureGitIdentity(server.type, transport, worktreePath, hubGitIdentity);
+          if (unitId !== null && identityResult.action === 'applied') {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
+          } else if (unitId !== null && identityResult.action === 'hub_missing') {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_missing' });
+          }
+        } catch (err) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_failed', message: err instanceof Error ? err.message : String(err) });
+          }
         }
 
         try {

@@ -4248,3 +4248,4 @@ describe('ExecuteTaskUseCase.isPushCompleted uses the task-recorded distribution
     expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoAWithToken, 'task/1-slug');
   });
 });
+

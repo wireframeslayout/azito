@@ -1206,20 +1206,27 @@ export class ExecuteTaskUseCase {
         baseBranch,
       });
 
-      const identityResult = await ensureGitIdentity(
-        server.type,
-        this.transportFactory.getTransport(server),
-        wt.path,
-        this.hubGitIdentity,
-      );
-      if (identityResult.action === 'applied') {
+      try {
+        const identityResult = await ensureGitIdentity(
+          server.type,
+          this.transportFactory.getTransport(server),
+          wt.path,
+          this.hubGitIdentity,
+        );
+        if (identityResult.action === 'applied') {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'git_identity_applied',
+            fields: identityResult.fields,
+          });
+        } else if (identityResult.action === 'hub_missing') {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'git_identity_missing',
+          });
+        }
+      } catch (err) {
         this.appendLog(taskId, unitId, 'command', {
-          type: 'git_identity_applied',
-          fields: identityResult.fields,
-        });
-      } else if (identityResult.action === 'hub_missing') {
-        this.appendLog(taskId, unitId, 'command', {
-          type: 'git_identity_missing',
+          type: 'git_identity_failed',
+          message: err instanceof Error ? err.message : String(err),
         });
       }
 

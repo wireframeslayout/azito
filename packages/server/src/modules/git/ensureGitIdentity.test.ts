@@ -58,4 +58,16 @@ describe('ensureGitIdentity', () => {
     expect(await ensureGitIdentity('local', undefined, '/wt', null)).toEqual({ action: 'hub_missing' });
     expect(setGitConfigValue).not.toHaveBeenCalled();
   });
+
+  it('propagates errors from getGitConfigValue', async () => {
+    vi.mocked(getGitConfigValue).mockRejectedValue(new Error('SSH disconnected'));
+    await expect(ensureGitIdentity('remote', undefined, '/wt', hub)).rejects.toThrow('SSH disconnected');
+    expect(setGitConfigValue).not.toHaveBeenCalled();
+  });
+
+  it('propagates errors from setGitConfigValue', async () => {
+    mockCurrent('', '');
+    vi.mocked(setGitConfigValue).mockRejectedValue(new Error('permission denied'));
+    await expect(ensureGitIdentity('local', undefined, '/wt', hub)).rejects.toThrow('permission denied');
+  });
 });

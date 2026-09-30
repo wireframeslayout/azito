@@ -43,7 +43,7 @@ function parseContent(raw: string): any {
 }
 
 /** Classify a log entry into a visual style bucket */
-function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | 'warning' | null {
+function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | 'warning' | 'info-identity' | null {
   if (type === 'user_comment') return 'user-comment';
   if (type === 'status_change') {
     if (typeof parsed === 'object' && parsed !== null) {
@@ -62,7 +62,8 @@ function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worke
   }
   if (type === 'command') {
     if (typeof parsed === 'object' && parsed !== null) {
-      if (parsed.type === 'git_identity_missing') return 'warning';
+      if (parsed.type === 'git_identity_missing' || parsed.type === 'git_identity_failed') return 'warning';
+      if (parsed.type === 'git_identity_applied') return 'info-identity';
       if (parsed.type === 'wait_poll' || parsed.type === 'wait_start' || parsed.type === 'llm_classify') return null;
       if (parsed.type === 'worker_prompt') return 'worker-prompt';
       if (parsed.type === 'worker_launch') return 'launch';
@@ -313,9 +314,24 @@ function UserCommentBubble({ parsed, time }: { parsed: any; time: string }) {
   );
 }
 
-function GitIdentityMissingBubble({ time }: { time: string }) {
+function GitIdentityWarningBubble({ parsed, time }: { parsed: any; time: string }) {
   const { t } = useTranslation('tasks');
+  if (typeof parsed === 'object' && parsed?.type === 'git_identity_failed') {
+    return <WarningBubble time={time}>{t('log.gitIdentityFailed', { reason: parsed.message || '' })}</WarningBubble>;
+  }
   return <WarningBubble time={time}>{t('log.gitIdentityMissing')}</WarningBubble>;
+}
+
+function GitIdentityAppliedBubble({ parsed, time }: { parsed: any; time: string }) {
+  const { t } = useTranslation('tasks');
+  const fields = typeof parsed === 'object' && Array.isArray(parsed?.fields)
+    ? parsed.fields.map((f: { key: string; value: string }) => `${f.key}=${f.value}`).join(', ')
+    : '';
+  return (
+    <SystemBubble time={time}>
+      {t('log.gitIdentityApplied')}{fields ? ` (${fields})` : ''}
+    </SystemBubble>
+  );
 }
 
 // ── Render a single log entry ──
@@ -358,7 +374,9 @@ function ChatBubble({ log }: { log: LogEntry }) {
     case 'session-resumed':
       return <SessionResumedBubble parsed={parsed} time={log.createdAt} />;
     case 'warning':
-      return <GitIdentityMissingBubble time={log.createdAt} />;
+      return <GitIdentityWarningBubble parsed={parsed} time={log.createdAt} />;
+    case 'info-identity':
+      return <GitIdentityAppliedBubble parsed={parsed} time={log.createdAt} />;
     default:
       return <SystemBubble time={log.createdAt}>{String(parsed)}</SystemBubble>;
   }

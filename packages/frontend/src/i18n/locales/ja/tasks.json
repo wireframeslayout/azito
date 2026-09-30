@@ -197,6 +197,7 @@
   "log": {
     "gitIdentityMissing": "コミット作者が未設定です。ハブで git config --global user.name / user.email を設定してください",
     "gitIdentityApplied": "Git 作者情報を補完しました",
+    "gitIdentityFailed": "コミット作者を設定できませんでした: {{reason}}。ハブで git config を確認してください",
     "orchestratorRequest": "オーケストレーターリクエスト #{{iteration}}",
     "orchestratorThinking": "オーケストレーター思考中...",
     "workerPrompt": "ワーカープロンプト",
