@@ -30,8 +30,10 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const isMobile = useIsMobile();
   const {
     server, servers, status, installStatus, sessions,
+    windowById, taskById,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
+    windowMetaError,
     loading, error, refresh,
   } = useServerDetail(serverName);
   const mgmt = useServerEditForm();
@@ -114,7 +116,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
             <SetupSection server={server} installStatus={installStatus} refresh={refresh} />
           )}
           {activeSection === 'windows' && (
-            <WindowsSection server={server} sessions={sessions} refresh={refresh} />
+            <WindowsSection server={server} sessions={sessions} refresh={refresh} windowById={windowById} taskById={taskById} windowMetaError={windowMetaError} />
           )}
           {activeSection === 'danger' && (
             <DangerSection

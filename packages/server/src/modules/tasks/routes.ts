@@ -8,16 +8,16 @@ import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IExecutionLogRepository } from './ExecutionLog';
 import type { ExecuteTaskUseCase } from './execution/ExecuteTaskUseCase';
 import type { IUnitRepository, SubagentConfig } from '../units/Unit';
-import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IWindowRepository } from '../windows/Window';
 import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from './execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
 import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
@@ -33,6 +33,7 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
+import { type MuxRef, tmuxTargetFromMuxRef, muxRefFromTmuxTarget } from '@azito/shared';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -79,12 +80,12 @@ export function validateGitFields(body: Record<string, unknown>): string | null 
 
 export interface TasksRouteOptions {
   taskRepo: ITaskRepository;
+  muxDriverRegistry: MuxDriverRegistry;
   projectRepo: IProjectRepository;
   projectServerRepo: IProjectServerRepository;
   logRepo: IExecutionLogRepository;
   executeTaskUseCase: ExecuteTaskUseCase;
   unitRepo: IUnitRepository;
-  tmux: TmuxClient;
   serverRepo: IServerRepository;
   worktreeServiceFactory: WorktreeServiceFactory;
   transportFactory: TransportFactory;
@@ -207,8 +208,8 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, tmux, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled } = opts;
-  const taskCleanupService = new TaskCleanupService({ serverRepo, tmux, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo });
+  const { taskRepo, muxDriverRegistry, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled } = opts;
+  const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry });
 
   // ── GET /api/tasks ──
   fastify.get<{
@@ -336,17 +337,20 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const t = taskRepo.findById(parseInt(request.params.id, 10));
       if (!t) return reply.status(404).send({ error: 'Task not found' });
 
+      const windows = windowRepo.findByTask(t.id);
+
       let paneAlive: boolean | null = null;
       if (t.tmuxWindow) {
         const resolvedServerName = resolveTaskServerName(t, projectServerRepo);
         const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
         if (resolvedServerName && srv) {
-          const tmuxSession = resolveTmuxSession(t.projectId, resolvedServerName, projectServerRepo);
-          paneAlive = await tmux.checkPaneExists(srv, `${tmuxSession}:${t.tmuxWindow}`);
+          const driver = muxDriverRegistry.resolve(srv);
+          const primaryWin = windows.find((w) => w.isPrimary);
+          const ref: MuxRef = primaryWin?.muxRef
+            ?? muxRefFromTmuxTarget(`${resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo)}:${t.tmuxWindow}`);
+          paneAlive = await driver.windowExists(srv, ref);
         }
       }
-
-      const windows = windowRepo.findByTask(t.id);
 
       let unitTypeInfo: { name: string; phases: Array<{ name: string; label: string }> } | null = null;
       const project = projectRepo.findById(t.projectId);
@@ -920,10 +924,15 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
               'the pane could not be confirmed dead. Check the server is reachable, kill the window manually if needed, then retry.',
           });
         }
-        const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, projectServerRepo);
+        const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, projectServerRepo);
         const windowName = task.tmuxWindow;
-        const target = `${tmuxSession}:${windowName}`;
-        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => tmux.killWindow(srv, target), () => {});
+        const driver = muxDriverRegistry.resolve(srv);
+        const retryWindows = windowRepo.findByTask(id);
+        const retryPrimaryWin = retryWindows.find((w) => w.isPrimary);
+        const retryRef: MuxRef = retryPrimaryWin?.muxRef
+          ?? muxRefFromTmuxTarget(`${muxWorkspace}:${windowName}`);
+        const target = tmuxTargetFromMuxRef(retryRef);
+        const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => driver.closeWindow(srv, retryRef), () => {});
         if (!outcome.success) {
           return reply.status(409).send({
             error: `Failed to kill task ${id}'s abandoned tmux window '${target}'; ` +

@@ -131,6 +131,43 @@ describe('wrapWithSupervisor', () => {
     expect(() => legacyParseFlags(flagArgs)).not.toThrow();
   });
 
+  it('prefixes AZITO_PREFIX env var when harnessPrefix is provided', () => {
+    const wrapped = wrapWithSupervisor('claude', {
+      server: { name: 'local-server', type: 'local' },
+      target: 'azito:task-10.1',
+      harnessPrefix: 'dev',
+    });
+
+    expect(wrapped).toContain("AZITO_PREFIX='dev'");
+  });
+
+  it('omits AZITO_PREFIX when harnessPrefix is not provided', () => {
+    const wrapped = wrapWithSupervisor('claude', {
+      server: { name: 'local-server', type: 'local' },
+      target: 'azito:task-10.2',
+    });
+
+    expect(wrapped).not.toContain('AZITO_PREFIX');
+  });
+
+  it('includes AZITO_PREFIX alongside launch binding env vars when both are provided', () => {
+    const wrapped = wrapWithSupervisor('claude', {
+      server: { name: 'local-server', type: 'local' },
+      target: 'azito:task-10.3',
+      harnessPrefix: 'dev',
+      launchId: 'launch-abc',
+      bootstrapToken: 'secret-xyz',
+    });
+
+    expect(wrapped).toContain("AZITO_PREFIX='dev'");
+    expect(wrapped).toContain("AZITO_SUPERVISOR_LAUNCH_ID='launch-abc'");
+    expect(wrapped).toContain("AZITO_SUPERVISOR_BOOTSTRAP='secret-xyz'");
+    // AZITO_PREFIX comes before the launch binding vars
+    const prefixIdx = wrapped.indexOf('AZITO_PREFIX');
+    const launchIdx = wrapped.indexOf('AZITO_SUPERVISOR_LAUNCH_ID');
+    expect(prefixIdx).toBeLessThan(launchIdx);
+  });
+
   it('resolves an agent-server command using the ~/.azito/agent/current path', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'agent-server', type: 'agent' },

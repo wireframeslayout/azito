@@ -1,4 +1,5 @@
 import type { Pane, Session, TmuxWindow } from '../pages/workspace/types';
+import type { TerminalRef } from './terminalRef';
 
 export function paneDisplayName(pane: Pick<Pane, 'title' | 'command'>): string {
   return pane.title && pane.title !== pane.command ? pane.title : pane.command;
@@ -72,4 +73,68 @@ export function resolveActivePane(
   }
 
   return win.panes[0] ?? null;
+}
+
+export interface WindowExistsResult {
+  found: boolean;
+  paneFound: boolean;
+}
+
+function findWindowByRef(sessions: Session[], ref: TerminalRef): TmuxWindow | undefined {
+  for (const sess of sessions) {
+    const win = ref.kind === 'windowId'
+      ? sess.windows.find(w => w.windowId === ref.windowId)
+      : sess.windows.find(w => w.ref === ref.ref);
+    if (win) return win;
+  }
+  return undefined;
+}
+
+function checkWindowExistsByRef(sessions: Session[], ref: TerminalRef): WindowExistsResult {
+  const win = findWindowByRef(sessions, ref);
+  if (!win) return { found: false, paneFound: false };
+  const paneFound = win.panes.some(p => p.index === ref.pane);
+  return { found: true, paneFound };
+}
+
+function checkWindowExistsByTarget(sessions: Session[], target: string): WindowExistsResult {
+  const match = resolveTmuxWindowMatch(sessions, target);
+  if (!match) return { found: false, paneFound: false };
+
+  if (!match.matchedRaw) {
+    const colonIdx = target.indexOf(':');
+    const rest = colonIdx >= 0 ? target.slice(colonIdx + 1) : '';
+    const dotIdx = rest.lastIndexOf('.');
+    if (dotIdx >= 0) {
+      const suffix = rest.slice(dotIdx + 1);
+      if (/^\d+$/.test(suffix)) {
+        const pIdx = parseInt(suffix, 10);
+        if (!match.window.panes.some(p => p.index === pIdx)) {
+          return { found: true, paneFound: false };
+        }
+      }
+    }
+  }
+
+  return { found: true, paneFound: true };
+}
+
+export function checkWindowExists(
+  sessions: Session[],
+  terminalRef: TerminalRef | undefined,
+  target: string,
+): WindowExistsResult {
+  if (terminalRef) return checkWindowExistsByRef(sessions, terminalRef);
+  return checkWindowExistsByTarget(sessions, target);
+}
+
+export function resolveActivePaneByRef(
+  sessions: Session[],
+  ref: TerminalRef,
+): Pane | null {
+  const win = findWindowByRef(sessions, ref);
+  if (!win) return null;
+  return win.panes.find(p => p.active)
+    ?? win.panes.find(p => p.index === ref.pane)
+    ?? win.panes[0] ?? null;
 }

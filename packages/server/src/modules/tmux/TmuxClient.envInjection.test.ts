@@ -3,6 +3,7 @@ import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
+import { uiTokenEnv, uiTokenEnvForServer } from '../../shared/auth/uiTokenEnv';
 
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
 const remoteSrv: ServerConfig = { name: 'remote', type: 'agent', host: '100.64.1.7' } as ServerConfig;
@@ -11,11 +12,12 @@ const LOCAL_URL = 'http://127.0.0.1:3001';
 const UI_TOKEN = 'test-ui-token-123';
 
 function makeClient(
-  execTmux: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
+  handler: (args: string[]) => Promise<{ stdout: string; stderr: string; code: number }>,
   uiToken: string = UI_TOKEN,
 ): TmuxClient {
+  const execMux = vi.fn((req: { kind: string; args: string[] }) => handler(req.args));
   const factory = {
-    getTransport: () => ({ execTmux: vi.fn(execTmux) }),
+    getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
   return new TmuxClient(factory, PUBLIC_URL, uiToken, LOCAL_URL);
 }
@@ -111,8 +113,8 @@ describe('TmuxClient AZITO_UI_TOKEN injection (Issue #28 Phase A後半: no longe
       calls.push(args);
       return { stdout: '', stderr: '', code: 0 };
     });
-    await client.createSession(srv, 'test-session', { windowName: 'win', extraEnv: client.uiTokenEnv() });
-    await client.createWindow(srv, 'test-session', 'win', { extraEnv: client.uiTokenEnv() });
+    await client.createSession(srv, 'test-session', { windowName: 'win', extraEnv: uiTokenEnv(UI_TOKEN) });
+    await client.createWindow(srv, 'test-session', 'win', { extraEnv: uiTokenEnv(UI_TOKEN) });
     // Each call also emits a second `set-window-option` tmux invocation
     // (setWindowStatusFormat) — filter to just the new-session/new-window
     // calls that actually carry the env flags.
@@ -122,9 +124,8 @@ describe('TmuxClient AZITO_UI_TOKEN injection (Issue #28 Phase A後半: no longe
     expect(envValue(newWindowCall, 'AZITO_UI_TOKEN')).toBe(UI_TOKEN);
   });
 
-  it('uiTokenEnv() returns an empty object when uiToken is empty', async () => {
-    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }), '');
-    expect(client.uiTokenEnv()).toEqual({});
+  it('uiTokenEnv() returns an empty object when uiToken is empty', () => {
+    expect(uiTokenEnv('')).toEqual({});
   });
 });
 
@@ -134,36 +135,36 @@ describe('TmuxClient AZITO_UI_TOKEN injection (Issue #28 Phase A後半: no longe
 // WindowRespawnService's non-task fallback) happily injected the hub's
 // AZITO_UI_TOKEN into an isolation_intent=1 server's pane too. This is the
 // server-aware wrapper those call sites now use instead.
-describe('TmuxClient.uiTokenEnvForServer', () => {
-  it('returns the legacy uiTokenEnv() for a non-isolated server', async () => {
-    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
-    expect(client.uiTokenEnvForServer(srv)).toEqual({ AZITO_UI_TOKEN: UI_TOKEN });
+describe('uiTokenEnvForServer (shared/auth/uiTokenEnv)', () => {
+  it('returns the legacy uiTokenEnv() for a non-isolated server', () => {
+    expect(uiTokenEnvForServer(UI_TOKEN, srv)).toEqual({ AZITO_UI_TOKEN: UI_TOKEN });
   });
 
-  it('masks the token with an explicit empty string for an isolation_intent server', async () => {
-    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
+  it('masks the token with an explicit empty string for an isolation_intent server', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(uiTokenEnvForServer(UI_TOKEN, isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
   });
 
-  it('masks even when the underlying uiToken is empty (still an explicit key, not omitted)', async () => {
-    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }), '');
+  it('masks even when the underlying uiToken is empty (still an explicit key, not omitted)', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(uiTokenEnvForServer('', isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
   });
 
-  // Issue #29 review (final pass), Critical finding 1: this mask previously
-  // covered only AZITO_UI_TOKEN — an agent-type isolated server's process
-  // env also holds AZITO_AGENT_TOKEN (see agent/main.ts), which a manual
-  // session/window/pane route or plain respawn could still inject into a
-  // new tmux window via session-env inheritance. `uiTokenEnvForServer` and
-  // `TaskPaneEnvironmentService.applyTokenMaskingOrCompat` must mask the
-  // exact same key set — both now reference the single shared
-  // ISOLATION_MASKED_ENV constant, asserted here directly so the two can
-  // never drift again.
-  it('masks the exact same key set as ISOLATION_MASKED_ENV (single source shared with TaskPaneEnvironmentService)', async () => {
-    const client = makeClient(async () => ({ stdout: '', stderr: '', code: 0 }));
+  it('masks the exact same key set as ISOLATION_MASKED_ENV (single source shared with TaskPaneEnvironmentService)', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(client.uiTokenEnvForServer(isolatedSrv)).toEqual({ ...ISOLATION_MASKED_ENV });
+    expect(uiTokenEnvForServer(UI_TOKEN, isolatedSrv)).toEqual({ ...ISOLATION_MASKED_ENV });
+  });
+  it('createWindow targets the session with a trailing colon so a window named like the session cannot capture the index', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => {
+      calls.push(args);
+      return { stdout: '', stderr: '', code: 0 };
+    });
+    await client.createWindow(srv, 'azito', 'win');
+    const newWindowCall = calls.find((c) => c[0] === 'new-window')!;
+    const tIdx = newWindowCall.indexOf('-t');
+    // `-t azito` would be resolved as a target-window and prefix-match a window
+    // named `azito-rc`, making tmux try that window's index ("index 1 in use").
+    expect(newWindowCall[tIdx + 1]).toBe('azito:');
   });
 });

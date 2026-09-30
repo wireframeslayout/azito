@@ -15,26 +15,28 @@ function createLocalServer(dir: string): ServerConfig {
   } as unknown as ServerConfig;
 }
 
-// Minimal mock of TmuxClient for testing shell command construction
-function createMockTmux(responses?: Record<string, string>) {
+// Minimal mock of TransportFactory for testing shell command construction
+function createMockTransport(responses?: Record<string, string>) {
   const commands: string[] = [];
   return {
     commands,
-    execCommand: async (_srv: unknown, cmd: string) => {
-      commands.push(cmd);
-      if (responses) {
-        for (const [pattern, stdout] of Object.entries(responses)) {
-          if (cmd.includes(pattern)) return { stdout, stderr: '', code: 0 };
+    getTransport: () => ({
+      exec: async (cmd: string) => {
+        commands.push(cmd);
+        if (responses) {
+          for (const [pattern, stdout] of Object.entries(responses)) {
+            if (cmd.includes(pattern)) return { stdout, stderr: '', code: 0 };
+          }
         }
-      }
-      return { stdout: '100', stderr: '', code: 0 };
-    },
+        return { stdout: '100', stderr: '', code: 0 };
+      },
+    }),
   };
 }
 
 describe('FileBrowseService shell quoting', () => {
   it('quotes filePath with single quotes in remote stat commands', async () => {
-    const mock = createMockTmux();
+    const mock = createMockTransport();
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
 
@@ -48,7 +50,7 @@ describe('FileBrowseService shell quoting', () => {
   });
 
   it('escapes single quotes in filePath for remote commands', async () => {
-    const mock = createMockTmux();
+    const mock = createMockTransport();
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
 
@@ -73,7 +75,7 @@ describe('FileBrowseService shell quoting', () => {
   // `base64` rejects it outright, so the read command uses `< file` redirection instead, which both
   // implementations accept identically.
   it('uses redirection (not -- argument form) in the remote base64 read command', async () => {
-    const mock = createMockTmux({ 'test -f': 'ok' });
+    const mock = createMockTransport({ 'test -f': 'ok' });
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
 
@@ -101,7 +103,7 @@ describe('FileBrowseService shell quoting', () => {
     const injectionPath = '/tmp/test$(touch /tmp/pwned).txt';
     const mock = {
       commands,
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
@@ -110,7 +112,7 @@ describe('FileBrowseService shell quoting', () => {
         }
         // mtime lookup (stat -c%.Y / -c%Y / -f%m chain)
         return { stdout: '1750000000\n', stderr: '', code: 0 };
-      },
+      } }),
     };
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
@@ -150,7 +152,7 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
     const expectedHash = createHash('sha256').update(originalContent, 'utf-8').digest('hex');
 
     const mock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
           return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
@@ -163,7 +165,7 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
         }
         // mtime lookup
         return { stdout: '1750000000\n', stderr: '', code: 0 };
-      },
+      } }),
     };
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
@@ -187,7 +189,7 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
     const expectedHash = createHash('sha256').update(originalContent, 'utf-8').digest('hex');
 
     const mock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
           return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
@@ -196,7 +198,7 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
           return { stdout: simulateSshBoundaryTrim(`${wrapped}\nAZITO_READ_OK`), stderr: '', code: 0 };
         }
         return { stdout: '1750000000\n', stderr: '', code: 0 };
-      },
+      } }),
     };
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
@@ -215,12 +217,12 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
   // marker distinguishes that from a genuinely empty file.
   it('rejects the read when the base64 command produces no success marker (empty output)', async () => {
     const mock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
         if (cmd.includes('base64')) return { stdout: '', stderr: '', code: 0 };
         return { stdout: '1750000000\n', stderr: '', code: 0 };
-      },
+      } }),
     };
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
@@ -234,12 +236,12 @@ describe('FileBrowseService.getFileContent (remote) — lossless base64 read', (
   it('rejects the read when the decoded byte count does not match the stat size', async () => {
     const truncatedB64 = Buffer.from('hel', 'utf-8').toString('base64'); // 3 bytes, but stat says 5
     const mock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
         if (cmd.includes('base64')) return { stdout: `${truncatedB64}\nAZITO_READ_OK\n`, stderr: '', code: 0 };
         return { stdout: '1750000000\n', stderr: '', code: 0 };
-      },
+      } }),
     };
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' };
@@ -430,7 +432,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     const MAX_ARG_STRLEN = 131072;
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         // デコード+置換コマンドは成功マーカーを返す（Issue #27 review Important 1）
         if (cmd.includes('base64 -d <') && cmd.includes('AZITO_WRITE_OK')) {
@@ -439,7 +441,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
         // 書き込み後の stat 検証には epoch 秒を返す（%.Y が最初に試される）
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -475,7 +477,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   // later stat call succeeding.
   it('throws when the remote write command reports no success marker', async () => {
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         // The decode/mv step "fails" silently (as a real base64/mv error
         // would under `code: 0` from an SSH transport) — no marker in stdout.
         if (cmd.includes('base64 -d <')) return { stdout: '', stderr: 'base64: invalid input\n', code: 0 };
@@ -484,7 +486,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
         // a source of truth for success.
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -500,12 +502,12 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   // returned nothing) skipped the check entirely and wrote unconditionally.
   it('fails closed with 409 when the remote mtime cannot be fetched but baseMtime was supplied', async () => {
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         // Every stat variant (mtime chain and mode chain) returns nothing,
         // simulating a transient stat failure / vanished file.
         if (cmd.startsWith('stat')) return { stdout: '', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -524,12 +526,12 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('falls back to base64 -D when base64 -d fails (BSD/macOS remote)', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote-macos', type: 'ssh' } as any;
@@ -550,13 +552,13 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('preserves the existing remote file mode across the mv replace', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%a')) return { stdout: '755\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -573,13 +575,13 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('does not attempt chmod when the file is newly created (no existing mode)', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat -c%a')) return { stdout: '', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -597,7 +599,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('returns 409 on remote hash conflict, without performing the write', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
           return { stdout: `${'a'.repeat(64)}  /tmp/hash-conflict.txt\n`, stderr: '', code: 0 };
@@ -606,7 +608,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
         // A real base64 -d / mv should never be reached — fail loudly if it is.
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -621,14 +623,14 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('writes successfully when the remote content hash matches', async () => {
     const currentHash = createHash('sha256').update('original', 'utf-8').digest('hex');
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
           return { stdout: `${currentHash}  /tmp/hash-match.txt\n`, stderr: '', code: 0 };
         }
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -646,7 +648,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('rejects the save (fail closed) when no remote hash tool is available', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         // Both sha256sum and shasum fail/are absent — empty stdout, as `2>/dev/null || ...` yields
         // when neither tool exists.
@@ -656,7 +658,7 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -676,12 +678,12 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('quotes the trap cleanup command as a single unit even when the path contains shell metacharacters', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -720,14 +722,14 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('rejects the write when the staged base64 byte count does not match what was sent', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('wc -c')) {
           // Simulate a truncated staging file (e.g. a dropped chunk) reported as size mismatch.
           return { stdout: 'AZITO_WRITE_SIZE_MISMATCH\n', stderr: '', code: 0 };
         }
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -746,12 +748,12 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
   it('creates the upload staging file under umask 077', async () => {
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -772,14 +774,14 @@ describe('FileBrowseService.writeFileContent (remote)', () => {
     const commands: string[] = [];
     let chunkCalls = 0;
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.startsWith("printf '%s'")) {
           chunkCalls++;
           if (chunkCalls === 2) throw new Error('transport dropped mid-upload');
         }
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote', type: 'ssh' } as any;
@@ -817,7 +819,7 @@ describe('FileBrowseService.writeFileContent concurrency', () => {
     const baseMtime = remoteMtimeSeconds * 1000;
     const commands: string[] = [];
     const tmuxMock = {
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.includes('%.Y')) return { stdout: `${remoteMtimeSeconds}.000000\n`, stderr: '', code: 0 };
         if (cmd.includes('%a')) return { stdout: '', stderr: '', code: 0 };
@@ -828,7 +830,7 @@ describe('FileBrowseService.writeFileContent concurrency', () => {
           return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
         }
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const service = new FileBrowseService(tmuxMock as any);
     const srv = { name: 'remote-shared', type: 'ssh' } as any;
@@ -920,13 +922,13 @@ describe('FileBrowseService.createEntry (remote)', () => {
     let callCount = 0;
     const mock = {
       commands: [] as string[],
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         mock.commands.push(cmd);
         callCount++;
         if (callCount === 1) return { stdout: 'no\n', stderr: '', code: 0 };
         if (callCount === 3) return { stdout: 'ok\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     };
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
@@ -936,7 +938,7 @@ describe('FileBrowseService.createEntry (remote)', () => {
   });
 
   it('throws 409 if remote path exists', async () => {
-    const mock = createMockTmux({ 'test -e': 'yes\n' });
+    const mock = createMockTransport({ 'test -e': 'yes\n' });
     const svc = new FileBrowseService(mock as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
     await expect(svc.createEntry(srv, '/workspace/existing', 'file')).rejects.toThrow('Already exists');
@@ -987,13 +989,13 @@ describe('FileBrowseService.ensureDirectory (remote)', () => {
   it('creates the directory when it does not exist', async () => {
     const commands: string[] = [];
     const svc = new FileBrowseService({
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         commands.push(cmd);
         if (cmd.startsWith('if [ -d')) return { stdout: 'none\n', stderr: '', code: 0 };
         if (cmd.startsWith('mkdir -p')) return { stdout: '', stderr: '', code: 0 };
         if (cmd.startsWith('test -d')) return { stdout: 'ok\n', stderr: '', code: 0 };
         return { stdout: '', stderr: '', code: 0 };
-      },
+      } }),
     } as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
     const result = await svc.ensureDirectory(srv, '/workspace/new/nested');
@@ -1003,10 +1005,10 @@ describe('FileBrowseService.ensureDirectory (remote)', () => {
 
   it('is a no-op when the remote path is already a directory', async () => {
     const svc = new FileBrowseService({
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('if [ -d')) return { stdout: 'dir\n', stderr: '', code: 0 };
         throw new Error(`unexpected command: ${cmd}`);
-      },
+      } }),
     } as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
     const result = await svc.ensureDirectory(srv, '/workspace/existing');
@@ -1015,10 +1017,10 @@ describe('FileBrowseService.ensureDirectory (remote)', () => {
 
   it('throws 409 when the remote path exists but is not a directory', async () => {
     const svc = new FileBrowseService({
-      execCommand: async (_srv: unknown, cmd: string) => {
+      getTransport: () => ({ exec: async (cmd: string) => {
         if (cmd.startsWith('if [ -d')) return { stdout: 'other\n', stderr: '', code: 0 };
         throw new Error(`unexpected command: ${cmd}`);
-      },
+      } }),
     } as any);
     const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
     await expect(svc.ensureDirectory(srv, '/workspace/afile')).rejects.toThrow('not a directory');

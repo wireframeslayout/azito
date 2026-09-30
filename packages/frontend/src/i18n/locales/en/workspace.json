@@ -92,6 +92,8 @@
     "session": "Session",
     "windowName": "Window Name (optional)",
     "windowNamePlaceholder": "e.g. dev",
+    "windowNameAutoGenHint": "Auto-generated if empty (e.g. win--a7x2)",
+    "windowExistsError": "A window with this name already exists",
     "workingDir": "Working Directory",
     "workingDirPlaceholder": "/path/to/project",
     "codingAgent": "Coding Agent",

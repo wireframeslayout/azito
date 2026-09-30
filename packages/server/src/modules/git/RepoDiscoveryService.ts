@@ -1,4 +1,4 @@
-import type { TmuxClient } from '../tmux/TmuxClient';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import { parseRemoteUrl, normalizeRemoteUrl, type ParsedRemote, type RepositoryProvider } from './parseRemoteUrl';
 import { shellQuote } from '../../shared/shellQuote';
@@ -76,7 +76,7 @@ export interface PathStatus {
 const SECTION_MARKER = '---AZITO_REPO_SECTION---';
 
 export class RepoDiscoveryService {
-  constructor(private tmux: TmuxClient) {}
+  constructor(private transportFactory: TransportFactory) {}
 
   /**
    * Reports whether `path` exists on `server`, and if so whether `path`
@@ -91,7 +91,7 @@ export class RepoDiscoveryService {
   async checkPathStatus(server: ServerConfig, path: string): Promise<PathStatus> {
     const safePath = shellQuote(path);
     const cmd = `if [ -e ${safePath} ]; then echo EXISTS; if [ -e ${safePath}/.git ]; then echo ISGIT; fi; fi`;
-    const result = await this.tmux.execCommand(server, cmd);
+    const result = await this.transportFactory.getTransport(server).exec(cmd);
     if (result.code !== 0) {
       throw new Error(`Path status check failed for '${path}' (exit code ${result.code})`);
     }
@@ -130,7 +130,7 @@ export class RepoDiscoveryService {
     // entry itself is still matched by `-name .git`; only paths inside it
     // (its internals) are excluded.
     const findCmd = `find ${safeDir} -maxdepth ${depth + 1} \\( -type d -o -type f \\) -name .git -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null`;
-    const findResult = await this.tmux.execCommand(server, findCmd);
+    const findResult = await this.transportFactory.getTransport(server).exec(findCmd);
     if (findResult.code !== 0) {
       throw new Error(`Repository scan failed while searching '${workingDirectory}' (exit code ${findResult.code})`);
     }
@@ -157,7 +157,7 @@ export class RepoDiscoveryService {
     // unusable on the target) unconditional — it is a command-level
     // failure and the whole scan is intentionally failed rather than
     // silently degraded.
-    const gitCheckResult = await this.tmux.execCommand(server, 'git --version');
+    const gitCheckResult = await this.transportFactory.getTransport(server).exec('git --version');
     if (gitCheckResult.code !== 0) {
       throw new Error(
         `Repository remote lookup failed: 'git' is not usable on '${workingDirectory}' (exit code ${gitCheckResult.code})`,
@@ -189,7 +189,7 @@ export class RepoDiscoveryService {
       })
       .join(' ; ');
 
-    const batchResult = await this.tmux.execCommand(server, batchCmd);
+    const batchResult = await this.transportFactory.getTransport(server).exec(batchCmd);
     // With `git` confirmed usable above and every per-candidate group
     // forced to exit 0, a nonzero code here can only mean the transport
     // itself failed to run the batched command (not any single

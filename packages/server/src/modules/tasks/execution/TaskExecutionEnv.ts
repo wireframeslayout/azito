@@ -24,11 +24,11 @@ export function resolveTaskServerName(
 }
 
 /**
- * Resolves the tmux session to use for a task on the given (already
- * resolved) server. Falls back to the DB-level default ('azito') only when
- * no project_servers row links this project to that server yet.
+ * Resolves the mux workspace (tmux session) to use for a task on the given
+ * (already resolved) server. Falls back to the DB-level default ('azito')
+ * only when no project_servers row links this project to that server yet.
  */
-export function resolveTmuxSession(
+export function resolveMuxWorkspace(
   projectId: number,
   serverName: string,
   projectServerRepo: IProjectServerRepository,

@@ -92,6 +92,8 @@
     "session": "セッション",
     "windowName": "ウィンドウ名（任意）",
     "windowNamePlaceholder": "例: dev",
+    "windowNameAutoGenHint": "空の場合は自動生成されます（例: win--a7x2）",
+    "windowExistsError": "同名のウィンドウが既に存在します",
     "workingDir": "作業ディレクトリ",
     "workingDirPlaceholder": "/path/to/project",
     "codingAgent": "コーディングエージェント",

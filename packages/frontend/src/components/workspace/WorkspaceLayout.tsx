@@ -68,7 +68,7 @@ interface WorkspaceLayoutProps {
   contextMenu: React.ReactNode;
   confirmDialog: React.ReactNode;
   modals: React.ReactNode;
-  connectPane?: (serverName: string, target: string, projectId?: number) => void;
+  connectPane?: import('../../lib/terminalRef').ConnectPaneFn;
   openTask?: (taskId: number, title: string, projectId?: number) => void;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** SP の M1 メニュー「オブジェクト」行に表示する総件数（Issue #69 T1）。 */

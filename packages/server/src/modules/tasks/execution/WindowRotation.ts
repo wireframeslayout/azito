@@ -1,6 +1,7 @@
+import type { MuxRef, PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { IMuxClient } from '../../tmux/IMuxClient';
 import { resolveKillOutcome, type KillOutcome } from '../../tmux/killOutcome';
 import type { Task } from '../Task';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -44,10 +45,9 @@ export { isolationMaskForServer, withServerLock, ensureSessionWithLock, ServerSn
  * {@link createRotatedWindow} returns, not a blanket revoke-all.
  */
 
-export interface KillTarget {
-  target: string;
-  kind: 'window' | 'pane';
-}
+export type KillTarget =
+  | { kind: 'window'; ref: MuxRef }
+  | { kind: 'pane'; handle: PaneHandle };
 
 /** One in-flight chain per taskId — see {@link runExclusiveForTask}. */
 const taskRotationLocks = new Map<number, Promise<unknown>>();
@@ -165,23 +165,26 @@ export function runExclusiveForTasks<T>(taskIds: number[], fn: () => Promise<T>)
  * caller.
  */
 export async function confirmOldWindowGone(
-  tmux: Pick<TmuxClient, 'killWindow' | 'killPane'>,
+  driver: Pick<IMuxClient, 'closeWindow' | 'closePane'>,
   server: ServerConfig,
   killTarget: KillTarget | null,
   taskId: number | null,
 ): Promise<void> {
   if (!killTarget) return;
   const exec = killTarget.kind === 'window'
-    ? tmux.killWindow(server, killTarget.target)
-    : tmux.killPane(server, killTarget.target);
+    ? driver.closeWindow(server, killTarget.ref)
+    : driver.closePane(server, killTarget.handle);
   // resolveKillOutcome normalizes local (throws on failure) vs agent
   // (resolves with a non-zero code) transports into one verdict — a bare
   // await/`.then(() => true, () => false)` here previously read an
   // agent-transport kill failure as success (Issue #28 third-party review).
   const outcome = await resolveKillOutcome(exec);
   if (taskId !== null && !outcome.success) {
+    const label = killTarget.kind === 'window'
+      ? `${killTarget.ref.workspace}:${killTarget.ref.window}`
+      : String(killTarget.handle);
     throw new Error(
-      `Failed to kill ${killTarget.kind} ${killTarget.target} before rotating window; the task token was not rotated so the still-live pane stays authenticated`,
+      `Failed to kill ${killTarget.kind} ${label} before rotating window; the task token was not rotated so the still-live pane stays authenticated`,
     );
   }
 }
@@ -202,7 +205,7 @@ export async function createRotatedWindow(
   server: ServerConfig,
   task: Task,
   reasonOnFailure: string,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
   enforceSnapshot = true,
   // Issue #29 Step 3a review, Important finding 2: optional hook run against
   // `freshServer` INSIDE this same lock, before any env/token is built — see
@@ -212,7 +215,7 @@ export async function createRotatedWindow(
   // (throws to abort); callers with nothing to re-check (trusted tasks,
   // manual/plain windows) simply omit it.
   preCheck?: (freshServer: ServerConfig) => void,
-): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef }> {
   // Issue #29 review (7th pass), Important finding 1: the entire
   // env-resolution -> `create()` span now runs inside
   // `lock.serverIsolationMutex.withLock(server.name, ...)` — the SAME mutex
@@ -247,7 +250,7 @@ export async function createRotatedWindowInLock(
   freshServer: ServerConfig,
   task: Task,
   reasonOnFailure: string,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
   // Issue #29 Step 3a review, Important finding 2: invoked FIRST, against
   // `freshServer`, before any env/task-token is built or `create()` runs —
   // callers that queued for this lock before their own execution-gate
@@ -260,10 +263,10 @@ export async function createRotatedWindowInLock(
   // `createSecondaryWindowInLock`/`createPlainWindowInLock`, which take no
   // such hook since they never build an untrusted-task-owned env) omits it.
   preCheck?: (freshServer: ServerConfig) => void,
-): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig }> {
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef }> {
   preCheck?.(freshServer);
   const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
-  let created: { result: ExecResult; windowName: string };
+  let created: { result: ExecResult; windowName: string; ref?: MuxRef };
   try {
     created = await create(freshServer, env);
   } catch (err) {
@@ -295,7 +298,7 @@ export async function createRotatedWindowInLock(
   // OWN subsequent tmux calls (resolvePaneId, splitPane, ...) should keep
   // using the exact connection info this window was actually created with
   // can do so instead of falling back to its now-possibly-stale argument.
-  return { windowName: created.windowName, env, tokenId, server: freshServer };
+  return { windowName: created.windowName, env, tokenId, server: freshServer, ref: created.ref };
 }
 
 /**
@@ -315,9 +318,9 @@ export async function createSecondaryWindow(
   lock: ServerIsolationLock,
   server: ServerConfig,
   task: Task,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
   enforceSnapshot = true,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
   return withServerLock(lock, server, enforceSnapshot, (freshServer) => createSecondaryWindowInLock(paneEnvService, freshServer, task, create));
 }
 
@@ -326,18 +329,18 @@ export async function createSecondaryWindowInLock(
   paneEnvService: TaskPaneEnvironmentService,
   freshServer: ServerConfig,
   task: Task,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
   const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
   const created = await create(freshServer, env);
-  return { windowName: created.windowName, env, server: freshServer };
+  return { windowName: created.windowName, env, server: freshServer, ref: created.ref };
 }
 
 /**
  * Non-task counterpart of {@link createSecondaryWindow} (Issue #29 review,
  * 9th pass, Important finding 1). A plain (non-task) window respawn/create
  * has no task token and no masked-secondary env to resolve — it only ever
- * needs {@link TmuxClient.uiTokenEnvForServer} — but the isolation-freshness
+ * needs {@link uiTokenEnvForServer} (shared/auth/uiTokenEnv) — but the isolation-freshness
  * requirement is identical to both other branches: env must be built from a
  * server row re-read AFTER this lock is actually held, never from whatever
  * `server` the caller happened to be holding before queuing for the lock.
@@ -348,24 +351,24 @@ export async function createSecondaryWindowInLock(
  * "isolated" window holding the old, unmasked UI token.
  */
 export async function createPlainWindow(
-  tmux: Pick<TmuxClient, 'uiTokenEnvForServer'>,
+  uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   lock: ServerIsolationLock,
   server: ServerConfig,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
   enforceSnapshot = true,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
-  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createPlainWindowInLock(tmux, freshServer, create));
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
+  return withServerLock(lock, server, enforceSnapshot, (freshServer) => createPlainWindowInLock(uiTokenEnvFn, freshServer, create));
 }
 
 /** Core of {@link createPlainWindow} — see {@link createRotatedWindowInLock}'s doc comment for why this split exists. */
 export async function createPlainWindowInLock(
-  tmux: Pick<TmuxClient, 'uiTokenEnvForServer'>,
+  uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   freshServer: ServerConfig,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string }>,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig }> {
-  const env = tmux.uiTokenEnvForServer(freshServer);
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
+  const env = uiTokenEnvFn(freshServer);
   const created = await create(freshServer, env);
-  return { windowName: created.windowName, env, server: freshServer };
+  return { windowName: created.windowName, env, server: freshServer, ref: created.ref };
 }
 
 /**

@@ -1,6 +1,6 @@
-import type { Task } from '../../pages/workspace/types';
+import type { Task, Window } from '../../pages/workspace/types';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
-import { stripPaneSuffix } from '../../utils/tmuxTarget';
+import { stripPaneSuffix } from '@azito/shared';
 
 export type TaskGroupKey = 'running' | 'finished' | 'recent';
 
@@ -28,14 +28,19 @@ function recentSortTimestamp(task: Task, openedAt: Record<number, number>): numb
   return Math.max(openedAt[task.id] ?? 0, taskTimestamp(task));
 }
 
-// 子ウィンドウ行のtmuxTargetはペイン接尾辞を含む（例: "session:win.1"）が、エージェント
-// アクティビティのtargetは接尾辞を落とした形（"session:win"）で流れてくる。既存の
-// stripPaneSuffix で両者を同じ正規化に通してから照合する。
+/**
+ * windowId がある場合は windowId で優先照合し、ない場合は target ベースにフォールバック。
+ */
 export function findWindowActivity(
   activityRows: ActiveWindowRow[],
   serverName: string,
   tmuxTarget: string,
+  windowId?: number,
 ): ActiveWindowRow | undefined {
+  if (windowId != null) {
+    const byId = activityRows.find((row) => row.windowId === windowId);
+    if (byId) return byId;
+  }
   const targetBase = stripPaneSuffix(tmuxTarget);
   return activityRows.find(
     (row) => row.serverName === serverName && stripPaneSuffix(row.target) === targetBase,

@@ -1,10 +1,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { Window, Task, Project } from '../pages/workspace/types';
+import type { TerminalRef } from '../lib/terminalRef';
 import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
 import { Icon } from './ui/Icon';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDisplay';
 
 interface WindowStatusDropdownProps {
   serverName: string;
@@ -19,7 +22,22 @@ interface WindowStatusDropdownProps {
   onChanged?: () => void;
 }
 
-export function findWindow(serverName: string, target: string, project: Project | null, allTasks: Task[]): Window | null {
+export function findWindow(serverName: string, target: string, project: Project | null, allTasks: Task[], terminalRef?: TerminalRef): Window | null {
+  if (terminalRef) {
+    const matcher = (w: Window): boolean => {
+      if (w.serverName !== serverName) return false;
+      if (terminalRef.kind === 'windowId') return w.id === terminalRef.windowId;
+      return w.muxRef === terminalRef.ref;
+    };
+    const sources: Window[][] = [];
+    if (project) sources.push(project.windows);
+    for (const task of allTasks) { if (task.windows) sources.push(task.windows); }
+    for (const wins of sources) {
+      const match = wins.find(matcher);
+      if (match) return match;
+    }
+  }
+
   const targetBase = target.includes('.') ? target.split('.')[0] : target;
 
   if (project) {
@@ -188,9 +206,11 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
     setActionLoading(true);
     try {
       const base = target.replace(/\.\d+$/, '');
+      let refJson: string | undefined;
+      try { refJson = formatMuxRef(muxRefFromTmuxTarget(base)); } catch { /* fall back to tmux_target */ }
       const body: Record<string, unknown> = {
         server_name: serverName,
-        tmux_target: base,
+        ...(refJson ? { ref: refJson } : { tmux_target: base }),
         window_type: selectedType === 'terminal' ? 'terminal' : 'agent',
         worker_type: selectedType === 'terminal' ? null : selectedType,
       };
@@ -254,7 +274,9 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
 
           {!win ? (
             <div style={{ padding: '12px' }}>
-              <InfoRow label="Target">{target}</InfoRow>
+              <InfoRow label="tmux">
+                <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>{target}</span>
+              </InfoRow>
               <InfoRow label="Status">
                 <span style={{ color: 'var(--text-dim)' }}>not registered</span>
               </InfoRow>
@@ -283,9 +305,19 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
           ) : (
             <>
               <div style={{ padding: '8px 12px' }}>
-                <InfoRow label="Window">
+                {win.id != null && (() => {
+                  const display = resolveWindowDisplay({
+                    windowId: win.id, label: win.label,
+                    workerType: win.workerType, windowType: win.windowType,
+                    tmuxTarget: win.tmuxTarget,
+                  });
+                  return (
+                    <InfoRow label="Window">{formatWindowDisplayLabel(display)}</InfoRow>
+                  );
+                })()}
+                <InfoRow label="tmux">
                   <span style={{ fontFamily: 'monospace', fontSize: 'var(--font-xs)' }}>
-                    {win.tmuxTarget.split(':')[1]?.split('.')[0] || win.tmuxTarget}
+                    {win.tmuxTarget}
                   </span>
                 </InfoRow>
                 <InfoRow label="Type">

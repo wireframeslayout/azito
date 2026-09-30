@@ -50,11 +50,12 @@ import { MobileStatusBar } from '../components/workspace/MobileStatusBar';
 import { SplitLayout, type PaneDrag } from '../components/workspace/SplitLayout';
 import { resolveDisplayedTaskTerminal, selectTaskTerminal } from '../components/workspace/TaskPanel';
 
-import type { SidebarMode, Task, Project, Window } from './workspace/types';
+import type { SidebarMode, Task, Project, Window, Session } from './workspace/types';
 import { ACTIVE_PROJECT_KEY, getProjectColorFallback } from './workspace/types';
 import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
-
+import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
+import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex } from '../lib/windowDisplay';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -94,7 +95,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -118,6 +119,14 @@ function WorkspaceInner() {
 
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
+
+  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
+  // sessions of their servers are available (per server, so unfetched servers wait).
+  useEffect(() => {
+    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
+    if (byServer.size === 0) return;
+    migrateLegacyTerminalTabIds(byServer);
+  }, [sessionData, migrateLegacyTerminalTabIds]);
 
   // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
   // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
@@ -432,8 +441,12 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverName: string, target: string, projectId?: number) => {
-    connectPaneRaw(serverName, target, projectId ?? currentProjectId);
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectId?: number) => {
+    if (typeof serverNameOrRef === 'object') {
+      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId);
+    } else {
+      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId));
+    }
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
 
@@ -443,12 +456,15 @@ function WorkspaceInner() {
 
   useEffect(() => {
     if (!focusedActiveTabId?.startsWith('terminal:')) return;
-    const rest = focusedActiveTabId.slice('terminal:'.length);
-    const slashIdx = rest.indexOf('/');
-    if (slashIdx <= 0) return;
-    const serverName = rest.slice(0, slashIdx);
-    const target = rest.slice(slashIdx + 1);
-    setFocusedTarget(`${serverName}::${target}`);
+    const parsed = parseTerminalTabId(focusedActiveTabId);
+    if (!parsed) return;
+    if (parsed.kind === 'legacy') {
+      setFocusedTarget(`${parsed.serverName}::${parsed.target}`);
+    } else if (parsed.kind === 'windowId') {
+      setFocusedTarget(`${parsed.serverName}::w${parsed.windowId}`);
+    } else {
+      setFocusedTarget(`${parsed.serverName}::ref:${parsed.ref}`);
+    }
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);
   useEffect(() => {
@@ -502,9 +518,14 @@ function WorkspaceInner() {
     }
   }, [currentProjectId, navigate]);
 
-  const connectPaneFromActiveWindow = useCallback((serverName: string, target: string, projectId?: number) => {
-    connectPane(serverName, target, projectId);
-    focusProjectById(projectId);
+  const connectPaneFromActiveWindow = useCallback((refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => {
+    if (typeof refOrServerName === 'object') {
+      connectPane(refOrServerName, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined);
+      focusProjectById(typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined);
+    } else {
+      connectPane(refOrServerName, targetOrProjectId as string, projectId);
+      focusProjectById(projectId);
+    }
   }, [connectPane, focusProjectById]);
 
   const openTaskFromActiveWindow = useCallback((taskId: number, title: string, projectId?: number) => {
@@ -527,13 +548,21 @@ function WorkspaceInner() {
       return;
     }
     if (focusedActiveTabId.startsWith('terminal:')) {
-      const rest = focusedActiveTabId.slice('terminal:'.length);
-      const slashIdx = rest.indexOf('/');
-      if (slashIdx > 0) {
-        const serverName = rest.slice(0, slashIdx);
-        const tmuxTarget = rest.slice(slashIdx + 1);
+      const parsed = parseTerminalTabId(focusedActiveTabId);
+      if (parsed) {
+        const serverName = parsed.serverName;
+        let tmuxTarget: string;
+        let windowId: number | undefined;
+        if (parsed.kind === 'windowId') {
+          windowId = parsed.windowId;
+          tmuxTarget = `w${parsed.windowId}`;
+        } else if (parsed.kind === 'legacy') {
+          tmuxTarget = parsed.target;
+        } else {
+          tmuxTarget = parsed.ref;
+        }
         const task = findTaskByTarget(tmuxTarget);
-        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null });
+        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId });
         return;
       }
     }
@@ -577,17 +606,23 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [setSelectedRepoId, project, openIssueListRaw, currentProjectId, mobile, setSidebarOpen]);
 
-  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v') => {
-    const colonIdx = target.indexOf(':');
-    if (colonIdx < 0) return;
-    const sessionName = target.substring(0, colonIdx);
-    const rest = target.substring(colonIdx + 1);
-    const dotIdx = rest.indexOf('.');
-    if (dotIdx < 0) return;
-    const windowIndex = parseInt(rest.substring(0, dotIdx), 10);
-    if (isNaN(windowIndex)) return;
+  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => {
     try {
-      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${windowIndex}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      if (windowId != null) {
+        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      } else if (ref) {
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      } else {
+        const colonIdx = target.indexOf(':');
+        if (colonIdx < 0) return;
+        const sessionName = target.substring(0, colonIdx);
+        const rest = target.substring(colonIdx + 1);
+        const dotIdx = rest.indexOf('.');
+        if (dotIdx < 0) return;
+        const windowIndex = parseInt(rest.substring(0, dotIdx), 10);
+        if (isNaN(windowIndex)) return;
+        await api(`/servers/${serverName}/sessions/${sessionName}/windows/${windowIndex}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+      }
       showToast(t(direction === 'h' ? 'workspace:pane.splitSuccessH' : 'workspace:pane.splitSuccessV'));
     } catch (e) {
       showToast(t('workspace:pane.splitFailed', { error: e instanceof Error ? e.message : String(e) }));
@@ -629,7 +664,16 @@ function WorkspaceInner() {
       navigate(location.pathname, { replace: true });
       return;
     }
+    const windowIdParam = params.get('windowId');
     const serverName = params.get('server');
+    if (windowIdParam && serverName) {
+      const wid = parseInt(windowIdParam, 10);
+      if (!isNaN(wid)) {
+        connectPaneRaw({ kind: 'windowId' as const, serverName, windowId: wid, pane: 1 }, currentProjectId);
+        navigate(location.pathname, { replace: true });
+        return;
+      }
+    }
     const target = params.get('target');
     if (serverName && target) {
       connectPane(serverName, target);
@@ -691,7 +735,7 @@ function WorkspaceInner() {
     // the pane TabBar via buildPaneTabMenuItems' base and mobile's single
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
-    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane,
+    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane, servers,
   });
 
   const handleWindowAddedToTask = useCallback(async (
@@ -700,10 +744,11 @@ function WorkspaceInner() {
     tmuxTarget: string,
     label: string,
     activate: boolean,
-    extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string },
+    extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; ref?: string },
   ) => {
     try {
       const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
+      if (extra?.ref) body['ref'] = extra.ref;
       if (extra?.windowType) body['window_type'] = extra.windowType;
       if (extra?.workerType) body['worker_type'] = extra.workerType;
       if (extra?.workerModel) body['worker_model'] = extra.workerModel;
@@ -755,30 +800,171 @@ function WorkspaceInner() {
     return { projectId: pid, projectName: proj?.name ?? null };
   }, [allTasks, allProjects]);
 
-  const getTerminalTabLabel = useCallback((serverName: string, target: string): string => {
+  const windowById = useMemo(() =>
+    buildWindowIndex(allProjects, allTasks, project),
+  [allProjects, allTasks, project]);
+
+  const windowByLegacyKey = useMemo(() => {
+    const map = new Map<string, Window>();
+    for (const [, w] of windowById) {
+      const parts = w.tmuxTarget.split(':');
+      if (parts.length >= 2) {
+        map.set(`${w.serverName}::${parts[0]}::${parts[1]}`, w);
+      }
+    }
+    return map;
+  }, [windowById]);
+
+  const taskById = useMemo(() => {
+    const map = new Map<number, Task>();
+    for (const t of allTasks) map.set(t.id, t);
+    return map;
+  }, [allTasks]);
+
+  const sessionWindowByWindowId = useMemo(() => {
+    const map = new Map<number, { panes: Array<{ index: number; title: string; command: string }> }>();
+    for (const sessions of Object.values(sessionData)) {
+      for (const sess of sessions) {
+        for (const win of sess.windows) {
+          if (win.windowId != null) map.set(win.windowId, win);
+        }
+      }
+    }
+    return map;
+  }, [sessionData]);
+
+  const sessionWindowIdByRef = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const [serverName, sessions] of Object.entries(sessionData)) {
+      for (const sess of sessions) {
+        for (const win of sess.windows) {
+          if (win.ref && win.windowId != null) map.set(`${serverName}::${win.ref}`, win.windowId);
+        }
+      }
+    }
+    return map;
+  }, [sessionData]);
+
+  const getTerminalTabLabel = useCallback((serverName: string, target: string, ref?: TerminalRef | null, tabId?: string): { label: string; title?: string } => {
+    // windowId を複数経路から取得
+    let windowId: number | undefined;
+    let paneOrdinal: number | undefined;
+    if (ref?.kind === 'windowId') {
+      windowId = ref.windowId;
+      paneOrdinal = ref.pane;
+    } else if (ref?.kind === 'ref') {
+      const wid = sessionWindowIdByRef.get(`${ref.serverName}::${ref.ref}`);
+      if (wid != null) { windowId = wid; paneOrdinal = ref.pane; }
+    }
+    if (windowId == null && tabId) {
+      const fromTab = parseTerminalTabId(tabId);
+      if (fromTab?.kind === 'windowId') {
+        windowId = fromTab.windowId;
+        paneOrdinal = paneOrdinal ?? fromTab.pane;
+      }
+    }
+    if (windowId == null) {
+      const parsed = parseTerminalTabId(`terminal:${serverName}::${target}`);
+      if (parsed?.kind === 'windowId') {
+        windowId = parsed.windowId;
+        paneOrdinal = paneOrdinal ?? parsed.pane;
+      } else {
+        const wm = target.match(/^w(\d+)$/);
+        if (wm) windowId = parseInt(wm[1], 10);
+      }
+    }
+
+    if (windowId != null) {
+      const sessWin = sessionWindowByWindowId.get(windowId);
+      let paneTitle: string | undefined;
+      let paneCommand: string | undefined;
+      if (sessWin) {
+        const pane = (paneOrdinal != null ? sessWin.panes.find(p => p.index === paneOrdinal) : undefined) ?? sessWin.panes[0];
+        if (pane) { paneTitle = pane.title; paneCommand = pane.command; }
+      }
+      const projWin = windowById.get(windowId);
+      const display = resolveWindowDisplay({
+        paneTitle,
+        paneCommand,
+        label: projWin?.label,
+        taskTitle: projWin?.taskId != null ? taskById.get(projWin.taskId)?.title : undefined,
+        tmuxTarget: projWin?.tmuxTarget,
+        windowId,
+        workerType: projWin?.workerType,
+        windowType: projWin?.windowType,
+      });
+      const hasManyPanes = sessWin ? sessWin.panes.length > 1 : false;
+      const paneSuffix = hasManyPanes && paneOrdinal != null ? `.${paneOrdinal}` : '';
+      const titleWithPane = paneSuffix ? `${display.title}${paneSuffix}` : display.title;
+      const displayWithPane = paneSuffix ? { ...display, title: titleWithPane } : display;
+      const label = formatWindowDisplayLabel(displayWithPane);
+      // ツールチップ: 重複を除く (title === idLabel のときは並べない)
+      const titleParts: string[] = [];
+      if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
+      titleParts.push(titleWithPane);
+      titleParts.push(serverName);
+      return { label, title: titleParts.join(' · ') };
+    }
+
+    // 旧形式 session:index.pane のタブ
     const m = target.match(/^(.+):(\d+)\.(\d+)$/);
-    if (!m) return target;
+    if (!m) {
+      const fallbackName = ref ? terminalRefDisplayLabel(ref) : target;
+      const fallbackDisplay = resolveWindowDisplay({ tmuxTarget: fallbackName });
+      return { label: formatWindowDisplayLabel(fallbackDisplay) };
+    }
     const [, sessionName, winIdx, paneIdx] = m;
     const srvSessions = sessionData[serverName] || [];
     const session = srvSessions.find((s) => s.name === sessionName);
-    let winName = '', paneTitle = '';
+    let winName = '', pt = '';
     if (session) {
       const win = session.windows.find((w) => w.index === parseInt(winIdx, 10));
       if (win) {
         winName = win.name;
         const pane = win.panes.find((p) => p.index === parseInt(paneIdx, 10));
-        if (pane) paneTitle = pane.title && pane.title !== pane.command ? pane.title : '';
+        if (pane) pt = pane.title && pane.title !== pane.command ? pane.title : '';
       }
     }
-    const projWin = project?.windows.find((w) => {
-      const parts = w.tmuxTarget.split(':');
-      return w.serverName === serverName && parts[0] === sessionName && (parts[1] == null || parseInt(parts[1], 10) === parseInt(winIdx, 10));
-    });
-    const displayName = paneTitle || projWin?.label || winName || sessionName;
+    // 旧形式: まずセッション情報から windowId を取得し windowById で引く
+    let projWin: Window | undefined;
+    if (session) {
+      const sw = session.windows.find((w) => w.index === parseInt(winIdx, 10));
+      if (sw?.windowId != null) projWin = windowById.get(sw.windowId) as Window | undefined;
+    }
+    // セッション情報が無いときは windowByLegacyKey で窓名ベースで引く
+    if (!projWin) {
+      projWin = windowByLegacyKey.get(`${serverName}::${sessionName}::${winName}`);
+    }
     const hasManyPanes = (session?.windows.find((w) => w.index === parseInt(winIdx, 10))?.panes.length ?? 0) > 1;
     const paneSuffix = hasManyPanes ? `.${paneIdx}` : '';
-    return `${sessionName} / ${displayName}${paneSuffix}`;
-  }, [sessionData, project]);
+    // 旧形式でも登録済み窓なら resolveWindowDisplay で内部名を除外する
+    if (projWin) {
+      const display = resolveWindowDisplay({
+        paneTitle: pt || undefined,
+        paneCommand: undefined,
+        label: projWin.label,
+        taskTitle: projWin.taskId != null ? taskById.get(projWin.taskId)?.title : undefined,
+        tmuxTarget: projWin.tmuxTarget,
+        windowId: projWin.id,
+        workerType: projWin.workerType,
+        windowType: projWin.windowType,
+      });
+      const titleWithPane = hasManyPanes ? `${display.title}${paneSuffix}` : display.title;
+      const displayWithPane = { ...display, title: titleWithPane };
+      const label = formatWindowDisplayLabel(displayWithPane);
+      const titleParts: string[] = [];
+      if (display.idLabel && display.idLabel !== titleWithPane) titleParts.push(display.idLabel);
+      titleParts.push(titleWithPane);
+      titleParts.push(serverName);
+      return { label, title: titleParts.join(' · ') };
+    }
+    const fallbackDisplay = resolveWindowDisplay({
+      paneTitle: pt || undefined,
+      tmuxTarget: `${sessionName}:${winName || winIdx}`,
+    });
+    const fallbackTitleWithPane = hasManyPanes ? `${fallbackDisplay.title}${paneSuffix}` : fallbackDisplay.title;
+    return { label: fallbackTitleWithPane };
+  }, [sessionData, sessionWindowByWindowId, sessionWindowIdByRef, windowById, windowByLegacyKey, taskById]);
 
   const buildTabItem = useCallback((tab: PersistedTab): TabItem => {
     const iconName: IconName | null = tab.type === 'terminal' ? 'terminal'
@@ -800,9 +986,10 @@ function WorkspaceInner() {
     const icon = iconName
       ? <span style={{ display: 'inline-flex', verticalAlign: '-2px' }}><Icon name={iconName} size={14} /></span>
       : '•';
-    const displayLabel = tab.type === 'terminal' && tab.serverName && tab.target
-      ? getTerminalTabLabel(tab.serverName, tab.target)
-      : tab.label;
+    const terminalInfo = tab.type === 'terminal' && tab.serverName && tab.target
+      ? getTerminalTabLabel(tab.serverName, tab.target, tab.terminalRef, tab.id)
+      : undefined;
+    const displayLabel = terminalInfo?.label ?? tab.label;
     const running = tab.type === 'terminal' && tab.serverName && tab.target
       ? shouldShowActivity(tab.serverName, tab.target)
       : tab.type === 'task' && tab.entityId !== undefined
@@ -811,6 +998,7 @@ function WorkspaceInner() {
     return {
       id: tab.id,
       label: displayLabel,
+      title: terminalInfo?.title,
       icon,
       pinned: tab.pinned,
       className: running ? 'tab-active-comet' : undefined,

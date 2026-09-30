@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { FilePreviewPanel } from '../FileExplorer';
 import StorageFilePreview from '../StorageFilePreview';
 import UnitPanel from './UnitPanel';
@@ -47,7 +48,7 @@ interface TabContentRendererProps {
   executeTask: (taskId: number, unitId: number | null) => void;
   stopTask: (unitId: number | null, taskId: number) => void;
   refreshWorkspace: () => void;
-  connectPane: (serverName: string, target: string) => void;
+  connectPane: ConnectPaneFn;
   openTask: (taskId: number, title: string, from?: 'global' | 'workspace') => void;
   openTaskRaw: (taskId: number, title: string, projectId?: number, from?: 'global' | 'workspace') => void;
   openTaskForm: (opts: { mode: 'create' | 'edit'; taskId?: number; projectId?: number; presetTitle?: string; presetDescription?: string; presetSource?: { source: string; sourceRef: string } }) => void;
@@ -147,20 +148,21 @@ export default function TabContentRenderer({
       style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', visibility: isVisible ? 'visible' : 'hidden', pointerEvents: isVisible ? 'auto' : 'none' }}>
       {isTerminal && (
         <TerminalContainer
-          serverName={tab.serverName!}
-          target={tab.target!}
-          projectId={tab.projectId}
-          project={project}
-          allTasks={allTasks}
-          sessions={sessionData[tab.serverName!]}
-          onWindowChanged={refreshWorkspace}
-          onSplitPane={onSplitPane ? (dir) => onSplitPane(tab.serverName!, tab.target!, dir) : undefined}
-          onOpenTask={openTask}
-          onDisconnect={onPaneDisconnect}
-          onCloseTab={() => closeTab(tab.id)}
-          onRetargetTab={retargetTab ? (sn, nt) => retargetTab(tab.id, sn, nt) : undefined}
-          reconnectKey={tab.reconnectKey}
-        />
+              serverName={tab.serverName!}
+              target={tab.target!}
+              terminalRef={tab.terminalRef}
+              projectId={tab.projectId}
+              project={project}
+              allTasks={allTasks}
+              sessions={sessionData[tab.serverName!]}
+              onWindowChanged={refreshWorkspace}
+              onSplitPane={onSplitPane ? (dir) => onSplitPane(tab.serverName!, tab.target!, dir) : undefined}
+              onOpenTask={openTask}
+              onDisconnect={onPaneDisconnect}
+              onCloseTab={() => closeTab(tab.id)}
+              onRetargetTab={retargetTab ? (sn, nt) => retargetTab(tab.id, sn, nt) : undefined}
+              reconnectKey={tab.reconnectKey}
+            />
       )}
       {tab.type === 'file' && tab.serverName && tab.filePath && (
         <FilePreviewPanel

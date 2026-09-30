@@ -1,8 +1,11 @@
 import { useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
-import type { Server, Session, TmuxWindow } from '../../../hooks/useServerManagement';
+import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
+import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -12,55 +15,107 @@ interface WindowsSectionProps {
   server: Server;
   sessions: Session[];
   refresh: () => void;
+  windowById: Map<number, WindowIndexEntry>;
+  taskById: Map<number, { title?: string }>;
+  windowMetaError?: boolean;
 }
 
-export default function WindowsSection({ server, sessions, refresh }: WindowsSectionProps) {
+export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
-  const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
+  const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
 
-  const firstTarget = useMemo(() => {
+  const firstRef = useMemo<TerminalRef | null>(() => {
     for (const sess of sessions) {
       for (const win of sess.windows) {
-        return `${sess.name}:${win.name ?? win.index}`;
+        return terminalRefFromWindow(server.name, win.windowId, win.ref, 1);
       }
     }
     return null;
-  }, [sessions]);
+  }, [sessions, server.name]);
 
-  const activeTarget = selectedTarget ?? firstTarget;
+  const activeRef = selectedRef ?? firstRef;
 
-  const handleSelect = useCallback((target: string) => {
-    setSelectedTarget(target);
+  const activeLabel = useMemo(() => {
+    if (!activeRef) return null;
+    if (activeRef.kind === 'windowId') {
+      const sessWin = sessions.flatMap(s => s.windows).find(w => w.windowId === activeRef.windowId);
+      const pane = sessWin
+        ? (activeRef.pane != null ? sessWin.panes.find(p => p.index === activeRef.pane) : undefined) ?? sessWin.panes[0]
+        : undefined;
+      const regWin = windowById.get(activeRef.windowId);
+      const display = resolveWindowDisplay({
+        windowId: activeRef.windowId,
+        paneTitle: pane?.title,
+        paneCommand: pane?.command,
+        label: regWin?.label,
+        workerType: regWin?.workerType,
+        windowType: regWin?.windowType,
+        taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
+        tmuxTarget: sessWin ? `${sessions.find(s => s.windows.includes(sessWin!))?.name}:${sessWin.name}` : undefined,
+      });
+      return formatWindowDisplayLabel(display);
+    }
+    const resolved = resolveTerminalTarget(activeRef, sessions);
+    if (resolved) return stripPaneSuffix(resolved);
+    return terminalRefDisplayLabel(activeRef);
+  }, [activeRef, sessions, windowById, taskById]);
+
+  const handleSelect = useCallback((ref: TerminalRef) => {
+    setSelectedRef(ref);
     setShowTree(false);
   }, []);
+
+  const useMuxRoutes = useMemo(() => muxKindForRuntime((server.muxRuntime ?? 'system') as MuxRuntime) !== 'tmux', [server.muxRuntime]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('New session name:');
     if (!name) return;
-    await api(`/servers/${encodeURIComponent(server.name)}/sessions`, {
-      method: 'POST', body: JSON.stringify({ name }),
-    });
+    if (useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
+    } else {
+      await api(`/servers/${encodeURIComponent(server.name)}/sessions`, { method: 'POST', body: JSON.stringify({ name }) });
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
   const handleAddWindow = useCallback(async (sessionName: string) => {
-    await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    if (useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+    } else {
+      await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
 
-  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string) => {
-    await api(
-      `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
-      { method: 'POST', body: JSON.stringify({ direction }) },
-    );
+  const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
+    if (windowId != null) {
+      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else if (ref && useMuxRoutes) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+    } else {
+      await api(
+        `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
+        { method: 'POST', body: JSON.stringify({ direction }) },
+      );
+    }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, useMuxRoutes]);
+
+  const metaErrorBar = windowMetaError ? (
+    <div style={{ padding: '6px 12px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
+      {t('windows.metaFetchError')}
+      <button onClick={refresh} className="icon-btn" style={{ fontSize: 'var(--font-xs)', color: 'var(--accent)', cursor: 'pointer', background: 'none', border: 'none', padding: 0 }}>
+        {t('windows.retry')}
+      </button>
+    </div>
+  ) : null;
 
   if (sessions.length === 0) {
     return (
       <div>
+        {metaErrorBar}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>
           <button
@@ -81,6 +136,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
+      {metaErrorBar}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 14px',
@@ -101,7 +157,7 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
             cursor: 'pointer',
           }}
         >
-          {activeTarget ?? 'Select window'}
+          {activeLabel ?? 'Select window'}
           <span style={{ display: 'inline-flex', alignItems: 'center', color: 'var(--text-dim)' }}>
             <Icon name="chevron-down" size={14} rotate={showTree ? 180 : 0} />
           </span>
@@ -110,11 +166,12 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
       </div>
 
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-        {activeTarget ? (
+        {activeRef ? (
           <TerminalContainer
-            key={`${server.name}:${activeTarget}`}
+            key={terminalTabId(activeRef)}
             serverName={server.name}
-            target={activeTarget}
+            target={activeLabel ?? ''}
+            terminalRef={activeRef}
             sessions={sessions}
             onWindowChanged={refresh}
           />
@@ -127,13 +184,15 @@ export default function WindowsSection({ server, sessions, refresh }: WindowsSec
         <WindowTreePopover
           sessions={sessions}
           serverName={server.name}
-          selectedTarget={activeTarget}
+          selectedRef={activeRef}
           onSelect={handleSelect}
           onClose={() => setShowTree(false)}
           onCreateSession={handleCreateSession}
           onAddWindow={handleAddWindow}
           onSplitPane={handleSplitPane}
           isMobile={isMobile}
+          windowById={windowById}
+          taskById={taskById}
         />
       )}
     </div>

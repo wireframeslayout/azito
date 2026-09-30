@@ -48,6 +48,33 @@ import * as m041 from '../../shared/db/migrations/041_sidekick_tags';
 import * as m042 from '../../shared/db/migrations/042_units';
 import * as m043 from '../../shared/db/migrations/043_agent_turns';
 import * as m044 from '../../shared/db/migrations/044_agent_watches';
+import * as m045 from '../../shared/db/migrations/045_server_mux_runtime';
+import * as m046 from '../../shared/db/migrations/046_remove_orchestrator_mode';
+import * as m047 from '../../shared/db/migrations/047_task_current_phase';
+import * as m048 from '../../shared/db/migrations/048_unit_type_column';
+import * as m049 from '../../shared/db/migrations/049_worker_runtime';
+import * as m050 from '../../shared/db/migrations/050_window_supervised';
+import * as m051 from '../../shared/db/migrations/051_resource_guard_settings';
+import * as m052 from '../../shared/db/migrations/052_project_secrets';
+import * as m053 from '../../shared/db/migrations/053_browser_tab_snapshots';
+import * as m054 from '../../shared/db/migrations/054_ssh_host_fingerprint';
+import * as m055 from '../../shared/db/migrations/055_reduce_worker_execution_mode';
+import * as m056 from '../../shared/db/migrations/056_drop_windows_supervised';
+import * as m057 from '../../shared/db/migrations/057_push_subscription_lang';
+import * as m058 from '../../shared/db/migrations/058_disable_ssh_servers';
+import * as m059 from '../../shared/db/migrations/059_input_trust_and_exec_gate';
+import * as m060 from '../../shared/db/migrations/060_authz_foundation';
+import * as m061 from '../../shared/db/migrations/061_isolation_profile';
+import * as m062 from '../../shared/db/migrations/062_isolation_report_split';
+import * as m063 from '../../shared/db/migrations/063_window_sleep';
+import * as m064 from '../../shared/db/migrations/064_distribution_state';
+import * as m065 from '../../shared/db/migrations/065_project_server_distribute_code';
+import * as m066 from '../../shared/db/migrations/066_project_server_distribution_repository';
+import * as m067 from '../../shared/db/migrations/067_task_distribution_repository';
+import * as m068 from '../../shared/db/migrations/068_merge_duplicate_window_rows';
+import * as m069 from '../../shared/db/migrations/069_window_mux_ref';
+import * as m070 from '../../shared/db/migrations/070_supervisor_launch_pane_ref_and_watch_normalize';
+import * as m071 from '../../shared/db/migrations/071_agent_watches_window_id';
 
 import { SqliteAgentWatchRepository } from './SqliteAgentWatchRepository';
 import type { SqliteDatabase } from '../../shared/db/Database';
@@ -62,9 +89,11 @@ const ALL_MIGRATIONS: Migration[] = [
   m011, m012, m013, m014, m015, m016, m017, m018, m019, m020,
   m021, m022, m023, m024, m025, m026, m027, m028, m029, m030,
   m031, m032, m033, m034, m035, m036, m037, m038, m039, m040, m041, m042, m043, m044,
+  m045, m046, m047, m048, m049, m050, m051, m052, m053, m054, m055, m056, m057, m058,
+  m059, m060, m061, m062, m063, m064, m065, m066, m067, m068, m069, m070, m071,
 ];
 
-const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42]);
+const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
 
 function buildSeededDb(): Database.Database {
   const db = new Database(':memory:');

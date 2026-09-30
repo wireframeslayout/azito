@@ -2,6 +2,7 @@ import type { FastifyPluginCallback } from 'fastify';
 import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
 import type { AgentHookSignal } from '../operations/AgentActivityMonitor';
 import type { InteractionSignal, InteractionContent, InteractionQuestion, InteractionQuestionOption } from './InteractionMonitor';
+import { isPaneHandleLike } from '@azito/shared';
 
 export interface WebhookRouteOptions {
   taskRepo: SqliteTaskRepository;
@@ -116,6 +117,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       windowName?: unknown;
       paneIndex?: unknown;
       event?: unknown;
+      muxPaneRef?: unknown;
     };
 
     if (typeof body.serverName !== 'string' || body.serverName === '') {
@@ -137,6 +139,9 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       return reply.status(400).send({ error: 'event must be "start" or "stop"' });
     }
 
+    const muxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef)
+      ? body.muxPaneRef : undefined;
+
     recordAgentActivity({
       serverName: body.serverName,
       sessionName: body.sessionName,
@@ -144,6 +149,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       windowName: body.windowName,
       paneIndex: body.paneIndex,
       event: body.event,
+      muxPaneRef,
     });
 
     return { ok: true };
@@ -173,6 +179,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       paneIndex?: unknown;
       event?: unknown;
       content?: unknown;
+      muxPaneRef?: unknown;
     };
 
     if (typeof body.serverName !== 'string' || body.serverName === '') {
@@ -195,6 +202,8 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
     }
 
     const content = parseInteractionContent(body.content);
+    const interactionMuxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef)
+      ? body.muxPaneRef : undefined;
 
     recordInteractionSignal({
       serverName: body.serverName,
@@ -207,6 +216,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       event: body.event,
       timestamp: Date.now(),
       ...(content === undefined ? {} : { content }),
+      muxPaneRef: interactionMuxPaneRef,
     });
 
     return { ok: true };

@@ -6,11 +6,14 @@ import * as fs from 'fs';
 import * as path from 'path';
 import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
+import { LocalTransport } from '../modules/servers/transport/LocalTransport';
 import type { MuxRuntime } from '../modules/servers/Server';
 import type { WebSocket } from 'ws';
 
 import agentRoutes from './routes';
 import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
+import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
@@ -73,7 +76,9 @@ async function main(): Promise<void> {
   await app.register(websocket);
 
   // Health endpoint (no auth) + tmux hook receiver + browser routes
-  await app.register(agentRoutes, { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS });
+  await app.register(agentRoutes, {
+    agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS,
+  });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
   app.addHook('onRequest', async (request, reply) => {
@@ -84,6 +89,14 @@ async function main(): Promise<void> {
     }
   });
 
+  const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
+  const muxKind = muxKindForRuntime(muxRuntime);
+  const isTmuxDriver = muxKind === 'tmux';
+  const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
+  const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
+
+  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '');
+
   // WebSocket routes
   await app.register(async (fastify) => {
     fastify.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
@@ -91,17 +104,31 @@ async function main(): Promise<void> {
       const mode = url.searchParams.get('mode');
 
       if (mode === 'terminal') {
+        const refParam = url.searchParams.get('ref');
+        const paneParam = url.searchParams.get('pane');
         const target = url.searchParams.get('target');
         const cols = parseInt(url.searchParams.get('cols') || '120', 10);
         const rows = parseInt(url.searchParams.get('rows') || '40', 10);
-        if (!target) {
-          socket.send(JSON.stringify({ error: 'target required' }));
+
+        let ref: MuxRef;
+        if (refParam) {
+          try {
+            ref = parseMuxRef(decodeURIComponent(refParam));
+          } catch {
+            socket.send(JSON.stringify({ error: 'Invalid ref parameter' }));
+            socket.close();
+            return;
+          }
+        } else if (target) {
+          ref = muxRefFromTmuxTarget(target);
+        } else {
+          socket.send(JSON.stringify({ error: 'ref or target required' }));
           socket.close();
           return;
         }
-        const muxParam = url.searchParams.get('mux');
-        const mux = muxParam === 'system' || muxParam === 'managed' ? muxParam : undefined;
-        handleAgentTerminal(socket, target, cols, rows, mux);
+        const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+
+        handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
         return;
       }
 
@@ -164,10 +191,7 @@ async function main(): Promise<void> {
 
   const PORT = parseInt(process.env.PORT || '3002', 10);
   const hookBase = `http://${bind}:${PORT}/api/hooks/tmux`;
-  const hookEvents = ['window-linked', 'window-unlinked', 'after-rename-window', 'after-kill-pane', 'session-window-changed', 'session-closed', 'after-select-pane'];
-
-  const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
+  const hookEvents = HOOK_EVENTS;
 
   // Cleanup tmux hooks and browser on shutdown (must register before listen — Fastify rejects addHook after ready)
   let hookInstallInterval: ReturnType<typeof setInterval> | null = null;
@@ -177,10 +201,12 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    for (const event of hookEvents) {
-      await new Promise<void>((resolve) => {
-        execFile(hookRt.bin, [...hookRt.baseArgs, 'set-hook', '-gu', `${event}[42]`], { timeout: 5000 }, () => resolve());
-      });
+    if (hookRt) {
+      for (const event of hookEvents) {
+        await new Promise<void>((resolve) => {
+          execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
+        });
+      }
     }
   });
 
@@ -208,28 +234,29 @@ async function main(): Promise<void> {
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
   // the initial install fails because tmux isn't up yet, and the next periodic pass installs it).
-  let lastInstallFailed: boolean | null = null;
-  const installTmuxHooks = (): void => {
-    let pending = hookEvents.length;
-    let anyFailed = false;
-    for (const event of hookEvents) {
-      const hookValue = `run-shell "curl -sf -o /dev/null -X POST '${hookBase}?event=${event}&session=#{hook_session_name}' 2>/dev/null &"`;
-      execFile(hookRt.bin, [...hookRt.baseArgs, 'set-hook', '-g', `${event}[42]`, hookValue], { timeout: 5000 }, (err) => {
-        if (err) anyFailed = true;
-        pending--;
-        if (pending === 0 && anyFailed !== lastInstallFailed) {
-          // Only log when the failure/success state changes, to avoid warn-spam every period
-          // while tmux is not yet running.
-          if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
-          else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
-          lastInstallFailed = anyFailed;
-        }
-      });
-    }
-  };
+  // Skipped entirely for non-tmux drivers.
+  if (hookRt) {
+    let lastInstallFailed: boolean | null = null;
+    const installTmuxHooks = (): void => {
+      let pending = hookEvents.length;
+      let anyFailed = false;
+      for (const event of hookEvents) {
+        const hookValue = buildHookValue(hookBase, event);
+        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
+          if (err) anyFailed = true;
+          pending--;
+          if (pending === 0 && anyFailed !== lastInstallFailed) {
+            if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
+            else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
+            lastInstallFailed = anyFailed;
+          }
+        });
+      }
+    };
 
-  installTmuxHooks();
-  hookInstallInterval = setInterval(installTmuxHooks, 60000);
+    installTmuxHooks();
+    hookInstallInterval = setInterval(installTmuxHooks, 60000);
+  }
 }
 
 main().catch((err) => {

@@ -206,6 +206,52 @@ describe('PushNotaryService', () => {
     expect(remoteBundleOps.createFromWorktree).toHaveBeenCalledTimes(1);
   });
 
+  it('treats empty bundle as already_up_to_date when remote HEAD matches worker HEAD', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      createFromWorktree: vi.fn(async () => { throw new Error('git bundle create failed: Refusing to create empty bundle'); }),
+    });
+    const gitProvider = mockGitProvider(sha);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+    });
+    expect(result.status).toBe('already_up_to_date');
+    expect(result.sha).toBe(sha);
+  });
+
+  it('re-throws empty bundle error when remote HEAD differs from worker HEAD', async () => {
+    const differentSha = 'b'.repeat(40);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      createFromWorktree: vi.fn(async () => { throw new Error('git bundle create failed: Refusing to create empty bundle'); }),
+    });
+    const gitProvider = mockGitProvider(differentSha);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('empty bundle');
+  });
+
+  it('does not treat non-empty-bundle errors as already_up_to_date', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      createFromWorktree: vi.fn(async () => { throw new Error('git bundle create failed: Permission denied'); }),
+    });
+    const gitProvider = mockGitProvider(null);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('Permission denied');
+  });
+
   it('returns failed when worker HEAD cannot be read', async () => {
     const remoteBundleOps = mockRemoteBundleOps({ getHeadSha: vi.fn(async () => null) });
     const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), mockGitProvider(), mockHubRepoCache());

@@ -1,18 +1,17 @@
 import type { WebSocket } from 'ws';
-import { LocalTransport } from '../../servers/transport/LocalTransport';
-import type { ITerminalStream } from '../../servers/transport/ServerTransport';
-import os from 'os';
-import { resolveTmuxRuntime } from '../../servers/transport/TmuxRuntime';
-import type { MuxRuntime } from '../../servers/Server';
+import type { IMuxTransport, ITerminalStream, OpenTerminalOpts } from '../../servers/transport/ServerTransport';
+import type { MuxRef, PaneOrdinal } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
 
 export function handleAgentTerminal(
   ws: WebSocket,
-  target: string,
+  ref: MuxRef,
+  ordinal: PaneOrdinal,
   cols: number,
   rows: number,
-  mux?: MuxRuntime,
+  transport: IMuxTransport,
+  terminalOpts?: OpenTerminalOpts,
 ): void {
   let closed = false;
   let activeStream: ITerminalStream | null = null;
@@ -35,12 +34,8 @@ export function handleAgentTerminal(
 
   ws.on('close', cleanup);
 
-  const muxRuntime = mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system';
-  // Agent process does not receive AZITO_URL from the hub; linked sessions on agents lack hub connectivity (v1 scope-out).
-  const hubUrl = process.env.AZITO_URL ?? '';
-  const transport = new LocalTransport(resolveTmuxRuntime(muxRuntime, os.homedir()), hubUrl);
   transport
-    .openTerminal(target, cols, rows)
+    .openTerminal(ref, ordinal, cols, rows, terminalOpts)
     .then((stream) => {
       if (closed) { stream.close(); return; }
       activeStream = stream;

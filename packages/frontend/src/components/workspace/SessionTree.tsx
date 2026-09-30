@@ -5,6 +5,8 @@ import ContextMenu from '../ContextMenu';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow } from '../../hooks/useServerManagement';
 import { lookupWindowTask } from '../../lib/windowTask';
+import { terminalTabId, terminalRefFromWindow, type TerminalRef } from '../../lib/terminalRef';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import { Icon } from '../ui/Icon';
 
 interface SessionTreeProps {
@@ -14,7 +16,7 @@ interface SessionTreeProps {
   expandedSessions: Set<string>;
   activeTabId: string | null;
   reinstalling: string | null;
-  onConnectPane: (serverName: string, target: string) => void;
+  onConnectPane: (ref: TerminalRef) => void;
   toggleSession: (sessionId: string) => void;
   getSessionMenuItems: (serverName: string, session: Session) => ContextMenuItem[];
   getWindowMenuItems: (serverName: string, sessionName: string, win: TmuxWindow, allWindows?: TmuxWindow[]) => ContextMenuItem[];
@@ -86,7 +88,20 @@ export default function SessionTree({
                       {...bindLongPress((x, y) => showContextMenuAt(x, y, getWindowMenuItems(serverName, session.name, win, session.windows)))}
                       style={{ ...longPressStyle, fontSize: 'var(--font-md)', color: 'var(--text-dim)', padding: '6px 8px', display: 'flex', alignItems: 'center', gap: 6, minHeight: 40, cursor: 'context-menu' }}
                     >
-                      <span>{win.index}: {win.name}</span>
+                      <span title={win.windowId != null ? win.name : undefined}>
+                        {win.index}: {win.windowId != null
+                          ? (() => {
+                              const activePane = win.panes.find((p) => p.active) ?? win.panes[0];
+                              return formatWindowDisplayLabel(resolveWindowDisplay({
+                                windowId: win.windowId,
+                                label: win.name,
+                                paneTitle: activePane?.title,
+                                paneCommand: activePane?.command,
+                                tmuxTarget: `${session.name}:${win.name}`,
+                              }));
+                            })()
+                          : win.name}
+                      </span>
                       {(() => {
                         const taskId = windowTaskMap && (
                           lookupWindowTask(windowTaskMap, serverName, `${session.name}:${win.name}`)
@@ -103,12 +118,13 @@ export default function SessionTree({
                       })()}
                     </div>
                     {win.panes.map((pane) => {
+                      const tRef = terminalRefFromWindow(serverName, win.windowId, win.ref, pane.index);
                       const target = `${session.name}:${windowId}.${pane.index}`;
-                      const tabId = `terminal:${serverName}/${target}`;
+                      const tabId = terminalTabId(tRef);
                       const isActive = activeTabId === tabId;
                       const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
                       return (
-                        <div key={pane.index} onClick={() => onConnectPane(serverName, target)}
+                        <div key={pane.index} onClick={() => onConnectPane(tRef)}
                           onContextMenu={(e) => { e.stopPropagation(); showPaneContextMenu(e, target, paneLabel); }}
                           {...bindLongPress((x, y) => showContextMenuAt(x, y, getPaneMenuItems(serverName, target, paneLabel)))}
                           className={`row-hover${isActive ? ' row-selected' : ''}`}

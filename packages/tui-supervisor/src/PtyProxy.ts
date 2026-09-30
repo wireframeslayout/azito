@@ -116,6 +116,7 @@ export class PtyProxy extends EventEmitter {
     // string | Buffer and writes Buffers unmodified). Decoding to a JS string
     // here would corrupt non-UTF-8 byte sequences (U+FFFD replacement).
     process.stdin.on('data', (data: Buffer) => {
+      this.emit('input', data.length);
       this.child?.write(data);
     });
     process.stdin.on('end', () => {
@@ -135,6 +136,7 @@ export class PtyProxy extends EventEmitter {
   /** Write raw bytes into the child PTY (used by HubClient command handling). */
   write(data: string | Buffer): void {
     if (!this.child) throw new Error('PtyProxy not started');
+    this.emit('input', typeof data === 'string' ? Buffer.byteLength(data) : data.length);
     this.child.write(data);
   }
 

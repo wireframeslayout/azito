@@ -19,14 +19,13 @@ set -g base-index 1
 set -g pane-base-index 1
 ```
 
-- **`pane-base-index 1`**: AZITO はペインを `<セッション>:<ウィンドウ>.1` 形式で参照します
-  （エージェント起動の send-keys、pipe-pane、respawn 等）。tmux デフォルトの pane index は
-  0 始まりのため、この設定が無いと `can't find pane: 1` でエージェントが起動しません。
-- **`base-index 1`**: ウィンドウ参照は名前ベースのため直接の依存はありませんが、
-  pane-base-index と揃えて 1 始まりにしておきます（`azito.conf` にも両方含まれています）。
+- **`pane-base-index 1`**: 窓の座標は `windows.mux_ref`（ドライバ専有 JSON — `{kind, workspace, window}`）
+  と `windows.id`（DB 主キー）で管理し、ペインは実行時に pane ID（`%N` → `PaneHandle`）で解決します。
+  `tmux_target` は互換表示用の列として残っています。`pane-base-index 1` は推奨設定です
+  （直接 ordinal を使うパスは廃止済み）。
 
-> 補足: ペイン参照を index 非依存の pane ID に統一する改善が Issue #357 で予定されています。
-> 完了後この設定は「推奨」に格下げされますが、それまでは必須です。
+> 補足: Issue #357 で予定されていたペイン参照の pane ID 統一は段階6で完了しました。
+> `pane-base-index 1` は推奨ですが必須ではありません。
 
 ## 推奨設定（快適・正確な動作のため）
 

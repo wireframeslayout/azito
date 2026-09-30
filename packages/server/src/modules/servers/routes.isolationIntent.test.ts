@@ -84,12 +84,6 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
   };
   return {
     serverRepo,
-    // Issue #29 review (5th pass), Critical finding 1: the false->true gate
-    // now also checks for live tmux sessions on the target server —
-    // listSessionsForSecurityGate() defaults to an empty array so every
-    // existing test not about that specific check stays a no-op through it.
-    // Issue #29 review (7th pass), Critical finding 1: the gate uses the
-    // security-gate-specific method, not the display-oriented listSessions().
     tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     // Issue #29 review, Critical finding 1: no windows registered by
@@ -109,8 +103,13 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // isolation flow unchanged. The dedicated C-1 describe block below
     // overrides this to false per-test.
     scopedAuthEnabled: true,
+    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspacesStrict: vi.fn(async () => []), caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     ...overrides,
   };
+}
+
+function makeMuxRegistry(listWorkspacesStrict: (...args: unknown[]) => Promise<unknown[]>): ServersRouteOptions['muxDriverRegistry'] {
+  return { resolve: vi.fn(() => ({ listWorkspacesStrict, caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
 }
 
 async function buildApp(opts: ServersRouteOptions) {
@@ -735,9 +734,9 @@ describe('isolation_intent false->true window-presence gate (Issue #29 review, C
 // `windows` row at all). A live tmux session is an INDEPENDENT signal,
 // checked in addition to the windowRepo check above, not instead of it.
 describe('isolation_intent false->true live-tmux-session gate (Issue #29 review, 5th pass, Critical finding 1)', () => {
-  it('rejects with 409 when the server has a live tmux session, even with no registered windows', async () => {
+  it('rejects with 409 when the server has a live workspace, even with no registered windows', async () => {
     const opts = makeOpts({
-      tmux: { listSessionsForSecurityGate: vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]) } as unknown as ServersRouteOptions['tmux'],
+      muxDriverRegistry: makeMuxRegistry(vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }])),
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
     const app = await buildApp(opts);
@@ -750,9 +749,9 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  it('fails closed (409) when listing live tmux sessions throws', async () => {
+  it('fails closed (409) when listing workspaces throws', async () => {
     const opts = makeOpts({
-      tmux: { listSessionsForSecurityGate: vi.fn(async () => { throw new Error('ssh unreachable'); }) } as unknown as ServersRouteOptions['tmux'],
+      muxDriverRegistry: makeMuxRegistry(vi.fn(async () => { throw new Error('ssh unreachable'); })),
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
     const app = await buildApp(opts);
@@ -765,9 +764,9 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  it('allows the transition when there are no registered windows and no live tmux sessions', async () => {
+  it('allows the transition when there are no registered windows and no live workspaces', async () => {
     const opts = makeOpts({
-      tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
+      muxDriverRegistry: makeMuxRegistry(vi.fn(async () => [])),
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', isolationIntent: false }));
     const app = await buildApp(opts);
@@ -784,9 +783,9 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
   // retry, not a no-op, and must be gated exactly like a false->true
   // transition. This test previously asserted the check was skipped, which
   // encoded the bug.
-  it('rejects with 409 when a true->true retry (cleanup not yet done) finds a live tmux session', async () => {
-    const listSessionsForSecurityGate = vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]);
-    const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
+  it('rejects with 409 when a true->true retry (cleanup not yet done) finds a live workspace', async () => {
+    const listWorkspacesStrict = vi.fn(async () => [{ name: 'manual-session', windowCount: 1, attached: false, created: 0, windows: [] }]);
+    const opts = makeOpts({ muxDriverRegistry: makeMuxRegistry(listWorkspacesStrict) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
       makeServer({ type: 'agent', isolationIntent: true, isolationCleanupReport: null }),
     );
@@ -796,13 +795,13 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
 
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('isolation_intent_blocked_by_live_sessions');
-    expect(listSessionsForSecurityGate).toHaveBeenCalledTimes(1);
+    expect(listWorkspacesStrict).toHaveBeenCalledTimes(1);
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  it('does not check live sessions on a true->true PUT when the cleanup report is already settled at "done"', async () => {
-    const listSessionsForSecurityGate = vi.fn(async () => []);
-    const opts = makeOpts({ tmux: { listSessionsForSecurityGate } as unknown as ServersRouteOptions['tmux'] });
+  it('does not check live workspaces on a true->true PUT when the cleanup report is already settled at "done"', async () => {
+    const listWorkspacesStrict = vi.fn(async () => []);
+    const opts = makeOpts({ muxDriverRegistry: makeMuxRegistry(listWorkspacesStrict) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
       makeServer({ type: 'agent', isolationIntent: true, isolationCleanupReport: JSON.stringify({ kind: 'cleanup', cleanup: 'done' }) }),
     );
@@ -811,19 +810,19 @@ describe('isolation_intent false->true live-tmux-session gate (Issue #29 review,
     const res = await app.inject({ method: 'PUT', url: '/api/servers/srv', payload: { isolationIntent: true } });
 
     expect(res.statusCode).toBe(200);
-    expect(listSessionsForSecurityGate).not.toHaveBeenCalled();
+    expect(listWorkspacesStrict).not.toHaveBeenCalled();
   });
 
   // Issue #29 review, Important finding 1 (this pass): once the risky-window
   // and live-session gate is clean, a not-yet-done cleanup report still
   // retries attemptIsolationCleanup exactly as before this fix — the gate
   // only blocks a dirty server, it does not disable the retry feature.
-  it('runs the cleanup retry when the true->true gate finds no risky windows and no live sessions', async () => {
+  it('runs the cleanup retry when the true->true gate finds no risky windows and no live workspaces', async () => {
     const install = vi.fn(async () => ({ success: true, steps: [] }));
     const harnessInstaller = { install, installLocal: vi.fn() } as unknown as ServersRouteOptions['harnessInstaller'];
     const opts = makeOpts({
       harnessInstaller,
-      tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
+      muxDriverRegistry: makeMuxRegistry(vi.fn(async () => [])),
       windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
@@ -932,12 +931,13 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
   });
 
-  // Issue #29 review (7th pass), Important finding 2: `type` (local->agent)
-  // and `muxRuntime` (system->managed) changes are just as much an "endpoint
-  // the check/cleanup could disagree about" as host/sshHost/agentPort/
-  // agentToken — missing them let a false->true transition slip past this
-  // guard while switching the very endpoint the risky-window/live-session
-  // checks and the cleanup purge are each looking at.
+  // Issue #29 review (7th pass), Important finding 2: a `type` (local->agent)
+  // change is just as much an "endpoint the check/cleanup could disagree
+  // about" as host/sshHost/agentPort/agentToken — missing it let a
+  // false->true transition slip past this guard while switching the very
+  // endpoint the risky-window/live-session checks and the cleanup purge are
+  // each looking at. (muxRuntime is NOT guarded — it's a local runtime
+  // setting, not connection info; see tests below.)
   it('rejects with 400 when type changes from local to agent alongside isolationIntent: false->true', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
@@ -956,7 +956,9 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
     expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
   });
 
-  it('rejects with 400 when muxRuntime changes alongside isolationIntent: false->true', async () => {
+  // Issue #394 (7-H): muxRuntime is a runtime configuration (which local mux
+  // driver to talk to), not connection info. Changing it while isolated is safe.
+  it('allows muxRuntime change alongside isolationIntent: false->true', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
       makeServer({ type: 'agent', isolationIntent: false, muxRuntime: 'system' }),
@@ -969,9 +971,42 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
       payload: { muxRuntime: 'managed', isolationIntent: true },
     });
 
-    expect(res.statusCode).toBe(400);
-    expect(res.json().error).toBe('isolation_intent_blocks_connection_change');
-    expect(opts.serverRepo.updateIsolationIntent).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', true);
+  });
+
+  it('allows muxRuntime change on an already-isolated server', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, muxRuntime: 'system' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { muxRuntime: 'managed' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.update).toHaveBeenCalled();
+  });
+
+  it('allows muxRuntime change alongside isolationIntent: true->false in the same request', async () => {
+    const opts = makeOpts();
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
+      makeServer({ type: 'agent', isolationIntent: true, muxRuntime: 'system' }),
+    );
+    const app = await buildApp(opts);
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/servers/srv',
+      payload: { muxRuntime: 'managed', isolationIntent: false },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.updateIsolationIntent).toHaveBeenCalledWith('srv', false);
   });
 
   // Issue #29 review (8th pass), Critical finding 1: a true->true PUT used

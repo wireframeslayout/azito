@@ -152,6 +152,7 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
     } as unknown as UnitsRouteOptions['serverRepo'],
     sidekickLoader: {} as unknown as UnitsRouteOptions['sidekickLoader'],
     unitTypeLoader: { get: vi.fn(() => null) } as unknown as UnitsRouteOptions['unitTypeLoader'],
+    muxDriverRegistry: { resolve: vi.fn(), has: vi.fn(() => true), register: vi.fn() } as unknown as UnitsRouteOptions['muxDriverRegistry'],
   };
   return { opts: routeOpts, currentTask: () => currentTask };
 }

@@ -9,6 +9,7 @@ import { Spinner } from './ui/Spinner';
 import { useTerminalTheme } from '../hooks/useTerminalTheme';
 import { createOsc52Extractor } from '../utils/osc52';
 import { buildWsUrl } from '../api/wsUrl';
+import { terminalWsParams, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
 import TerminalBackdrop from './TerminalBackdrop';
 
 // SP端末クイックキーフッター（TerminalQuickKeyBar）と⌨透過パッド（MobileKeyboardOverlay）が
@@ -63,13 +64,14 @@ export interface XTermViewHandle {
 interface XTermViewProps {
   serverName: string;
   target: string;
+  terminalRef?: TerminalRef;
   onDisconnect?: () => void;
   onWindowNotFound?: () => void;
   onMaxRetriesReached?: () => void;
   onConnectTimeout?: () => void;
 }
 
-const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView({ serverName, target, onDisconnect, onWindowNotFound, onMaxRetriesReached, onConnectTimeout }, ref) {
+const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView({ serverName, target, terminalRef, onDisconnect, onWindowNotFound, onMaxRetriesReached, onConnectTimeout }, ref) {
   const { t } = useTranslation('common');
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -324,7 +326,13 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
           }
           clearTimeout(connectDataTimerRef.current);
 
-          const ws = new WebSocket(buildWsUrl({ server: serverName, target, cols: String(terminal.cols), rows: String(terminal.rows) }));
+          // A `w<id>` placeholder target can never be served by the legacy target= path;
+          // recover the windowId form when the caller did not pass terminalRef.
+          const effectiveRef = terminalRef ?? (target.includes(':') ? undefined : terminalRefFromTabTarget(serverName, target) ?? undefined);
+          const wsParams = effectiveRef
+            ? terminalWsParams(effectiveRef, terminal.cols, terminal.rows)
+            : { server: serverName, target, cols: String(terminal.cols), rows: String(terminal.rows) };
+          const ws = new WebSocket(buildWsUrl(wsParams));
           wsRef.current = ws;
           let firstMsg = true;
           let connectTimedOut = false;

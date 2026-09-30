@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
-import { isSameWindowTarget } from '../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
 import { useNotificationChannel } from './useNotificationChannel';
 
 /** Mirrors the server's `GET /api/windows/pane-loading-state` response. `ready: null` means "no
@@ -56,7 +56,7 @@ function firstToken(command: string): string | null {
  * late (the supervised/non-supervised decision resolves asynchronously via fetch) still lands on
  * the correct remaining budget instead of getting a fresh 10s.
  */
-export function useSupervisedLoadingOverlay(serverName: string, target: string): LoadingOverlayState {
+export function useSupervisedLoadingOverlay(serverName: string, target: string, windowId?: number): LoadingOverlayState {
   const [mounted, setMounted] = useState(true);
   const [fadingOut, setFadingOut] = useState(false);
   const [phase, setPhase] = useState<LoadingOverlayPhase>('connecting');
@@ -154,7 +154,9 @@ export function useSupervisedLoadingOverlay(serverName: string, target: string):
    * stripped) happens server-side, matching isSameWindowTarget's rule. */
   const fetchPaneLoadingState = (): Promise<PaneLoadingState> =>
     api<PaneLoadingState>(
-      `/windows/pane-loading-state?server_name=${encodeURIComponent(serverName)}&tmux_target=${encodeURIComponent(target)}`,
+      windowId != null
+        ? `/windows/pane-loading-state?windowId=${windowId}`
+        : `/windows/pane-loading-state?server_name=${encodeURIComponent(serverName)}&tmux_target=${encodeURIComponent(target)}`,
     );
 
   useEffect(() => {

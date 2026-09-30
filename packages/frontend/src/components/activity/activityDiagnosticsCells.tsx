@@ -101,6 +101,18 @@ export function TransitionCell({ row }: { row: ActivityDiagnosticRow }) {
   );
 }
 
+export function MatchCell({ row }: { row: ActivityDiagnosticRow }) {
+  const hookMatch = row.hook?.matchedBy;
+  const svMatch = row.supervisorMatchedBy;
+  const match = hookMatch ?? svMatch;
+  if (!match) return <span style={{ ...DIM, fontSize: 'var(--font-sm)' }}>—</span>;
+  return (
+    <Chip tone={match === 'muxPaneRef' ? 'green' : 'default'}>
+      {match === 'muxPaneRef' ? '%N' : match === 'windowSpec' ? 'spec' : 'key'}
+    </Chip>
+  );
+}
+
 /** ウィンドウ列（tmux ターゲット＋ サーバー名・タスク番号）。 */
 export function WindowCell({ row }: { row: ActivityDiagnosticRow }) {
   return (

@@ -15,7 +15,7 @@ import type { IServerTransport, ExecResult } from '../servers/transport/ServerTr
 function mockTransport(handler: (cmd: string) => ExecResult): IServerTransport {
   return {
     exec: vi.fn(async (cmd: string) => handler(cmd)),
-    execTmux: vi.fn(),
+    execMux: vi.fn(),
     openTerminal: vi.fn(),
     createPaneStream: vi.fn(),
   } as unknown as IServerTransport;

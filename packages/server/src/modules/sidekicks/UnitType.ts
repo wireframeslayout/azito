@@ -13,6 +13,7 @@ export interface UnitTypePhase {
   subagentRole?: SubagentRole;
   skillCommand?: string;
   defaultSidekick?: string;
+  stillWorkingLimit?: number;
 }
 
 export interface UnitType {

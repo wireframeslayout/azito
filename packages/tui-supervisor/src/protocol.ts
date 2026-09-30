@@ -44,6 +44,8 @@ export interface RegisterMessage {
    */
   bootstrapToken?: string;
   sessionToken?: string;
+  /** tmux の `$TMUX_PANE` (`%N`)。後続段階でのペイン逆引きに使う（現段階では保持のみ）。 */
+  muxPaneRef?: string;
 }
 
 export interface HeartbeatMessage {
@@ -62,12 +64,15 @@ export type ActivityState = 'active' | 'idle';
  */
 export type AgentStatus = 'working' | 'blocked';
 
+export type ActivityDecidedBy = 'screen' | 'title' | 'bytes';
+
 export interface ActivityMessage {
   type: 'activity';
   state: ActivityState;
   bytesInWindow: number;
   ts: number;
   status?: AgentStatus;
+  decidedBy?: ActivityDecidedBy;
 }
 
 export interface ChildExitMessage {

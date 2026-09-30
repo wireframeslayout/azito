@@ -133,6 +133,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
     },
     windowRepo: {
       add: vi.fn(() => 100),
+      adoptForTask: vi.fn(),
       findAll: vi.fn(() => []),
       findById: vi.fn(() => undefined),
       findByProject: vi.fn(() => []),
@@ -140,6 +141,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       findByTaskIds: vi.fn(() => new Map()),
       findAgentSessionIdsByServer: vi.fn(() => new Set<string>()),
       findByServerAndTarget: vi.fn(() => undefined),
+      findByServerAndRef: vi.fn(() => undefined),
       findByServer: vi.fn(() => []),
       findByServerAndSession: vi.fn(() => []),
       update: vi.fn(),
@@ -149,16 +151,21 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       updatePaneLayout: vi.fn(),
       now: vi.fn(() => '2026-01-01 00:00:00'),
     },
-    tmux: {
-      listSessions: vi.fn(async () => [{ name: 'azito', windows: [] }]),
-      createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      killWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
-      resolvePaneId: vi.fn(async () => '%0'),
-      sendKeys: vi.fn(async () => {}),
-      checkPaneExists: vi.fn(async () => true),
-      uiTokenEnvForServer: vi.fn(() => ({})),
-    } as unknown as TaskRestoreDeps['tmux'],
+    muxDriverRegistry: (() => {
+      const driver = {
+        listWorkspaces: vi.fn(async () => [{ name: 'azito', windowCount: 0, attached: true, created: 0, windows: [] }]),
+        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+        openWindow: vi.fn(async (_srv: unknown, ws: string, name?: string) => ({ ref: { kind: 'tmux' as const, workspace: ws, window: name ?? 'task-1' }, result: { stdout: '', stderr: '', code: 0 }, windowName: name ?? 'task-1' })),
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+        closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+        resolvePane: vi.fn(async () => '%0'),
+        sendKeysToHandle: vi.fn(async () => {}),
+        paneCommandByHandle: vi.fn(async () => null),
+        windowExists: vi.fn(async () => true),
+        listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
+      };
+      return { resolve: vi.fn(() => driver), _driver: driver };
+    })() as unknown as TaskRestoreDeps['muxDriverRegistry'],
     worktreeServiceFactory: {
       create: vi.fn(() => ({
         create: vi.fn(async () => ({ path: worktreeDir, branch: 'feat/test-task' })),
@@ -243,10 +250,17 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
   };
 }
 
+function overrideDriver(base: TaskRestoreDeps, driverOverrides: Record<string, any>): TaskRestoreDeps['muxDriverRegistry'] {
+  const baseDriver = (base.muxDriverRegistry as any)._driver;
+  const newDriver = { ...baseDriver, ...driverOverrides };
+  return { resolve: vi.fn(() => newDriver), _driver: newDriver } as any;
+}
+
 describe('TaskRestoreService', () => {
   let deps: TaskRestoreDeps;
   let service: TaskRestoreService;
   const log = { warn: vi.fn() };
+  function mockDriver() { return (deps.muxDriverRegistry as any)._driver; }
 
   beforeEach(() => {
     rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-task-restore-')));
@@ -266,9 +280,9 @@ describe('TaskRestoreService', () => {
 
     const result = await service.restore(task, log);
 
-    expect(result.tmuxTarget).toBe('azito:task-1.1');
+    expect(result.tmuxTarget).toBe('azito:task-1');
     expect(result.worktreePath).toBe(worktreeDir);
-    expect(deps.tmux.createWindow).toHaveBeenCalledWith(
+    expect(mockDriver().openWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
       'task-1',
@@ -278,7 +292,7 @@ describe('TaskRestoreService', () => {
       ownerType: 'task',
       taskId: 1,
       isPrimary: true,
-      tmuxTarget: 'azito:task-1.1',
+      tmuxTarget: 'azito:task-1',
     }));
     expect(deps.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'open', tmuxWindow: 'task-1' }));
   });
@@ -405,7 +419,7 @@ describe('TaskRestoreService', () => {
       await expect(service.restore(task, log)).rejects.toThrow(/escapes the allowed directory/);
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
       // No worktree was ever created, so rollback should only touch the tmux window.
-      expect(deps.tmux.killWindow).toHaveBeenCalled();
+      expect(mockDriver().closeWindow).toHaveBeenCalled();
     } finally {
       rmSync(outsideDir, { recursive: true, force: true });
     }
@@ -476,9 +490,9 @@ describe('TaskRestoreService', () => {
     service = new TaskRestoreService(deps);
 
     await expect(service.restore(task, log)).rejects.toThrow('worktree failed');
-    expect(deps.tmux.killWindow).toHaveBeenCalledWith(
+    expect(mockDriver().closeWindow).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
-      'azito:task-1',
+      { kind: 'tmux', workspace: 'azito', window: 'task-1' },
     );
     // Issue #28 third-party review fix: the task stays 'archived' throughout
     // this rollback (no status WRITE happens here to trigger
@@ -492,10 +506,9 @@ describe('TaskRestoreService', () => {
     const task = makeTask({ serverName: 'test-server' });
     deps = makeDeps({
       ...deps,
-      tmux: {
-        ...deps.tmux,
-        createWindow: vi.fn(async () => { throw new Error('tmux failed'); }),
-      } as unknown as TaskRestoreDeps['tmux'],
+      muxDriverRegistry: overrideDriver(deps, {
+        openWindow: vi.fn(async () => { throw new Error('tmux failed'); }),
+      }),
     });
     service = new TaskRestoreService(deps);
 
@@ -512,7 +525,7 @@ describe('TaskRestoreService', () => {
     // though nothing was ever created (no window to kill — killWindow must
     // NOT be called for a window that never came into existence).
     expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_create_failed');
-    expect(deps.tmux.killWindow).not.toHaveBeenCalled();
+    expect(mockDriver().closeWindow).not.toHaveBeenCalled();
   });
 
   it('throws and revokes the just-issued generation when tmux window creation resolves with a non-zero exit code (agent-transport failure mode)', async () => {
@@ -526,10 +539,9 @@ describe('TaskRestoreService', () => {
     const task = makeTask({ serverName: 'test-server' });
     deps = makeDeps({
       ...deps,
-      tmux: {
-        ...deps.tmux,
-        createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: 'no server running', code: 1 }, windowName: 'task-1' })),
-      } as unknown as TaskRestoreDeps['tmux'],
+      muxDriverRegistry: overrideDriver(deps, {
+        openWindow: vi.fn(async () => ({ ref: { kind: 'tmux' as const, workspace: 'azito', window: 'task-1' }, result: { stdout: '', stderr: 'no server running', code: 1 }, windowName: 'task-1' })),
+      }),
     });
     service = new TaskRestoreService(deps);
 
@@ -537,7 +549,7 @@ describe('TaskRestoreService', () => {
     expect(deps.taskRepo.update).not.toHaveBeenCalled();
     expect(deps.windowRepo.add).not.toHaveBeenCalled();
     expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_create_failed');
-    expect(deps.tmux.killWindow).not.toHaveBeenCalled();
+    expect(mockDriver().closeWindow).not.toHaveBeenCalled();
   });
 
   // Issue #28 third-party review, second round: TaskRestoreService's rollback
@@ -557,15 +569,14 @@ describe('TaskRestoreService', () => {
           remove: vi.fn(async () => {}),
         })),
       } as unknown as TaskRestoreDeps['worktreeServiceFactory'],
-      tmux: {
-        ...deps.tmux,
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
-      } as unknown as TaskRestoreDeps['tmux'],
+      muxDriverRegistry: overrideDriver(deps, {
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
+      }),
     });
     service = new TaskRestoreService(deps);
 
     await expect(service.restore(task, log)).rejects.toThrow('worktree failed');
-    expect(deps.tmux.killWindow).toHaveBeenCalled();
+    expect(mockDriver().closeWindow).toHaveBeenCalled();
     expect(deps.paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
 
@@ -589,16 +600,15 @@ describe('TaskRestoreService', () => {
           throw new Error('db write failed');
         }),
       },
-      tmux: {
-        ...deps.tmux,
-        killWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
-      } as unknown as TaskRestoreDeps['tmux'],
+      muxDriverRegistry: overrideDriver(deps, {
+        closeWindow: vi.fn(async () => ({ stdout: '', stderr: 'device busy', code: 1 })),
+      }),
     });
     service = new TaskRestoreService(deps);
 
     await expect(service.restore(task, log)).rejects.toThrow('db write failed');
     expect(deps.windowRepo.add).toHaveBeenCalled();
-    expect(deps.tmux.killWindow).toHaveBeenCalled();
+    expect(mockDriver().closeWindow).toHaveBeenCalled();
     expect(deps.windowRepo.remove).not.toHaveBeenCalled();
     expect(deps.paneEnvService.revokeGeneration).not.toHaveBeenCalled();
   });
@@ -647,18 +657,16 @@ describe('TaskRestoreService', () => {
     const task = makeTask({ serverName: 'test-server' });
     deps = makeDeps({
       ...deps,
-      tmux: {
-        ...deps.tmux,
-        listSessions: vi.fn(async () => []),
-        createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'w' })),
-        createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      } as unknown as TaskRestoreDeps['tmux'],
+      muxDriverRegistry: overrideDriver(deps, {
+        listWorkspaces: vi.fn(async () => []),
+        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      }),
     });
     service = new TaskRestoreService(deps);
 
     await service.restore(task, log);
 
-    expect(deps.tmux.createSession).toHaveBeenCalledWith(
+    expect(mockDriver().openWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'test-server' }),
       'azito',
       { extraEnv: {} },
@@ -691,12 +699,10 @@ describe('TaskRestoreService', () => {
     deps = makeDeps({
       ...deps,
       serverRepo: { ...deps.serverRepo, findByName },
-      tmux: {
-        ...deps.tmux,
-        listSessions: vi.fn(async () => []),
-        createSession: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'azito' })),
-        createWindow: vi.fn(async () => ({ result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
-      } as unknown as TaskRestoreDeps['tmux'],
+      muxDriverRegistry: overrideDriver(deps, {
+        listWorkspaces: vi.fn(async () => []),
+        openWorkspace: vi.fn(async (_srv: unknown, name: string) => ({ ref: { kind: 'tmux' as const, workspace: name, window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
+      }),
     });
     service = new TaskRestoreService(deps);
 
@@ -705,10 +711,10 @@ describe('TaskRestoreService', () => {
     // findByName is called once at the top of restore() (serverAtStart),
     // once inside resolveExecutionManifest() for the execution-gate
     // manifest, then once per lock-and-refetch span below — so
-    // createSession/resolvePaneId/getTransport must each see whichever
+    // openWorkspace/resolvePane/getTransport must each see whichever
     // generation its OWN span produced, never an earlier one.
-    const createSessionServer = (deps.tmux.createSession as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const resolvePaneIdServer = (deps.tmux.resolvePaneId as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const createSessionServer = (mockDriver().openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const resolvePaneServer = (mockDriver().resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const getTransportServer = (deps.transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's own lock span re-read the server for the
@@ -716,11 +722,11 @@ describe('TaskRestoreService', () => {
     // resolved at the very top of restore() or inside resolveExecutionManifest().
     expect(createSessionServer.agentVersion).not.toBe('gen-1');
     // createRotatedWindow's own, LATER lock span re-read the server again
-    // for the real task window — resolvePaneId/getTransport (called after,
+    // for the real task window — resolvePane/getTransport (called after,
     // with the reassigned `server`) must see that STRICTLY NEWER row, not
     // the one ensureSessionWithLock's span produced.
-    expect(resolvePaneIdServer.agentVersion).not.toBe(createSessionServer.agentVersion);
-    expect(getTransportServer.agentVersion).toBe(resolvePaneIdServer.agentVersion);
+    expect(resolvePaneServer.agentVersion).not.toBe(createSessionServer.agentVersion);
+    expect(getTransportServer.agentVersion).toBe(resolvePaneServer.agentVersion);
   });
 
   // Issue #87 13th-round review, Important finding 1: restore() must run
@@ -807,7 +813,7 @@ describe('TaskRestoreService', () => {
       // The tmux window this run created is rolled back, same as this
       // function's existing failure-handling convention for worktree
       // creation failures.
-      expect(deps.tmux.killWindow).toHaveBeenCalled();
+      expect(mockDriver().closeWindow).toHaveBeenCalled();
     });
 
     it('succeeds and creates the worktree once distribution succeeds on an isolated server', async () => {
@@ -1023,7 +1029,7 @@ describe('TaskRestoreService', () => {
       // task must not be left with an open window running on unverified
       // content.
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
-      expect(deps.tmux.killWindow).toHaveBeenCalled();
+      expect(mockDriver().closeWindow).toHaveBeenCalled();
     });
 
     // Counterpart to the above: when a working directory IS configured
@@ -1249,7 +1255,7 @@ describe('TaskRestoreService', () => {
       // The guard must have fired BEFORE worktree creation — never allowed
       // to fall through to `git worktree add --force` against the stale ref.
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
-      expect(deps.tmux.killWindow).toHaveBeenCalled();
+      expect(mockDriver().closeWindow).toHaveBeenCalled();
     });
   });
 
@@ -1264,7 +1270,7 @@ describe('TaskRestoreService', () => {
 
       await expect(service.restore(task, log)).rejects.toThrow(/requires approval/);
 
-      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(mockDriver().openWindow).not.toHaveBeenCalled();
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
       expect(deps.taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, {
         pendingOperation: 'restore',
@@ -1312,8 +1318,8 @@ describe('TaskRestoreService', () => {
 
       const result = await service.restore(task, log);
 
-      expect(result.tmuxTarget).toBe('azito:task-1.1');
-      expect(deps.tmux.createWindow).toHaveBeenCalled();
+      expect(result.tmuxTarget).toBe('azito:task-1');
+      expect(mockDriver().openWindow).toHaveBeenCalled();
     });
 
     // Issue #87 review (forge/87-mirror follow-up round 2), Important
@@ -1392,7 +1398,7 @@ describe('TaskRestoreService', () => {
       // approval only ever given for A) was never invoked, and no
       // window/worktree was created either.
       expect(fetchDistributionService.distribute).not.toHaveBeenCalled();
-      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(mockDriver().openWindow).not.toHaveBeenCalled();
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
       expect(deps.taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(task.id, {
         pendingOperation: 'restore',
@@ -1414,7 +1420,7 @@ describe('TaskRestoreService', () => {
 
       await expect(service.restore(task, log)).rejects.toThrow(/denied/);
 
-      expect(deps.tmux.createWindow).not.toHaveBeenCalled();
+      expect(mockDriver().openWindow).not.toHaveBeenCalled();
       expect(deps.taskRepo.updateStatus).not.toHaveBeenCalled();
     });
 
@@ -1431,7 +1437,7 @@ describe('TaskRestoreService', () => {
 
       const result = await service.restore(task, log);
 
-      expect(result.tmuxTarget).toBe('azito:task-1.1');
+      expect(result.tmuxTarget).toBe('azito:task-1');
     });
   });
 });

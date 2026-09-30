@@ -6,7 +6,9 @@ import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
+import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import { selectTaskTerminal } from './TaskPanel';
+import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
 
 const COLLAPSE_STORAGE_KEY = 'active-windows-collapsed';
 const HEADER_HEIGHT = 36;
@@ -28,7 +30,7 @@ function saveUserCollapsed(value: boolean): void {
 }
 
 export interface ActiveWindowsSectionProps {
-  connectPane: (serverName: string, target: string, projectId?: number) => void;
+  connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
   openTask: (taskId: number, title: string, projectId?: number) => void;
   taskWindows: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
 }
@@ -115,19 +117,22 @@ export default function ActiveWindowsSection({ connectPane, openTask, taskWindow
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 4px 8px' }}>
           {rows.map((row) => {
             const taskId = row.taskId ?? lookupWindowTask(windowTaskMap, row.serverName, row.target);
-            const displayName = row.paneName || row.label || row.target;
-            const windowLabel = row.label || row.target;
+            const displayName = formatActiveWindowLabel(row);
+            const windowLabel = formatActiveWindowLabel(row);
             const isFinished = row.status === 'finished';
             const isBlocked = !isFinished && row.activityStatus === 'blocked';
             const dismissIfFinished = () => {
-              if (isFinished) dismissFinished(row.serverName, row.target);
+              if (isFinished) dismissFinished(row.serverName, row.target, row.windowId);
             };
             const handleRowOpen = () => {
               if (taskId != null) {
                 selectTaskTerminal(taskId, { serverName: row.serverName, target: row.target });
                 openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), row.projectId);
               } else {
-                connectPane(row.serverName, row.target, row.projectId);
+                const ref: TerminalRef = row.windowId != null
+                  ? { kind: 'windowId', serverName: row.serverName, windowId: row.windowId, pane: 1 }
+                  : terminalRefFromTarget(row.serverName, row.target);
+                connectPane(ref, row.projectId);
               }
               dismissIfFinished();
             };

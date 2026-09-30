@@ -13,6 +13,7 @@ import AddWindowModal from './workspace/AddWindowModal';
 import ResourceWarningDialog from './ResourceWarningDialog';
 import { Chip, EmptyState, FormSelect, ListRow, ListRowGroup, LoadingState, PanelHeader, baseInputStyle, Button } from './ui';
 import type { Window, Unit, Server } from '../pages/workspace/types';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDisplay';
 import { notifyProjectsChanged } from '../lib/projectsChanged';
 import { isDistributeCodeLocked, isDistributionRepositorySelected, resolveDistributeCodeForSave, resolveDistributeCodeToggleOnProjectServersChange, resolveDistributionRepositoryIdOnProjectServersChange } from '../lib/distributeCodePolicy';
 import { buildEnvironmentRowChips, needsDistributionSetup, type DistributionPrerequisite, type EnvironmentChip, type LastDistribution } from '../lib/environmentRow';
@@ -310,7 +311,10 @@ export function useProjectSettings(
     await api(`/windows/${wid}`, { method: 'DELETE' });
     if (win) {
       tabs
-        .filter((t) => t.id.startsWith(`terminal:${win.serverName}/${win.tmuxTarget}.`))
+        .filter((t) => t.type === 'terminal' && (
+          t.id.startsWith(`terminal:${win.serverName}::w${win.id}.`) ||
+          t.id.startsWith(`terminal:${win.serverName}/${win.tmuxTarget}.`)
+        ))
         .forEach((t) => closeTab(t.id));
     }
     refresh();
@@ -882,15 +886,24 @@ function WindowsSection({ settings: s, addWindowModal }: { settings: ReturnType<
         />
       ) : (
         <ListRowGroup>
-          {windows.map((w) => (
-            <ListRow
-              key={w.id}
-              icon={<Icon name="terminal" size={14} />}
-              title={w.label || `${w.serverName} / ${w.tmuxTarget}`}
-              description={<span style={{ fontFamily: 'monospace' }}>{w.serverName}:{w.tmuxTarget}</span>}
-              rightActions={<Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>}
-            />
-          ))}
+          {windows.map((w) => {
+            const display = resolveWindowDisplay({
+              windowId: w.id,
+              label: w.label,
+              workerType: w.workerType,
+              windowType: w.windowType,
+              tmuxTarget: w.tmuxTarget,
+            });
+            return (
+              <ListRow
+                key={w.id}
+                icon={<Icon name="terminal" size={14} />}
+                title={formatWindowDisplayLabel(display)}
+                description={<span style={{ fontFamily: 'monospace' }}>{w.serverName} · tmux {w.tmuxTarget}</span>}
+                rightActions={<Button size="sm" onClick={() => s.handleRemoveWindow(w.id)}>{t('common:actions.remove')}</Button>}
+              />
+            );
+          })}
         </ListRowGroup>
       )}
     </>

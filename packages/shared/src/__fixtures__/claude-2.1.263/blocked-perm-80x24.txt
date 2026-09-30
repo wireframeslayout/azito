@@ -1,0 +1,25 @@
+# captured 2026-09-07 on server007: Claude Code 2.1.263 in tmux 3.4 (80x24), tmux capture-pane -p -e -S -50
+
+[38;5;239m[48;5;237m❯ [38;5;231mBash ツールで mkdir -p perm_test_dir && rm -rf perm_test_dir [39m
+  [38;5;231mを1コマンドで実行してください。[39m
+[49m
+[38;5;246m [39m Creating then removing perm_test_dir
+[38;5;246m  ⎿  $ mkdir -p perm_test_dir && rm -rf perm_test_dir[39m
+
+[38;5;153m────────────────────────────────────────────────────────────────────────────────
+[39m [1m[38;5;153mBash command[0m
+ [1mTip: auto mode handles these prompts for you — choose "switch to auto mode" [0m
+ [1mbelow[0m
+
+   mkdir -p perm_test_dir && rm -rf perm_test_dir
+   [38;5;246mCreate then remove perm_test_dir[39m
+
+ Do you want to proceed?
+ [38;5;153m❯[39m [38;5;246m1. [38;5;153mYes[39m
+   [38;5;246m2. [39mYes, and don't ask again for [1mmkdir -p perm_test_dir[0m and [1mrm -rf [0m
+      [1mperm_test_dir[0m commands in [1m/tmp/claude-1000/-home-serveruser-workspace-azit
+[0m      [1mo/be626d60-6d8f-499a-a11c-307fe5c7251e/scratchpad/fx/wd[0m
+   [38;5;246m3. [39mYes, and switch to auto mode[38;5;246m · auto mode handles these prompts for you[39m
+   [38;5;246m4. [39mNo
+
+ [38;5;246mEsc to cancel · Tab to amend[39m

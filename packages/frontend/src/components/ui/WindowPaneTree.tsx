@@ -3,11 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { Icon } from './Icon';
 import { api } from '../../api/client';
 import { AgentIcon } from './AgentIcons';
+import { WindowIdChip } from './WindowIdChip';
+import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, Window } from '../../pages/workspace/types';
 
-export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean };
+export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: string };
 
 type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
 
@@ -47,10 +49,16 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
     });
   }, []);
 
-  const handleUnzoom = useCallback(async (serverName: string, sessionName: string, windowName: string) => {
-    const target = `${sessionName}:${windowName}`;
+  const handleUnzoom = useCallback(async (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => {
     try {
-      await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/unzoom`, { method: 'POST' });
+      if (windowId != null) {
+        await api(`/windows/${windowId}/panes/1/unzoom`, { method: 'POST' });
+      } else if (ref) {
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/1/unzoom`, { method: 'POST' });
+      } else {
+        const target = `${sessionName}:${windowName}`;
+        await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/unzoom`, { method: 'POST' });
+      }
     } catch { /* best-effort */ }
   }, []);
 
@@ -94,7 +102,7 @@ interface WindowRowProps {
   isActive?: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
-  onUnzoom: (serverName: string, sessionName: string, windowName: string) => void;
+  onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => void;
   onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
@@ -168,7 +176,9 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const title = renderTitle?.(w) ?? (w.label || w.tmuxTarget);
+  const display = resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const title = renderTitle?.(w) ?? display.title;
+  const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -187,12 +197,13 @@ function OfflineRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra,
       </span>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {showIdChip && <WindowIdChip id={w.id!} />}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
         </div>
-        {subtitle != null && (
+        {subtitle != null && (typeof subtitle !== 'string' || subtitle !== title) && (
           <div style={{
             fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
@@ -225,7 +236,9 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   const bindLongPress = useLongPress();
   const clickable = !!onPaneClick;
   const subtitle = renderSubtitle?.(w);
-  const title = renderTitle?.(w) ?? (w.label || w.tmuxTarget);
+  const display = resolveWindowDisplay({ windowId: w.id, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const title = renderTitle?.(w) ?? display.title;
+  const showIdChip = renderTitle?.(w) != null ? w.id != null : !!display.idLabel;
   return (
     <div
       onClick={onPaneClick ? () => onPaneClick(w.serverName, w.tmuxTarget, w) : undefined}
@@ -244,12 +257,13 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
       </span>
       <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {showIdChip && <WindowIdChip id={w.id!} />}
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
             {title}
           </span>
           {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
         </div>
-        {subtitle != null && (
+        {subtitle != null && (typeof subtitle !== 'string' || subtitle !== title) && (
           <div style={{
             fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
             textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
@@ -315,6 +329,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         const isUniqueName = session.windows.filter((w2) => w2.name === sw.name).length === 1;
         const windowId = isUniqueName ? sw.name : String(sw.index);
 
+        // resolveWindowDisplay を先に計算し、idChip の重複を防ぐ
+        const winDisplay = resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+        const winTitle = renderTitle?.(w) ?? winDisplay.title;
+        const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
+
         if (paneCount <= 1) {
           const pane = sw.panes[0];
           if (!pane) return null;
@@ -343,24 +362,27 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               </span>
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {renderTitle?.(w) ?? (w.label || sw.name)}
+                    {winTitle}
                   </span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                 </div>
-                <div style={{
-                  fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
-                  textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
-                }}>
-                  {subtitle}
-                </div>
+                {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
+                  <div style={{
+                    fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+                  }}>
+                    {subtitle}
+                  </div>
+                )}
               </div>
               {extra}
             </div>
           );
         }
 
-        const windowLabel = renderTitle?.(w) ?? (w.label || sw.name);
+        const windowLabel = winTitle;
         const windowHasActive = sw.panes.some((pane) => {
           const target = `${sessionName}:${windowId}.${pane.index}`;
           return isActive?.(w.serverName, target, 'window') ?? false;
@@ -400,13 +422,14 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               </span>
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {winShowIdChip && <WindowIdChip id={w.id!} />}
                   <span
                     onClick={() => onToggle(expandKey)}
                     style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
                   >{windowLabel}</span>
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                 </div>
-                {parentSubtitle != null && (
+                {parentSubtitle != null && (typeof parentSubtitle !== 'string' || parentSubtitle !== windowLabel) && (
                   <div style={{
                     fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
                     textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
@@ -416,7 +439,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                 )}
               </div>
               <button
-                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId); }}
+                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId, sw.windowId ?? undefined, sw.ref); }}
                 title={t('windowPaneTree.showAllPanes')}
                 aria-label={t('windowPaneTree.showAllPanesLabel')}
                 style={{

@@ -6,7 +6,8 @@ import { AgentIcon } from '../ui/AgentIcons';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
-import { isSameWindowTarget } from '../../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import StatusDropdown from '../task/StatusDropdown';
 import type { Task, Window } from '../../pages/workspace/types';
 
@@ -62,7 +63,7 @@ interface TaskDetailMenuProps {
   /** タスクの全ウィンドウ（Issue #69 T8a）。「ウィンドウとブラウザ」節が空なら描かない。 */
   windows: Window[];
   /** 現在コンテンツ表示中（または最終アクティブ）のウィンドウ — 該当行に ✓ を出す。 */
-  focusedWindowTarget: { serverName: string; target: string } | null;
+  focusedWindowTarget: { serverName: string; target: string; windowId?: number } | null;
   /** 行タップ: メニューを閉じ、そのウィンドウのコンテンツ（端末/チャットは localStorage 記憶
    * モード）を表示する。実際の表示切替は呼び出し元（TaskPanel の handleMobileSelect）が担う。 */
   onSelectWindow: (serverName: string, target: string) => void;
@@ -134,8 +135,9 @@ function IdleDot() {
   );
 }
 
-function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
+function WindowMenuRow({ w, taskTitle, isCurrent, onSelect, onLongPress, onDelete }: {
   w: Window;
+  taskTitle?: string;
   isCurrent: boolean;
   onSelect: () => void;
   /** 長押し（タッチ座標）: デスクトップと同じコンテキストメニューを開く。省略時は長押し無効。 */
@@ -171,7 +173,14 @@ function WindowMenuRow({ w, isCurrent, onSelect, onLongPress, onDelete }: {
       </span>
       <span style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
         <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {w.label || w.tmuxTarget}
+          {formatWindowDisplayLabel(resolveWindowDisplay({
+            windowId: w.id,
+            label: w.label,
+            taskTitle,
+            workerType: w.workerType,
+            windowType: w.windowType,
+            tmuxTarget: w.tmuxTarget,
+          }))}
         </span>
         {w.workerType && (
           <span style={{
@@ -455,11 +464,13 @@ export default function TaskDetailMenu({
                   {windows.map((w) => {
                     const isCurrent = !!focusedWindowTarget
                       && focusedWindowTarget.serverName === w.serverName
-                      && isSameWindowTarget(focusedWindowTarget.target, w.tmuxTarget);
+                      && (focusedWindowTarget.windowId != null ? focusedWindowTarget.windowId === w.id
+                        : isSameWindowTarget(focusedWindowTarget.target, w.tmuxTarget));
                     return (
                       <WindowMenuRow
                         key={w.id}
                         w={w}
+                        taskTitle={task.title}
                         isCurrent={isCurrent}
                         onSelect={() => { onSelectWindow(w.serverName, w.tmuxTarget); onClose(); }}
                         onLongPress={onLongPressWindow ? (x, y) => onLongPressWindow(x, y, w) : undefined}

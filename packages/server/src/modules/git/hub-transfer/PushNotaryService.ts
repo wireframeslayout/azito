@@ -93,7 +93,19 @@ export class PushNotaryService {
     const { server, transport, worktreePath } = params;
     const sshHost = server.sshHost!;
 
-    const remoteBundlePath = await this.remoteBundleOps.createFromWorktree(transport, worktreePath, branch, baseBranch);
+    let remoteBundlePath: string;
+    try {
+      remoteBundlePath = await this.remoteBundleOps.createFromWorktree(transport, worktreePath, branch, baseBranch);
+    } catch (err) {
+      if (this.isEmptyBundleError(err)) {
+        const workerHead = await this.remoteBundleOps.getHeadSha(transport, worktreePath);
+        const remoteHead = await this.gitProvider.getBranchHeadSha(params.repo, branch);
+        if (workerHead && remoteHead === workerHead) {
+          return { pushedSha: workerHead };
+        }
+      }
+      throw err;
+    }
     const localBundlePath = await this.downloadBundle(sshHost, remoteBundlePath, transport);
 
     try {
@@ -145,6 +157,11 @@ export class PushNotaryService {
   private isPrerequisiteError(err: unknown): boolean {
     const msg = err instanceof Error ? err.message : String(err);
     return msg.includes('prerequisite commits');
+  }
+
+  private isEmptyBundleError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.toLowerCase().includes('empty bundle');
   }
 
   // #124 Bug 4: retry SHA verification with exponential backoff.

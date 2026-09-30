@@ -8,14 +8,16 @@ import type { IExecutionLogRepository } from '../ExecutionLog';
 import type { IServerRepository } from '../../servers/Server';
 import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { IMuxClient } from '../../tmux/IMuxClient';
+import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ExecuteTaskUseCase } from '../execution/ExecuteTaskUseCase';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { AgentTurn } from '../turns/AgentTurn';
 import { extractPhaseSummary } from '../extractPhaseSummary';
-import { resolveTaskServerName, resolveTmuxSession, resolveUnitId } from '../execution/TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from '../execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
+import type { MuxRef, PaneHandle } from '@azito/shared';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -33,7 +35,7 @@ export class RecoverStuckTasksUseCase {
     private projectRepo: IProjectRepository,
     private projectServerRepo: IProjectServerRepository,
     private logRepo: IExecutionLogRepository,
-    private tmuxClient: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private executeTaskUseCase: ExecuteTaskUseCase,
     private turnRepo: SqliteAgentTurnRepository,
     private logger: RecoveryLogger,
@@ -102,21 +104,29 @@ export class RecoverStuckTasksUseCase {
     if (!server) return;
     if (server.type !== 'local' && !usesHttpSignalPath(unit.workerExecutionMode)) return;
 
-    const tmuxSession = resolveTmuxSession(task.projectId, resolvedServerName, this.projectServerRepo);
+    const driver: IMuxClient = this.muxDriverRegistry.resolve(server);
+
+    const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     const windowName = task.tmuxWindow || `task-${task.id}`;
 
-    let target: string;
+    let handle: PaneHandle;
     try {
-      target = await this.tmuxClient.resolvePaneId(server, `${tmuxSession}:${windowName}`);
+      const ref: MuxRef = { kind: driver.kind, workspace: muxWorkspace, window: windowName };
+      handle = await driver.resolvePane(server, ref, 1);
     } catch {
-      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${tmuxSession}:${windowName})`);
+      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWorkspace}:${windowName})`);
       return;
     }
 
+    let probe: { alive: boolean; verified: boolean };
     try {
-      await this.tmuxClient.capturePane(server, target);
+      probe = await driver.probePane(server, handle);
     } catch {
-      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${target})`);
+      this.logger.warn(`Recovery skip: probePane failed for task ${task.id} (${handle})`);
+      return;
+    }
+    if (!probe.alive || !probe.verified) {
+      this.logger.warn(`Recovery skip: pane ${!probe.alive ? 'dead' : 'unverified'} for task ${task.id} (${handle})`);
       return;
     }
 
@@ -133,7 +143,7 @@ export class RecoverStuckTasksUseCase {
       return;
     }
 
-    await this.tmuxClient.sendKeys(server, target, ['Escape']);
+    await driver.sendKeysToHandle(server, handle, ['Escape']);
     await sleep(500);
 
     if (usesHttpSignalPath(unit.workerExecutionMode)) {

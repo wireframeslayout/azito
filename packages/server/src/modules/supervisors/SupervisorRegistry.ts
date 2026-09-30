@@ -4,6 +4,7 @@ import type { WebSocket } from 'ws';
 
 import {
   SUPERVISOR_PROTOCOL_VERSION,
+  type ActivityDecidedBy,
   type ActivityState,
   type AgentStatus,
   type HubToSupervisorMessage,
@@ -99,6 +100,9 @@ interface SupervisorConnection {
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
+  lastReportedDecidedBy: ActivityDecidedBy | null;
+  muxPaneRef: string | null;
+  windowId?: number;
 }
 
 export interface SupervisorEntry {
@@ -116,6 +120,9 @@ export interface SupervisorEntry {
   lastActivityFrameAt: number | null;
   lastReportedState: ActivityState | null;
   lastReportedStatus: AgentStatus | null;
+  lastReportedDecidedBy: ActivityDecidedBy | null;
+  muxPaneRef: string | null;
+  windowId?: number;
 }
 
 export interface SupervisorActivityEvent {
@@ -133,6 +140,7 @@ export interface SupervisorActivityEvent {
   childCommand: string;
   /** See SupervisorConnection.bound's doc comment — false means "display only, do not drive Tier 0 / turn idle refresh". */
   bound: boolean;
+  decidedBy?: ActivityDecidedBy;
 }
 
 export interface SupervisorReadyEvent {
@@ -140,6 +148,7 @@ export interface SupervisorReadyEvent {
   target: string;
   taskId: number | null;
   unitId: number | null;
+  windowId?: number;
 }
 
 export interface SupervisorChildExitEvent {
@@ -173,8 +182,18 @@ export interface SupervisorAuthorityRevokedEvent {
   target: string;
 }
 
+export interface SupervisorRegisteredEvent {
+  serverName: string;
+  target: string;
+  muxPaneRef: string | null;
+  bound: boolean;
+}
+
+import { windowKey, stripPaneSuffix } from '@azito/shared';
+import type { PaneHandle } from '@azito/shared';
+
 function keyFor(serverName: string, target: string): string {
-  return `${serverName}::${target}`;
+  return windowKey(serverName, target);
 }
 
 /**
@@ -229,6 +248,7 @@ export class SupervisorRegistry extends EventEmitter {
    * random-suffixed target) doesn't linger in this map forever on a long-running hub.
    */
   private exitedKeys = new Map<string, number>();
+  private muxPaneRefIndex = new Map<string, string>();
 
   /** Removes expired entries from exitedKeys. Called from child_exit (the only place new entries
    * are added) rather than on a timer — cheap enough given how infrequently child_exit fires, and
@@ -408,9 +428,10 @@ export class SupervisorRegistry extends EventEmitter {
       return { ok: false, event: 'supervisor_launch.unknown', reason: 'unknown launch id' };
     }
 
+    // rc.2 以前の supervisor が .1 付き target で登録するため strip を維持
     const mismatch =
       row.serverName !== info.serverName ||
-      row.target !== info.target ||
+      row.target !== stripPaneSuffix(info.target) ||
       row.taskId !== info.taskId ||
       row.unitId !== info.unitId;
     if (mismatch) {
@@ -427,7 +448,7 @@ export class SupervisorRegistry extends EventEmitter {
         this.audit('supervisor_launch.session_rejected', { launchId: info.launchId });
         return { ok: false, event: 'supervisor_launch.session_rejected', reason: 'invalid session token' };
       }
-      this.launchRepo.touchRegistered(info.launchId);
+      this.launchRepo.touchRegistered(info.launchId, info.muxPaneRef ?? undefined);
       return { ok: true, bound: true, launchId: info.launchId };
     }
 
@@ -516,6 +537,9 @@ export class SupervisorRegistry extends EventEmitter {
     }
 
     if (existing) {
+      if (existing.muxPaneRef) {
+        this.muxPaneRefIndex.delete(`${existing.serverName}::${existing.muxPaneRef}`);
+      }
       this.socketKeys.delete(existing.socket);
       this.teardown(key, existing, new Error('replaced by new registration'));
       this.safeClose(existing.socket, 1000, 'replaced by new registration');
@@ -547,6 +571,9 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: null,
       lastReportedState: null,
       lastReportedStatus: null,
+      lastReportedDecidedBy: null,
+      muxPaneRef: info.muxPaneRef ?? null,
+      windowId: undefined,
     };
     this.connections.set(key, conn);
     this.socketKeys.set(socket, key);
@@ -557,6 +584,16 @@ export class SupervisorRegistry extends EventEmitter {
 
     this.safeSend(socket, authResult.sessionToken ? { type: 'registered', sessionToken: authResult.sessionToken } : { type: 'registered' });
     this.startPing(key, conn);
+
+    if (conn.muxPaneRef) {
+      this.muxPaneRefIndex.set(`${conn.serverName}::${conn.muxPaneRef}`, key);
+    }
+    this.emit('registered', {
+      serverName: conn.serverName,
+      target: conn.target,
+      muxPaneRef: conn.muxPaneRef,
+      bound: conn.bound,
+    } satisfies SupervisorRegisteredEvent);
   }
 
   /** Routes an already-parsed non-register message to its connection. Ignores unmatched/unknown messages. */
@@ -575,6 +612,7 @@ export class SupervisorRegistry extends EventEmitter {
         conn.lastActivityFrameAt = Date.now();
         conn.lastReportedState = msg.state;
         conn.lastReportedStatus = msg.status ?? null;
+        conn.lastReportedDecidedBy = msg.decidedBy ?? null;
         this.emit('activity', {
           serverName: conn.serverName,
           target: conn.target,
@@ -584,6 +622,7 @@ export class SupervisorRegistry extends EventEmitter {
           status: msg.status,
           childCommand: conn.childCommand,
           bound: conn.bound,
+          decidedBy: msg.decidedBy,
         } satisfies SupervisorActivityEvent);
         break;
 
@@ -601,6 +640,7 @@ export class SupervisorRegistry extends EventEmitter {
           target: conn.target,
           taskId: conn.taskId,
           unitId: conn.unitId,
+          windowId: conn.windowId,
         } satisfies SupervisorReadyEvent);
         break;
 
@@ -639,7 +679,7 @@ export class SupervisorRegistry extends EventEmitter {
         if (typeof msg.sessionToken !== 'string' || !conn.launchId || !this.launchRepo) break;
         const row = this.launchRepo.findByLaunchId(conn.launchId);
         if (!row || !this.launchRepo.verifySession(row, msg.sessionToken)) break;
-        this.launchRepo.touchRegistered(conn.launchId);
+        this.launchRepo.touchRegistered(conn.launchId, conn.muxPaneRef ?? undefined);
         this.audit('supervisor_launch.ack_activated', {
           launchId: conn.launchId,
           serverName: conn.serverName,
@@ -676,6 +716,9 @@ export class SupervisorRegistry extends EventEmitter {
     this.socketKeys.delete(socket);
     const conn = this.connections.get(key);
     if (!conn || conn.socket !== socket) return; // stale close from an already-replaced socket
+    if (conn.muxPaneRef) {
+      this.muxPaneRefIndex.delete(`${conn.serverName}::${conn.muxPaneRef}`);
+    }
     this.teardown(key, conn, new Error('supervisor disconnected'));
     // A closed connection is not itself proof the agent stopped (e.g. the
     // supervisor process crashing and being relaunched) — unlike an explicit
@@ -733,6 +776,44 @@ export class SupervisorRegistry extends EventEmitter {
     this.exitedKeys.delete(keyFor(serverName, target));
   }
 
+  findByPaneHandle(serverName: string, handle: PaneHandle): SupervisorEntry | undefined {
+    const indexKey = `${serverName}::${handle}`;
+    const connKey = this.muxPaneRefIndex.get(indexKey);
+    if (!connKey) return undefined;
+    const conn = this.connections.get(connKey);
+    if (!conn) return undefined;
+    return {
+      serverName: conn.serverName,
+      target: conn.target,
+      taskId: conn.taskId,
+      unitId: conn.unitId,
+      pid: conn.pid,
+      childCommand: conn.childCommand,
+      connectedAt: conn.connectedAt,
+      lastHeartbeatAt: conn.lastHeartbeatAt,
+      ready: conn.ready,
+      bound: conn.bound,
+      lastActivityFrameAt: conn.lastActivityFrameAt,
+      lastReportedState: conn.lastReportedState,
+      lastReportedStatus: conn.lastReportedStatus,
+      lastReportedDecidedBy: conn.lastReportedDecidedBy,
+      muxPaneRef: conn.muxPaneRef,
+    };
+  }
+
+  clearServerPaneRefs(serverName: string): void {
+    const prefix = `${serverName}::`;
+    for (const key of this.muxPaneRefIndex.keys()) {
+      if (key.startsWith(prefix)) this.muxPaneRefIndex.delete(key);
+    }
+  }
+
+  setWindowId(serverName: string, target: string, windowId: number): void {
+    const key = keyFor(serverName, target);
+    const conn = this.connections.get(key);
+    if (conn) conn.windowId = windowId;
+  }
+
   snapshot(): SupervisorEntry[] {
     return [...this.connections.values()].map((conn) => ({
       serverName: conn.serverName,
@@ -748,6 +829,9 @@ export class SupervisorRegistry extends EventEmitter {
       lastActivityFrameAt: conn.lastActivityFrameAt,
       lastReportedState: conn.lastReportedState,
       lastReportedStatus: conn.lastReportedStatus,
+      lastReportedDecidedBy: conn.lastReportedDecidedBy,
+      muxPaneRef: conn.muxPaneRef,
+      windowId: conn.windowId,
     }));
   }
 

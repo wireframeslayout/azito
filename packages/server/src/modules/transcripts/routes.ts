@@ -1,4 +1,5 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
+import { asPaneHandle } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
@@ -185,7 +186,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       return reply.status(400).send({ error: 'Invalid text' });
     }
 
-    const result = await windowInputService.sendInput(windowId, paneId, text);
+    const result = await windowInputService.sendInput(windowId, asPaneHandle(paneId), text);
     if (result === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
     if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
     return { ok: true };
@@ -246,7 +247,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
         resolvedKey = key;
       }
 
-      const result = await windowInputService.sendSignal(windowId, paneId, action === 'answer' ? 'key' : action, resolvedKey);
+      const result = await windowInputService.sendSignal(windowId, asPaneHandle(paneId), action === 'answer' ? 'key' : action, resolvedKey);
       if (result === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
       if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
       return { ok: true };
@@ -348,7 +349,7 @@ async function handleSendInput(
     return reply.status(400).send({ error: 'Invalid text' });
   }
 
-  const result = await transcriptPaneService.sendInput(sessionId, paneId, text);
+  const result = await transcriptPaneService.sendInput(sessionId, asPaneHandle(paneId), text);
   if (result === 'session_not_found') return reply.status(404).send({ error: 'Session not found' });
   if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
   return { ok: true };
@@ -394,7 +395,7 @@ async function handleSendSignal(
     resolvedKey = key;
   }
 
-  const result = await transcriptPaneService.sendSignal(source, sessionId, paneId, resolvedKey);
+  const result = await transcriptPaneService.sendSignal(source, sessionId, asPaneHandle(paneId), resolvedKey);
   if (result === 'session_not_found') return reply.status(404).send({ error: 'Session not found' });
   if (result === 'pane_not_found') return reply.status(404).send({ error: 'Pane not found' });
   return { ok: true };

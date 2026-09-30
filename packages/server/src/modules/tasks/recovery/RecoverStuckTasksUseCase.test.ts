@@ -157,8 +157,9 @@ interface Mocks {
     [key: string]: unknown;
   };
   tmuxClient: {
-    capturePane: ReturnType<typeof vi.fn>;
-    sendKeys: ReturnType<typeof vi.fn>;
+    captureScreen: ReturnType<typeof vi.fn>;
+    sendKeysToHandle: ReturnType<typeof vi.fn>;
+    probePane: ReturnType<typeof vi.fn>;
     [key: string]: unknown;
   };
   executeTaskUseCase: {
@@ -214,9 +215,12 @@ function createMocks(): Mocks {
       findByUnit: vi.fn(),
     },
     tmuxClient: {
+      kind: 'tmux',
       resolvePaneId: vi.fn().mockResolvedValue('%0'),
-      capturePane: vi.fn().mockResolvedValue({ stdout: 'pane content', code: 0 }),
-      sendKeys: vi.fn().mockResolvedValue(undefined),
+      resolvePane: vi.fn().mockResolvedValue('%0'),
+      captureScreen: vi.fn().mockResolvedValue({ stdout: 'pane content', code: 0 }),
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
+      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
     },
     executeTaskUseCase: {
       getRunning: vi.fn().mockReturnValue({}),
@@ -236,7 +240,8 @@ function createMocks(): Mocks {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createUseCase(mocks: Mocks): RecoverStuckTasksUseCase {
+function createUseCase(mocks: Mocks, registry?: any): RecoverStuckTasksUseCase {
+  const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient } as any;
   return new RecoverStuckTasksUseCase(
     mocks.taskRepo as any,
     mocks.unitRepo as any,
@@ -244,7 +249,7 @@ function createUseCase(mocks: Mocks): RecoverStuckTasksUseCase {
     mocks.projectRepo as any,
     mocks.projectServerRepo as any,
     mocks.logRepo as any,
-    mocks.tmuxClient as any,
+    mockRegistry,
     mocks.executeTaskUseCase as any,
     mocks.turnRepo as any,
     mocks.logger,
@@ -329,7 +334,7 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.taskRepo.updateStatus).toHaveBeenCalledWith(10, 'running');
     expect(mocks.taskRepo.updateCurrentPhase).toHaveBeenCalledWith(10, 'reviewing');
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 10);
-    expect(mocks.tmuxClient.sendKeys).toHaveBeenCalled();
+    expect(mocks.tmuxClient.sendKeysToHandle).toHaveBeenCalled();
   });
 
   it('should retry current phase when marker not found (incomplete)', async () => {
@@ -403,13 +408,13 @@ describe('RecoverStuckTasksUseCase', () => {
     mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
       status === 'running' ? [task] : [],
     );
-    mocks.tmuxClient.capturePane.mockRejectedValue(new Error('pane not found'));
+    mocks.tmuxClient.probePane.mockResolvedValue({ alive: false, verified: true });
 
     const useCase = createUseCase(mocks);
     await useCase.run();
 
     expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
-    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('pane dead'));
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('dead'));
   });
 
   it('should not detect terminal statuses as stuck', async () => {
@@ -472,7 +477,7 @@ describe('RecoverStuckTasksUseCase', () => {
     const useCase = createUseCase(mocks);
     await useCase.run();
 
-    expect(mocks.tmuxClient.sendKeys).toHaveBeenCalledWith(
+    expect(mocks.tmuxClient.sendKeysToHandle).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'local' }),
       '%0',
       ['Escape'],
@@ -822,5 +827,55 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.taskRepo.update).not.toHaveBeenCalled();
     expect(mocks.taskRepo.updateStatus).not.toHaveBeenCalledWith(33, 'waiting_input');
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 33);
+  });
+
+  it('should use the default registry driver (tmuxClient) when no custom driver is registered', async () => {
+    const task = makeTask({ id: 41 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.turnRepo.findLatestByTaskPhase.mockReturnValue(
+      makeAgentTurn({ id: 21, taskId: 41, phase: 'implementing', status: 'completed' }),
+    );
+
+    const useCase = createUseCase(mocks);
+    await useCase.run();
+
+    expect(mocks.tmuxClient.resolvePane).toHaveBeenCalled();
+    expect(mocks.tmuxClient.probePane).toHaveBeenCalled();
+    expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 41);
+  });
+
+  it('should skip recovery when probePane returns verified: false (unverified pane state)', async () => {
+    mocks = createMocks();
+    const task = makeTask({ id: 42 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.tmuxClient.probePane.mockResolvedValue({ alive: true, verified: false });
+
+    const useCase = createUseCase(mocks);
+    await useCase.run();
+
+    expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('unverified'));
+  });
+
+  it('should skip recovery when probePane returns alive: false', async () => {
+    mocks = createMocks();
+    const task = makeTask({ id: 43 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.tmuxClient.probePane.mockResolvedValue({ alive: false, verified: true });
+
+    const useCase = createUseCase(mocks);
+    await useCase.run();
+
+    expect(mocks.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(expect.stringContaining('dead'));
   });
 });

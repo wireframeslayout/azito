@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { mapKey } from './keymap';
 import {
   SUPERVISOR_PROTOCOL_VERSION,
+  type ActivityDecidedBy,
   type ActivityState,
   type AgentStatus,
   type ChildExitMessage,
@@ -24,6 +25,8 @@ export interface HubClientOptions {
    * deliberately NOT gated — they target an already-running child.
    */
   readiness?: { waitUntilReady(): Promise<void>; isReady(): boolean };
+  /** Returns the current activity tracker snapshot for sending on registration. */
+  activitySnapshot?: () => { state: ActivityState; bytesInWindow: number; status?: AgentStatus; decidedBy?: ActivityDecidedBy };
   heartbeatMs?: number;
   backoffBaseMs?: number;
   backoffMaxMs?: number;
@@ -143,10 +146,9 @@ export class HubClient {
     }
   }
 
-  sendActivity(state: ActivityState, bytesInWindow: number, status?: AgentStatus): void {
-    // Dropped while disconnected by design: stale activity is worthless.
+  sendActivity(state: ActivityState, bytesInWindow: number, status?: AgentStatus, decidedBy?: ActivityDecidedBy): void {
     if (!this.registered) return;
-    this.safeSend({ type: 'activity', state, bytesInWindow, ts: Date.now(), status });
+    this.safeSend({ type: 'activity', state, bytesInWindow, ts: Date.now(), status, decidedBy });
   }
 
   /**
@@ -206,6 +208,12 @@ export class HubClient {
         // child is still booting.
         if (this.options.readiness?.isReady()) {
           this.sendReady();
+        }
+        {
+          const snap = this.options.activitySnapshot?.();
+          if (snap) {
+            this.sendActivity(snap.state, snap.bytesInWindow, snap.status, snap.decidedBy);
+          }
         }
         break;
       case 'inject_prompt':

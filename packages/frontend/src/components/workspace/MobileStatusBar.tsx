@@ -6,6 +6,8 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { formatActiveWindowLabel } from '../../lib/windowDisplay';
+import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
 import { FINISHED_TTL_MS } from '../../hooks/useAgentActivity';
 import type { Task } from '../../pages/workspace/types';
@@ -27,7 +29,7 @@ const BAR_HEIGHT = 26;
 interface MobileStatusBarProps {
   allTasks: Task[];
   openTask: (taskId: number, title: string, projectId?: number) => void;
-  connectPane: (serverName: string, target: string, projectId?: number) => void;
+  connectPane: ConnectPaneFn;
 }
 
 interface WorkingGroup {
@@ -101,7 +103,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
         key: groupKey,
         taskId: row.taskId,
         projectId: row.projectId,
-        title: task?.title || row.paneName || row.label || row.target,
+        title: task?.title || formatActiveWindowLabel(row),
         meta: task ? t(`common:status.${task.status}`) : undefined,
         isBlocked,
         row,
@@ -149,7 +151,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
   const handleFinishedRowOpen = (row: ActiveWindowRow) => {
     openActivityTarget(
       { taskId: row.taskId, serverName: row.serverName, target: row.target, projectId: row.projectId },
-      row.label || row.paneName || row.target,
+      formatActiveWindowLabel(row),
       openTask,
       connectPane,
     );
@@ -204,7 +206,7 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
               {finishedRows.map((row) => (
                 <button key={row.key} type="button" className="row-hover" onClick={() => handleFinishedRowOpen(row)} style={rowButtonStyle}>
                   <FinishedIndicator />
-                  <span style={rowTitleStyle}>{row.label || row.paneName || row.target}</span>
+                  <span style={rowTitleStyle}>{formatActiveWindowLabel(row)}</span>
                   {row.finishedAt != null && (
                     <span style={{ flexShrink: 0, fontSize: 'var(--font-2xs)', color: 'var(--success)' }}>
                       {formatRelativeTime(row.finishedAt)}

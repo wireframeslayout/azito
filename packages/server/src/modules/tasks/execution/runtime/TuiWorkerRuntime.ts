@@ -1,4 +1,5 @@
-import type { TmuxClient } from '../../../tmux/TmuxClient';
+import type { PaneHandle } from '@azito/shared';
+import type { IMuxClient } from '../../../tmux/IMuxClient';
 import type { WorkerInputService } from '../WorkerInputService';
 import type { WorkerWaiter } from '../WorkerWaiter';
 import type { HttpSignalTurnCoordinator } from '../HttpSignalTurnCoordinator';
@@ -40,11 +41,11 @@ function isTuiReady(output: string): boolean {
 
 export class TuiWorkerRuntime implements IWorkerRuntime {
   constructor(
-    private tmux: TmuxClient,
     private workerInput: WorkerInputService,
     private workerWaiter: WorkerWaiter,
     private httpSignalCoordinator: HttpSignalTurnCoordinator,
     private supervisorRegistry: Pick<SupervisorRegistry, 'issueLaunch'>,
+    private harnessPrefix?: string,
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
@@ -54,6 +55,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
           target: ctx.supervisorTarget,
           taskId: ctx.taskId,
           unitId: ctx.unitId,
+          harnessPrefix: this.harnessPrefix,
           // Issue #28 Phase C — issueLaunch() returns undefined only when no
           // DB-backed launch repository exists (see its doc comment); the
           // spread then omits both flags and wrapWithSupervisor falls back to
@@ -63,23 +65,24 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
             target: ctx.supervisorTarget,
             taskId: ctx.taskId ?? null,
             unitId: ctx.unitId ?? null,
+            windowId: ctx.windowId ?? null,
           }),
         })
       : ctx.effectiveLaunchCommand;
-    await this.tmux.sendKeys(ctx.server, ctx.target, [sendCommand, 'Enter']);
+    await ctx.driver.sendKeysToHandle(ctx.server, ctx.handle, [sendCommand, 'Enter']);
     const isClaudeWorker = isClaudeLaunchCommand(ctx.effectiveLaunchCommand);
-    await this.waitForTuiReady(ctx.server, ctx.target, isClaudeWorker);
+    await this.waitForTuiReady(ctx.driver, ctx.server, ctx.handle, isClaudeWorker);
     return sendCommand;
   }
 
-  private async waitForTuiReady(server: ServerConfig, target: string, strict: boolean): Promise<void> {
+  private async waitForTuiReady(driver: IMuxClient, server: ServerConfig, handle: PaneHandle, strict: boolean): Promise<void> {
     await sleep(3000);
 
     if (!strict) return;
 
     const deadline = Date.now() + 27000;
     while (Date.now() < deadline) {
-      const result = await this.tmux.capturePane(server, target, -50);
+      const result = await driver.captureScreen(server, handle, -50);
       if (isTuiReady(result.stdout)) return;
       await sleep(1000);
     }
@@ -90,7 +93,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   async sendPrompt(ctx: WorkerContext, prompt: string): Promise<void> {
     await this.workerInput.sendPrompt(
       ctx.server,
-      ctx.target,
+      ctx.handle,
       prompt,
       { taskId: ctx.taskId, unitId: ctx.unitId },
       ctx.supervisorTarget,
@@ -109,7 +112,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         capability: ctx.capability,
         nonce: ctx.nonce,
         server: ctx.server,
-        target: ctx.target,
+        target: ctx.handle,
         prompt: ctx.prompt,
         outputFilePath: ctx.outputFilePath,
       });
@@ -151,7 +154,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
         capability: FOLLOW_UP_CAPABILITY,
         nonce: ctx.nonce,
         server: ctx.server,
-        target: ctx.target,
+        target: ctx.handle,
         prompt: ctx.prompt,
         outputFilePath: ctx.outputFilePath,
       });

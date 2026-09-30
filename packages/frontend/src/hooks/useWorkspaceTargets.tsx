@@ -1,4 +1,5 @@
 import { createContext, useCallback, useContext, useState } from 'react';
+import { windowKey } from '@azito/shared';
 
 interface WorkspaceTargetsContextValue {
   onOpenInTerminal: ((serverName: string, target: string) => void) | null;
@@ -30,11 +31,7 @@ const defaultValue: WorkspaceTargetsContextValue = {
 
 const WorkspaceTargetsContext = createContext<WorkspaceTargetsContextValue>(defaultValue);
 
-function makeTargetKey(serverName: string, target: string): string {
-  return `${serverName}::${target}`;
-}
-
-export { makeTargetKey as activityKey };
+export { windowKey as activityKey };
 
 export function WorkspaceTargetsProvider({ children }: { children: React.ReactNode }) {
   const [onOpenInTerminal, setOnOpenInTerminal] = useState<((serverName: string, target: string) => void) | null>(null);

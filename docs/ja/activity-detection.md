@@ -56,13 +56,25 @@ supervisor は idle を報告します。
 `tui-supervisor` はエージェントの PTY を包んで起動し、ハブへ永続 WebSocket（`/ws/supervisor`）で
 接続します（10秒ハートビート、切断時は指数バックオフで無期限再接続）。
 
-### supervisor 内部の判定
+### supervisor 内部の 3 段判定器（S1 → S2 → S3）
 
-| 判定器 | 内容 |
-|---|---|
-| タイトル追跡 | PTY 出力中の OSC 0/2 タイトルを解析。**認識済みマーカー**（稼働 `⠀-⣿ ◐◑◒◓ ✻✶✽✢∗` / idle `✳ ` / `Action Required`）を**一度観測した後のみ**タイトル権威モードに移行。1チャンク内の全タイトルを累積判定（チャンク境界に非依存） |
-| バイト量追跡 | 3秒窓の出力バイト量で active/idle を判定。タイトル権威モード移行前（未認識タイトルのみの generic TUI 等）はこちらが有効なまま |
-| 送信 | 状態**遷移時**に activity フレームを送信＋active 中は15秒ごとに再送（keepalive）。子プロセス終了は `child_exit` として明示送信 |
+supervisor は画面規則・タイトル・バイト量の 3 段ラダーで判定する。上位の段が `unknown` 以外を
+返した時点で下位は参照されない。
+
+| 段 | 判定器 | 内容 |
+|---|---|---|
+| S1 screen | 画面規則 | `@xterm/headless` に PTY 出力を流し込み、プロンプト箱（`─` 罫線 2 本と `❯`）の上のブロックを `classifyScreen()` で規則評価。blocked > working > idle の優先順位で最初にマッチしたルールが勝つ。`skip`（transcript viewer 等）は直前の状態を維持 |
+| S2 title | タイトル追跡 | PTY 出力中の OSC 0/2 タイトルを解析。**認識済みマーカー**（稼働 `⠀-⣿ ◐◑◒◓ ✻✶✽✢∗` / idle `✳ ` / `Action Required`）を**一度観測した後のみ**タイトル権威モードに移行。1チャンク内の全タイトルを累積判定（チャンク境界に非依存）。tmux 配下の Claude Code ≥2.1.236 ではタイトルが `✳` 固定のため S1 に劣後する |
+| S3 bytes | バイト量追跡 | 3秒窓の出力バイト量で active/idle を判定。S1・S2 が `unknown` の場合のみ有効（タイトル権威モード移行前の generic TUI 等） |
+
+画面規則（`classifyScreen` / `classifyTitle` / `splitPromptBox`）は `@azito/shared`
+（`packages/shared/src/agentScreenRules.ts`）に集約され、server 側 Tier 2 と共用する。
+
+activity フレームには `decidedBy: 'screen' | 'title' | 'bytes'` が付与され、ハブ側の稼働検知
+診断に表示される。
+
+送信: 状態**遷移時**に activity フレームを送信＋active 中は15秒ごとに再送（keepalive）。
+子プロセス終了は `child_exit` として明示送信。
 
 ### ハブ側の扱い
 
@@ -84,6 +96,55 @@ hooks（`azito-activity` / `azito-interaction` / `azito-notify` / `azito-questio
 現在は `buildLoginShellCommand()`（`packages/tui-supervisor/src/PtyProxy.ts`）が、値が存在する
 場合のみコマンド文字列の先頭で両変数を再エクスポートします。プロファイル評価の後に実行される
 ため確実に復元されます。tmux 外での起動時は何も注入しません。
+
+### supervisor の資格情報解決（AZITO_PREFIX 対応）
+
+supervisor は `resolveHubEnv()`（`packages/tui-supervisor/src/env.ts`）で `AZITO_URL` /
+`AZITO_WEBHOOK_TOKEN` を解決します。解決順序は「プロセス環境変数 → env ファイル」です。
+
+ハブが `--prefix` モードで運用されている場合（`AZITO_HARNESS_PREFIX` が設定されている場合）、
+ハブは supervisor の起動コマンドに `AZITO_PREFIX=<prefix>` を env 変数として埋め込みます
+（`SupervisorLaunch.wrapWithSupervisor()`）。supervisor は `AZITO_PREFIX` に従って
+`~/.azito/azitoctl-<prefix>.env` を読み、ハブの `AZITO_WEBHOOK_TOKEN` を取得します。
+prefix 未設定時は従来どおり `~/.azito/azitoctl.env` を読みます。
+
+これは Tier 1（hook）の「宛先プロファイルの原子的解決」（下記§3）と同じ `AZITO_PREFIX` 規約に
+従います。`harness/setup.sh --prefix <name>` が書いた env ファイルを、hook と supervisor が
+同じ規約で選択します。
+
+### S3: バイト量ヒューリスティック（Combined mode）
+
+S1・S2 が `unknown` の場合にのみ有効。Claude Code ≥2.1.236 on tmux では S1（画面規則）が先に
+判定するため、通常はここに到達しない。S1 対応以前の supervisor や、タイトル・画面いずれも判定
+できない generic TUI のフォールバックとして残る。
+
+- バイト量ヒューリスティックで idle/active を判定する
+- エコー緩和: **当該 tick に新規出力がある**閾値超過が `ACTIVE_CONSECUTIVE_TICKS`（2）tick 連続
+  した場合のみ idle→active に遷移する（単発のキーストロークエコーでは遷移しない）
+- `working` / `blocked` タイトルが観測された瞬間に S2（title-authoritative mode）に昇格する
+- S3 で emit される active frame は `decidedBy: 'bytes'`、`status` なし
+
+### S1 の working → idle 確認
+
+S1（画面規則）で working → idle に遷移する際のみ、`IDLE_CONFIRMATIONS`（3）回の連続確認を行う
+（各 `IDLE_RECHECK_MS`（100ms）間隔、上限 `IDLE_HOLD_CAP_MS`（700ms））。Claude Code の
+スピナー行消去 → プロンプト箱描画の過渡状態で一瞬 idle に見える誤判定を防ぐ。idle → working /
+blocked は即時遷移する。
+
+| 定数 | 値 | 説明 |
+|------|---|------|
+| `ACTIVE_CONSECUTIVE_TICKS` | 2 | S3: idle→active 遷移に必要な連続閾値超過 tick 数 |
+| `DEBOUNCE_MS` | 120 | S1: 画面評価のデバウンス（個別チャンク） |
+| `MAX_DEBOUNCE_MS` | 300 | S1: 画面評価のデバウンス上限（初回ペンディングからの最大遅延） |
+| `IDLE_RECHECK_MS` | 100 | S1: working→idle 確認の間隔 |
+| `IDLE_CONFIRMATIONS` | 3 | S1: working→idle 確認の回数 |
+| `IDLE_HOLD_CAP_MS` | 700 | S1: working→idle 確認の上限時間 |
+
+### 登録時のスナップショット frame
+
+`HubClient` は `registered` メッセージ受信時に `ActivityTracker` の現在状態をスナップショット
+として activity frame を1枚送信する（`ready` 再送と同じ位置）。これにより、登録前に発生した
+状態遷移が失われても、接続直後にハブが最新状態を認識できる。再接続時も同様に発火する。
 
 ## 3. Tier 1 -- Claude Code hooks
 
@@ -118,6 +179,19 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 解決後、`AZITO_WEBHOOK_TOKEN` または `AZITO_SERVER_NAME` が空なら hook は何もせず exit 0 します。
 
 対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`。
+
+### ウィンドウ同定方式（段階4: muxPaneRef 優先）
+
+Tier 0（supervisor）と Tier 1（hook）が送ってくるシグナルをハブ側の `windows` テーブル行に紐付ける際、以下の優先順位で同定します:
+
+| 優先度 | 方式 | 内容 |
+|---|---|---|
+| 1 | `muxPaneRef`（tmux `%N`） | `PaneHandleResolver` がペイン ID を `IMuxClient.refFromPaneHandle()` → `windowRepo.findByServerAndRef()` で逆引き。結果は 30 秒（正）/ 5 秒（負）キャッシュされ、`sessions:updated` で無効化される |
+| 2 | 4 要素照合（フォールバック） | session 名 + windowSpec（名前 or 番号）+ paneIndex の組み合わせで `windows.findAll()` を走査する従来方式。`muxPaneRef` が無い場合、または逆引き失敗時に使用 |
+
+supervisor の `register` 受理時に `muxPaneRef` がある場合、ハブは即座にバックグラウンドで逆引きを発火しキャッシュを温めます（`PaneHandleResolver.warm()`）。これにより、hook シグナルが届く前でも診断パネルの supervisor 行は `muxPaneRef` ベースで照合されます。
+
+診断パネル（`GET /api/debug/activity`）の各行に `supervisorMatchedBy`（supervisor との照合方法）と `hook.matchedBy`（hook シグナルの照合方法）が追加されています。
 
 ## 4. Tier 2 -- ペイン分類（タイトル/画面）
 
@@ -226,6 +300,8 @@ housekeeping レコードで埋まることが常態です。固定 16KB の単�
    飲み込み防止）
 
 ## 7. 停止遷移の reason
+
+`agent:activity` 通知ペイロードには `windowId?: number`（`windows` テーブルの主キー、解決可能な場合のみ）が付きます。`supervisor:ready` にも同様に `windowId?: number` が含まれます。Push 通知のディープリンク URL にも `windowId=` パラメータが付与されます（旧パラメータ `server` / `target` も併記）。
 
 稼働→停止の遷移イベントには**停止理由**が付きます。UI の「完了」行は `completed` のみから
 生成されます（中断・削除・オフラインは完了扱いしない）。

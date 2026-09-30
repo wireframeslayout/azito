@@ -1,5 +1,6 @@
 import type { IServerRepository, ServerConfig } from './Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import type { IMuxClient } from '../tmux/IMuxClient';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 
@@ -252,7 +253,7 @@ export async function withServerLock<T>(
  * old "adopt whatever is current" behavior by passing `enforceSnapshot: false`.
  */
 export async function ensureSessionWithLock(
-  tmux: Pick<TmuxClient, 'listSessions' | 'createSession'>,
+  mux: Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'> | Pick<TmuxClient, 'listSessions' | 'createSession'>,
   lock: ServerIsolationLock,
   server: ServerConfig,
   sessionName: string,
@@ -260,10 +261,11 @@ export async function ensureSessionWithLock(
 ): Promise<{ created: boolean; server: ServerConfig }> {
   return lock.serverIsolationMutex.withLock(server.name, async () => {
     const freshServer = refetchServer(lock, server, enforceSnapshot);
-    const existingSessions = await tmux.listSessions(freshServer);
-    const exists = existingSessions.some((s) => s.name === sessionName);
+    const driver = mux as Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'>;
+    const workspaces = await driver.listWorkspaces(freshServer);
+    const exists = workspaces.some((ws) => ws.name === sessionName);
     if (!exists) {
-      await tmux.createSession(freshServer, sessionName, { extraEnv: isolationMaskForServer(freshServer) });
+      await driver.openWorkspace(freshServer, sessionName, { extraEnv: isolationMaskForServer(freshServer) });
       return { created: true, server: freshServer };
     }
     return { created: false, server: freshServer };

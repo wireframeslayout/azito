@@ -1,4 +1,5 @@
-import type { TmuxClient } from '../../tmux/TmuxClient';
+import type { PaneHandle } from '@azito/shared';
+import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ServerConfig } from '../../servers/Server';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { SupervisorCommandError } from '../../supervisors/SupervisorRegistry';
@@ -38,19 +39,20 @@ const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
  */
 export class WorkerInputService {
   constructor(
-    private tmux: TmuxClient,
+    private muxDriverRegistry: MuxDriverRegistry,
     private registry: SupervisorRegistry,
     private appendLog: AppendLogFn,
   ) {}
 
   async sendPrompt(
     server: ServerConfig,
-    target: string,
+    handle: PaneHandle,
     text: string,
     ctx?: WorkerInputContext,
     supervisorTarget?: string,
   ): Promise<void> {
-    const supervisorKey = supervisorTarget ?? target;
+    const driver = this.muxDriverRegistry.resolve(server);
+    const supervisorKey = supervisorTarget ?? handle;
     if (this.registry.isBoundConnected(server.name, supervisorKey)) {
       try {
         await this.registry.sendCommand(server.name, supervisorKey, { type: 'inject_prompt', text, submit: true });
@@ -62,7 +64,7 @@ export class WorkerInputService {
         }
         this.logFallback(ctx, (err as Error).message);
       }
-      const foreground = await this.tmux.getPaneCurrentCommand(server, target);
+      const foreground = await driver.paneCommandByHandle(server, handle);
       if (foreground !== null && SHELL_COMMANDS.has(foreground)) {
         if (ctx) {
           this.appendLog(ctx.taskId, ctx.unitId, 'command', {
@@ -73,17 +75,18 @@ export class WorkerInputService {
         return;
       }
     }
-    await this.tmux.sendKeys(server, target, [text, 'Enter']);
+    await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
   }
 
   async sendKeys(
     server: ServerConfig,
-    target: string,
+    handle: PaneHandle,
     keys: string[],
     ctx?: WorkerInputContext,
     supervisorTarget?: string,
   ): Promise<void> {
-    const supervisorKey = supervisorTarget ?? target;
+    const driver = this.muxDriverRegistry.resolve(server);
+    const supervisorKey = supervisorTarget ?? handle;
     if (this.registry.isBoundConnected(server.name, supervisorKey)) {
       try {
         await this.registry.sendCommand(server.name, supervisorKey, { type: 'send_keys', keys });
@@ -96,7 +99,7 @@ export class WorkerInputService {
         this.logFallback(ctx, (err as Error).message);
       }
     }
-    await this.tmux.sendKeys(server, target, keys);
+    await driver.sendKeysToHandle(server, handle, keys);
   }
 
   private isAckTimeout(err: unknown): err is SupervisorCommandError {

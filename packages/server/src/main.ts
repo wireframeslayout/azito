@@ -171,7 +171,7 @@ async function main(): Promise<void> {
     wiring.projectRepo,
     wiring.projectServerRepo,
     wiring.logRepo,
-    wiring.tmuxClient,
+    wiring.muxDriverRegistry,
     wiring.executeTaskUseCase,
     wiring.agentTurnRepo,
     app.log,

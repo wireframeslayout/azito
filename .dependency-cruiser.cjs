@@ -60,8 +60,9 @@ module.exports = {
         '基盤層 modules/tmux は modules/servers 以外への依存を原則禁止（servers との関係は tmux⇄servers ' +
         'ペアとして双方向を許可 = 下記 pathNot に列挙した servers 全体）。' +
         '個別の例外: tmux/routes/hooks.ts が notifications/NotificationBus（フック通知のイベント発火）を、' +
-        'tmux/routes/sessions.ts が windows/SqliteWindowRepository（セッション一覧とウィンドウ情報の突合）を' +
-        '参照している。これは tmux/routes 配下の HTTP インターフェース層としての実装であり、この2箇所に限定する。',
+        'tmux/routes/sessions.ts が windows/SqliteWindowRepository（セッション一覧とウィンドウ情報の突合）と' +
+        'windows/windowPaneOps（ref ルートの共通操作関数、段階5-A）を' +
+        '参照している。これは tmux/routes 配下の HTTP インターフェース層としての実装であり、この箇所に限定する。',
       from: { path: '^packages/server/src/modules/tmux' },
       to: {
         path: '^packages/server/src/modules',
@@ -70,6 +71,7 @@ module.exports = {
           '^packages/server/src/modules/servers',
           '^packages/server/src/modules/notifications/NotificationBus\\.ts$',
           '^packages/server/src/modules/windows/SqliteWindowRepository\\.ts$',
+          '^packages/server/src/modules/windows/windowPaneOps\\.ts$',
         ],
       },
     },
@@ -257,6 +259,27 @@ module.exports = {
           '^packages/server/src/modules/prompt/PromptModuleLoader\\.ts$',
         ],
       },
+    },
+
+    // --- TmuxClient import 制限 (#408) ---
+    {
+      name: 'no-tmuxclient-outside-tmux',
+      severity: 'error',
+      comment:
+        'TmuxClient の import は modules/tmux/**, app/wiring.ts, cli/** に限定する。' +
+        '暫定 allow-list に列挙されたファイルは後続 Issue で順次 IMuxClient/TransportFactory に移行して削減する。',
+      from: {
+        path: '^packages/server/src/modules',
+        pathNot: [
+          '^packages/server/src/modules/tmux',
+          // --- 暫定 allow-list（type import のみ残存） ---
+          '^packages/server/src/modules/servers/routes\\.ts$',
+          '^packages/server/src/modules/servers/ServerIsolationLock\\.ts$',
+          '^packages/server/src/modules/windows/routes\\.ts$',
+          '^packages/server/src/modules/projects/routes\\.ts$',
+        ],
+      },
+      to: { path: '^packages/server/src/modules/tmux/TmuxClient\\.ts$' },
     },
   ],
 

@@ -10,6 +10,7 @@ function makeWatch(overrides: Partial<AgentWatchRecord> = {}): AgentWatchRecord 
     serverName: 'local',
     target: 'session:0',
     label: null,
+    windowId: null,
     createdAt: '2026-01-01T00:00:00.000Z',
     ...overrides,
   };
@@ -37,7 +38,7 @@ describe('notifyAgentWatchesOnIdle', () => {
     await notifyAgentWatchesOnIdle(
       { serverName: 'local', target: 'session:0', running: false },
       {
-        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), deleteById },
+        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), findByWindowId: vi.fn().mockReturnValue([]), deleteById },
         pushSubRepo: { findByEndpoint: vi.fn().mockReturnValue(sub) },
         pushService: { sendToAll },
       },
@@ -60,7 +61,7 @@ describe('notifyAgentWatchesOnIdle', () => {
     await notifyAgentWatchesOnIdle(
       { serverName: 'local', target: 'session:0', running: true },
       {
-        agentWatchRepo: { findByKey, deleteById: vi.fn() },
+        agentWatchRepo: { findByKey, findByWindowId: vi.fn().mockReturnValue([]), deleteById: vi.fn() },
         pushSubRepo: { findByEndpoint: vi.fn() },
         pushService: { sendToAll },
       },
@@ -76,7 +77,7 @@ describe('notifyAgentWatchesOnIdle', () => {
     await notifyAgentWatchesOnIdle(
       { serverName: 'local', target: 'session:0', running: false },
       {
-        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([]), deleteById: vi.fn() },
+        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([]), findByWindowId: vi.fn().mockReturnValue([]), deleteById: vi.fn() },
         pushSubRepo: { findByEndpoint: vi.fn() },
         pushService: { sendToAll },
       },
@@ -94,7 +95,7 @@ describe('notifyAgentWatchesOnIdle', () => {
     await notifyAgentWatchesOnIdle(
       { serverName: 'local', target: 'session:0', running: false },
       {
-        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), deleteById },
+        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), findByWindowId: vi.fn().mockReturnValue([]), deleteById },
         pushSubRepo: { findByEndpoint: vi.fn().mockReturnValue(sub) },
         pushService: { sendToAll },
       },
@@ -111,7 +112,7 @@ describe('notifyAgentWatchesOnIdle', () => {
     await notifyAgentWatchesOnIdle(
       { serverName: 'local', target: 'session:0', running: false },
       {
-        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), deleteById },
+        agentWatchRepo: { findByKey: vi.fn().mockReturnValue([watch]), findByWindowId: vi.fn().mockReturnValue([]), deleteById },
         pushSubRepo: { findByEndpoint: vi.fn().mockReturnValue(null) },
         pushService: { sendToAll },
       },

@@ -4,7 +4,6 @@ import type { IProjectRepository } from '../projects/Project';
 import type { IStorageSettingsRepository } from './SqliteStorageSettingsRepository';
 import type { MinioStorageClient } from './storage/MinioStorageClient';
 import type { IServerRepository } from '../servers/Server';
-import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
@@ -198,15 +197,14 @@ const storageRoutes: FastifyPluginCallback<StorageRouteOptions> = (fastify, opts
 
 export interface FileBrowseRouteOptions {
   serverRepo: IServerRepository;
-  tmux: TmuxClient;
   projectServerRepo: IProjectServerRepository;
   transportFactory: TransportFactory;
   searchService: FileSearchService;
 }
 
 export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, projectServerRepo, transportFactory, searchService } = opts;
-  const fileBrowseService = new FileBrowseService(tmux);
+  const { serverRepo, projectServerRepo, transportFactory, searchService } = opts;
+  const fileBrowseService = new FileBrowseService(transportFactory);
   const resolverFactory = new PathResolverFactory();
 
   // ── GET /api/servers/:name/directories ──

@@ -1,4 +1,5 @@
 import type { EventEmitter } from 'events';
+import type { PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 
 export interface IPaneStream extends EventEmitter {
@@ -11,5 +12,5 @@ export interface IPaneStream extends EventEmitter {
 }
 
 export interface IPaneStreamFactory {
-  create(paneId: string, server: Pick<ServerConfig, 'type' | 'host' | 'agentPort' | 'agentToken'>): IPaneStream;
+  create(handle: PaneHandle | string, server: Pick<ServerConfig, 'type' | 'host' | 'agentPort' | 'agentToken'>): IPaneStream;
 }

@@ -37,7 +37,8 @@ import type { Task, Unit, Window, Session, Project, ExecutionApprovalData } from
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { useClickOutside } from '../../hooks/useClickOutside';
-import { isSameWindowTarget } from '../../utils/tmuxTarget';
+import { isSameWindowTarget } from '@azito/shared';
+import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';
@@ -891,9 +892,22 @@ export default function TaskPanel({
       const finishedAt = status === 'finished' && w
         ? findFinished(w.serverName, w.tmuxTarget)?.finishedAt
         : undefined;
+      const extra = w ? resolveWindowContextExtra(w, sessionData) : undefined;
+      const displayLabel = w
+        ? formatWindowDisplayLabel(resolveWindowDisplay({
+            windowId: w.id,
+            paneTitle: extra?.paneTitle,
+            paneCommand: extra?.paneCommand,
+            label: w.label,
+            taskTitle: task?.title,
+            workerType: w.workerType,
+            windowType: w.windowType,
+            tmuxTarget: w.tmuxTarget,
+          }))
+        : win.target;
       return {
         key: tabId,
-        label: w?.label || win.target,
+        label: displayLabel,
         prefix: <span style={{ display: 'inline-flex', opacity: 0.75 }}><Icon name="terminal" size={14} /></span>,
         extra: isRespawning
           ? <Spinner size={10} />
@@ -915,7 +929,7 @@ export default function TaskPanel({
       };
     }
     return { key: tabId, label: tabId, closable: true };
-  }, [windows, windowActions.respawningWindowIds, windowIndicator, findFinished, browserTabIds]);
+  }, [windows, windowActions.respawningWindowIds, windowIndicator, findFinished, sessionData, task, browserTabIds]);
 
   const handlePaneSelectTab = useCallback((paneId: string, tabId: string) => {
     layout.setActive(paneId, tabId);
@@ -1063,10 +1077,20 @@ export default function TaskPanel({
   const renderWindowDropdownTrigger = useCallback((pane: PaneNode) => {
     if (windows.length === 0) return null;
     const isOpen = windowDropdownPaneId === pane.id;
-    const label = focusedWindowTarget
-      ? (windows.find((w) => w.serverName === focusedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, focusedWindowTarget.target))?.label
-        || focusedWindowTarget.target)
-      : '';
+    const label = (() => {
+      if (!focusedWindowTarget) return '';
+      const w = windows.find((x) => x.serverName === focusedWindowTarget.serverName && isSameWindowTarget(x.tmuxTarget, focusedWindowTarget.target));
+      if (!w) return focusedWindowTarget.target;
+      const sessions = sessionData[w.serverName];
+      const tw = sessions ? resolveTmuxWindow(sessions, w.tmuxTarget) : null;
+      const pane0 = tw?.panes[0];
+      const display = resolveWindowDisplay({
+        windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
+        label: w.label, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
+        workerType: w.workerType, windowType: w.windowType,
+      });
+      return formatWindowDisplayLabel(display);
+    })();
     return (
       <span style={{ position: 'relative' }}>
         <span
@@ -1098,7 +1122,7 @@ export default function TaskPanel({
         {isOpen && renderWindowDropdownBody(pane)}
       </span>
     );
-  }, [windows, windowDropdownPaneId, focusedWindowTarget, renderWindowDropdownBody, t]);
+  }, [windows, windowDropdownPaneId, focusedWindowTarget, renderWindowDropdownBody, sessionData, task, t]);
 
   // SP コンテンツヘッダー（承認済み S8: 「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nペイン」）
   // — 旧実装は名前+件数+▾を1トリガーへ結合していたが、S8 は左（ウィンドウ名タップ＝ウィンドウ
@@ -1108,10 +1132,20 @@ export default function TaskPanel({
   const renderSpWindowNameTrigger = useCallback((pane: PaneNode) => {
     if (windows.length === 0) return null;
     const isOpen = windowDropdownPaneId === pane.id;
-    const label = focusedWindowTarget
-      ? (windows.find((w) => w.serverName === focusedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, focusedWindowTarget.target))?.label
-        || focusedWindowTarget.target)
-      : '';
+    const label = (() => {
+      if (!focusedWindowTarget) return '';
+      const w = windows.find((x) => x.serverName === focusedWindowTarget.serverName && isSameWindowTarget(x.tmuxTarget, focusedWindowTarget.target));
+      if (!w) return focusedWindowTarget.target;
+      const sessions = sessionData[w.serverName];
+      const tw = sessions ? resolveTmuxWindow(sessions, w.tmuxTarget) : null;
+      const pane0 = tw?.panes[0];
+      const display = resolveWindowDisplay({
+        windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
+        label: w.label, taskTitle: task?.title, tmuxTarget: w.tmuxTarget,
+        workerType: w.workerType, windowType: w.windowType,
+      });
+      return formatWindowDisplayLabel(display);
+    })();
     const hasMultiple = windows.length > 1;
     return (
       <span
@@ -1135,7 +1169,7 @@ export default function TaskPanel({
         {hasMultiple && <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="chevron-down" size={14} rotate={isOpen ? 180 : 0} /></span>}
       </span>
     );
-  }, [windows, windowDropdownPaneId, focusedWindowTarget, t]);
+  }, [windows, windowDropdownPaneId, focusedWindowTarget, sessionData, task, t]);
 
   const renderSpPaneCountChip = useCallback((pane: PaneNode) => {
     if (windows.length === 0) return null;
