@@ -1,3 +1,4 @@
+import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import Modal from '../Modal';
 import FormField from '../FormField';
@@ -33,6 +34,9 @@ export default function QuickAddWindowModal({
   workerType,
 }: QuickAddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
+  const [modelInvalid, setModelInvalid] = useState(false);
+  const handleModelValidityChange = useCallback((valid: boolean) => setModelInvalid(!valid), []);
+
   return (
     <Modal
       title={t('windows.quickAddTitle', { label: agentLabel, serverName })}
@@ -40,7 +44,7 @@ export default function QuickAddWindowModal({
       onClose={onClose}
       maxWidth={400}
       actions={
-        <Button variant="primary" onClick={onSubmit} loading={loading} loadingLabel={t('addWindow.adding')}>
+        <Button variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid} loadingLabel={t('addWindow.adding')}>
           {t('addWindow.createAndAdd')}
         </Button>
       }
@@ -60,8 +64,9 @@ export default function QuickAddWindowModal({
             models={workerModels}
             value={agentModel}
             onChange={onAgentModelChange}
+            onValidityChange={handleModelValidityChange}
             placeholder={t('common:labels.default')}
-            note={workerType === 'codex' ? 'gpt-6 系は Codex CLI 0.159 以降が必要です' : undefined}
+            note={workerType === 'codex' ? t('common:modelSelect.codexVersionNote') : undefined}
           />
         </FormField>
       )}

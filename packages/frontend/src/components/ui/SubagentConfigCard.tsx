@@ -28,9 +28,10 @@ interface SubagentConfigCardProps {
   value: SubagentConfig | null;
   onChange: (next: SubagentConfig | null) => void;
   workerType?: string;
+  onModelValidityChange?: (valid: boolean) => void;
 }
 
-export default function SubagentConfigCard({ title, description, value, onChange, workerType }: SubagentConfigCardProps) {
+export default function SubagentConfigCard({ title, description, value, onChange, workerType, onModelValidityChange }: SubagentConfigCardProps) {
   const { t } = useTranslation('common');
   const [agents, setAgents] = useState<AgentDefinition[]>([]);
 
@@ -84,8 +85,9 @@ export default function SubagentConfigCard({ title, description, value, onChange
               models={models}
               value={value?.model ?? ''}
               onChange={handleModelChange}
+              onValidityChange={onModelValidityChange}
               placeholder={t('subagentConfig.selectModel')}
-              note={value?.provider === 'codex' ? 'gpt-6 系は Codex CLI 0.159 以降が必要です' : undefined}
+              note={value?.provider === 'codex' ? t('modelSelect.codexVersionNote') : undefined}
             />
           </FormField>
         </div>

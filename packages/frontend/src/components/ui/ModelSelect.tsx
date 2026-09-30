@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { isValidModelId } from '@azito/shared';
 import { FormSelect, FormInput } from './FormInput';
@@ -9,37 +9,39 @@ interface ModelSelectProps {
   models: { id: string; label: string }[];
   value: string;
   onChange: (id: string) => void;
+  onValidityChange?: (valid: boolean) => void;
   placeholder?: string;
   note?: string;
   disabled?: boolean;
 }
 
-export function ModelSelect({ models, value, onChange, placeholder, note, disabled }: ModelSelectProps) {
+export function ModelSelect({ models, value, onChange, onValidityChange, placeholder, note, disabled }: ModelSelectProps) {
   const { t } = useTranslation('common');
-  const isCustom = value !== '' && !models.some((m) => m.id === value);
-  const [customMode, setCustomMode] = useState(isCustom);
-  const [localCustom, setLocalCustom] = useState(isCustom ? value : '');
-  const prevValueRef = useRef(value);
+  const [customMode, setCustomMode] = useState(false);
+  const [localCustom, setLocalCustom] = useState('');
 
-  useEffect(() => {
-    if (value === prevValueRef.current) return;
-    prevValueRef.current = value;
-    if (value !== '' && !models.some((m) => m.id === value)) {
-      setCustomMode(true);
-      setLocalCustom(value);
-    }
-  }, [value, models]);
-
-  const showCustomInput = customMode || isCustom;
+  const isInList = models.some((m) => m.id === value);
+  const showCustomInput = customMode || (value !== '' && models.length > 0 && !isInList);
   const selectValue = showCustomInput ? CUSTOM_SENTINEL : value;
-  const validationError = localCustom !== '' && !isValidModelId(localCustom);
+
+  const effectiveCustom = showCustomInput && !customMode && value !== '' ? value : localCustom;
+  const validationError = effectiveCustom !== '' && !isValidModelId(effectiveCustom);
+
+  const isValid = !showCustomInput || (effectiveCustom !== '' && isValidModelId(effectiveCustom));
+  React.useEffect(() => {
+    onValidityChange?.(isValid);
+  }, [isValid, onValidityChange]);
+
+  if (customMode && isInList) {
+    setCustomMode(false);
+    setLocalCustom('');
+  }
 
   const handleSelectChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const v = e.target.value;
     if (v === CUSTOM_SENTINEL) {
       setCustomMode(true);
       setLocalCustom('');
-      onChange('');
     } else {
       setCustomMode(false);
       setLocalCustom('');
@@ -52,8 +54,6 @@ export function ModelSelect({ models, value, onChange, placeholder, note, disabl
     setLocalCustom(v);
     if (v && isValidModelId(v)) {
       onChange(v);
-    } else if (value !== '') {
-      onChange('');
     }
   };
 
@@ -74,7 +74,7 @@ export function ModelSelect({ models, value, onChange, placeholder, note, disabl
       {showCustomInput && (
         <div style={{ marginTop: 8 }}>
           <FormInput
-            value={localCustom}
+            value={effectiveCustom}
             onChange={handleCustomChange}
             placeholder="e.g. claude-opus-5-5[1m]"
             disabled={disabled}

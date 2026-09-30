@@ -75,6 +75,12 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
   const [workerExecutionMode, setWorkerExecutionMode] = useState('tmux-pipe');
   const [workerRuntime, setWorkerRuntime] = useState('tui');
   const [sleepAfterPush, setSleepAfterPush] = useState(false);
+  const [modelInvalid, setModelInvalid] = useState(false);
+  const [reviewModelInvalid, setReviewModelInvalid] = useState(false);
+  const [implementModelInvalid, setImplementModelInvalid] = useState(false);
+  const handleModelValidityChange = useCallback((valid: boolean) => setModelInvalid(!valid), []);
+  const handleReviewModelValidityChange = useCallback((valid: boolean) => setReviewModelInvalid(!valid), []);
+  const handleImplementModelValidityChange = useCallback((valid: boolean) => setImplementModelInvalid(!valid), []);
   const [workerTypes, setWorkerTypes] = useState<string[]>([]);
   const [modelOptions, setModelOptions] = useState<{ id: string; label: string }[]>([]);
 
@@ -219,6 +225,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
       onCancel={onCancel}
       loading={saving}
       loadingLabel={t('common:actions.saving')}
+      disabled={modelInvalid || reviewModelInvalid || implementModelInvalid}
       error={error}
       backLabel={backLabel}
       onBack={onBack}
@@ -248,8 +255,9 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
           models={modelOptions}
           value={workerModel}
           onChange={setWorkerModel}
+          onValidityChange={handleModelValidityChange}
           placeholder={modelOptions.length === 0 ? t('runtime.freeInput') : undefined}
-          note={workerType === 'codex' ? 'gpt-6 系は Codex CLI 0.159 以降が必要です' : undefined}
+          note={workerType === 'codex' ? t('common:modelSelect.codexVersionNote') : undefined}
         />
       </FormField>
       {agentDefsError && (
@@ -327,6 +335,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
         value={reviewSubagent}
         onChange={setReviewSubagent}
         workerType={workerType || undefined}
+        onModelValidityChange={handleReviewModelValidityChange}
       />
       <SubagentConfigCard
         title={t('subagents.implementTitle')}
@@ -334,6 +343,7 @@ export default function UnitFormView({ mode, unitId, onSaved, onCancel, backLabe
         value={implementSubagent}
         onChange={setImplementSubagent}
         workerType={workerType || undefined}
+        onModelValidityChange={handleImplementModelValidityChange}
       />
 
       <div style={{ margin: '16px 0', display: 'flex', alignItems: 'center', gap: 8 }}>
