@@ -4,6 +4,9 @@ import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
+vi.mock('../../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () => ({ action: 'already_set' })) }));
+import { ensureGitIdentity } from '../../git/ensureGitIdentity';
+
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
 // resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
 // the no-credential path deterministically, instead of depending on whoever
@@ -4244,5 +4247,61 @@ describe('ExecuteTaskUseCase.isPushCompleted uses the task-recorded distribution
     await harness.useCase.isPushCompleted(1);
 
     expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoAWithToken, 'task/1-slug');
+  });
+});
+
+describe('ExecuteTaskUseCase git identity fallback (#425)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function setupIdentityTest(mockBehavior: () => void) {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70, workingDirectory: '/some/work/dir' });
+    const harness = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    harness.worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/some/work/dir/.worktrees/task-70', branch: 'task/70' })),
+    });
+    mockBehavior();
+    return harness;
+  }
+
+  it('logs git_identity_missing when hub identity is unavailable and continues execution', async () => {
+    const { useCase, logRepo } = setupIdentityTest(() => {
+      vi.mocked(ensureGitIdentity).mockResolvedValueOnce({ action: 'hub_missing' });
+    });
+
+    await useCase.execute(70, 70);
+
+    expect(logRepo.append).toHaveBeenCalledWith(70, 70, 'command', { type: 'git_identity_missing' });
+  });
+
+  it('logs git_identity_failed with message and continues execution when ensureGitIdentity throws', async () => {
+    const { useCase, logRepo } = setupIdentityTest(() => {
+      vi.mocked(ensureGitIdentity).mockRejectedValueOnce(new Error('git config write failed'));
+    });
+
+    await useCase.execute(70, 70);
+
+    expect(logRepo.append).toHaveBeenCalledWith(70, 70, 'command', { type: 'git_identity_failed', message: 'git config write failed' });
+  });
+
+  it('logs git_identity_applied with only the fields that were actually set', async () => {
+    const { useCase, logRepo } = setupIdentityTest(() => {
+      vi.mocked(ensureGitIdentity).mockResolvedValueOnce({
+        action: 'applied',
+        fields: [{ key: 'user.email', value: 'hub@example.com' }],
+      });
+    });
+
+    await useCase.execute(70, 70);
+
+    expect(logRepo.append).toHaveBeenCalledWith(70, 70, 'command', {
+      type: 'git_identity_applied',
+      fields: [{ key: 'user.email', value: 'hub@example.com' }],
+    });
   });
 });

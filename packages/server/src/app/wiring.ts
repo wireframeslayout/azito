@@ -89,6 +89,7 @@ import { WindowActivityStatusService } from '../modules/windows/WindowActivitySt
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
+import type { GitIdentity } from '../modules/git/ensureGitIdentity';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
 import { UsageService } from '../modules/usage/UsageService';
 import { UpdateChannelResolver } from '../modules/system/UpdateChannelResolver';
@@ -357,7 +358,7 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
 // execute()/restore() may clear `task.distributionRepositoryId`, so
 // `buildExecuteTaskUseCase`/`buildApplicationServices` (TaskRestoreService)
 // must be able to read from it too.
-function readHubGitIdentity(): { name: string; email: string } | null {
+function readHubGitIdentity(): GitIdentity | null {
   try {
     const name = execFileSync('git', ['config', '--global', 'user.name'], { encoding: 'utf-8' }).trim();
     const email = execFileSync('git', ['config', '--global', 'user.email'], { encoding: 'utf-8' }).trim();
@@ -368,18 +369,17 @@ function readHubGitIdentity(): { name: string; email: string } | null {
   }
 }
 
-function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository): FetchDistributionService {
+function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null): FetchDistributionService {
   const sftpService = new SftpService(infra.sshClient);
   const hubRepoCache = new HubRepoCache(dataPaths.dir);
   const remoteBundleOps = new RemoteBundleOps();
-  const hubGitIdentity = readHubGitIdentity();
   // sshClient passed to normalize the outer lock key's host identity (Issue
   // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
   // `sshHostResolver` constructor doc comment.
   return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, harnessPrefix?: string): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix?: string): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -412,6 +412,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     scopedAuthEnabled,
     fetchDistributionService,
     distributionStateRepo,
+    hubGitIdentity,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -437,6 +438,7 @@ function buildExecuteTaskUseCase(
   fetchDistributionService: FetchDistributionService,
   distributionStateRepo: SqliteDistributionStateRepository,
   dataPaths: DataPaths,
+  hubGitIdentity: GitIdentity | null,
   harnessPrefix?: string,
 ): ExecuteTaskUseCase {
 
@@ -479,6 +481,7 @@ function buildExecuteTaskUseCase(
     distributionStateRepo,
     infra.muxDriverRegistry,
     harnessPrefix,
+    hubGitIdentity,
   );
 }
 
@@ -580,10 +583,11 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // instance, not two separately-constructed repositories over the same
   // table.
   const distributionStateRepo = new SqliteDistributionStateRepository(db);
-  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo);
-  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, harnessPrefix);
+  const hubGitIdentity = readHubGitIdentity();
+  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo, hubGitIdentity);
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, hubGitIdentity, harnessPrefix);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, harnessPrefix);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, hubGitIdentity, harnessPrefix);
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);

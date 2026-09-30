@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { shellQuote } from '../../../shared/shellQuote';
+import { setRemoteGitConfigValue } from '../gitConfigOps';
 import { assertSafeBranch } from '../assertSafeGitArgs';
 import { execGitOrThrow, execWithSentinel, RemoteGitCommandError } from '../execWithSentinel';
 import { DUMMY_ORIGIN_URL } from './types';
@@ -470,12 +471,7 @@ export class RemoteBundleOps {
   // ── #124 Bug 5: git identity on distributed working directories ──
 
   async setGitIdentity(transport: IServerTransport, workingDir: string, identity: { name: string; email: string }): Promise<void> {
-    await execGitOrThrow(
-      transport,
-      `git -C ${shellQuote(workingDir)} config user.name ${shellQuote(identity.name)} && ` +
-      `git -C ${shellQuote(workingDir)} config user.email ${shellQuote(identity.email)} 2>&1`,
-      10_000,
-      'git config user identity failed',
-    );
+    await setRemoteGitConfigValue(transport, workingDir, 'user.name', identity.name);
+    await setRemoteGitConfigValue(transport, workingDir, 'user.email', identity.email);
   }
 }

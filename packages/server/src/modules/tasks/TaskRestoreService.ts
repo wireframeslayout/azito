@@ -20,6 +20,7 @@ import { resolveTaskServerName, resolveMuxWorkspace, resolveBaseBranch, resolveA
 import { performDistribution, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './execution/DistributionHelper';
 import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
+import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
 import { shellQuote } from '../../shared/shellQuote';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
@@ -101,6 +102,7 @@ export interface TaskRestoreDeps {
   // site below and ExecuteTaskUseCase's matching field for the full
   // rationale.
   distributionStateRepo: IDistributionStateRepository | null;
+  hubGitIdentity: GitIdentity | null;
 }
 
 export class TaskRestoreService {
@@ -117,7 +119,7 @@ export class TaskRestoreService {
   }
 
   async restore(task: Task, log: { warn: (msg: string) => void }): Promise<{ tmuxTarget: string; worktreePath: string | null }> {
-    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo } = this.deps;
+    const { taskRepo, serverRepo, projectRepo, projectServerRepo, unitRepo, windowRepo, worktreeServiceFactory, transportFactory, contentExtractor, logRepo, unitTypeLoader, sidekickLoader, projectSecretRepo, events, paneEnvService, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, hubGitIdentity } = this.deps;
 
     const serverName = resolveTaskServerName(task, projectServerRepo);
     if (!serverName) {
@@ -606,15 +608,24 @@ export class TaskRestoreService {
         effectiveDir = wt.path;
 
         if (allowedRoot) {
-          // Same containment check ExecuteTaskUseCase applies to a freshly
-          // created worktree path; the outer try/catch below already rolls
-          // back the worktree (worktreePath + repoDir are set) and tmux
-          // window on any throw, so rejection here needs no separate cleanup.
           const resolvedWtPath = await assertDirectoryContained(
             this.pathResolverFactory, server.type, transport, { target: worktreePath, allowedRoot }, 'worktree path',
           );
           worktreePath = resolvedWtPath;
           effectiveDir = resolvedWtPath;
+        }
+
+        try {
+          const identityResult = await ensureGitIdentity(server.type, transport, worktreePath, hubGitIdentity);
+          if (unitId !== null && identityResult.action === 'applied') {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
+          } else if (unitId !== null && identityResult.action === 'hub_missing') {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_missing' });
+          }
+        } catch (err) {
+          if (unitId !== null) {
+            appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_failed', message: err instanceof Error ? err.message : String(err) });
+          }
         }
 
         try {
