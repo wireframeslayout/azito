@@ -7,6 +7,7 @@ function mockRemoteBundleOps(overrides: Partial<Record<string, any>> = {}) {
     getHeadBranch: vi.fn(async () => null),
     createFromWorktree: vi.fn(async () => '/tmp/azito-push-test.bundle'),
     cleanup: vi.fn(async () => {}),
+    getAheadCount: vi.fn(async () => null),
     ...overrides,
   } as any;
 }
@@ -67,6 +68,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer({ sshHost: null }) as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('sshHost');
@@ -80,6 +82,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: '',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('push credential');
@@ -100,6 +103,7 @@ describe('PushNotaryService', () => {
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main',
       repo: makeRepo({ token: null }), token: 'gh-cli-token',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('notarized');
     expect(cleanPusher.push).toHaveBeenCalledWith(expect.any(String), expect.anything(), 'gh-cli-token', 'feat', expect.anything());
@@ -112,6 +116,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('already_up_to_date');
     expect(result.sha).toBe(sha);
@@ -129,6 +134,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('notarized');
     expect(result.sha).toBe(sha);
@@ -149,6 +155,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('remote verification timed out');
@@ -165,6 +172,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: null, repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('notarized');
     expect(gitProvider.getBranchHeadSha).toHaveBeenCalledTimes(3);
@@ -185,6 +193,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('notarized');
     expect(remoteBundleOps.createFromWorktree).toHaveBeenCalledTimes(2);
@@ -201,6 +210,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('Authentication failed');
@@ -217,6 +227,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('already_up_to_date');
     expect(result.sha).toBe(sha);
@@ -233,6 +244,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('empty bundle');
@@ -248,6 +260,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('Permission denied');
@@ -259,7 +272,8 @@ describe('PushNotaryService', () => {
       getHeadBranch: vi.fn(async () => 'fix/xxx'),
     });
     const gitProvider = { getBranchHeadSha: vi.fn()
-      .mockResolvedValueOnce(null)   // pre-push check on effective branch 'fix/xxx'
+      .mockResolvedValueOnce(null)   // security: existing-remote-branch check on 'fix/xxx'
+      .mockResolvedValueOnce(null)   // pre-push already_up_to_date check on 'fix/xxx'
       .mockResolvedValueOnce(sha),   // verification on 'fix/xxx'
     } as any;
     const cleanPusher = mockCleanPusher(sha);
@@ -267,6 +281,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'task/123-xxx', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('notarized');
     expect(result.actualBranch).toBe('fix/xxx');
@@ -289,6 +304,7 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'task/123-xxx', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('notarized');
     expect(result.actualBranch).toBeUndefined();
@@ -300,8 +316,70 @@ describe('PushNotaryService', () => {
     const result = await service.notarize({
       taskId: 1, unitId: 1, server: makeServer() as any,
       transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
     });
     expect(result.status).toBe('failed');
     expect(result.error).toContain('HEAD SHA');
+  });
+
+  it('rejects push when effective branch matches a protected branch (#423 review)', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      getHeadBranch: vi.fn(async () => 'main'),
+    });
+    const gitProvider = mockGitProvider(null);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'task/1-slug', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: 'main',
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('push_branch_rejected');
+    expect(result.error).toContain('protected branch');
+    expect(result.actualBranch).toBe('main');
+  });
+
+  it('rejects push when effective branch already exists on remote (#423 review)', async () => {
+    const existingSha = 'c'.repeat(40);
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      getHeadBranch: vi.fn(async () => 'feat/existing'),
+    });
+    const gitProvider = {
+      getBranchHeadSha: vi.fn(async (_repo: unknown, branch: string) =>
+        branch === 'feat/existing' ? existingSha : null,
+      ),
+    } as any;
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'task/1-slug', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('push_branch_rejected');
+    expect(result.error).toContain('already exists on remote');
+    expect(result.actualBranch).toBe('feat/existing');
+  });
+
+  it('includes aheadCount in empty bundle diagnostic (#423 review)', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      getHeadSha: vi.fn(async () => sha),
+      getHeadBranch: vi.fn(async () => null),
+      createFromWorktree: vi.fn(async () => { throw new Error('Refusing to create empty bundle'); }),
+      getAheadCount: vi.fn(async () => 3),
+    });
+    const differentSha = 'b'.repeat(40);
+    const gitProvider = mockGitProvider(differentSha);
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), gitProvider, mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('aheadCount=3');
+    expect(result.error).toContain('headBranch=detached');
   });
 });

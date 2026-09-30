@@ -307,6 +307,22 @@ export class RemoteBundleOps {
   }
 
   /**
+   * Returns the number of commits `branch` is ahead of `origin/<base>`, or
+   * `null` when the count cannot be determined (missing ref, not a repo, etc.).
+   * Used for diagnostic enrichment only — never for correctness decisions.
+   */
+  async getAheadCount(transport: IServerTransport, dir: string, base: string, branch: string): Promise<number | null> {
+    assertSafeBranch(base, 'base');
+    assertSafeBranch(branch, 'branch');
+    const r = await transport.exec(
+      `cd ${shellQuote(dir)} && git rev-list --count origin/${shellQuote(base)}..${shellQuote(branch)} 2>/dev/null`,
+      10_000,
+    );
+    const count = r.stdout?.trim();
+    return count && /^\d+$/.test(count) ? parseInt(count, 10) : null;
+  }
+
+  /**
    * "No HEAD yet" (empty/missing dir) is a normal branch here, not a
    * failure — so this deliberately does not use `hasGitError`/throw. Same
    * `2>/dev/null` real-redirection + sha-regex-validates-success approach

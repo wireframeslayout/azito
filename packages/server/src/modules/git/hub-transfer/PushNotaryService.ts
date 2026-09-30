@@ -50,6 +50,29 @@ export class PushNotaryService {
       const headBranch = await this.remoteBundleOps.getHeadBranch(transport, worktreePath);
       const effectiveBranch = headBranch && headBranch !== branch ? headBranch : branch;
 
+      // #423 review: when the worker's HEAD diverges from the recorded task
+      // branch, validate the effective branch before pushing — the worker is
+      // untrusted on isolated servers and could point HEAD at a protected
+      // branch (main, baseBranch, targetBranch).
+      if (effectiveBranch !== branch) {
+        const protectedBranches = [params.baseBranch, params.targetBranch, params.defaultBranch].filter((b): b is string => !!b);
+        if (protectedBranches.includes(effectiveBranch)) {
+          return {
+            status: 'failed',
+            error: `push_branch_rejected: worker HEAD '${effectiveBranch}' is a protected branch (one of: ${protectedBranches.join(', ')})`,
+            actualBranch: effectiveBranch,
+          };
+        }
+        const existingRemoteSha = await this.gitProvider.getBranchHeadSha(repo, effectiveBranch);
+        if (existingRemoteSha) {
+          return {
+            status: 'failed',
+            error: `push_branch_rejected: worker HEAD '${effectiveBranch}' already exists on remote (SHA: ${existingRemoteSha}) — refusing to push to a pre-existing branch that is not the task's recorded branch`,
+            actualBranch: effectiveBranch,
+          };
+        }
+      }
+
       const remoteSha = await this.gitProvider.getBranchHeadSha(repo, effectiveBranch);
       if (remoteSha === workerHeadSha) {
         return {
@@ -72,7 +95,7 @@ export class PushNotaryService {
         }
       }
 
-      const pushResult = await this.attemptPush(params, identity.identity, token, effectiveBranch, baseBranch, seedDir);
+      const pushResult = await this.attemptPush(params, identity.identity, token, effectiveBranch, baseBranch, seedDir, headBranch);
 
       // #124 Bug 4: SHA verification with retry for remote propagation lag.
       // GitHub's API can take 1-3s to reflect a just-pushed branch.
@@ -102,6 +125,7 @@ export class PushNotaryService {
     branch: string,
     baseBranch: string | null,
     seedDir: string | undefined,
+    headBranch: string | null,
   ): Promise<{ pushedSha: string }> {
     const { server, transport, worktreePath } = params;
     const sshHost = server.sshHost!;
@@ -119,8 +143,11 @@ export class PushNotaryService {
         // #423: enrich the error with branch diagnostic info so the root
         // cause (branch mismatch) is visible in logs.
         const msg = err instanceof Error ? err.message : String(err);
+        const aheadCount = await this.remoteBundleOps.getAheadCount(
+          params.transport, params.worktreePath, baseBranch ?? 'HEAD', branch,
+        );
         throw new Error(
-          `${msg} (expectedBranch=${params.branch}, headBranch=${branch}, workerHead=${workerHead}, remoteHead=${remoteHead})`,
+          `${msg} (expectedBranch=${params.branch}, headBranch=${headBranch ?? 'detached'}, workerHead=${workerHead}, remoteHead=${remoteHead}, aheadCount=${aheadCount ?? 'unknown'})`,
         );
       }
       throw err;

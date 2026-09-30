@@ -552,11 +552,11 @@ export class PhaseLoopRunner {
           // follow-up, Important finding 1), never a fresh re-resolution —
           // see this method's parameter doc comment.
           const probeRepo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : null;
-          // #423: resolve actual HEAD branch inside the closure at first
-          // invocation — the worker may commit on a different branch than
-          // `probeBranch` (which was captured at closure-build time, before
-          // the worker ran). Cached so getBranch runs at most once per probe.
-          let resolvedEffectiveBranch: string | undefined;
+          // #423 review: resolve actual HEAD branch on every probe
+          // invocation — the worker may switch branches mid-phase. Only
+          // log/update DB when the resolved value changes from the last
+          // observation to avoid noise.
+          let lastResolvedBranch: string | undefined;
           pushingProbe = async () => {
             // Issue #87 review (forge/87-mirror follow-up), Important
             // finding 2: fail closed — same rule as
@@ -575,18 +575,17 @@ export class PhaseLoopRunner {
               this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
               return false;
             }
-            // #423: resolve actual HEAD branch once per probe lifetime.
-            if (resolvedEffectiveBranch === undefined) {
-              const headBranch = await this.getWorktreeService(server).getBranch(probeDir);
-              if (headBranch && headBranch !== probeBranch) {
+            // #423 review: resolve on every invocation; log only on change.
+            const headBranch = await this.getWorktreeService(server).getBranch(probeDir);
+            const resolvedEffectiveBranch = (headBranch && headBranch !== probeBranch) ? headBranch : probeBranch;
+            if (resolvedEffectiveBranch !== lastResolvedBranch) {
+              if (resolvedEffectiveBranch !== probeBranch) {
                 this.appendLog(task.id, unit.id, 'command', {
-                  type: 'push_branch_mismatch', expected: probeBranch, actual: headBranch,
+                  type: 'push_branch_mismatch', expected: probeBranch, actual: resolvedEffectiveBranch,
                 });
-                this.taskRepo.update(task.id, { worktreeBranch: headBranch });
-                resolvedEffectiveBranch = headBranch;
-              } else {
-                resolvedEffectiveBranch = probeBranch;
+                this.taskRepo.update(task.id, { worktreeBranch: resolvedEffectiveBranch });
               }
+              lastResolvedBranch = resolvedEffectiveBranch;
             }
             // Create the PR (if due) before verifying — verifyPushCompleted's own
             // PR-existence check then sees what this call just created.
@@ -764,8 +763,15 @@ export class PhaseLoopRunner {
               baseBranch: currentTaskForPush?.targetBranch ?? null,
               repo: probeRepo,
               token: pushCredential.token,
+              targetBranch: currentTaskForPush?.targetBranch ?? null,
+              defaultBranch: project?.defaultBranch ?? null,
             });
             if (notaryResult.status === 'failed') {
+              if (notaryResult.actualBranch) {
+                this.appendLog(task.id, unit.id, 'command', {
+                  type: 'push_branch_mismatch', expected: probeBranch, actual: notaryResult.actualBranch,
+                });
+              }
               this.appendLog(task.id, unit.id, 'status_change', { status: 'hub_push_failed', error: notaryResult.error });
               this.taskRepo.updateStatus(task.id, 'failed');
               return;
