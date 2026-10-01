@@ -52,13 +52,15 @@ import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionMani
 import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
+import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn } from '../turns/AgentTurn';
+import type { IPrimaryWindowWaker } from './IPrimaryWindowWaker';
+import { isPrimaryTaskWindow } from '../../windows/Window';
 
 // ─── Helpers ───
 
@@ -170,6 +172,11 @@ export class ExecuteTaskUseCase {
     // left untouched rather than cleared. See the field's use below.
     private distributionStateRepo: IDistributionStateRepository | null = null,
     private muxDriverRegistry: MuxDriverRegistry,
+    // Issue #274: wakes sleeping primary windows and detects running sessions
+    // for follow-up's window resolution, without pulling WindowRespawnService
+    // as a direct dependency (avoids circular dependency direction: tasks →
+    // windows is forbidden). Wired as an adapter in wiring.ts.
+    private primaryWindowWaker: IPrimaryWindowWaker,
     private harnessPrefix?: string,
     private hubGitIdentity: GitIdentity | null = null,
   ) {
@@ -1544,6 +1551,58 @@ export class ExecuteTaskUseCase {
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
+    // ===== Pre-lock phase (Issue #274) =====
+    // Wake sleeping primary windows and detect running sessions BEFORE
+    // acquiring runExclusiveForTask — wake() internally calls respawn()
+    // which also takes the same per-task lock, so calling it inside the
+    // lock would deadlock.
+    const taskWindows = this.windowRepo.findByTask(taskId);
+    const primaryWindow = taskWindows.find((w) => isPrimaryTaskWindow(w));
+
+    let wakeResult: { tmuxTarget: string } | null = null;
+    // Track if we found the session running in a different window.
+    let runningInWindow: { windowId: number; tmuxTarget: string } | null = null;
+
+    // 1. Duplicate session detection: check regardless of whether a primary
+    //    window record exists (Finding 4 — a task can have agentSessionId
+    //    but no window row if the row was lost).
+    if (task.agentSessionId) {
+      const running = await this.primaryWindowWaker.findRunningSession(
+        task.id, task.agentSessionId, serverName,
+      );
+      if (running && (!primaryWindow || running.windowId !== primaryWindow.id)) {
+        runningInWindow = running;
+      }
+    }
+
+    // 2-3. Primary window sleeping/dead detection and wake.
+    if (primaryWindow && !runningInWindow) {
+      if (primaryWindow.sleeping) {
+        wakeResult = await this.primaryWindowWaker.wake(
+          primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
+        );
+      } else {
+        const fuCheckDriver = this.resolveDriver(server);
+        let alive = false;
+        try {
+          if (primaryWindow.muxRef) {
+            alive = await fuCheckDriver.windowExists(server, primaryWindow.muxRef);
+          } else {
+            const resolved = await fuCheckDriver.resolveRef(server, primaryWindow.tmuxTarget);
+            alive = resolved ? await fuCheckDriver.windowExists(server, resolved) : true;
+          }
+        } catch {
+          alive = true;
+        }
+        if (!alive) {
+          this.windowRepo.update(primaryWindow.id, { sleeping: true });
+          wakeResult = await this.primaryWindowWaker.wake(
+            primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
+          );
+        }
+      }
+    }
+
     // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
     // as execute() above — including the same `isolationMaskForServer`
     // masking (via `ensureSessionWithLock`), not a bare `{}` and not
@@ -1573,6 +1632,7 @@ export class ExecuteTaskUseCase {
       await sleep(500);
     }
 
+    // ===== Lock phase =====
     // Threaded to the working-directory-rejected rollback below (needs the
     // specific generation to revoke — see that branch's comment); stays null
     // when the `windowExists` result is true, since nothing was rotated.
@@ -1584,22 +1644,58 @@ export class ExecuteTaskUseCase {
       // The ENTIRE "read current window state -> decide whether to rotate ->
       // create -> persist" sequence now runs inside runExclusiveForTask, not
       // just the create/persist half (Issue #28 third-party review, TOCTOU
-      // finding): the old code computed `windowExists` from a `task`/tmux
-      // snapshot taken BEFORE the lock. Two concurrent follow-ups for the
-      // same not-yet-running task could both observe "no window yet" from
-      // their own pre-lock snapshot, both enter the rotation, and the
-      // second's issueNextGeneration() would revoke the first's
-      // still-being-created generation before its window creation even
-      // resolved — runExclusiveForTask only serializes the callbacks, it
-      // doesn't protect state read before either callback started. Reading
-      // `task.tmuxWindow` fresh from the repository INSIDE the lock, and
-      // re-checking tmux for it there too, means the decision is always made
-      // against the latest state any prior queued rotation for this task
-      // (execute()/followUp()/respawn()) actually persisted.
+      // finding). Reading `task.tmuxWindow` fresh from the repository INSIDE
+      // the lock, and re-checking tmux for it there too, means the decision
+      // is always made against the latest state any prior queued rotation
+      // for this task (execute()/followUp()/respawn()) actually persisted.
       ({ windowName, windowExists, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
+        // Issue #274: if a running session was found in a different window,
+        // use that window directly.
+        if (runningInWindow) {
+          const parts = runningInWindow.tmuxTarget.split(':');
+          const runningWindowName = parts[1]?.split('.')[0] || runningInWindow.tmuxTarget;
+          return { windowName: runningWindowName, windowExists: true, tokenId: null, server };
+        }
+
+        // Issue #274: if we woke a sleeping primary window, re-read the
+        // window record to verify it's still ours and alive, then use it.
+        if (wakeResult && primaryWindow) {
+          const freshWin = this.windowRepo.findById(primaryWindow.id);
+          if (freshWin && !freshWin.sleeping) {
+            // Verify the woken window actually exists in tmux.
+            const wakeDriver = this.resolveDriver(server);
+            const wakeRef = freshWin.muxRef ?? muxRefFromTmuxTarget(freshWin.tmuxTarget);
+            let wokenAlive = false;
+            try {
+              wokenAlive = await wakeDriver.windowExists(server, wakeRef);
+            } catch {}
+            if (wokenAlive) {
+              // Issue #274 review: re-verify the execution gate inside the
+              // per-task lock — state may have changed between the pre-lock
+              // gate (line 1549) and lock acquisition.
+              const freshTask = this.taskRepo.findById(taskId);
+              if (!freshTask) throw new Error(`Task ${taskId} not found`);
+              this.reverifyGateInLock(freshTask, unitId, 'resume', server, fuBaseBranch);
+
+              const parts = freshWin.tmuxTarget.split(':');
+              const wokenWindowName = parts[1]?.split('.')[0] || freshWin.tmuxTarget;
+              this.taskRepo.update(taskId, { tmuxWindow: wokenWindowName } as Partial<Task>);
+              return { windowName: wokenWindowName, windowExists: false, tokenId: null, server };
+            }
+          }
+          // Wake result is stale — fall through to the standard path.
+        }
+
         const currentTask = this.taskRepo.findById(taskId);
         if (!currentTask) throw new Error(`Task ${taskId} not found`);
-        const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
+
+        // Finding 2: prefer the primary window's tmuxTarget/muxRef over
+        // task.tmuxWindow — the task column can lag behind when a window
+        // is respawned or renamed independently.
+        const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
+        const candidateWindowName = freshPrimary
+          ? (freshPrimary.muxRef?.window || freshPrimary.tmuxTarget.split(':')[1]?.split('.')[0] || `task-${task.id}`)
+          : (currentTask.tmuxWindow || `task-${task.id}`);
         let exists = false;
         try {
           const fuDriver = this.resolveDriver(server);
@@ -1608,6 +1704,10 @@ export class ExecuteTaskUseCase {
           if (ws) exists = ws.windows.some((w) => w.name === candidateWindowName);
         } catch {}
         if (exists) {
+          // Sync task.tmuxWindow with the actual window name.
+          if (currentTask.tmuxWindow !== candidateWindowName) {
+            this.taskRepo.update(taskId, { tmuxWindow: candidateWindowName } as Partial<Task>);
+          }
           return { windowName: candidateWindowName, windowExists: true, tokenId: null, server };
         }
 
@@ -1633,6 +1733,36 @@ export class ExecuteTaskUseCase {
           (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs, fuBaseBranch),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+
+        // Register or update the primary window row.
+        const newTmuxTarget = `${muxWorkspace}:${created.windowName}`;
+        if (freshPrimary) {
+          this.windowRepo.update(freshPrimary.id, {
+            tmuxTarget: newTmuxTarget,
+            muxRef: created.ref,
+            sleeping: false,
+          });
+        } else {
+          this.windowRepo.add({
+            ownerType: 'task',
+            projectId: null,
+            taskId,
+            serverName,
+            tmuxTarget: newTmuxTarget,
+            muxRef: created.ref,
+            label: created.windowName,
+            isPrimary: true,
+            windowType: unit.workerType ? 'agent' as const : 'terminal' as const,
+            workerType: unit.workerType,
+            workerModel: unit.workerModel,
+            agentSessionId: task.agentSessionId,
+            launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
+            workingDirectory: task.worktreePath || task.workingDirectory || null,
+            paneLayout: null,
+            sleeping: false,
+          });
+        }
+
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {

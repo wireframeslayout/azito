@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import * as detectDefaultBranchModule from '../git/detectDefaultBranch';
@@ -1898,5 +1899,193 @@ describe('WindowRespawnService.respawn — baseBranch auto-detection (Issue #63)
     expect(task.baseBranch).toBeNull();
 
     vi.restoreAllMocks();
+  });
+});
+
+// ─── Issue #274: findRunningSessionForTask + duplicate session guard ───
+
+/**
+ * Builds a service variant with process-detection mocks: the tmux driver
+ * gains `panePidByHandle` and the transport gains `exec` (for `ps` output).
+ * `extraWindows` feeds `windowRepo.findByTask`.
+ */
+function buildServiceWithProcessDetection(opts: {
+  window: Window;
+  task?: Task | null;
+  unit?: Unit | null;
+  extraWindows?: Window[];
+  panePidByHandle?: (server: unknown, handle: unknown) => Promise<number | null>;
+  psOutput?: string;
+  psExecThrows?: boolean;
+}) {
+  const exec = opts.psExecThrows
+    ? vi.fn(async () => { throw new Error('ps failed'); })
+    : vi.fn(async () => ({ stdout: opts.psOutput ?? '', stderr: '', code: 0 }));
+
+  const transportFactory: Pick<TransportFactory, 'getTransport'> = {
+    getTransport: vi.fn(() => ({ exec })) as any,
+  };
+
+  const result = buildService({
+    window: opts.window,
+    task: opts.task,
+    unit: opts.unit,
+    transportFactory,
+  });
+
+  // Inject panePidByHandle onto the tmux mock (not present in the base
+  // buildService fixture).
+  (result.tmux as any).panePidByHandle = opts.panePidByHandle ?? vi.fn(async () => 1234);
+
+  // Wire findByTask to return `extraWindows` (the windows to scan).
+  if (opts.extraWindows) {
+    (result.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue(opts.extraWindows);
+  }
+
+  return { ...result, exec };
+}
+
+describe('WindowRespawnService.findRunningSessionForTask', () => {
+  it('returns the window where the agentSessionId is running', async () => {
+    const sleepingWin = makeWindow({ id: 10, taskId: 5, sleeping: true, tmuxTarget: 'azito:task-sleeping' });
+    const aliveWin = makeWindow({ id: 20, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-alive' });
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+
+    // ps output: PID 1234 is the shell, PID 1235 is claude with our sessionId
+    const psOutput = [
+      '  1234     1      10 bash',
+      `  1235  1234       5 /usr/local/bin/claude --resume ${sessionId} --dangerously-skip-permissions`,
+    ].join('\n');
+
+    const { service } = buildServiceWithProcessDetection({
+      window: aliveWin,
+      extraWindows: [sleepingWin, aliveWin],
+      psOutput,
+    });
+
+    const result = await service.findRunningSessionForTask(5, sessionId, 'local-server');
+
+    expect(result).toEqual({ windowId: 20, tmuxTarget: 'azito:task-alive' });
+  });
+
+  it('returns null when PID resolution fails', async () => {
+    const aliveWin = makeWindow({ id: 20, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-alive' });
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+
+    const psOutput = `  1234     1      10 bash\n  1235  1234       5 claude --resume ${sessionId}`;
+
+    const { service } = buildServiceWithProcessDetection({
+      window: aliveWin,
+      extraWindows: [aliveWin],
+      psOutput,
+      // listPanesByRef succeeds but panePidByHandle throws
+      panePidByHandle: vi.fn(async () => { throw new Error('pane gone'); }),
+    });
+
+    const result = await service.findRunningSessionForTask(5, sessionId, 'local-server');
+
+    // The whole window is skipped (catch around pane resolution) → null
+    expect(result).toBeNull();
+  });
+
+  it('returns null when a different agentSessionId is running', async () => {
+    const aliveWin = makeWindow({ id: 20, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-alive' });
+    const targetSessionId = 'aaaa-bbbb-cccc-dddd';
+    const differentSessionId = 'xxxx-yyyy-zzzz-wwww';
+
+    // ps output has a DIFFERENT sessionId
+    const psOutput = [
+      '  1234     1      10 bash',
+      `  1235  1234       5 claude --resume ${differentSessionId} --dangerously-skip-permissions`,
+    ].join('\n');
+
+    const { service } = buildServiceWithProcessDetection({
+      window: aliveWin,
+      extraWindows: [aliveWin],
+      psOutput,
+    });
+
+    const result = await service.findRunningSessionForTask(5, targetSessionId, 'local-server');
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)', () => {
+  it('throws when the same agentSessionId is running in a different window', async () => {
+    const sessionId = 'dup-session-1234';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: sessionId });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+    // Another window (id=999) where the session is actually running
+    const otherWin = makeWindow({ id: 999, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-other' });
+
+    const psOutput = [
+      '  5000     1      10 bash',
+      `  5001  5000       3 claude --resume ${sessionId} --dangerously-skip-permissions`,
+    ].join('\n');
+
+    const { service } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      // findRunningSessionForTask scans these windows
+      extraWindows: [otherWin],
+      psOutput,
+      // PID 5000 is from the OTHER window's pane
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(DuplicateAgentSessionError);
+    await expect(service.respawn(1, makeServer())).rejects.toMatchObject({ windowId: 999 });
+  });
+
+  it('skips execution gate when gateAlreadyEnforced is true (Finding 1)', async () => {
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+
+    const { service, sentCommands } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      psOutput: '',
+      panePidByHandle: vi.fn(async () => null),
+    });
+
+    // With gateAlreadyEnforced, the gate should not be called again.
+    // If it WAS called, it would throw because the test setup has no
+    // proper approval configuration.
+    await service.respawn(1, makeServer(), { gateAlreadyEnforced: true });
+    expect(sentCommands.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not throw when a different agentSessionId is running in another window', async () => {
+    const sessionId = 'my-session-1234';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: sessionId });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+    const otherWin = makeWindow({ id: 999, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-other' });
+
+    // ps output has a DIFFERENT sessionId running
+    const psOutput = [
+      '  5000     1      10 bash',
+      '  5001  5000       3 claude --resume totally-different-session --dangerously-skip-permissions',
+    ].join('\n');
+
+    const { service, sentCommands } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      extraWindows: [otherWin],
+      psOutput,
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    // Should NOT throw — the different session is irrelevant
+    await service.respawn(1, makeServer());
+
+    // Respawn proceeded normally (agent launch command was sent)
+    expect(sentCommands.length).toBeGreaterThanOrEqual(1);
   });
 });

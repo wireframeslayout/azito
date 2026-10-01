@@ -21,6 +21,7 @@ import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './exe
 import type { KillOutcome } from '../tmux/killOutcome';
 import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
+import { DuplicateAgentSessionError } from '../windows/DuplicateAgentSessionError';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
 import { failAsyncTaskOperation } from './execution/AppendLog';
 import { decideExecutionApproval, decideExecutionPreApproval, denyPendingApproval, resolvePendingApprovalManifest, type ApprovalOrigin } from './execution/ExecutionApprovalDecision';
@@ -1094,6 +1095,9 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           result = await respawnService.respawn(primaryWindow.id, srv);
         } catch (err) {
           if (replyToExecutionGateError(err, reply)) return;
+          if (err instanceof DuplicateAgentSessionError) {
+            return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, message: err.message });
+          }
           throw err;
         }
         const windowName = task.tmuxWindow || `task-${task.id}`;
