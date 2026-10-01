@@ -79,6 +79,7 @@ import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGr
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
+import type { IPrimaryWindowWaker } from '../modules/tasks/execution/IPrimaryWindowWaker';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
 import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
 import { PaneHandleResolver } from '../modules/operations/PaneHandleResolver';
@@ -481,6 +482,15 @@ function buildExecuteTaskUseCase(
     fetchDistributionService,
     distributionStateRepo,
     infra.muxDriverRegistry,
+    // Issue #274: adapter from WindowRespawnService to IPrimaryWindowWaker,
+    // avoiding a direct WindowRespawnService import in ExecuteTaskUseCase
+    // (dependency direction: tasks → windows would be a layer violation).
+    {
+      wake: (windowId, serverName, opts) =>
+        appServices.windowRespawnService.wakeWindow(windowId, serverName, opts),
+      findRunningSession: (taskId, agentSessionId, serverName) =>
+        appServices.windowRespawnService.findRunningSessionForTask(taskId, agentSessionId, serverName),
+    } satisfies IPrimaryWindowWaker,
     harnessPrefix,
     hubGitIdentity,
   );
