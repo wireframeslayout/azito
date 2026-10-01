@@ -63,6 +63,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
@@ -1207,10 +1209,9 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
 
     expect(tmux.listWorkspaces).not.toHaveBeenCalled();
     expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
-    // pendingOperation 'resume' lets the approval handler resume via
-    // resumeStateMachine() rather than re-inferring it from task.tmuxWindow
-    // (Issue #328 third-round review finding 1).
-    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'resume', priorStatus: 'open', manifestHash: expect.any(String) });
+    // pendingOperation 'follow_up' lets the approval handler re-execute
+    // followUp() with the saved body text (Issue #276).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'follow_up', priorStatus: 'open', manifestHash: expect.any(String), pendingFollowUpBody: 'please continue', pendingFollowUpPhases: undefined });
   });
 
   it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
@@ -1264,7 +1265,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     // already non-null (mirrors SqliteTaskRepository's real guard).
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledTimes(2);
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(1, 1, { pendingOperation: 'execute', priorStatus: 'review', manifestHash: expect.any(String) });
-    expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(2, 1, { pendingOperation: 'resume', priorStatus: 'pending_approval', manifestHash: expect.any(String) });
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(2, 1, { pendingOperation: 'follow_up', priorStatus: 'pending_approval', manifestHash: expect.any(String), pendingFollowUpBody: 'please continue', pendingFollowUpPhases: undefined });
 
     // Exactly one 'status_change' notification went out (from the FIRST
     // block) — the second, no-op block must not emit a duplicate/misleading
@@ -1274,7 +1275,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     );
     expect(statusChangeCalls).toHaveLength(1);
     expect(statusChangeCalls[0][3]).toEqual({ status: 'pending_approval', operation: 'execute' });
-    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', { type: 'execution_gate_already_pending', operation: 'follow_up' });
   });
 });
 

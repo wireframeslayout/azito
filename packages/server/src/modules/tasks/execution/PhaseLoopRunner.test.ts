@@ -94,6 +94,8 @@ function makeRunner(overrides: {
       pendingOperation: null,
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     })),
     update: vi.fn(),
     updateStatus: vi.fn(),
@@ -1520,6 +1522,8 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     const approvedUnitRepo = { findById: vi.fn(() => originalUnit) };
@@ -1638,6 +1642,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     const { manifest } = resolveExecutionManifest(
@@ -1676,6 +1682,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approved against the ORIGINAL Unit config (what a human actually saw).
@@ -1736,6 +1744,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approved against the ORIGINAL Unit config (what a human actually saw).
@@ -1980,6 +1990,8 @@ describe('PhaseLoopRunner isolation cutoff re-reads isolationIntent per phase (#
       status: 'running', currentPhase: 'pushing', planMarkdown: null, targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approve against the SAME config resolveExecutionManifest will see at run
@@ -2040,6 +2052,8 @@ describe('PhaseLoopRunner isolation cutoff re-reads isolationIntent per phase (#
       status: 'running', currentPhase: 'pushing', planMarkdown: null, targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', worktreeBranch: null, branch: null, summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approve against the config resolveExecutionManifest will see

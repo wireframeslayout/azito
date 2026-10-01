@@ -846,6 +846,8 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           pendingOperation: null,
           pendingOperationWindowId: null,
           pendingOperationPriorStatus: null,
+          pendingFollowUpBody: null,
+          pendingFollowUpPhases: null,
         }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

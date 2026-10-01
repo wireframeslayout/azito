@@ -39,6 +39,8 @@ function baseFields(overrides: Partial<TaskOriginationFields> = {}): TaskOrigina
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     ...overrides,
   };
 }

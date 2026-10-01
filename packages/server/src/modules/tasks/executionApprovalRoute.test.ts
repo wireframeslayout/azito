@@ -50,6 +50,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: 'execute',
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: 'open',
+    pendingFollowUpBody: null,
+    pendingFollowUpPhases: null,
     sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
@@ -233,6 +235,8 @@ function makeStatefulOpts(initialTask: Task): { opts: TasksRouteOptions; getTask
       pendingOperation: null,
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       sleepAfterPush: null,
     };
     return true;
@@ -1148,6 +1152,8 @@ describe('Creation-time pre-approval (task/328 follow-up)', () => {
       pendingOperation: null,
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       sleepAfterPush: null,
       executionApprovedFingerprintHash: null,
       ...overrides,
