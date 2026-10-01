@@ -17,6 +17,7 @@ import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
+import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
@@ -397,6 +398,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         result = await respawnService.respawn(id, srv);
       } catch (err) {
         if (replyToExecutionGateError(err, reply)) return;
+        if (err instanceof DuplicateAgentSessionError) {
+          return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, message: err.message });
+        }
         throw err;
       }
       notifyWindowsChanged(srv.name);

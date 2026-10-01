@@ -4355,7 +4355,7 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
 
     await useCase.followUp(80, 5, 'please continue');
 
-    expect(waker.wake).toHaveBeenCalledWith(50, 'local-server', { skipAgentLaunch: true });
+    expect(waker.wake).toHaveBeenCalledWith(50, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true });
     // No new window was created via createRotatedWindow.
     expect(tmux.openWindow).not.toHaveBeenCalled();
   });
@@ -4504,7 +4504,14 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     }]);
 
     const waker = (useCase as any).primaryWindowWaker;
-    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-9' });
+    // Finding 5: mock wake acquires the same per-task lock that followUp's
+    // lock phase uses — if wake were ever moved inside runExclusiveForTask,
+    // this would deadlock and the 5s timeout would fire.
+    const { runExclusiveForTask } = await import('./WindowRotation.js');
+    (waker.wake as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      await runExclusiveForTask(9, async () => {});
+      return { tmuxTarget: 'azito:task-9' };
+    });
     (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
 
     // The test itself is the deadlock guard: if wake() were called inside
@@ -4515,6 +4522,118 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     ]);
 
     await expect(result).resolves.toBeUndefined();
-    expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true });
+    expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true });
   }, 10_000);
+
+  it('sends follow-up to running session even when no primary window record exists (Finding 4)', async () => {
+    const unit = makeUnit({ id: 85, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 10, serverName: 'local-server', unitId: 85, tmuxWindow: 'task-10', agentSessionId: 'sess-orphan' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    // No window records at all for this task.
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    // Session IS running in window 88.
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      windowId: 88, tmuxTarget: 'azito:task-10-orphan',
+    });
+
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-10-orphan', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.followUp(85, 10, 'continue');
+
+    expect(waker.wake).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-10-orphan' }),
+      1,
+    );
+  });
+
+  it('uses primary window target even when task.tmuxWindow points to a dead window (Finding 2)', async () => {
+    const unit = makeUnit({ id: 86, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 11, serverName: 'local-server', unitId: 86, tmuxWindow: 'dead-window', agentSessionId: 'sess-stale' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 75, ownerType: 'task' as const, isPrimary: true, taskId: 11,
+      serverName: 'local-server', tmuxTarget: 'azito:task-11-real',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-11-real' },
+      label: 'task-11-real', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-stale',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The primary window's name (task-11-real) exists, NOT the dead task.tmuxWindow.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-11-real', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    await useCase.followUp(86, 11, 'continue');
+
+    // Should use the primary window, not the stale task.tmuxWindow.
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-11-real' }),
+      1,
+    );
+    // Should NOT create a new window.
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    // Should NOT register a second primary window.
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('does not register a duplicate primary window when one already exists (Finding 2)', async () => {
+    const unit = makeUnit({ id: 87, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 12, serverName: 'local-server', unitId: 87, tmuxWindow: null });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 76, ownerType: 'task' as const, isPrimary: true, taskId: 12,
+      serverName: 'local-server', tmuxTarget: 'azito:task-12-old',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-12-old' },
+      label: 'task-12-old', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: null,
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    // Window does NOT exist in tmux — force the create path.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    await useCase.followUp(87, 12, 'continue');
+
+    // Window was created, but windowRepo.add was NOT called because a
+    // primary row already existed — windowRepo.update should be used instead.
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(windowRepo.update).toHaveBeenCalledWith(76, expect.objectContaining({
+      sleeping: false,
+    }));
+  });
 });

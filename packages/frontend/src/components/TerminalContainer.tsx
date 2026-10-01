@@ -207,7 +207,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
         return;
       }
       if (!res.tmuxTarget) {
-        setRespawnError(res.error || 'Respawn failed');
+        setRespawnError((res as any).message || res.error || 'Respawn failed');
         return;
       }
       setWindowMissing(false);

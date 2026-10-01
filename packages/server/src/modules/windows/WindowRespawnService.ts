@@ -1,4 +1,5 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
+import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -184,7 +185,7 @@ export class WindowRespawnService {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean }): Promise<{ tmuxTarget: string }> {
+  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
 
@@ -215,7 +216,7 @@ export class WindowRespawnService {
     if (win.taskId !== null) {
       task = this.taskRepo.findById(win.taskId);
     }
-    if (task) {
+    if (task && !opts?.gateAlreadyEnforced) {
       // Issue #63: detect and persist baseBranch before the gate so the
       // fingerprint matches the approval screen's detection.
       const rspProjectServer = this.projectServerRepo.find(task.projectId, server.name);
@@ -239,7 +240,7 @@ export class WindowRespawnService {
     if (task && task.agentSessionId) {
       const running = await this.findRunningSessionForTask(task.id, task.agentSessionId, server.name);
       if (running && running.windowId !== windowId) {
-        throw new Error(`この会話は W-${running.windowId} で動作中です`);
+        throw new DuplicateAgentSessionError(running.windowId);
       }
     }
 
@@ -371,7 +372,7 @@ export class WindowRespawnService {
         // pre-respawn window an in-lock block is supposed to leave
         // untouched. Moving the same check here means a downgrade aborts
         // before anything is torn down.
-        if (isPrimary) {
+        if (isPrimary && !opts?.gateAlreadyEnforced) {
           // 'continuation': a respawn resumes a task whose working
           // directory a past execute()/restore() already populated — it
           // never distributes anything itself.
@@ -588,7 +589,7 @@ export class WindowRespawnService {
   async wakeWindow(
     windowId: number,
     serverName: string,
-    opts?: { skipAgentLaunch?: boolean },
+    opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean },
   ): Promise<{ tmuxTarget: string }> {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error(`Server ${serverName} not found`);

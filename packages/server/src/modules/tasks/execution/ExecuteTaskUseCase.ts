@@ -1563,28 +1563,25 @@ export class ExecuteTaskUseCase {
     // Track if we found the session running in a different window.
     let runningInWindow: { windowId: number; tmuxTarget: string } | null = null;
 
-    if (primaryWindow) {
-      // 1. Duplicate session detection: if the same agentSessionId is
-      //    already running in a DIFFERENT window, send the follow-up there.
-      if (task.agentSessionId) {
-        const running = await this.primaryWindowWaker.findRunningSession(
-          task.id, task.agentSessionId, serverName,
-        );
-        if (running && running.windowId !== primaryWindow.id) {
-          runningInWindow = running;
-        }
+    // 1. Duplicate session detection: check regardless of whether a primary
+    //    window record exists (Finding 4 — a task can have agentSessionId
+    //    but no window row if the row was lost).
+    if (task.agentSessionId) {
+      const running = await this.primaryWindowWaker.findRunningSession(
+        task.id, task.agentSessionId, serverName,
+      );
+      if (running && (!primaryWindow || running.windowId !== primaryWindow.id)) {
+        runningInWindow = running;
       }
+    }
 
-      // 2. Sleeping window → wake (skip agent launch; follow-up will
-      //    launch the agent with the prompt).
-      if (!runningInWindow && primaryWindow.sleeping) {
+    // 2-3. Primary window sleeping/dead detection and wake.
+    if (primaryWindow && !runningInWindow) {
+      if (primaryWindow.sleeping) {
         wakeResult = await this.primaryWindowWaker.wake(
-          primaryWindow.id, serverName, { skipAgentLaunch: true },
+          primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
         );
-      }
-
-      // 3. Not sleeping but tmux pane died → mark sleeping then wake.
-      if (!runningInWindow && !primaryWindow.sleeping && !wakeResult) {
+      } else {
         const fuCheckDriver = this.resolveDriver(server);
         let alive = false;
         try {
@@ -1595,13 +1592,12 @@ export class ExecuteTaskUseCase {
             alive = resolved ? await fuCheckDriver.windowExists(server, resolved) : true;
           }
         } catch {
-          // Cannot determine liveness — treat as alive to avoid false wake.
           alive = true;
         }
         if (!alive) {
           this.windowRepo.update(primaryWindow.id, { sleeping: true });
           wakeResult = await this.primaryWindowWaker.wake(
-            primaryWindow.id, serverName, { skipAgentLaunch: true },
+            primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
           );
         }
       }
@@ -1688,7 +1684,14 @@ export class ExecuteTaskUseCase {
 
         const currentTask = this.taskRepo.findById(taskId);
         if (!currentTask) throw new Error(`Task ${taskId} not found`);
-        const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
+
+        // Finding 2: prefer the primary window's tmuxTarget/muxRef over
+        // task.tmuxWindow — the task column can lag behind when a window
+        // is respawned or renamed independently.
+        const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
+        const candidateWindowName = freshPrimary
+          ? (freshPrimary.muxRef?.window || freshPrimary.tmuxTarget.split(':')[1]?.split('.')[0] || `task-${task.id}`)
+          : (currentTask.tmuxWindow || `task-${task.id}`);
         let exists = false;
         try {
           const fuDriver = this.resolveDriver(server);
@@ -1697,6 +1700,10 @@ export class ExecuteTaskUseCase {
           if (ws) exists = ws.windows.some((w) => w.name === candidateWindowName);
         } catch {}
         if (exists) {
+          // Sync task.tmuxWindow with the actual window name.
+          if (currentTask.tmuxWindow !== candidateWindowName) {
+            this.taskRepo.update(taskId, { tmuxWindow: candidateWindowName } as Partial<Task>);
+          }
           return { windowName: candidateWindowName, windowExists: true, tokenId: null, server };
         }
 
@@ -1723,26 +1730,34 @@ export class ExecuteTaskUseCase {
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
 
-        // Register the newly created window as the primary task window
-        // (Issue #274: prevents "no primary window" on subsequent follow-ups).
-        this.windowRepo.add({
-          ownerType: 'task',
-          projectId: null,
-          taskId,
-          serverName,
-          tmuxTarget: `${muxWorkspace}:${created.windowName}`,
-          muxRef: created.ref,
-          label: created.windowName,
-          isPrimary: true,
-          windowType: unit.workerType ? 'agent' as const : 'terminal' as const,
-          workerType: unit.workerType,
-          workerModel: unit.workerModel,
-          agentSessionId: task.agentSessionId,
-          launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
-          workingDirectory: task.worktreePath || task.workingDirectory || null,
-          paneLayout: null,
-          sleeping: false,
-        });
+        // Register or update the primary window row.
+        const newTmuxTarget = `${muxWorkspace}:${created.windowName}`;
+        if (freshPrimary) {
+          this.windowRepo.update(freshPrimary.id, {
+            tmuxTarget: newTmuxTarget,
+            muxRef: created.ref,
+            sleeping: false,
+          });
+        } else {
+          this.windowRepo.add({
+            ownerType: 'task',
+            projectId: null,
+            taskId,
+            serverName,
+            tmuxTarget: newTmuxTarget,
+            muxRef: created.ref,
+            label: created.windowName,
+            isPrimary: true,
+            windowType: unit.workerType ? 'agent' as const : 'terminal' as const,
+            workerType: unit.workerType,
+            workerModel: unit.workerModel,
+            agentSessionId: task.agentSessionId,
+            launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
+            workingDirectory: task.worktreePath || task.workingDirectory || null,
+            paneLayout: null,
+            sleeping: false,
+          });
+        }
 
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));

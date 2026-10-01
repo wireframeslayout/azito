@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import * as detectDefaultBranchModule from '../git/detectDefaultBranch';
@@ -2035,7 +2036,28 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
       panePidByHandle: vi.fn(async () => 5000),
     });
 
-    await expect(service.respawn(1, makeServer())).rejects.toThrow(/W-999.*動作中/);
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(DuplicateAgentSessionError);
+    await expect(service.respawn(1, makeServer())).rejects.toMatchObject({ windowId: 999 });
+  });
+
+  it('skips execution gate when gateAlreadyEnforced is true (Finding 1)', async () => {
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+
+    const { service, sentCommands } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      psOutput: '',
+      panePidByHandle: vi.fn(async () => null),
+    });
+
+    // With gateAlreadyEnforced, the gate should not be called again.
+    // If it WAS called, it would throw because the test setup has no
+    // proper approval configuration.
+    await service.respawn(1, makeServer(), { gateAlreadyEnforced: true });
+    expect(sentCommands.length).toBeGreaterThanOrEqual(1);
   });
 
   it('does not throw when a different agentSessionId is running in another window', async () => {
