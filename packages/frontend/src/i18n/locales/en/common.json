@@ -167,6 +167,7 @@
     "launchTimeout": "Launch timed out",
     "supervisedMonitoring": "Monitoring agent launch…",
     "continueDisplay": "Continuing to display",
+    "sessionAlreadyRunning": "This conversation is already open in {{windowId}}",
     "respawning": "Respawning…",
     "taskOwnedPaneBadge": "Task execution",
     "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env.",

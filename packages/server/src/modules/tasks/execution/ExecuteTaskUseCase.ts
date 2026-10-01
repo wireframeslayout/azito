@@ -1670,12 +1670,16 @@ export class ExecuteTaskUseCase {
               wokenAlive = await wakeDriver.windowExists(server, wakeRef);
             } catch {}
             if (wokenAlive) {
+              // Issue #274 review: re-verify the execution gate inside the
+              // per-task lock — state may have changed between the pre-lock
+              // gate (line 1549) and lock acquisition.
+              const freshTask = this.taskRepo.findById(taskId);
+              if (!freshTask) throw new Error(`Task ${taskId} not found`);
+              this.reverifyGateInLock(freshTask, unitId, 'resume', server, fuBaseBranch);
+
               const parts = freshWin.tmuxTarget.split(':');
               const wokenWindowName = parts[1]?.split('.')[0] || freshWin.tmuxTarget;
-              // Update task.tmuxWindow to match the woken window.
               this.taskRepo.update(taskId, { tmuxWindow: wokenWindowName } as Partial<Task>);
-              // windowExists: false — skipAgentLaunch was set, so follow-up
-              // still needs to launch the agent with the prompt.
               return { windowName: wokenWindowName, windowExists: false, tokenId: null, server };
             }
           }

@@ -167,6 +167,7 @@
     "launchTimeout": "起動がタイムアウトしました",
     "supervisedMonitoring": "エージェントの起動を監視中…",
     "continueDisplay": "そのまま表示を続けます",
+    "sessionAlreadyRunning": "この会話はすでに {{windowId}} で開いています",
     "respawning": "再起動中…",
     "taskOwnedPaneBadge": "タスク実行",
     "taskOwnedPaneTooltip": "このペインへの入力は権限を昇格しません。オペレーター操作はブラウザまたは operator.env を読み込んだセッションから行ってください。",

@@ -372,11 +372,17 @@ export class WindowRespawnService {
         // pre-respawn window an in-lock block is supposed to leave
         // untouched. Moving the same check here means a downgrade aborts
         // before anything is torn down.
-        if (isPrimary && !opts?.gateAlreadyEnforced) {
+        if (isPrimary) {
           // 'continuation': a respawn resumes a task whose working
           // directory a past execute()/restore() already populated — it
           // never distributes anything itself.
-          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
+          // Issue #274 review: when gateAlreadyEnforced the OUTER
+          // enforceExecutionGate was correctly skipped (caller already
+          // ran it), but this IN-LOCK re-verification must still run —
+          // state may have changed between the caller's gate and lock
+          // acquisition. unitId may be null when the outer gate was
+          // skipped, so resolve it from the manifest.
+          const { manifest, unit: freshUnit, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
             unitRepo: this.unitRepo,
             projectRepo: this.projectRepo,
             projectServerRepo: this.projectServerRepo,
@@ -385,10 +391,11 @@ export class WindowRespawnService {
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
           }, 'continuation', buildRespawnManifestInput(currentWin), freshServer.name, respawnBaseBranch);
+          const lockUnitId = unitId ?? freshUnit?.id ?? null;
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task!,
-            unitId,
+            lockUnitId,
             'respawn',
             freshProjectServer,
             freshServer,

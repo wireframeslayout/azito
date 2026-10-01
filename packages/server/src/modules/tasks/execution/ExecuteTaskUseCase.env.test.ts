@@ -4636,4 +4636,60 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
       sleeping: false,
     }));
   });
+
+  it('blocks when the in-lock gate re-verification finds a stale approval after wake', async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const gatePS = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const unit = makeUnit({ id: 88, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 13, serverName: 'local-server', unitId: 88, tmuxWindow: 'task-13',
+      agentSessionId: 'sess-gate',
+      inputTrust: 'untrusted',
+    });
+    const { useCase, windowRepo, tmux, taskRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: gatePS,
+    });
+
+    // Pre-compute the approval hash so the PRE-LOCK gate passes.
+    const { manifest } = resolveExecutionManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo,
+      projectSecretRepo: projectSecretRepo as any,
+      unitTypeLoader: unitTypeLoader as any,
+      sidekickLoader: sidekickLoader as any,
+    }, 'continuation');
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    const sleepingWindow = {
+      id: 55, ownerType: 'task' as const, isPrimary: true, taskId: 13,
+      serverName: 'local-server', tmuxTarget: 'azito:task-13',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-13' },
+      label: 'task-13', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-gate',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-13' });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The PRE-LOCK gate passes (approval hash is valid). But inside
+    // the lock, findById returns a task whose approval was invalidated
+    // (hash cleared) — simulating a concurrent description edit.
+    const staleFreshTask = { ...task, executionApprovedFingerprintHash: null };
+    (taskRepo.findById as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(task)          // followUp() line 1515: pre-lock read
+      .mockReturnValueOnce(staleFreshTask); // in-lock reverifyGateInLock
+
+    await expect(useCase.followUp(88, 13, 'try again')).rejects.toThrow(/requires approval/);
+
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+  });
 });

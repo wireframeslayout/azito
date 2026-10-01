@@ -14,6 +14,7 @@ import { TerminalQuickKeyBar } from './workspace/TerminalQuickKeyBar';
 import { TerminalChatToggle } from './ui/TerminalChatToggle';
 import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
 import { api } from '../api/client';
+import { formatWindowId } from '@azito/shared';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
@@ -192,7 +193,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     setRespawning(true);
     setRespawnError(null);
     try {
-      const res = await api<{ tmuxTarget: string; error?: string }>(`/windows/${dbWindow.id}/respawn`, {
+      const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number }>(`/windows/${dbWindow.id}/respawn`, {
         method: 'POST',
         body: JSON.stringify({ force }),
       });
@@ -207,7 +208,11 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
         return;
       }
       if (!res.tmuxTarget) {
-        setRespawnError((res as any).message || res.error || 'Respawn failed');
+        if (res.error === 'session_already_running' && res.windowId != null) {
+          setRespawnError(t('terminal.sessionAlreadyRunning', { windowId: formatWindowId(res.windowId) }));
+        } else {
+          setRespawnError(res.message || res.error || 'Respawn failed');
+        }
         return;
       }
       setWindowMissing(false);
