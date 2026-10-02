@@ -3,7 +3,8 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
-import type { IMuxClient } from './IMuxClient';
+import type { IMuxClient, PaneWindowLabels } from './IMuxClient';
+import { MuxOperationUnsupportedError } from './MuxCapabilityError';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
@@ -112,6 +113,7 @@ export class TmuxClient implements IMuxClient {
     changeEvents: true, agentState: false,
     independentClients: true, copyMode: true,
   };
+  readonly supportsPaneLabels = false;
 
   constructor(
     private transportFactory: TransportFactory,
@@ -664,6 +666,10 @@ export class TmuxClient implements IMuxClient {
     const identity = await this.getWindowIdentity(server, target);
     if (!identity) return null;
     return { kind: 'tmux', workspace: identity.sessionName, window: identity.windowName };
+  }
+
+  async labelWindowPanes(_server: ServerConfig, _ref: MuxRef, _labels: PaneWindowLabels): Promise<void> {
+    throw new MuxOperationUnsupportedError(this.kind, 'labelWindowPanes');
   }
 
   async resolvePane(server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal): Promise<PaneHandle> {

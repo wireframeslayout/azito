@@ -86,6 +86,10 @@ const MISAO_ULID = '[0-7][0-9A-HJKMNP-TV-Z]{25}';
 const MISAO_WINDOW_ID_RE = new RegExp(`^w_${MISAO_ULID}$`);
 const MISAO_PANE_ID_RE = new RegExp(`^p_${MISAO_ULID}$`);
 
+export function isMisaoWindowId(s: string): boolean {
+  return MISAO_WINDOW_ID_RE.test(s);
+}
+
 export function parseMuxRef(json: string): MuxRef {
   const obj = JSON.parse(json) as { kind: string; workspace: string; window: string };
   if (obj.kind === 'misao') {

@@ -2,9 +2,17 @@ import type { MuxDriverKind, MuxRef, PaneHandle, PaneOrdinal, MuxCapabilities, M
 import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
 
+/** Hub-side identity stamped on a window's panes by drivers that keep pane labels. */
+export interface PaneWindowLabels {
+  windowId: number;
+  taskId?: number;
+}
+
 export interface IMuxClient {
   readonly kind: MuxDriverKind;
   readonly caps: MuxCapabilities;
+  /** Whether the driver stores hub labels on panes. Not part of `caps`: caps are exposed through the API. */
+  readonly supportsPaneLabels: boolean;
 
   // ─── Workspace / Window ───
 
@@ -19,6 +27,8 @@ export interface IMuxClient {
   windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean>;
   focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
   resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null>;
+  /** Stamps every pane of the window with the hub window/task identity. Only valid when `supportsPaneLabels`. */
+  labelWindowPanes(server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void>;
 
   // ─── Pane ───
 

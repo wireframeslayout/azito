@@ -34,4 +34,5 @@ export {
   windowKeyForRef,
   muxKindForRuntime,
   isPaneHandleLike,
+  isMisaoWindowId,
 } from './mux';
