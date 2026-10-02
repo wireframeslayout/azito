@@ -254,6 +254,25 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
   });
 
+  it('retries a task whose primary window is a misao window (ref carries no tmux target)', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: 'task-1' });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' };
+    const baseWindow = (opts.windowRepo.findByTask as any)(1)[0];
+    (opts.windowRepo.findByTask as any).mockReturnValue([{ ...baseWindow, muxRef: misaoRef }]);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
+
+    expect(res.statusCode).toBe(200);
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'test-server' }),
+      misaoRef,
+    );
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
+  });
+
   it('fails closed and leaves the task/execution untouched when the kill fails (still-live pane)', async () => {
     const opts = makeOpts(
       { status: 'failed', tmuxWindow: 'task-1' },

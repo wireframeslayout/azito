@@ -30,7 +30,8 @@ import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironment
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
-import { type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef } from '@azito/shared';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 
 function sleep(ms: number): Promise<void> {
@@ -392,7 +393,7 @@ export class TaskRestoreService {
       createdRef = created.ref ?? null;
 
       const ref: MuxRef = createdRef!;
-      const windowTarget = tmuxTargetFromMuxRef(ref);
+      const windowTarget = muxWindowTarget(ref);
       const handle = await this.resolveDriver(server).resolvePane(server, ref, 1);
       const dbTarget = windowTarget;
       // `lockedProjectServer` (Issue #87 16th-round review, Important finding
