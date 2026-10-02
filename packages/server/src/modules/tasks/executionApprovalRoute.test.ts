@@ -1077,6 +1077,27 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
     expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
     expect(getTask().status).toBe('failed');
   });
+
+  it('follow_up approval with a corrupt saved phase list marks the task failed instead of running every phase', async () => {
+    const task = makeTask({
+      pendingOperation: 'follow_up',
+      pendingOperationPriorStatus: 'running',
+      pendingFollowUpBody: 'Please fix the tests',
+      pendingFollowUpPhases: '["implementing"',
+    });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(getTask().status).toBe('failed');
+  });
 });
 
 // Issue #328 fourteenth-round review: GET .../execution-approval and POST

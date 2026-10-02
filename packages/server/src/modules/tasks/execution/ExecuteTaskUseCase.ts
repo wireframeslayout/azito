@@ -2152,16 +2152,16 @@ export class ExecuteTaskUseCase {
       }
     }
 
-    // Wake sleeping primary window before the lock (same pattern as
-    // followUp — Issue #276 review fix 3). The gate at line 2144 is the
-    // authoritative check, so pass gateVerifiedByCaller to skip respawn's
-    // own in-lock reverification.
+    // Wake a sleeping primary window before the lock (Issue #276). Unlike
+    // followUp(), resumeStateMachine() neither launches the agent itself nor
+    // re-verifies the gate under the task lock, so let respawn() do both:
+    // relaunch the agent (--resume) and run its own in-lock 'continuation'
+    // gate — the same kind as the 'resume' gate above, so an approval that
+    // passed it is not asked for again.
     const rsmTaskWindows = this.windowRepo.findByTask(taskId);
     const rsmPrimaryWindow = rsmTaskWindows.find((w) => isPrimaryTaskWindow(w));
     if (rsmPrimaryWindow?.sleeping) {
-      await this.primaryWindowWaker.wake(
-        rsmPrimaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true },
-      );
+      await this.primaryWindowWaker.wake(rsmPrimaryWindow.id, serverName, { gateAlreadyEnforced: true });
     }
 
     // Use the primary window from windowRepo instead of task.tmuxWindow —

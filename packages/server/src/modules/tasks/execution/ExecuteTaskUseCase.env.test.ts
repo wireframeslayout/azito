@@ -4356,7 +4356,7 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
 
     await useCase.followUp(80, 5, 'please continue');
 
-    expect(waker.wake).toHaveBeenCalledWith(50, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true });
+    expect(waker.wake).toHaveBeenCalledWith(50, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true });
     // No new window was created via createRotatedWindow.
     expect(tmux.openWindow).not.toHaveBeenCalled();
   });
@@ -4523,7 +4523,7 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     ]);
 
     await expect(result).resolves.toBeUndefined();
-    expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true });
+    expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true });
   }, 10_000);
 
   it('sends follow-up to running session even when no primary window record exists (Finding 4)', async () => {

@@ -582,13 +582,15 @@ export async function decideExecutionApproval(
     if (!body) {
       failApprovedOperation('follow_up', new Error(`Task ${taskId}: follow-up body was not preserved`));
     } else {
-      let phases: string[] | undefined;
-      try {
-        phases = task.pendingFollowUpPhases ? JSON.parse(task.pendingFollowUpPhases) : undefined;
-      } catch {
-        phases = undefined;
-      }
-      executeTaskUseCase.followUp(unitId as number, taskId, body, { phaseNames: phases })
+      // A corrupt saved phase list must not silently widen the follow-up to
+      // every remaining phase — JSON.parse throws inside the promise chain,
+      // so it fails the approved operation like any other follow-up error.
+      const savedPhases = task.pendingFollowUpPhases;
+      Promise.resolve()
+        .then(() => {
+          const phases = savedPhases ? JSON.parse(savedPhases) as string[] : undefined;
+          return executeTaskUseCase.followUp(unitId as number, taskId, body, { phaseNames: phases });
+        })
         .catch((err: unknown) => failApprovedOperation('follow_up', err));
     }
   } else if (operation === 'resume') {
