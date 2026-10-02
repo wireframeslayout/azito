@@ -1,11 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxWorkspace, type PaneHandle, type PaneOrdinal, asPaneHandle, isMisaoWindowId } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
 import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
 import { MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { generateWindowName } from '../windowNameUtils';
-import type { MisaoEventSource, MisaoRpc } from './MisaoConnection';
+import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
+import { MisaoTerminalStream } from './MisaoTerminalStream';
 import { encodeMisaoKey } from './misaoKeys';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
@@ -21,6 +23,8 @@ export interface MisaoMuxClientOptions {
   /** Called (with the server name) when the daemon reports a workspace/window/pane change. */
   onChange: (serverName: string) => void;
   log: { warn(message: string): void };
+  /** Opens a daemon connection owned by one terminal (attach is per connection). */
+  connectAttachClient: () => Promise<MisaoAttachClient>;
 }
 
 const OK: ExecResult = { stdout: '', stderr: '', code: 0 };
@@ -30,7 +34,7 @@ const unsupported = (operation: string): MuxOperationUnsupportedError => new Mux
 /**
  * IMuxClient over the misao daemon. A window is addressed by its daemon window id (`MuxRef.window`) and a pane by
  * its pane id (`PaneHandle`); a pane's ordinal is its 1-based position among the window's panes in creation order.
- * Terminal attach and line streaming are not part of this driver yet.
+ * Line streaming is not part of this driver yet.
  */
 export class MisaoMuxClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'misao';
@@ -132,6 +136,29 @@ export class MisaoMuxClient implements IMuxClient {
     return asPaneHandle(panes[ordinal - 1].paneId);
   }
 
+  /** Attaches a browser terminal to one pane; every terminal is its own daemon client, so the daemon arbitrates the size. */
+  async openTerminal(_server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
+    const { workspaces, panes } = await this.snapshot();
+    if (!workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window))) throw new Error('WINDOW_NOT_FOUND');
+    const windowPanes = panesOfWindow(panes, ref.window);
+    if (ordinal < 1 || ordinal > windowPanes.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${windowPanes.length}) for ${ref.window}`);
+    const client = await this.options.connectAttachClient();
+    try {
+      return await MisaoTerminalStream.open({
+        client,
+        paneId: windowPanes[ordinal - 1].paneId,
+        clientId: `azito-term-${randomUUID()}`,
+        cols,
+        rows,
+        log: this.options.log,
+        rpcErrorCode: (err) => this.rpc.rpcErrorCode(err),
+      });
+    } catch (err) {
+      client.close();
+      throw this.rpc.rpcErrorCode(err) === PANE_NOT_FOUND ? new Error('WINDOW_NOT_FOUND') : err;
+    }
+  }
+
   async listPanesByRef(_server: ServerConfig, ref: MuxRef): Promise<Array<{ ordinal: PaneOrdinal; handle: PaneHandle; title: string; command: string; active: boolean }>> {
     const panes = await this.windowPanes(ref);
     return panes.map((p, i) => ({ ordinal: i + 1, handle: asPaneHandle(p.paneId), title: p.title, command: paneCommand(p), active: false }));
@@ -226,7 +253,6 @@ export class MisaoMuxClient implements IMuxClient {
   async setPaneTitle(_server: ServerConfig, _handle: PaneHandle, _title: string): Promise<ExecResult> { throw unsupported('setPaneTitle'); }
   async captureLayout(_server: ServerConfig, _ref: MuxRef): Promise<never> { throw unsupported('captureLayout'); }
   async applyLayout(_server: ServerConfig, _ref: MuxRef, _layout: string): Promise<ExecResult> { throw unsupported('applyLayout'); }
-  async openTerminal(_server: ServerConfig, _ref: MuxRef, _ordinal: PaneOrdinal, _cols: number, _rows: number): Promise<ITerminalStream> { throw unsupported('openTerminal'); }
 
   async measurePanePids(_server: ServerConfig): Promise<Array<{ ref: MuxRef; pid: number }>> {
     const panes = await this.rpc.request('pane.list', {});

@@ -12,6 +12,9 @@ export interface MisaoRpc {
   rpcErrorCode(err: unknown): number | undefined;
 }
 
+/** What a terminal needs from its own daemon connection: attach is per connection, so each terminal owns one. */
+export type MisaoAttachClient = Pick<MisaoClient, 'request' | 'subscribeEvents' | 'onNotification' | 'onStateChange' | 'close'>;
+
 export interface MisaoEventSource {
   subscribeEvents(handler: EventHandler): Promise<Subscription>;
   onGap(listener: (gap: GapInfo) => void): () => void;
@@ -131,4 +134,17 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
       this.retryTimer.unref();
     }
   }
+}
+
+/** Opens a connection that is not shared with the driver, so closing it detaches only that terminal. */
+export async function connectDedicatedMisaoClient(sdk: MisaoSdk, socketPath: string): Promise<MisaoAttachClient> {
+  const client = new sdk.MisaoClient({ socketPath });
+  try {
+    await client.connect();
+  } catch (err) {
+    client.close();
+    if (err instanceof sdk.MisaoConnectionError) throw new MuxDriverUnavailableError('misao', 'daemon_unreachable');
+    throw err;
+  }
+  return client;
 }
