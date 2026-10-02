@@ -29,6 +29,26 @@ export interface MisaoHandle {
   driver: MisaoMuxClient;
 }
 
+export interface MisaoDaemonStatus {
+  installed: boolean;
+  /** The daemon's protocol version (`server.info`). */
+  version?: string;
+  /** Why the daemon is not usable. */
+  detail?: string;
+}
+
+/** Reports whether the daemon is reachable and which protocol version it speaks. Never throws: a failure is the status. */
+export async function describeMisaoDaemon(connection: MisaoConnection): Promise<MisaoDaemonStatus> {
+  const availability = connection.availability();
+  if (!availability.available) return { installed: false, detail: availability.reason };
+  try {
+    const info = await connection.request('server.info', {});
+    return { installed: true, version: info.protocolVersion };
+  } catch (err) {
+    return { installed: false, detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 /** Servers the misao driver serves: local servers running the misao mux. */
 export function selectLocalMisaoServers<T extends Pick<ServerConfig, 'muxRuntime' | 'type'>>(servers: T[]): T[] {
   return servers.filter((s) => muxKindForRuntime(s.muxRuntime) === 'misao' && s.type === 'local');

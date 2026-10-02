@@ -156,3 +156,57 @@ describe('PUT /api/servers/:name onMuxRuntimeChanged', () => {
     expect(onMuxRuntimeChanged).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/servers/:name/install-status', () => {
+  function withTransport(opts: ServersRouteOptions) {
+    const exec = vi.fn(async (cmd: string) => ({ stdout: cmd === 'uname -s' ? 'Linux\n' : '', stderr: '', code: 0 }));
+    const transportFactory = { invalidate: vi.fn(), getTransport: vi.fn(() => ({ exec })) } as unknown as ServersRouteOptions['transportFactory'];
+    return { exec, opts: { ...opts, transportFactory } };
+  }
+
+  it('reports the misao daemon instead of tmux for a misao server', async () => {
+    const stored = makeServer({ muxRuntime: 'misao' });
+    const misaoDaemonStatus = vi.fn(async () => ({ installed: true, version: '0.2.0' }));
+    const { exec, opts } = withTransport({ ...makeOpts(true, stored), misaoDaemonStatus });
+
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+
+    const body = res.json();
+    expect(body.misao).toEqual({ installed: true, version: '0.2.0' });
+    expect(body).not.toHaveProperty('tmux');
+    expect(body).toHaveProperty('node');
+    expect(exec.mock.calls.map(([cmd]) => cmd).filter((cmd) => cmd.includes('tmux'))).toEqual([]);
+  });
+
+  it('reports an unreachable daemon as not installed', async () => {
+    const stored = makeServer({ muxRuntime: 'misao' });
+    const misaoDaemonStatus = vi.fn(async () => ({ installed: false, detail: 'daemon_unreachable' }));
+    const { opts } = withTransport({ ...makeOpts(true, stored), misaoDaemonStatus });
+
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+
+    expect(res.json().misao).toEqual({ installed: false, detail: 'daemon_unreachable' });
+  });
+
+  it('reports misao_disabled when the driver is not wired', async () => {
+    const stored = makeServer({ muxRuntime: 'misao' });
+    const { opts } = withTransport(makeOpts(false, stored));
+
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+
+    expect(res.json().misao).toEqual({ installed: false, detail: 'misao_disabled' });
+  });
+
+  it('keeps the tmux check for a tmux server', async () => {
+    const stored = makeServer({ muxRuntime: 'system' });
+    const misaoDaemonStatus = vi.fn();
+    const { exec, opts } = withTransport({ ...makeOpts(true, stored), misaoDaemonStatus });
+
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+
+    expect(res.json()).toHaveProperty('tmux');
+    expect(res.json()).not.toHaveProperty('misao');
+    expect(exec).toHaveBeenCalledWith('tmux -V');
+    expect(misaoDaemonStatus).not.toHaveBeenCalled();
+  });
+});

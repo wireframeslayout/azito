@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api } from '../../../api/client';
 import { InstallSteps, FormSelect, FormInput, Chip, Button } from '../../ui';
 import type { InstallStep, ChipTone } from '../../ui';
@@ -150,7 +151,8 @@ export default function SetupSection({ server, installStatus, refresh }: SetupSe
   // 進捗計算: 表示中の行のみを母数にする。任意コンポーネント（chromium）も母数に含めるが、
   // 未導入でも異常扱い（赤）にはしない（S1 デザインの決定④）。
   const progressRows: { installed: boolean }[] = [
-    { installed: installStatus.tmux.installed },
+    ...(installStatus.tmux ? [{ installed: installStatus.tmux.installed }] : []),
+    ...(installStatus.misao ? [{ installed: installStatus.misao.installed }] : []),
     { installed: installStatus.node.installed },
     ...(showTailscale ? [{ installed: installStatus.tailscale!.installed }] : []),
     { installed: installStatus.aztHarness.installed },
@@ -213,19 +215,30 @@ export default function SetupSection({ server, installStatus, refresh }: SetupSe
         </Button>
       </div>
 
-      <StepRow
-        label="tmux"
-        item={installStatus.tmux}
-        categoryLabel={t('setup.foundation')}
-        running={false}
-        action={
-          server.muxRuntime === 'system' && installStatus.tmux.installed ? (
-            <Button size="sm" variant="ghost" onClick={handleApplyTmuxConfig}>{t('setup.applySettings')}</Button>
-          ) : undefined
-        }
-      >
-        {!installStatus.tmux.installed && <TmuxSetupCards server={server} refresh={refresh} />}
-      </StepRow>
+      {installStatus.tmux && (
+        <StepRow
+          label="tmux"
+          item={installStatus.tmux}
+          categoryLabel={t('setup.foundation')}
+          running={false}
+          action={
+            server.muxRuntime === 'system' && installStatus.tmux.installed ? (
+              <Button size="sm" variant="ghost" onClick={handleApplyTmuxConfig}>{t('setup.applySettings')}</Button>
+            ) : undefined
+          }
+        >
+          {!installStatus.tmux.installed && <TmuxSetupCards server={server} refresh={refresh} />}
+        </StepRow>
+      )}
+
+      {installStatus.misao && (
+        <StepRow
+          label="misao"
+          item={describeMisaoItem(installStatus.misao, t)}
+          categoryLabel={t('setup.foundation')}
+          running={false}
+        />
+      )}
 
       <StepRow
         label="Node.js"
@@ -325,6 +338,21 @@ export default function SetupSection({ server, installStatus, refresh }: SetupSe
       )}
     </div>
   );
+}
+
+const MISAO_DETAIL_KEYS: Record<string, string> = {
+  daemon_unreachable: 'overview.misaoUnreachable',
+  misao_disabled: 'overview.misaoDisabled',
+};
+
+/** Turns the server's machine-readable misao status into what StepRow prints (protocol label, readable detail). */
+function describeMisaoItem(item: InstallStatusItem, t: TFunction): InstallStatusItem {
+  const detailKey = item.detail ? MISAO_DETAIL_KEYS[item.detail] : undefined;
+  return {
+    ...item,
+    version: item.version ? t('setup.misaoProtocol', { version: item.version }) : undefined,
+    detail: detailKey ? t(detailKey) : item.detail,
+  };
 }
 
 function TmuxSetupCards({ server, refresh }: { server: Server; refresh: () => void }) {

@@ -129,6 +129,7 @@
     "recheck": "再チェック",
     "rechecking": "確認中…",
     "foundation": "基盤",
+    "misaoProtocol": "プロトコル {{version}}",
     "agentLabel": "エージェント",
     "applySettings": "設定適用",
     "allInstalled": "すべて導入済",

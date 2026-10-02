@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
-import { registerMisaoDriver, resolveMisaoRuntime, selectLocalMisaoServers, syncMisaoChangeHooks, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
+import { describeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntime, selectLocalMisaoServers, syncMisaoChangeHooks, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
 
 function runtime(connect: () => Promise<void>): MisaoRuntime {
   class FakeConnectionError extends Error {}
@@ -128,5 +128,30 @@ describe('syncMisaoChangeHooks', () => {
     syncMisaoChangeHooks(misao, srv('system'), srv('misao'), log);
     await new Promise((r) => setImmediate(r));
     expect(log.warn).toHaveBeenCalled();
+  });
+});
+
+describe('describeMisaoDaemon', () => {
+  function connection(availability: { available: true } | { available: false; reason: string }, request: () => Promise<unknown>) {
+    return { availability: () => availability, request } as never;
+  }
+
+  it('reports the protocol version of a connected daemon', async () => {
+    const request = vi.fn(async () => ({ protocolVersion: '0.2.0' }));
+    const status = await describeMisaoDaemon(connection({ available: true }, request));
+    expect(status).toEqual({ installed: true, version: '0.2.0' });
+    expect(request).toHaveBeenCalledWith('server.info', {});
+  });
+
+  it('reports an unreachable daemon without sending a request', async () => {
+    const request = vi.fn();
+    const status = await describeMisaoDaemon(connection({ available: false, reason: 'daemon_unreachable' }, request));
+    expect(status).toEqual({ installed: false, detail: 'daemon_unreachable' });
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('puts the error message in detail when server.info fails', async () => {
+    const status = await describeMisaoDaemon(connection({ available: true }, async () => { throw new Error('socket closed'); }));
+    expect(status).toEqual({ installed: false, detail: 'socket closed' });
   });
 });

@@ -36,7 +36,7 @@ import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
 import { resolveTerminalTarget } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
-import sessionsRoutes from '../modules/tmux/routes/sessions';
+import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
 import gitRoutes from '../modules/git/routes';
 import sidekicksRoutes from '../modules/sidekicks/routes';
@@ -77,7 +77,7 @@ import { AgentEventStream } from '../modules/servers/transport/AgentEventStream'
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
 import { partitionByTmuxRuntime } from '../modules/servers/tmuxServers';
-import { selectLocalMisaoServers, syncMisaoChangeHooks } from '../modules/tmux/misao/misaoDriver';
+import { describeMisaoDaemon, selectLocalMisaoServers, syncMisaoChangeHooks } from '../modules/tmux/misao/misaoDriver';
 import { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
 import { MisaoActivityBridge } from '../modules/operations/misaoActivityBridge';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
@@ -479,8 +479,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
     serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, misaoEnabled: wiring.misaoEnabled,
+    misaoDaemonStatus: wiring.misao && (() => describeMisaoDaemon(wiring.misao!.connection)),
     onMuxRuntimeChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);
+      // The session cache is shared across mux kinds; drop the previous runtime's listing.
+      invalidateSessionCache(next.name);
       paneHandleResolver.clearServer(next.name);
       supervisorRegistry.clearServerPaneRefs(next.name);
       syncMisaoChangeHooks(wiring.misao, previous, next, app.log);

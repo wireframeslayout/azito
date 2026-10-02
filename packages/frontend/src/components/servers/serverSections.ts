@@ -32,7 +32,9 @@ export interface InstallStatusItem {
 }
 
 export interface InstallStatusResponse {
-  tmux: InstallStatusItem;
+  /** Present for tmux servers; misao servers report `misao` instead. */
+  tmux?: InstallStatusItem;
+  misao?: InstallStatusItem;
   node: InstallStatusItem;
   aztHarness: InstallStatusItem;
   tailscale?: InstallStatusItem;
@@ -57,6 +59,7 @@ export function getSetupSummary(installStatus: InstallStatusResponse | null): Se
   if (!installStatus) return { text: 'servers:status.checking', tone: 'dim' };
   const items = [
     installStatus.tmux,
+    installStatus.misao,
     installStatus.node,
     installStatus.aztHarness,
     installStatus.tailscale,
