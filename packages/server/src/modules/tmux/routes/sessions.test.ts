@@ -8,6 +8,7 @@ import { resolveKillOutcome } from '../killOutcome';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
+import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -865,5 +866,30 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
 
     expect(res.statusCode).toBe(500);
     expect(res.json()).toEqual({ error: 'daemon unreachable' });
+  });
+
+  it('lets an unavailable driver reach the app error handler instead of the route 500', async () => {
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const listWorkspaces = vi.fn();
+    registry.register('misao', { listWorkspaces } as unknown as IMuxClient, () => ({ available: false, reason: 'daemon_unreachable' }));
+    app = Fastify();
+    app.setErrorHandler((err, _request, reply) => {
+      if (err instanceof MuxDriverUnavailableError) return reply.status(503).send({ reason: err.reason });
+      return reply.status(500).send({ error: 'unexpected' });
+    });
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(misaoServer),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ reason: 'daemon_unreachable' });
+    expect(listWorkspaces).not.toHaveBeenCalled();
   });
 });

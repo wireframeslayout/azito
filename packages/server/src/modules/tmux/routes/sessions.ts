@@ -222,9 +222,14 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         return enrichSessions(cached.data, request.params.name, opts.windowRepo);
       }
 
+      // Resolved outside the try so an unavailable driver reaches the global 503 handler like the other mux routes.
+      const driver = opts.muxDriverRegistry && muxKindForRuntime(srv.muxRuntime ?? 'system') !== 'tmux'
+        ? opts.muxDriverRegistry.resolve(srv)
+        : undefined;
+
       try {
-        if (opts.muxDriverRegistry && muxKindForRuntime(srv.muxRuntime ?? 'system') !== 'tmux') {
-          const workspaces = await opts.muxDriverRegistry.resolve(srv).listWorkspaces(srv);
+        if (driver) {
+          const workspaces = await driver.listWorkspaces(srv);
           sessionCache.set(request.params.name, { data: workspaces, ts: Date.now() });
           return enrichSessions(workspaces, request.params.name, opts.windowRepo);
         }
