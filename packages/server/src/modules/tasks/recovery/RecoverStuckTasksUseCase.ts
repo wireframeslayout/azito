@@ -10,6 +10,7 @@ import type { IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
+import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
 import type { ExecuteTaskUseCase } from '../execution/ExecuteTaskUseCase';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { AgentTurn } from '../turns/AgentTurn';
@@ -146,7 +147,14 @@ export class RecoverStuckTasksUseCase {
     if (!server) return;
     if (server.type !== 'local' && !usesHttpSignalPath(unit.workerExecutionMode)) return;
 
-    const driver: IMuxClient = this.muxDriverRegistry.resolve(server);
+    let driver: IMuxClient;
+    try {
+      driver = this.muxDriverRegistry.resolve(server);
+    } catch (err) {
+      if (!(err instanceof MuxDriverUnavailableError)) throw err;
+      this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
+      return;
+    }
 
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     const windowName = task.tmuxWindow || `task-${task.id}`;
