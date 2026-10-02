@@ -57,11 +57,14 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
     return asPaneHandle(paneId);
   }
 
-  function watchMarkers(stream: MisaoPaneStream): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('marker not detected')), 20000);
+  /** `cancel` clears the timeout, so a test that fails before awaiting `detected` leaves no late rejection behind. */
+  function watchMarkers(stream: MisaoPaneStream): { detected: Promise<string>; cancel: () => void } {
+    let timer: NodeJS.Timeout | undefined;
+    const detected = new Promise<string>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error('marker not detected')), 20000);
       stream.on('marker', (kind: string) => { clearTimeout(timer); resolve(kind); });
     });
+    return { detected, cancel: () => clearTimeout(timer) };
   }
 
   beforeAll(async () => {
@@ -100,12 +103,13 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
     const stream = new MisaoPaneStream(pane, viaProxy);
     stream.setMarkers('AZITO_DONE_1_n1', 'AZITO_QUESTIONS_1_n1');
     stream.enableMarkerDetection();
-    const detected = watchMarkers(stream);
+    const { detected, cancel } = watchMarkers(stream);
     stream.start();
     try {
       await expect(detected).resolves.toBe('phase_complete');
       expect(stream.getBuffer()).toContain('working');
     } finally {
+      cancel();
       stream.stop();
     }
   });
@@ -115,7 +119,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
     const stream = new MisaoPaneStream(pane, viaProxy);
     stream.setMarkers('AZITO_DONE_2_n2', 'AZITO_QUESTIONS_2_n2');
     stream.enableMarkerDetection();
-    const detected = watchMarkers(stream);
+    const { detected, cancel } = watchMarkers(stream);
     const gaps: unknown[] = [];
     stream.on('gap', (gap) => gaps.push(gap));
     stream.start();
@@ -131,6 +135,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
       expect(gaps).toEqual([]);
       expect(stream.getBuffer()).toContain('AZITO_DONE_2_n2');
     } finally {
+      cancel();
       stream.stop();
     }
   });

@@ -56,3 +56,18 @@ describe('WorkerWaiter.startPaneStream stream events', () => {
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_gap', reason: 'epoch' });
   });
 });
+
+describe('WorkerWaiter.waitForWorker cleanup', () => {
+  it.each([
+    ['stops the pipe of a file-backed stream', '/tmp/azito-pipe-1.log', 1],
+    ['does not stop a pipe that was never started (no output file)', '', 0],
+  ])('%s', async (_name, filePath, stopCalls) => {
+    const { waiter, stream, driver } = setup(filePath);
+    const abort = new AbortController();
+    const waiting = waiter.waitForWorker(server, handle, 1, 2, abort.signal, stream as unknown as IPaneStream);
+    abort.abort();
+    await waiting;
+    expect(driver.stopOutputStream).toHaveBeenCalledTimes(stopCalls);
+    expect(stream.stop).toHaveBeenCalled();
+  });
+});

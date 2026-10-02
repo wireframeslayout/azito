@@ -2091,3 +2091,38 @@ describe('PhaseLoopRunner isolation cutoff re-reads isolationIntent per phase (#
     expect(serverRepoMock.findByName).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('PhaseLoopRunner pane stream ownership before waitForWorker', () => {
+  const run = (runner: PhaseLoopRunner) =>
+    runner.stateMachineLoop(makeUnitForRun(), 'local', task, server, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
+  const phaseStreamOf = (workerWaiter: { startPaneStream: ReturnType<typeof vi.fn> }) =>
+    workerWaiter.startPaneStream.mock.results[0].value as { stop: ReturnType<typeof vi.fn> };
+
+  it('stops the pane stream when a step between startPaneStream and waitForWorker throws', async () => {
+    const { runner, workerWaiter } = makeRunner();
+    workerWaiter.startSignalStream.mockImplementation(() => { throw new Error('signal file not writable'); });
+
+    await expect(run(runner)).rejects.toThrow('signal file not writable');
+
+    expect(phaseStreamOf(workerWaiter).stop).toHaveBeenCalledTimes(1);
+    expect(workerWaiter.waitForWorker).not.toHaveBeenCalled();
+  });
+
+  it('stops the pane stream exactly once when sending the prompt fails', async () => {
+    const { runner, workerWaiter, workerInput } = makeRunner();
+    workerInput.sendPrompt.mockRejectedValue(new Error('send failed'));
+
+    await run(runner);
+
+    expect(phaseStreamOf(workerWaiter).stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves stopping to waitForWorker once the stream is handed over', async () => {
+    const { runner, workerWaiter } = makeRunner();
+
+    await run(runner);
+
+    expect(workerWaiter.waitForWorker).toHaveBeenCalled();
+    expect(phaseStreamOf(workerWaiter).stop).not.toHaveBeenCalled();
+  });
+});

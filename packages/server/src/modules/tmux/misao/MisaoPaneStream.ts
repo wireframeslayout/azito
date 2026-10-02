@@ -1,6 +1,7 @@
 import type { PaneHandle } from '@azito/shared';
 import type { GapInfo, Subscription, SubscriptionErrorInfo } from '@misao/sdk' with { 'resolution-mode': 'import' };
 import { BasePaneStream } from '../PaneOutputStream';
+import type { PaneStreamGapEvent } from '../PaneStream';
 import type { MisaoLineSource } from './MisaoConnection';
 
 /**
@@ -8,6 +9,11 @@ import type { MisaoLineSource } from './MisaoConnection';
  * it resumes from the last seq. Lines lost anyway (daemon restart, ring overrun) are reported as 'gap'; phase
  * completion is decided by the signal stream, so a gap only costs buffered output. A refused re-subscribe or a
  * failed subscribe is reported as 'subscription_error' ('error' would crash the process when nobody listens).
+ *
+ * Known limitation: stop() unsubscribes on the client side only (the SDK drops the stream locally). The protocol has
+ * no way to end a line subscription yet, so the daemon keeps sending this pane's lines over the shared connection
+ * until the pane closes or the connection is re-established; ending it on the daemon side waits for misao to add
+ * pane.unsubscribe_lines.
  */
 export class MisaoPaneStream extends BasePaneStream {
   protected filePath = '';
@@ -51,7 +57,8 @@ export class MisaoPaneStream extends BasePaneStream {
 
   private handleGap(gap: GapInfo): void {
     if (this.closed || gap.stream.kind !== 'lines' || gap.stream.paneId !== this.pane) return;
-    this.emit('gap', { reason: gap.reason });
+    const event: PaneStreamGapEvent = { reason: gap.reason };
+    this.emit('gap', event);
   }
 
   private handleSubscriptionError(info: SubscriptionErrorInfo): void {
