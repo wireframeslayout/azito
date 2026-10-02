@@ -299,8 +299,6 @@ describe('MisaoMuxClient writes', () => {
     expect(daemon.callsTo('window.create')[0]).toEqual({ workspace: 'proj', name: 'main' });
     expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, env: { FOO: 'bar' } });
     expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('ephemeralEnv');
-    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
-    expect(daemon.panes[0].env).toEqual({});
   });
 
   it('openWorkspace runs a command through a login shell and generates a window name unless exact', async () => {

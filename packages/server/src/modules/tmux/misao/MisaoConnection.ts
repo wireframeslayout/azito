@@ -19,19 +19,6 @@ export type MisaoAttachClient = Pick<MisaoClient, 'request' | 'subscribeEvents' 
 
 export interface MisaoEventSource {
   subscribeEvents(handler: EventHandler): Promise<Subscription>;
-  async subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription> {
-    try {
-      return await this.requireClient().subscribeLines(paneId, handler);
-    } catch (err) {
-      throw this.translate(err);
-    }
-  }
-
-  onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void {
-    this.subscriptionErrorListeners.add(listener);
-    return () => { this.subscriptionErrorListeners.delete(listener); };
-  }
-
   onGap(listener: (gap: GapInfo) => void): () => void;
   /** Fires on every transition into the connected state (first connect, retry success, SDK reconnect). */
   onConnected(listener: () => void): () => void;
@@ -97,6 +84,19 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoLineSou
     } catch (err) {
       throw this.translate(err);
     }
+  }
+
+  async subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription> {
+    try {
+      return await this.requireClient().subscribeLines(paneId, handler);
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void {
+    this.subscriptionErrorListeners.add(listener);
+    return () => { this.subscriptionErrorListeners.delete(listener); };
   }
 
   onGap(listener: (gap: GapInfo) => void): () => void {

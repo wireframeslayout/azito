@@ -66,6 +66,16 @@ export abstract class BasePaneStream extends EventEmitter implements IPaneStream
     }
   }
 
+  /** Looks for markers in text that is not part of the stream (a screen snapshot): nothing is buffered or counted. */
+  protected scanForMarkers(text: string): void {
+    const { questionsAccum, questionsDepth } = this;
+    for (const rawLine of text.split('\n')) {
+      this.checkRawSegments(rawLine.replace(/\r+$/, ''));
+    }
+    this.questionsAccum = questionsAccum;
+    this.questionsDepth = questionsDepth;
+  }
+
   private checkRawSegments(stripped: string): void {
     const segments = stripped.split('\r');
     for (const seg of segments) {
