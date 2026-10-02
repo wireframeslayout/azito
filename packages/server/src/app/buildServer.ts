@@ -74,7 +74,7 @@ import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
-import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { muxKindForRuntime, muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
@@ -105,7 +105,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const defaultErrorHandler = app.errorHandler;
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof MuxDriverUnavailableError) {
-      return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind });
+      return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind, reason: err.reason });
     }
     return defaultErrorHandler.call(app, err, request, reply);
   });
@@ -458,7 +458,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
-    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, misaoEnabled: wiring.misaoEnabled,
     onMuxRuntimeChanged: (serverName) => {
       transportFactory.invalidate(serverName);
       paneHandleResolver.clearServer(serverName);
@@ -807,7 +807,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     // 8s hard cap in main.ts's graceful shutdown can starve it in favor of later steps.
     await browserSessionManager.stopAll();
     agentActivityMonitor.stop();
-    const localServers = serverRepo.findAll().filter((s) => s.type === 'local');
+    const localServers = serverRepo.findAll().filter((s) => s.type === 'local' && muxKindForRuntime(s.muxRuntime) === 'tmux');
     await tmuxHookManager.uninstallAll(localServers);
     for (const stream of agentEventStreams) stream.stop();
     notificationBus.destroy();

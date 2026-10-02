@@ -5,6 +5,7 @@ import fs from 'fs';
 import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { muxKindForRuntime, type MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
@@ -106,7 +107,27 @@ function redactSecrets(message: string): string {
 
 // ─── Types ───
 
+// AZITO_EXPERIMENTAL_MISAO, resolved once at the composition root. Off by default so routes built without it keep the tmux-only contract.
+function allowedMuxRuntimes(misaoEnabled: boolean): MuxRuntime[] {
+  return misaoEnabled ? ['system', 'managed', 'misao'] : ['system', 'managed'];
+}
+
+function muxRuntimeError(misaoEnabled: boolean): string {
+  return misaoEnabled ? 'muxRuntime must be "system", "managed" or "misao"' : 'muxRuntime must be "system" or "managed"';
+}
+
+function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<string, unknown> {
+  const kind = muxKindForRuntime(srv.muxRuntime);
+  try {
+    return { runtime: srv.muxRuntime, kind, driverAvailable: true, caps: registry.resolve(srv).caps };
+  } catch (err) {
+    if (!(err instanceof MuxDriverUnavailableError)) throw err;
+    return { runtime: srv.muxRuntime, kind, driverAvailable: false, caps: null, reason: err.reason };
+  }
+}
+
 export interface ServersRouteOptions {
+  misaoEnabled?: boolean;
   serverRepo: IServerRepository;
   tmux: TmuxClient;
   transportFactory: TransportFactory;
@@ -172,6 +193,8 @@ export interface ServersRouteOptions {
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
   const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxRuntimeChanged } = opts;
+  const misaoEnabled = opts.misaoEnabled ?? false;
+  const muxRuntimeWhitelist: string[] = allowedMuxRuntimes(misaoEnabled);
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -356,10 +379,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     if (!srv) return reply.status(404).send({ error: 'Server not found' });
     const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
     const { agentToken, ...rest } = srv;
-    const kind = muxKindForRuntime(srv.muxRuntime);
-    const driverAvailable = muxDriverRegistry.has(kind);
-    const caps = driverAvailable ? muxDriverRegistry.resolve(srv).caps : null;
-    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash, mux: { runtime: srv.muxRuntime, kind, driverAvailable, caps } };
+    const mux = describeMux(muxDriverRegistry, srv);
+    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash, mux };
   });
 
   // ── POST /api/servers ──
@@ -383,8 +404,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       muxRuntime?: string;
     };
     const validMuxRuntime = muxRuntime || undefined;
-    if (validMuxRuntime && !['system', 'managed'].includes(validMuxRuntime))
-      return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+    if (validMuxRuntime && !muxRuntimeWhitelist.includes(validMuxRuntime))
+      return reply.status(400).send({ error: muxRuntimeError(misaoEnabled) });
+    if (validMuxRuntime === 'misao' && autoInstall)
+      return reply.status(400).send({ error: 'muxRuntime "misao" is only supported on local servers' });
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
@@ -407,6 +430,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       if (!type || !['local', 'agent'].includes(type))
         return reply.status(400).send({ error: 'Type must be "local" or "agent"' });
+      if (validMuxRuntime === 'misao' && type !== 'local')
+        return reply.status(400).send({ error: 'muxRuntime "misao" is only supported on local servers' });
       if (type === 'agent') {
         if (!host) return reply.status(400).send({ error: 'Host required for agent servers' });
         if (!agentPort) return reply.status(400).send({ error: 'Port required for agent servers' });
@@ -440,8 +465,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; isolationIntent?: boolean;
       };
       const validPutMux = putMux || undefined;
-      if (validPutMux && !['system', 'managed'].includes(validPutMux))
-        return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+      if (validPutMux && !muxRuntimeWhitelist.includes(validPutMux))
+        return reply.status(400).send({ error: muxRuntimeError(misaoEnabled) });
+      // Moving a misao row back to system/managed stays allowed while the flag is off; any write that would keep it on misao is refused.
+      const effectiveMuxRuntime = (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime;
+      if (effectiveMuxRuntime === 'misao' && !misaoEnabled)
+        return reply.status(400).send({ error: 'muxRuntime "misao" requires AZITO_EXPERIMENTAL_MISAO=1; set muxRuntime to "system" or "managed" to edit this server' });
       // Issue #29 review, Important finding 2: isolationIntent must be an
       // actual boolean, not merely truthy — `"false"` (a string) is truthy
       // in JS and would otherwise be persisted as `true` by
@@ -470,6 +499,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // when effectiveType !== 'agent', with no way to explicitly express
       // "and clear it too" in the same request.
       const effectiveType = (type || srv.type) as 'local' | 'agent';
+      if (effectiveMuxRuntime === 'misao' && effectiveType !== 'local') {
+        return reply.status(400).send({ error: 'muxRuntime "misao" is only supported on local servers' });
+      }
       if (effectiveType !== 'agent' && isolationIntent === true) {
         return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
       }
