@@ -63,6 +63,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,

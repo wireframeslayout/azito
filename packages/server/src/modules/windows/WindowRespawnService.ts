@@ -185,7 +185,7 @@ export class WindowRespawnService {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean }): Promise<{ tmuxTarget: string }> {
+  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
 
@@ -372,10 +372,18 @@ export class WindowRespawnService {
         // pre-respawn window an in-lock block is supposed to leave
         // untouched. Moving the same check here means a downgrade aborts
         // before anything is torn down.
-        if (isPrimary) {
-          // 'continuation': a respawn resumes a task whose working
-          // directory a past execute()/restore() already populated — it
-          // never distributes anything itself.
+        if (isPrimary && opts?.inLockGate) {
+          // Caller-provided gate (e.g. follow_up / resume) — delegates
+          // the in-lock re-verification to the caller so it can use the
+          // correct operation and manifest. If it throws (e.g.
+          // ExecutionGatePendingApprovalError), the exception propagates
+          // and the window is NOT killed or recreated.
+          opts.inLockGate(freshServer);
+        } else if (isPrimary) {
+          // Default respawn reverification: 'continuation' — a respawn
+          // resumes a task whose working directory a past execute()/
+          // restore() already populated — it never distributes anything
+          // itself.
           // Issue #274 review: when gateAlreadyEnforced the OUTER
           // enforceExecutionGate was correctly skipped (caller already
           // ran it), but this IN-LOCK re-verification must still run —
@@ -596,7 +604,7 @@ export class WindowRespawnService {
   async wakeWindow(
     windowId: number,
     serverName: string,
-    opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean },
+    opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void },
   ): Promise<{ tmuxTarget: string }> {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error(`Server ${serverName} not found`);

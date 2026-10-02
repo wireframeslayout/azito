@@ -75,6 +75,8 @@ function buildTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
   sleepAfterPush: null,
     worktreePath: null,
     worktreeBranch: null,

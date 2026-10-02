@@ -326,6 +326,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
+        pendingFollowUpBody: null,
+        pendingFollowUpPhases: null,
       }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
       return { ok: true, id };
     } catch (err: unknown) {
@@ -515,6 +517,16 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           baseBranchUnresolvable: manifest.branches.base === null,
         },
         secretNames,
+        pendingFollowUpPreview: (() => {
+          if (!task.pendingFollowUpBody) return null;
+          const marker = '## User Instructions\n';
+          const idx = task.pendingFollowUpBody.indexOf(marker);
+          const userPart = idx >= 0 ? task.pendingFollowUpBody.slice(idx + marker.length) : task.pendingFollowUpBody;
+          return userPart.slice(0, 200) + (userPart.length > 200 ? '…' : '');
+        })(),
+        pendingFollowUpPhases: task.pendingFollowUpPhases
+          ? JSON.parse(task.pendingFollowUpPhases) as string[]
+          : null,
       };
     },
   );
@@ -845,6 +857,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
+        pendingFollowUpBody: null,
+        pendingFollowUpPhases: null,
       }, { kind: 'task', id: parentId, generation }, actor);
 
       return reply.status(201).send({ ok: true, id });

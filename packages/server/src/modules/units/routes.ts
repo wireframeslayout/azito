@@ -320,7 +320,7 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
       }
 
       try {
-        await executeTaskUseCase.followUp(id, taskId, finalComment);
+        await executeTaskUseCase.followUp(id, taskId, finalComment, { phaseNames: phases });
         return { ok: true };
       } catch (err: unknown) {
         if (replyToExecutionGateError(err, reply)) return;

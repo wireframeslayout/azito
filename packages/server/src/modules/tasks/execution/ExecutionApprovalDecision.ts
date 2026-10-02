@@ -315,7 +315,7 @@ interface ApprovalLogger {
  */
 function resolveApprovedStatus(operation: NonNullable<Task['pendingOperation']>, priorStatus: TaskStatus): TaskStatus {
   if (operation === 'execute') return 'open' as TaskStatus;
-  if (operation === 'resume') return 'running' as TaskStatus;
+  if (operation === 'resume' || operation === 'follow_up') return 'running' as TaskStatus;
   return priorStatus;
 }
 
@@ -431,7 +431,7 @@ export async function decideExecutionApproval(
   // approval) rather than consume it and then have nothing runnable to
   // dispatch to, which would leave the task silently stuck with a cleared
   // pendingOperation but nothing executed (Issue #328 review fix 2).
-  if ((operation === 'execute' || operation === 'resume') && unitId === null) {
+  if ((operation === 'execute' || operation === 'resume' || operation === 'follow_up') && unitId === null) {
     return {
       status: 409,
       body: { error: `Task ${taskId} has no resolvable Unit — cannot approve a "${operation}" operation without one. Assign a Unit to the task or its project, then retry.` },
@@ -573,6 +573,25 @@ export async function decideExecutionApproval(
       taskRestoreService.restore(approvedTask, log)
         .then(() => emitCurrentStatus('restore'))
         .catch((err: unknown) => failApprovedOperation('restore', err));
+    }
+  } else if (operation === 'follow_up') {
+    // Issue #276: re-execute followUp() with the saved body text. `task` was
+    // read at line 392 BEFORE consumePendingApproval cleared the columns, so
+    // pendingFollowUpBody/pendingFollowUpPhases are still populated here.
+    const body = task.pendingFollowUpBody;
+    if (!body) {
+      failApprovedOperation('follow_up', new Error(`Task ${taskId}: follow-up body was not preserved`));
+    } else {
+      // A corrupt saved phase list must not silently widen the follow-up to
+      // every remaining phase — JSON.parse throws inside the promise chain,
+      // so it fails the approved operation like any other follow-up error.
+      const savedPhases = task.pendingFollowUpPhases;
+      Promise.resolve()
+        .then(() => {
+          const phases = savedPhases ? JSON.parse(savedPhases) as string[] : undefined;
+          return executeTaskUseCase.followUp(unitId as number, taskId, body, { phaseNames: phases });
+        })
+        .catch((err: unknown) => failApprovedOperation('follow_up', err));
     }
   } else if (operation === 'resume') {
     // status is already 'running' (see resolveApprovedStatus()) — this is

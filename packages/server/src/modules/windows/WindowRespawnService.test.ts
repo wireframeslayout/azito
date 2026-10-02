@@ -93,6 +93,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
@@ -1814,6 +1816,77 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
       manifestHash: expect.any(String),
       pendingOperationWindowId: 1,
     });
+  });
+});
+
+describe('WindowRespawnService — inLockGate callback (Issue #276)', () => {
+  const PASSING_REPORT = JSON.stringify({ kind: 'verification', verified: true });
+
+  function allowProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
+  }
+
+  function verifiedServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
+    return makeServer({
+      isolationIntent: true,
+      isolationVerifiedAt: '2026-01-01T00:00:00Z',
+      isolationReport: PASSING_REPORT,
+      ...overrides,
+    });
+  }
+
+  it('inLockGate callback is called instead of default respawn reverification', async () => {
+    const task = makeTask({ id: 11, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: 'abc' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 11, isPrimary: true, tmuxTarget: 'azito:task-11--ab12' });
+    const inLockGate = vi.fn();
+    const { service, tmux, taskRepo, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    // Make the in-lock refetch return a server matching the one passed to
+    // respawn() — otherwise the snapshot-mismatch guard fires first.
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name }));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-11--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await service.respawn(1, verifiedServer(), { gateAlreadyEnforced: true, inLockGate });
+
+    expect(inLockGate).toHaveBeenCalledOnce();
+    // Called with the fresh server from the lock
+    expect(inLockGate).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }));
+    // Default respawn gate (recordExecutionGateBlock) was NOT called
+    expect(taskRepo.recordExecutionGateBlock).not.toHaveBeenCalled();
+  });
+
+  it('inLockGate that throws prevents window creation', async () => {
+    const task = makeTask({ id: 12, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 2, taskId: 12, isPrimary: true, tmuxTarget: 'azito:task-12--cd34' });
+    const inLockGate = vi.fn(() => { throw new Error('gate blocked'); });
+    const { service, tmux, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name }));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-12--cd34', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await expect(service.respawn(2, verifiedServer(), { gateAlreadyEnforced: true, inLockGate })).rejects.toThrow('gate blocked');
+
+    // Old window was NOT killed and new window was NOT created
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
   });
 });
 

@@ -68,6 +68,7 @@
       }
     },
     "baseBranchUnresolvable": "既定ブランチを検出できませんでした。このままでは実行が失敗します。プロジェクトの既定ブランチを設定してください。",
+    "followUpPreview": "承認すると次の follow-up を送ります:",
     "reapprovalNote": "承認後にこのタスクのタイトルまたは本文を編集すると、再承認が必要になります。",
     "approve": "承認",
     "deny": "拒否",

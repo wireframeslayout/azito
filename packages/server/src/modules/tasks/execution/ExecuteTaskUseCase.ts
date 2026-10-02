@@ -340,8 +340,10 @@ export class ExecuteTaskUseCase {
   enforceExecutionGate(
     task: Task,
     unitId: number,
-    operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
+    operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review' | 'follow_up',
     baseBranchOverride?: string | null,
+    followUpBody?: string,
+    followUpPhases?: string[],
   ) {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
     // project.defaultUnitId) / serverName the caller already resolved via
@@ -405,6 +407,8 @@ export class ExecuteTaskUseCase {
         pendingOperation: operation,
         priorStatus: task.status,
         manifestHash,
+        pendingFollowUpBody: followUpBody,
+        pendingFollowUpPhases: followUpPhases ? JSON.stringify(followUpPhases) : undefined,
       });
       if (recorded) {
         // Separate 'status_change' log entry (Issue #51), not just the
@@ -462,6 +466,8 @@ export class ExecuteTaskUseCase {
     operation: NonNullable<Task['pendingOperation']>,
     freshServer: ServerConfig,
     baseBranchOverride?: string | null,
+    followUpBody?: string | null,
+    followUpPhases?: string | null,
   ): { project: ReturnType<typeof resolveExecutionManifest>['project']; projectServer: ReturnType<typeof resolveExecutionManifest>['projectServer'] } {
     // Same 'execute' vs 'continuation' mapping as enforceExecutionGate()
     // above — only a FRESH execute() (never distributed anything this run)
@@ -487,6 +493,9 @@ export class ExecuteTaskUseCase {
       freshServer,
       this.scopedAuthEnabled,
       manifestHash,
+      null,
+      followUpBody,
+      followUpPhases,
     );
     return { project, projectServer };
   }
@@ -1508,7 +1517,7 @@ export class ExecuteTaskUseCase {
       });
   }
 
-  async followUp(unitId: number, taskId: number, comment: string): Promise<void> {
+  async followUp(unitId: number, taskId: number, comment: string, opts?: { phaseNames?: string[] }): Promise<void> {
     const unitForRun = this.unitRepo.findById(unitId);
     if (!unitForRun) throw new Error('Unit not found');
 
@@ -1543,12 +1552,13 @@ export class ExecuteTaskUseCase {
     // just as much as a fresh execute() can — e.g. a description edit on an
     // untrusted task invalidates its approval hash while the task is
     // mid-run, and the next follow-up (including the one the answer-submit
-    // endpoint issues) must not resume it unattended. The `comment` for this
-    // particular call is not persisted anywhere and is lost when blocked;
-    // the caller must resubmit it after approval (see approve-execution).
-    this.enforceExecutionGate(task, unitId, 'resume', fuBaseBranch);
+    // endpoint issues) must not resume it unattended. When blocked, the
+    // composed `comment` is saved in pending_follow_up_body so approval can
+    // re-deliver it (Issue #276). After approval the fingerprint matches so
+    // the gate passes through; if state changed since approval it re-blocks
+    // and body is re-saved automatically.
+    this.enforceExecutionGate(task, unitId, 'follow_up', fuBaseBranch, comment, opts?.phaseNames);
 
-    this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
     // ===== Pre-lock phase (Issue #274) =====
@@ -1579,7 +1589,14 @@ export class ExecuteTaskUseCase {
     if (primaryWindow && !runningInWindow) {
       if (primaryWindow.sleeping) {
         wakeResult = await this.primaryWindowWaker.wake(
-          primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
+          primaryWindow.id, serverName, {
+            skipAgentLaunch: true, gateAlreadyEnforced: true,
+            inLockGate: (fs) => {
+              const t = this.taskRepo.findById(taskId);
+              if (!t) throw new Error(`Task ${taskId} not found`);
+              this.reverifyGateInLock(t, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+            },
+          },
         );
       } else {
         const fuCheckDriver = this.resolveDriver(server);
@@ -1597,7 +1614,14 @@ export class ExecuteTaskUseCase {
         if (!alive) {
           this.windowRepo.update(primaryWindow.id, { sleeping: true });
           wakeResult = await this.primaryWindowWaker.wake(
-            primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
+            primaryWindow.id, serverName, {
+              skipAgentLaunch: true, gateAlreadyEnforced: true,
+              inLockGate: (fs) => {
+                const t = this.taskRepo.findById(taskId);
+                if (!t) throw new Error(`Task ${taskId} not found`);
+                this.reverifyGateInLock(t, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+              },
+            },
           );
         }
       }
@@ -1675,7 +1699,7 @@ export class ExecuteTaskUseCase {
               // gate (line 1549) and lock acquisition.
               const freshTask = this.taskRepo.findById(taskId);
               if (!freshTask) throw new Error(`Task ${taskId} not found`);
-              this.reverifyGateInLock(freshTask, unitId, 'resume', server, fuBaseBranch);
+              this.reverifyGateInLock(freshTask, unitId, 'follow_up', server, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
 
               const parts = freshWin.tmuxTarget.split(':');
               const wokenWindowName = parts[1]?.split('.')[0] || freshWin.tmuxTarget;
@@ -1730,7 +1754,7 @@ export class ExecuteTaskUseCase {
           return { result, windowName: fuRef.window, ref: fuRef };
         },
           true,
-          (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs, fuBaseBranch),
+          (fs) => this.reverifyGateInLock(currentTask, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
 
@@ -1774,6 +1798,14 @@ export class ExecuteTaskUseCase {
       throw new Error(`Failed to create task window: ${err instanceof Error ? err.message : err}`);
     }
     server = createdServer;
+
+    // Moved after the lock phase so that user_comment is logged only when
+    // ALL gate checks (outer enforceExecutionGate AND in-lock
+    // reverifyGateInLock) have passed. Before this move the log was written
+    // between the outer gate and the lock; if reverifyGateInLock blocked
+    // (re-saving the body for approval), user_comment was logged once here
+    // and a second time on the post-approval re-execution (Issue #276 nit).
+    this.appendLog(taskId, unitId, 'user_comment', { text: comment });
 
     const fuMainDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: fuMainDriver.kind, workspace: muxWorkspace, window: windowName };
@@ -2141,7 +2173,36 @@ export class ExecuteTaskUseCase {
       }
     }
 
-    const windowName = task.tmuxWindow || `task-${task.id}`;
+    // Wake a sleeping primary window before the lock (Issue #276). Provide
+    // an inLockGate that re-verifies the gate with 'resume' operation under
+    // the server isolation lock, so approval is not asked for again but
+    // state changes since the outer gate are caught.
+    const rsmTaskWindows = this.windowRepo.findByTask(taskId);
+    const rsmPrimaryWindow = rsmTaskWindows.find((w) => isPrimaryTaskWindow(w));
+    if (rsmPrimaryWindow?.sleeping) {
+      await this.primaryWindowWaker.wake(rsmPrimaryWindow.id, serverName, {
+        gateAlreadyEnforced: true,
+        inLockGate: (fs) => {
+          const t = this.taskRepo.findById(taskId);
+          if (!t) throw new Error(`Task ${taskId} not found`);
+          this.reverifyGateInLock(t, unitId, 'resume', fs, rsmBaseBranch);
+        },
+      });
+    }
+
+    // Use the primary window from windowRepo instead of task.tmuxWindow —
+    // the task column can lag behind when a window is respawned or renamed
+    // independently (Issue #276). Re-read after potential wake above.
+    const taskWindows = this.windowRepo.findByTask(taskId);
+    const primaryWindow = taskWindows.find((w) => isPrimaryTaskWindow(w));
+    let windowName: string;
+    if (primaryWindow) {
+      const resolved = primaryWindow.muxRef?.window || primaryWindow.tmuxTarget.split(':')[1]?.split('.')[0];
+      if (!resolved) throw new Error(`Cannot resolve window name for primary window ${primaryWindow.id} (task ${taskId})`);
+      windowName = resolved;
+    } else {
+      windowName = task.tmuxWindow || `task-${task.id}`;
+    }
     const resumeDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: resumeDriver.kind, workspace: muxWorkspace, window: windowName };
     const windowTarget = tmuxTargetFromMuxRef(ref);
