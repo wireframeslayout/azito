@@ -124,3 +124,15 @@ describe('servers routes with the misao flag on', () => {
     expect(res.json().mux).toEqual({ runtime: 'misao', kind: 'misao', driverAvailable: false, caps: null, reason: 'driver_not_registered' });
   });
 });
+
+describe('POST /api/servers/:name/agent/install on a misao server', () => {
+  it.each([false, true])('rejects before any remote work (misaoEnabled=%s)', async (misaoEnabled) => {
+    const install = vi.fn();
+    const opts = { ...makeOpts(misaoEnabled, makeServer({ muxRuntime: 'misao', sshHost: 'u@h' })), agentInstaller: { install } as unknown as ServersRouteOptions['agentInstaller'] };
+    const res = await (await buildApp(opts)).inject({ method: 'POST', url: '/api/servers/srv/agent/install' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toEqual({ error: 'muxRuntime "misao" is only supported on local servers' });
+    expect(install).not.toHaveBeenCalled();
+    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+  });
+});

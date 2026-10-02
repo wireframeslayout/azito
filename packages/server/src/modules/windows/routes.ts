@@ -20,7 +20,7 @@ import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -78,6 +78,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (refJson) {
         try {
           givenRef = parseMuxRef(refJson);
+          if (!isRefKindCompatible(givenRef, serverName ? serverRepo.findByName(serverName) : null)) throw new Error('ref kind does not match server');
           if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
@@ -204,6 +205,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (refJson) {
         try {
           givenRef = parseMuxRef(refJson);
+          if (!isRefKindCompatible(givenRef, serverName ? serverRepo.findByName(serverName) : null)) throw new Error('ref kind does not match server');
           if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });

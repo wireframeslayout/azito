@@ -816,6 +816,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      if (srv.muxRuntime === 'misao') return reply.status(400).send({ error: 'muxRuntime "misao" is only supported on local servers' });
 
       // Issue #29 review, 14th pass, Important finding 2: `PUT /api/servers/:name`
       // rejects ANY connection-info change while `isolationIntent` is (or

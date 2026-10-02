@@ -10,7 +10,7 @@ import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
+import { resolveRefForServer, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
@@ -828,7 +828,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       if (!opts.windowRepo) return reply.status(500).send({ error: 'windowRepo not configured' });
       const dbWindow = opts.windowRepo.findByServerAndRef(request.params.name, ref);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
@@ -848,7 +848,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
@@ -864,7 +864,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
 
       if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
@@ -891,7 +891,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -913,7 +913,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -931,7 +931,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -946,7 +946,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -961,7 +961,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -978,7 +978,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -996,7 +996,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { ref: refParam } = request.body as { ref?: string } ?? {};
       if (!refParam) return reply.status(400).send({ error: 'ref is required' });
-      const ref = resolveRefFromParam(refParam);
+      const ref = resolveRefForServer(refParam, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       await muxClient.focusWindow(srv, ref);
       return { ok: true };

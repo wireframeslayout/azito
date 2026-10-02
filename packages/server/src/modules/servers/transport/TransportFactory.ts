@@ -22,8 +22,9 @@ export class TransportFactory {
 
   getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
     // Never fall back to a tmux transport for a non-tmux runtime; checked before the cache so a stale tmux entry is not returned.
-    if (muxKindForRuntime(server.muxRuntime) !== 'tmux') {
-      throw new MuxDriverUnavailableError('misao', this.misaoEnabled ? 'driver_not_registered' : 'misao_disabled');
+    const kind = muxKindForRuntime(server.muxRuntime);
+    if (kind !== 'tmux') {
+      throw new MuxDriverUnavailableError(kind, this.misaoEnabled ? 'driver_not_registered' : 'misao_disabled');
     }
     const key = `${server.type}:${server.name}`;
     const existing = this.cache.get(key);

@@ -114,6 +114,7 @@ async function main(): Promise<void> {
         if (refParam) {
           try {
             ref = parseMuxRef(decodeURIComponent(refParam));
+            if (ref.kind !== muxKind) throw new Error('ref kind does not match agent mux');
           } catch {
             socket.send(JSON.stringify({ error: 'Invalid ref parameter' }));
             socket.close();

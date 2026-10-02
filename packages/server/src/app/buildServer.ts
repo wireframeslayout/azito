@@ -34,6 +34,7 @@ import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
 import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
+import { isRefKindCompatible } from '../modules/windows/windowPaneOps';
 import hooksRoutes from '../modules/tmux/routes/hooks';
 import sessionsRoutes from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
@@ -713,7 +714,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         }
       } else if (refParam) {
         try {
-          resolvedRef = parseMuxRef(decodeURIComponent(refParam));
+          const parsed = parseMuxRef(decodeURIComponent(refParam));
+          if (isRefKindCompatible(parsed, resolvedServer)) resolvedRef = parsed;
         } catch { /* invalid ref */ }
       } else if (target) {
         resolvedRef = muxRefFromTmuxTarget(target);
