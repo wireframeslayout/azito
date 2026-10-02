@@ -12,5 +12,6 @@ export interface IPaneStream extends EventEmitter {
 }
 
 export interface IPaneStreamFactory {
-  create(handle: PaneHandle | string, server: Pick<ServerConfig, 'type' | 'host' | 'agentPort' | 'agentToken'>): IPaneStream;
+  /** `pane` is the real pane the stream reads from; it is absent for streams backed by a file the agent writes to (signal files). */
+  create(handle: PaneHandle | string, server: Pick<ServerConfig, 'type' | 'host' | 'agentPort' | 'agentToken'>, pane?: PaneHandle): IPaneStream;
 }

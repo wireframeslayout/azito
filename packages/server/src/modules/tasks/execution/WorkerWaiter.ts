@@ -67,7 +67,7 @@ export class WorkerWaiter {
     unitId: number,
   ): IPaneStream | null {
     const paneId = `${taskId}-${Date.now()}`;
-    const paneStream = this.paneStreamFactory.create(paneId, server);
+    const paneStream = this.paneStreamFactory.create(paneId, server, handle);
     paneStream.start();
     const filePath = paneStream.getFilePath();
     if (filePath) {
@@ -208,6 +208,13 @@ export class WorkerWaiter {
         cleanup();
         resolve(result);
       };
+
+      paneStream.on('gap', ({ reason }: { reason: string }) => {
+        this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_gap', reason });
+      });
+      paneStream.on('subscription_error', (err: Error) => {
+        this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_subscription_error', message: err.message });
+      });
 
       // Before giving up as stopped, check the completion probe (e.g. push/PR
       // already exist on the remote) — the worker may have finished without

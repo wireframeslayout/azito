@@ -239,7 +239,6 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
   const contentExtractor = new LlmContentExtractor(llmClient);
-  const paneStreamFactory = new PaneStreamFactory(transportFactory);
   const gitProvider = new GitProviderService();
   const worktreeServiceFactory = new WorktreeServiceFactory();
   const storageClient = new MinioStorageClient();
@@ -250,6 +249,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
       notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
     }, console)
     : undefined;
+  const paneStreamFactory = new PaneStreamFactory(transportFactory, misao?.connection);
   const sidekickPackageLoader = new SidekickPackageLoader(undefined, dataPaths.sidekicks);
   const sidekickPackageService = new SidekickPackageService(sidekickPackageLoader, dataPaths.sidekicks);
   const sidekickSyncService = new SidekickSyncService();
