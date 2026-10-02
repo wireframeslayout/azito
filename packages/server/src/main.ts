@@ -12,6 +12,8 @@ import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
+import { reportMisaoServersWhenDisabled } from './modules/servers/misaoStartupCheck';
+import { partitionByTmuxRuntime } from './modules/servers/tmuxServers';
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
@@ -145,9 +147,16 @@ async function main(): Promise<void> {
     }
   }
 
+  reportMisaoServersWhenDisabled(wiring.serverRepo, wiring.misaoEnabled, app.log);
+
   // ─── Startup: install tmux hooks + connect agent event streams ───
 
-  for (const srv of wiring.serverRepo.findAll()) {
+  const { tmux: tmuxServers, skipped: nonTmuxServers } = partitionByTmuxRuntime(wiring.serverRepo.findAll());
+  for (const srv of nonTmuxServers) {
+    app.log.info(`Skipping tmux startup hooks and linked-session GC for ${srv.name}: mux runtime '${srv.muxRuntime}' is not tmux`);
+  }
+
+  for (const srv of tmuxServers) {
     if (srv.type === 'local') {
       tmuxHookManager.install(srv).catch((err) => {
         app.log.warn(`Failed to install tmux hooks on ${srv.name}: ${err}`);
@@ -164,7 +173,7 @@ async function main(): Promise<void> {
 
   // ─── Startup GC: clean leaked linked sessions ───
 
-  for (const srv of wiring.serverRepo.findAll()) {
+  for (const srv of tmuxServers) {
     wiring.tmuxClient.cleanupLinkedSessions(srv).then((n) => {
       if (n > 0) app.log.info(`Startup GC: cleaned ${n} linked session(s) on ${srv.name}`);
     }).catch(() => {});

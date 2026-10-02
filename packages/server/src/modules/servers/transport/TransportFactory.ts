@@ -4,13 +4,40 @@ import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
+import { muxKindForRuntime } from '@azito/shared';
+import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
+import type { MuxDriverAvailability } from '../../tmux/MuxDriverRegistry';
+import { MuxlessLocalTransport } from './MuxlessLocalTransport';
+
+type MuxAvailabilityFn = (server: Pick<ServerConfig, 'muxRuntime'>) => MuxDriverAvailability;
+
+export interface TransportFactoryOptions {
+  /** MuxDriverRegistry.availability; omitted means the misao flag is off. */
+  muxAvailability?: MuxAvailabilityFn;
+}
+
+const MISAO_DISABLED: MuxAvailabilityFn = () => ({ available: false, reason: 'misao_disabled' });
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport>();
 
-  constructor(private publicUrl: string) {}
+  private muxAvailability: MuxAvailabilityFn;
+
+  constructor(private publicUrl: string, options: TransportFactoryOptions = {}) {
+    this.muxAvailability = options.muxAvailability ?? MISAO_DISABLED;
+  }
 
   getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
+    // Exec is independent of the mux, so a non-tmux local server still gets a shell transport; its mux operations fail
+    // via the registry's availability instead of falling back to tmux. Checked before the cache so a stale tmux entry
+    // is never returned.
+    const kind = muxKindForRuntime(server.muxRuntime);
+    if (kind !== 'tmux') {
+      if (server.type === 'local') return new MuxlessLocalTransport(kind, () => this.muxAvailability(server));
+      const availability = this.muxAvailability(server);
+      if (!availability.available) throw new MuxDriverUnavailableError(kind, availability.reason);
+      throw new Error(`Mux kind "${kind}" is not supported on ${server.type} servers`);
+    }
     const key = `${server.type}:${server.name}`;
     const existing = this.cache.get(key);
     if (existing && server.type === 'agent') {

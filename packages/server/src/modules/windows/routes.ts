@@ -19,8 +19,9 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
-import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
+import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -46,6 +47,10 @@ export interface WindowsRouteOptions {
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
   const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
   const driverFor = (srv: ServerConfig): IMuxClient => opts.muxDriverRegistry.resolve(srv);
+  const muxUnavailableBody = (srv: ServerConfig): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
+    const availability = opts.muxDriverRegistry.availability(srv);
+    return availability.available ? null : { error: 'mux_driver_unavailable', kind: muxKindForRuntime(srv.muxRuntime), reason: availability.reason };
+  };
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -74,10 +79,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
+      const srv = serverName ? serverRepo.findByName(serverName) : null;
       let givenRef: MuxRef | undefined;
       if (refJson) {
         try {
           givenRef = parseMuxRef(refJson);
+          if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
           if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
@@ -85,6 +92,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      const unavailable = srv ? muxUnavailableBody(srv) : null;
+      if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       if (existing) {
@@ -200,10 +209,12 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
+      const srv = serverName ? serverRepo.findByName(serverName) : null;
       let givenRef: MuxRef | undefined;
       if (refJson) {
         try {
           givenRef = parseMuxRef(refJson);
+          if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
           if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
@@ -211,6 +222,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      const unavailable = srv ? muxUnavailableBody(srv) : null;
+      if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       if (existing) {

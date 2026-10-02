@@ -38,9 +38,10 @@ export function handleTerminalConnection(
 
   ws.on('close', cleanup);
 
-  const openPromise = transportFactory
+  // getTransport throws synchronously for an unavailable driver; route it through the promise chain so the client gets the error message.
+  const openPromise = Promise.resolve().then(() => transportFactory
     .getTransport(server)
-    .openTerminal(ref, ordinal, cols, rows, terminalOpts);
+    .openTerminal(ref, ordinal, cols, rows, terminalOpts));
 
   openPromise.then((stream) => {
     if (closed) stream.close();

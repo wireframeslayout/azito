@@ -59,6 +59,7 @@ import { SqliteResourceGuardSettingsRepository } from '../modules/servers/resour
 import { SqliteAuditLogRepository } from '../shared/audit/AuditLogRepository';
 import { AuditLogService } from '../shared/audit/AuditLogService';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
+import { resolveMisaoEnabled } from '../shared/misaoFlag';
 import { KeyedMutex } from '../shared/keyedMutex';
 import { TaskOriginationService } from '../modules/tasks/origination/TaskOriginationService';
 import { TaskPaneEnvironmentService } from '../modules/tasks/execution/TaskPaneEnvironmentService';
@@ -213,19 +214,21 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   fetchDistributionService: FetchDistributionService;
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
+  /** AZITO_EXPERIMENTAL_MISAO, resolved once here via shared/misaoFlag.ts and threaded to the repository, registry, transport factory and routes. */
+  misaoEnabled: boolean;
   harnessPrefix?: string;
 }
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false, misaoEnabled: boolean = false): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
-  const transportFactory = new TransportFactory(publicUrl);
+  const muxDriverRegistry = new MuxDriverRegistry({ misaoEnabled });
+  const transportFactory = new TransportFactory(publicUrl, { muxAvailability: (server) => muxDriverRegistry.availability(server) });
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
-  const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
@@ -293,8 +296,8 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   };
 }
 
-function buildRepositories(db: SqliteDatabase): Repositories {
-  const serverRepo = new SqliteServerRepository(db);
+function buildRepositories(db: SqliteDatabase, misaoEnabled: boolean): Repositories {
+  const serverRepo = new SqliteServerRepository(db, { misaoEnabled });
   const windowRepo = new SqliteWindowRepository(db);
   const projectRepo = new SqliteProjectRepository(db, windowRepo);
   const providerRepo = new SqliteProviderRepository(db);
@@ -546,7 +549,8 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     console.error('[startup] Agent bundle build failed (non-fatal):', (err as Error).message);
   }
 
-  const repos = buildRepositories(db);
+  const misaoEnabled = resolveMisaoEnabled();
+  const repos = buildRepositories(db, misaoEnabled);
   const extractHost = (sshHostStr: string): { host: string; port: number } => {
     const atIdx = sshHostStr.indexOf('@');
     let rest = atIdx !== -1 ? sshHostStr.substring(atIdx + 1) : sshHostStr;
@@ -583,7 +587,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled, misaoEnabled);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   // Constructed here, once, and passed to both `buildFetchDistributionService`
@@ -620,6 +624,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     paneHandleResolver,
     resourceGuard,
     scopedAuthEnabled,
+    misaoEnabled,
     harnessPrefix,
     distributionStateRepo,
     fetchDistributionService,

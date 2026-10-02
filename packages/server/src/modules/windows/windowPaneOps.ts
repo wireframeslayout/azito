@@ -3,7 +3,7 @@ import type { ExecResult } from '../servers/transport/ServerTransport';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { Window, IWindowRepository } from './Window';
 import { isPrimaryTaskWindow } from './Window';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, muxKindForRuntime } from '@azito/shared';
 import { resolveKillOutcome, type KillOutcome } from '../tmux/killOutcome';
 
 // ─── Resolution helpers ───
@@ -24,6 +24,19 @@ export function resolveRefFromParam(encoded: string): MuxRef {
   } catch {
     throw Object.assign(new Error('Invalid ref parameter'), { statusCode: 400 });
   }
+}
+
+/** A ref is only usable on a server whose driver speaks the same kind; an unknown server accepts tmux refs only. */
+export function isRefKindCompatible(ref: MuxRef, server: Pick<ServerConfig, 'muxRuntime'> | null | undefined): boolean {
+  return ref.kind === (server ? muxKindForRuntime(server.muxRuntime) : 'tmux');
+}
+
+export function resolveRefForServer(encoded: string, server: Pick<ServerConfig, 'muxRuntime'>): MuxRef {
+  const ref = resolveRefFromParam(encoded);
+  if (!isRefKindCompatible(ref, server)) {
+    throw Object.assign(new Error('Invalid ref parameter'), { statusCode: 400 });
+  }
+  return ref;
 }
 
 export async function resolvePaneHandle(

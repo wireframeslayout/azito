@@ -10,6 +10,7 @@ import type { AgentActivityStopReason } from '../notifications/NotificationEvent
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
 import { windowKey, asPaneHandle, muxKindForRuntime, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
 
@@ -620,6 +621,10 @@ export class AgentActivityMonitor {
 
   private hookMatchedBy = new Map<string, 'muxPaneRef' | 'windowSpec'>();
 
+  // Last MuxDriverUnavailableError reason logged per server, so a server whose driver is
+  // unavailable is reported once (and again only if the reason changes) instead of every tick.
+  private unavailableDriverReasons = new Map<string, MuxDriverUnavailableReason>();
+
   constructor(
     private executeTaskUseCase: ExecuteTaskUseCase,
     private windowRepo: IWindowRepository,
@@ -1138,9 +1143,11 @@ export class AgentActivityMonitor {
         const driver = this.muxDriverRegistry.resolve(server);
         const workspaces = await driver.listWorkspaces(server);
         sessionsByServer.set(serverName, workspacesToTmuxSessions(workspaces));
-      } catch {
+        this.unavailableDriverReasons.delete(serverName);
+      } catch (err) {
         sessionsByServer.set(serverName, []);
         sessionErrors.add(serverName);
+        this.warnDriverUnavailableOnChange(serverName, err);
       }
     }));
 
@@ -1847,6 +1854,13 @@ export class AgentActivityMonitor {
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     const titleOnly = classifyPaneState({ paneTitle, agentType: w.workerType });
     return titleOnly === 'working' || titleOnly === 'idle';
+  }
+
+  private warnDriverUnavailableOnChange(serverName: string, err: unknown): void {
+    if (!(err instanceof MuxDriverUnavailableError)) return;
+    if (this.unavailableDriverReasons.get(serverName) === err.reason) return;
+    this.unavailableDriverReasons.set(serverName, err.reason);
+    console.warn(`[agent-activity] mux driver unavailable for server ${serverName} (${err.kind}: ${err.reason}); skipping it`);
   }
 
   private async captureScreenTail(

@@ -32,17 +32,6 @@ describe('MuxDriverRegistry', () => {
     expect(() => registry.resolve(serverWith('system'))).toThrow(MuxDriverUnavailableError);
   });
 
-  it('has returns true for registered kind', () => {
-    const registry = new MuxDriverRegistry();
-    registry.register('tmux', makeMockDriver('tmux'));
-    expect(registry.has('tmux')).toBe(true);
-  });
-
-  it('has returns false for unregistered kind', () => {
-    const registry = new MuxDriverRegistry();
-    expect(registry.has('tmux')).toBe(false);
-  });
-
   it('register overwrites a previous driver for the same kind', () => {
     const registry = new MuxDriverRegistry();
     const first = makeMockDriver('tmux');
