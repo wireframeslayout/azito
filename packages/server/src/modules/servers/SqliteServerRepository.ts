@@ -3,11 +3,16 @@ import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime, ServerMeta } from './Server';
 import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
 
-function assertMuxRuntime(value: unknown): MuxRuntime {
-  if (value !== 'system' && value !== 'managed') {
-    throw new Error(`Invalid mux_runtime in database: '${String(value)}'. Expected 'system' or 'managed'. Run migration 075 to fix stale data.`);
+// Reads are tolerant of 'misao' regardless of the flag so one flagged-off row cannot fail findAll() for every caller.
+function parseStoredMuxRuntime(value: unknown): MuxRuntime {
+  if (value !== 'system' && value !== 'managed' && value !== 'misao') {
+    throw new Error(`Invalid mux_runtime in database: '${String(value)}'. Expected 'system', 'managed' or 'misao'. Run migration 075 to fix stale data.`);
   }
   return value;
+}
+
+export interface SqliteServerRepositoryOptions {
+  misaoEnabled?: boolean;
 }
 
 const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
@@ -27,7 +32,10 @@ export class SqliteServerRepository implements IServerRepository {
   private updateIsolationVerificationStmt;
   private updateIsolationFailureStmt;
 
-  constructor(private db: SqliteDatabase) {
+  private misaoEnabled: boolean;
+
+  constructor(private db: SqliteDatabase, options: SqliteServerRepositoryOptions = {}) {
+    this.misaoEnabled = options.misaoEnabled ?? false;
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
     this.getStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE name = ? AND type IN ('local', 'agent')`);
     this.addStmt = db.prepare('INSERT INTO servers (name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
@@ -106,16 +114,23 @@ export class SqliteServerRepository implements IServerRepository {
     }));
   }
 
+  listNamesByMuxRuntime(runtime: MuxRuntime): string[] {
+    const rows = this.db.prepare("SELECT name FROM servers WHERE mux_runtime = ? AND type IN ('local', 'agent') ORDER BY created_at").all(runtime) as Array<{ name: string }>;
+    return rows.map((r) => r.name);
+  }
+
   findByName(name: string): ServerConfig | null {
     const row = this.getStmt.get(name) as Record<string, unknown> | undefined;
     return row ? this.toEntity(row) : null;
   }
 
   create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime): void {
+    this.assertWritableMuxRuntime(muxRuntime);
     this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system');
   }
 
   update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime): void {
+    this.assertWritableMuxRuntime(muxRuntime);
     this.updateStmt.run(type, host ?? null, agentPort ?? null, seal(agentToken ?? null), sshHost ?? null, muxRuntime ?? 'system', name);
   }
 
@@ -182,6 +197,12 @@ export class SqliteServerRepository implements IServerRepository {
     this.removeStmt.run(name);
   }
 
+  private assertWritableMuxRuntime(muxRuntime: MuxRuntime | undefined): void {
+    if (muxRuntime === 'misao' && !this.misaoEnabled) {
+      throw new Error("mux_runtime 'misao' requires AZITO_EXPERIMENTAL_MISAO=1");
+    }
+  }
+
   private toEntity(row: Record<string, unknown>): ServerConfig {
     return {
       name: row.name as string,
@@ -191,7 +212,7 @@ export class SqliteServerRepository implements IServerRepository {
       agentToken: open(row.agent_token as string | null),
       agentVersion: (row.agent_version as string) ?? null,
       sshHost: (row.ssh_host as string) ?? null,
-      muxRuntime: assertMuxRuntime(row.mux_runtime),
+      muxRuntime: parseStoredMuxRuntime(row.mux_runtime),
       sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
       isolationIntent: (row.isolation_intent as number) === 1,
       isolationVerifiedAt: (row.isolation_verified_at as string) ?? null,
