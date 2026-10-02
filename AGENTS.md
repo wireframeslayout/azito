@@ -100,7 +100,7 @@ packages/
       modules/                     # Feature modules (1 module = 1 responsibility; routes+service+repository together)
         tmux/                      # [base] TmuxClient, PaneOutputStream/PaneStream(Factory), TmuxHookManager
           routes/, ws/             # HTTP routes (sessions, hooks) + WS handlers (terminal, agent-terminal)
-          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal) — only with AZITO_EXPERIMENTAL_MISAO=1, local servers only
+          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal), MisaoPaneStream (task output read from the daemon's line stream instead of pipe-pane; a gap is only logged as `pane_stream_gap` — completion/questions are detected from the signal file) — only with AZITO_EXPERIMENTAL_MISAO=1, local servers only
         servers/                  # [base] Server entity, SqliteServerRepository, install status parsing
           transport/               # ServerTransport interface + Local/Ssh/Agent implementations, AgentPaneStream/EventStream
           ssh/                     # SshClient (persistent shell pool, marker-based exec)

@@ -4,6 +4,7 @@ import type { ExecResult, ITerminalStream } from '../../servers/transport/Server
 import type { ServerConfig } from '../../servers/Server';
 import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
+import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
@@ -34,7 +35,7 @@ const unsupported = (operation: string): MuxOperationUnsupportedError => new Mux
 /**
  * IMuxClient over the misao daemon. A window is addressed by its daemon window id (`MuxRef.window`) and a pane by
  * its pane id (`PaneHandle`); a pane's ordinal is its 1-based position among the window's panes in creation order.
- * Line streaming is not part of this driver yet.
+ * Task output is read by MisaoPaneStream over the daemon's line stream, not through this client.
  */
 export class MisaoMuxClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'misao';
@@ -198,8 +199,7 @@ export class MisaoMuxClient implements IMuxClient {
       cwd: source.cwd,
       windowId: source.window.id,
       labels: inheritedLabels(source),
-      // ephemeralEnv: env would be persisted by the daemon and shown by pane.info/pane.list (secrets such as task tokens).
-      ...(env ? { ephemeralEnv: env } : {}),
+      ...paneEnvParams(env),
     });
     return { handle: asPaneHandle(paneId), result: { stdout: paneId, stderr: '', code: 0 } };
   }
@@ -305,8 +305,7 @@ export class MisaoMuxClient implements IMuxClient {
         cmd: command ? [this.options.shell, '-lc', command] : [this.options.shell],
         windowId,
         labels: { origin: 'hub', name: windowName },
-        // ephemeralEnv: env would be persisted by the daemon and shown by pane.info/pane.list (secrets such as task tokens).
-        ...(extraEnv ? { ephemeralEnv: extraEnv } : {}),
+        ...paneEnvParams(extraEnv),
       });
     } catch (err) {
       await this.rpc.request('window.close', { windowId }).catch(() => undefined);
@@ -325,6 +324,16 @@ export class MisaoMuxClient implements IMuxClient {
       return { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
     }
   }
+}
+
+/** Secrets go in ephemeralEnv: env is persisted by the daemon and shown by pane.info/pane.list. */
+function paneEnvParams(input: Record<string, string> | undefined): { env?: Record<string, string>; ephemeralEnv?: Record<string, string> } {
+  if (!input) return {};
+  const { env, ephemeralEnv } = splitPaneEnv(input);
+  return {
+    ...(Object.keys(env).length > 0 ? { env } : {}),
+    ...(Object.keys(ephemeralEnv).length > 0 ? { ephemeralEnv } : {}),
+  };
 }
 
 /** `ordinal` is 1-based; non-integers (a malformed `pane=` query) are rejected like out-of-range values. */

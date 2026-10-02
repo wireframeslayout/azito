@@ -1,4 +1,4 @@
-import type { MisaoClient, EventHandler, GapInfo, Subscription, ConnectionState } from '@misao/sdk' with { 'resolution-mode': 'import' };
+import type { MisaoClient, EventHandler, LineHandler, GapInfo, Subscription, SubscriptionErrorInfo, ConnectionState } from '@misao/sdk' with { 'resolution-mode': 'import' };
 import type { MethodName, MethodParams, MethodResult } from '@misao/protocol' with { 'resolution-mode': 'import' };
 import type { MuxDriverAvailability } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
@@ -24,6 +24,13 @@ export interface MisaoEventSource {
   onConnected(listener: () => void): () => void;
 }
 
+/** Per-pane line stream. The SDK re-subscribes after a reconnect; a re-subscribe the daemon refuses is reported through onSubscriptionError. */
+export interface MisaoLineSource {
+  subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription>;
+  onGap(listener: (gap: GapInfo) => void): () => void;
+  onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void;
+}
+
 export interface MisaoConnectionOptions {
   socketPath: string;
   sdk: MisaoSdk;
@@ -36,12 +43,13 @@ type Status = 'idle' | 'connected' | 'disconnected' | 'closed';
  * The hub's single connection to the misao daemon. The SDK retries only after a first successful connect,
  * so the first connect is retried here with the SDK's own backoff until it succeeds or the connection is closed.
  */
-export class MisaoConnection implements MisaoRpc, MisaoEventSource {
+export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoLineSource {
   private client: MisaoClient | undefined;
   private status: Status = 'idle';
   private retryTimer: NodeJS.Timeout | undefined;
   private readonly connectedListeners = new Set<() => void>();
   private readonly gapListeners = new Set<(gap: GapInfo) => void>();
+  private readonly subscriptionErrorListeners = new Set<(info: SubscriptionErrorInfo) => void>();
 
   constructor(private readonly options: MisaoConnectionOptions) {}
 
@@ -53,6 +61,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
     this.client = client;
     client.onStateChange((state) => this.handleState(state));
     client.onGap((gap) => { for (const listener of this.gapListeners) listener(gap); });
+    client.onSubscriptionError((info) => { for (const listener of this.subscriptionErrorListeners) listener(info); });
     client.onError((err) => this.options.log.warn(`[misao] callback error: ${err instanceof Error ? err.message : String(err)}`));
     await this.connectAttempt(client, 1);
   }
@@ -75,6 +84,19 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
     } catch (err) {
       throw this.translate(err);
     }
+  }
+
+  async subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription> {
+    try {
+      return await this.requireClient().subscribeLines(paneId, handler);
+    } catch (err) {
+      throw this.translate(err);
+    }
+  }
+
+  onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void {
+    this.subscriptionErrorListeners.add(listener);
+    return () => { this.subscriptionErrorListeners.delete(listener); };
   }
 
   onGap(listener: (gap: GapInfo) => void): () => void {

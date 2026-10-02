@@ -372,13 +372,13 @@ describe('MisaoMuxClient writes', () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');
     const source = daemon.addPane(w, { cwd: '/repo', labels: { origin: 'hub', name: 'old', windowId: '806', task: '12', other: 'x' } });
-    const res = await client.splitPaneByHandle(server, handle(source), 'h', { TOKEN: 't' });
+    const res = await client.splitPaneByHandle(server, handle(source), 'h', { AZITO_TASK_ID: '12', AZITO_TASK_TOKEN: 't', AZITO_UI_TOKEN: '' });
     expect(daemon.callsTo('pane.open')[0]).toEqual({
       cmd: ['/bin/zsh'], cwd: '/repo', windowId: w,
       labels: { origin: 'hub', name: 'main', windowId: '806', task: '12' },
-      ephemeralEnv: { TOKEN: 't' },
+      env: { AZITO_TASK_ID: '12' },
+      ephemeralEnv: { AZITO_TASK_TOKEN: 't', AZITO_UI_TOKEN: '' },
     });
-    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
     expect(res.handle).toBe(daemon.panes[1].paneId);
     expect((await client.listPanesByRef(server, refOf('proj', w))).map((p) => p.ordinal)).toEqual([1, 2]);
   });
