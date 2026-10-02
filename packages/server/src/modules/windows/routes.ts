@@ -21,6 +21,7 @@ import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -128,6 +129,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (givenRef && srv) await labelRegisteredWindow(driverFor(srv), srv, givenRef, { windowId: winId });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
@@ -180,6 +182,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           paneLayout: null,
           sleeping: false,
         });
+        if (win.ref) await labelRegisteredWindow(driverFor(srv), srv, win.ref, { windowId: winId });
         addedIds.push(winId);
       }
       notifyWindowsChanged(serverName);
@@ -267,6 +270,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (givenRef && srv) await labelRegisteredWindow(driverFor(srv), srv, givenRef, { windowId: winId, taskId: id });
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
