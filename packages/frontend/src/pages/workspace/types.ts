@@ -147,6 +147,7 @@ export interface ExecutionApprovalData {
   };
   secretNames: string[];
   pendingFollowUpPreview: string | null;
+  pendingFollowUpPhases: string[] | null;
 }
 
 export interface Server {

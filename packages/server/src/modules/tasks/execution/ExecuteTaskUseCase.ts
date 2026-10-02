@@ -1559,7 +1559,6 @@ export class ExecuteTaskUseCase {
     // and body is re-saved automatically.
     this.enforceExecutionGate(task, unitId, 'follow_up', fuBaseBranch, comment, opts?.phaseNames);
 
-    this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
 
     // ===== Pre-lock phase (Issue #274) =====
@@ -1799,6 +1798,14 @@ export class ExecuteTaskUseCase {
       throw new Error(`Failed to create task window: ${err instanceof Error ? err.message : err}`);
     }
     server = createdServer;
+
+    // Moved after the lock phase so that user_comment is logged only when
+    // ALL gate checks (outer enforceExecutionGate AND in-lock
+    // reverifyGateInLock) have passed. Before this move the log was written
+    // between the outer gate and the lock; if reverifyGateInLock blocked
+    // (re-saving the body for approval), user_comment was logged once here
+    // and a second time on the post-approval re-execution (Issue #276 nit).
+    this.appendLog(taskId, unitId, 'user_comment', { text: comment });
 
     const fuMainDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: fuMainDriver.kind, workspace: muxWorkspace, window: windowName };

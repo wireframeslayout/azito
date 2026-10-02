@@ -4693,4 +4693,188 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalled();
     expect(tmux.openWindow).not.toHaveBeenCalled();
   });
+
+  it('followUp on untrusted task with sleeping primary window: outer gate blocks as follow_up with body before wake', async () => {
+    const gatePS = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const unit = makeUnit({ id: 89, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 14, serverName: 'local-server', unitId: 89, tmuxWindow: 'task-14',
+      agentSessionId: 'sess-b1',
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: null,
+    });
+    const { useCase, taskRepo, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: gatePS,
+    });
+
+    const sleepingWindow = {
+      id: 56, ownerType: 'task' as const, isPrimary: true, taskId: 14,
+      serverName: 'local-server', tmuxTarget: 'azito:task-14',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-14' },
+      label: 'task-14', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-b1',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+
+    await expect(useCase.followUp(89, 14, 'Fix the tests', { phaseNames: ['implementing'] }))
+      .rejects.toThrow(/requires approval/);
+
+    // Blocked as 'follow_up' with body and phases preserved
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(14, expect.objectContaining({
+      pendingOperation: 'follow_up',
+      pendingFollowUpBody: 'Fix the tests',
+      pendingFollowUpPhases: '["implementing"]',
+    }));
+    // Wake was NOT called — the outer gate blocked before reaching wake
+    expect(waker.wake).not.toHaveBeenCalled();
+  });
+
+  it('user_comment is not logged when reverifyGateInLock blocks after outer gate passed', async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const gatePS = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const unit = makeUnit({ id: 90, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 15, serverName: 'local-server', unitId: 90, tmuxWindow: 'task-15',
+      agentSessionId: 'sess-nodup',
+      inputTrust: 'untrusted',
+    });
+    const { useCase, windowRepo, tmux, taskRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: gatePS,
+    });
+
+    // Pre-compute approval hash so the PRE-LOCK gate passes.
+    const { manifest } = resolveExecutionManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo,
+      projectSecretRepo: projectSecretRepo as any,
+      unitTypeLoader: unitTypeLoader as any,
+      sidekickLoader: sidekickLoader as any,
+    }, 'continuation');
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    const sleepingWindow = {
+      id: 57, ownerType: 'task' as const, isPrimary: true, taskId: 15,
+      serverName: 'local-server', tmuxTarget: 'azito:task-15',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-15' },
+      label: 'task-15', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-nodup',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-15' });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The PRE-LOCK gate passes but in-lock reverify finds stale approval.
+    const staleFreshTask = { ...task, executionApprovedFingerprintHash: null };
+    (taskRepo.findById as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(task)          // followUp() pre-lock read
+      .mockReturnValueOnce(staleFreshTask); // in-lock reverifyGateInLock
+
+    await expect(useCase.followUp(90, 15, 'try again')).rejects.toThrow(/requires approval/);
+
+    // user_comment must NOT have been logged — the appendLog is now after
+    // the lock, so reverifyGateInLock blocking prevents it.
+    const userCommentCalls = (logRepo.append as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c: unknown[]) => {
+        const content = c[3] as { text?: string } | undefined;
+        return c[2] === 'user_comment' && content?.text === 'try again';
+      });
+    expect(userCommentCalls).toHaveLength(0);
+  });
+});
+
+describe('ExecuteTaskUseCase.resumeStateMachine — primary window (Issue #276)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses primary window muxRef when task.tmuxWindow points to a dead window', async () => {
+    const unit = makeUnit({ id: 91, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 16, serverName: 'local-server', unitId: 91, tmuxWindow: 'dead-window-xyz' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 80, ownerType: 'task' as const, isPrimary: true, taskId: 16,
+      serverName: 'local-server', tmuxTarget: 'azito:task-16',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-16' },
+      label: 'task-16', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: null,
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-16', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.resumeStateMachine(91, 16);
+
+    // Should use primary window muxRef (task-16), NOT task.tmuxWindow (dead-window-xyz).
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-16' }),
+      1,
+    );
+  });
+
+  it('wakes a sleeping primary window with inLockGate, without skipAgentLaunch', async () => {
+    const unit = makeUnit({ id: 92, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 17, serverName: 'local-server', unitId: 92, tmuxWindow: 'task-17' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const sleepingWindow = {
+      id: 81, ownerType: 'task' as const, isPrimary: true, taskId: 17,
+      serverName: 'local-server', tmuxTarget: 'azito:task-17',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-17' },
+      label: 'task-17', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: null,
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-17' });
+
+    // After wake, re-read returns the window as no longer sleeping.
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-17', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.resumeStateMachine(92, 17);
+
+    // Wake called with gateAlreadyEnforced + inLockGate, but WITHOUT skipAgentLaunch
+    // (unlike followUp which passes skipAgentLaunch: true).
+    expect(waker.wake).toHaveBeenCalledWith(81, 'local-server', {
+      gateAlreadyEnforced: true,
+      inLockGate: expect.any(Function),
+    });
+  });
 });

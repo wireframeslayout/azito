@@ -132,8 +132,8 @@ export interface Task {
    * - 'follow_up' — ExecuteTaskUseCase.enforceExecutionGate (followUp()
    *                entry); pendingFollowUpBody/pendingFollowUpPhases are set
    *                alongside to preserve the composed comment for re-delivery
-   * - 'resume'   — ExecuteTaskUseCase.enforceExecutionGate (followUp()/
-   *                resumeStateMachine() entries reached WITHOUT a route-level
+   * - 'resume'   — ExecuteTaskUseCase.enforceExecutionGate (resumeStateMachine()
+   *                entry reached WITHOUT a route-level
    *                pre-check, e.g. RecoverStuckTasksUseCase)
    * - 'resume_await_answer'      — ExecuteTaskUseCase.enforceExecutionGate,
    *                passed explicitly by POST /api/tasks/:id/answer's

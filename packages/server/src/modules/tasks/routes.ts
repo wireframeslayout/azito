@@ -517,8 +517,15 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           baseBranchUnresolvable: manifest.branches.base === null,
         },
         secretNames,
-        pendingFollowUpPreview: task.pendingFollowUpBody
-          ? task.pendingFollowUpBody.slice(0, 200) + (task.pendingFollowUpBody.length > 200 ? '…' : '')
+        pendingFollowUpPreview: (() => {
+          if (!task.pendingFollowUpBody) return null;
+          const marker = '## User Instructions\n';
+          const idx = task.pendingFollowUpBody.indexOf(marker);
+          const userPart = idx >= 0 ? task.pendingFollowUpBody.slice(idx + marker.length) : task.pendingFollowUpBody;
+          return userPart.slice(0, 200) + (userPart.length > 200 ? '…' : '');
+        })(),
+        pendingFollowUpPhases: task.pendingFollowUpPhases
+          ? JSON.parse(task.pendingFollowUpPhases) as string[]
           : null,
       };
     },
