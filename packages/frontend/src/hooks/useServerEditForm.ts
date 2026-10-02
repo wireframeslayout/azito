@@ -42,15 +42,12 @@ export function useServerEditForm() {
   const handleEditServer = useCallback(async (): Promise<boolean> => {
     if (!editServer) return false;
     // A local server has no connection settings to edit; only its mux runtime can change.
-    const isLocal = editServer.type === 'local';
-    if (!isLocal) {
+    const body: Record<string, unknown> = { muxRuntime: editMuxRuntime };
+    if (editServer.type !== 'local') {
       if (!editHost.trim()) { showToast('Host is required'); return false; }
       if (!editPort.trim()) { showToast('Port is required'); return false; }
-    }
-    const body: Record<string, unknown> = isLocal
-      ? { muxRuntime: editMuxRuntime }
-      : { type: editType, host: editHost.trim(), muxRuntime: editMuxRuntime };
-    if (!isLocal) {
+      body.type = editType;
+      body.host = editHost.trim();
       body.agentPort = parseInt(editPort.trim(), 10);
       if (editToken.trim()) {
         body.agentToken = editToken.trim();
