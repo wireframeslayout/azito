@@ -7,7 +7,7 @@ import type { InstallStep } from '../ui';
 import type { Server } from '../../hooks/useServerManagement';
 import { useHealth } from '../../hooks/useHealth';
 import type { MuxRuntime } from '@azito/shared';
-import { muxRuntimeOptions } from '../../lib/muxRuntimeForm';
+import { muxRuntimeNotice, muxRuntimeOptions, type MuxRuntimeNotice } from '../../lib/muxRuntimeForm';
 
 interface ServerFormFieldsProps {
   mode: 'add' | 'edit';
@@ -54,7 +54,7 @@ interface MuxRuntimeFieldProps {
   value: MuxRuntime;
   options: readonly MuxRuntime[];
   onChange: (v: MuxRuntime) => void;
-  /** Persisted runtime; when it differs from `value` (between tmux runtimes) a migration warning is shown. Omitted in add mode. */
+  /** Persisted runtime; when it differs from `value` a note is shown (socket migration, or leaving misao). Omitted in add mode. */
   originalValue?: MuxRuntime;
 }
 
@@ -64,30 +64,34 @@ const MUX_LABEL_KEY: Record<MuxRuntime, string> = {
   misao: 'serverModals.muxMisao',
 };
 
+const MUX_NOTICE_KEY: Record<MuxRuntimeNotice, string> = {
+  enterMisao: 'serverModals.misaoHint',
+  leaveMisao: 'serverModals.misaoLeaveNote',
+  tmuxMigration: 'serverModals.muxMigrationWarning',
+};
+
 function MuxRuntimeField({ value, options, onChange, originalValue }: MuxRuntimeFieldProps) {
   const { t } = useTranslation(['workspace', 'common']);
-  const hintId = useId();
-  const isMisaoSelected = value === 'misao';
+  const noticeId = useId();
+  const notice = muxRuntimeNotice(originalValue, value);
   return (
     <>
       <FormField label={t('serverModals.muxRuntime')}>
         <FormSelect
           value={value}
           onChange={(e) => onChange(e.target.value as MuxRuntime)}
-          aria-describedby={isMisaoSelected ? hintId : undefined}
+          aria-describedby={notice ? noticeId : undefined}
         >
           {options.map((option) => <option key={option} value={option}>{t(MUX_LABEL_KEY[option])}</option>)}
         </FormSelect>
       </FormField>
-      {isMisaoSelected && (
-        <div id={hintId} style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}>
-          {t('serverModals.misaoHint')}
-        </div>
-      )}
-      {/* The warning is about the tmux socket; moving to or from misao is covered by the misao hint. */}
-      {originalValue && value !== originalValue && value !== 'misao' && originalValue !== 'misao' && (
-        <div style={{ fontSize: 'var(--font-sm)', color: 'var(--warning, #f0ad4e)', padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}>
-          {t('serverModals.muxMigrationWarning')}
+      {notice && (
+        <div
+          id={noticeId}
+          role="status"
+          style={{ fontSize: 'var(--font-sm)', color: notice === 'enterMisao' ? 'var(--text-dim)' : 'var(--warning, #f0ad4e)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}
+        >
+          {t(MUX_NOTICE_KEY[notice])}
         </div>
       )}
     </>
@@ -118,7 +122,7 @@ function ServerFormFields({ mode, autoInstall, type, serverType, host, port, tok
   const muxField = (
     <MuxRuntimeField
       value={muxRuntime}
-      options={muxRuntimeOptions(serverType, misaoEnabled)}
+      options={muxRuntimeOptions(serverType, misaoEnabled, originalMuxRuntime)}
       onChange={onMuxRuntimeChange}
       originalValue={mode === 'edit' ? originalMuxRuntime : undefined}
     />

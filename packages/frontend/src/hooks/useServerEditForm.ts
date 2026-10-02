@@ -33,7 +33,7 @@ export function useServerEditForm() {
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime, muxRuntimeOptions(srv.type, misaoEnabled)));
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime, muxRuntimeOptions(srv.type, misaoEnabled, srv.muxRuntime)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, [misaoEnabled]);
 

@@ -147,6 +147,7 @@
     "muxManaged": "AZITO managed tmux",
     "muxMisao": "misao (experimental)",
     "misaoHint": "Switches this server to the misao daemon. Windows on tmux are not migrated. Experimental.",
+    "misaoLeaveNote": "Windows currently on misao will no longer be reachable from the hub after switching back to tmux.",
     "muxMigrationWarning": "Sessions on the previous socket will not be migrated.",
     "displayName": "Display Name",
     "displayNamePlaceholder": "e.g. dev-server",
