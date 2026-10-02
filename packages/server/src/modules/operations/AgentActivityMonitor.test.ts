@@ -2336,6 +2336,34 @@ describe('AgentActivityMonitor', () => {
       expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'blocked', decidedBy: 'tier0_mux', refinedBy: 'tier2_title' }));
     });
 
+    it('an exited signal that arrives while a tick is awaiting the screen still completes on the next tick', async () => {
+      arrange();
+      // A title the screen prefetch does not pick up, so the read happens inside this key's own evaluation.
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, paneActivity, [makePane({ command: 'claude', title: 'claude' })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      emit.mockClear();
+
+      let releaseScreen!: () => void;
+      screenReads.mockImplementationOnce(() => new Promise((r) => {
+        releaseScreen = () => r({ stdout: screen, stderr: '', code: 0 });
+      }));
+      drawScreen(PROMPT_SCREEN);
+      const inFlight = monitor.tick();
+      await vi.waitFor(() => expect(releaseScreen).toBeDefined());
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'done', { decidedBy: 'exit' });
+      releaseScreen();
+      await inFlight;
+      expect(stopPayloads()).toEqual([]);
+
+      await monitor.tick();
+      expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
+    });
+
     it('reads the first pane of the window found through its mux_ref', async () => {
       arrange();
       monitor.recordMuxSignal('local', 'azito:agent-1', 'working');

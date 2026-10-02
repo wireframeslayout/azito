@@ -953,6 +953,9 @@ export class AgentActivityMonitor {
   private async collect(): Promise<CollectResult> {
     this.tickCounter++;
     this.kickProcessProbeRefresh();
+    // Only `done` entries this tick has seen expire below: one recorded while
+    // the tick is awaiting has not been evaluated yet.
+    const muxStatesAtStart = new Set(this.muxStates.values());
     const allWindows = this.windowRepo.findAll();
     this.windowIdByKey.clear();
     for (const w of allWindows) {
@@ -1595,7 +1598,7 @@ export class AgentActivityMonitor {
     // state is no longer authoritative. Removing the entry lets lower tiers
     // take over on subsequent ticks (e.g. the window may be reused).
     for (const [key, mux] of this.muxStates) {
-      if (mux.status === 'done') this.muxStates.delete(key);
+      if (mux.status === 'done' && muxStatesAtStart.has(mux)) this.muxStates.delete(key);
     }
 
     this.previousLiveKeys = liveKeys;
