@@ -6,6 +6,12 @@ type Event = Parameters<EventHandler>[0];
 const event = (type: string, paneId: string | undefined, data: unknown): Event => ({ seq: 1, ts: '2026-10-02T00:00:00.000Z', type, paneId, data }) as Event;
 
 const PANE_A = 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXA';
+const PANE_B = 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXB';
+const PANE_C = 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXC';
+
+const pane = (paneId: string, windowId: string, agentState: string, decidedBy: string) => (
+  { paneId, workspace: 'azito', window: { id: windowId }, agentState, decidedBy }
+);
 
 function setup(panes: unknown[] = []) {
   let handler: EventHandler | undefined;
@@ -26,11 +32,12 @@ function setup(panes: unknown[] = []) {
     onDisconnected: (l: () => void) => { disconnectedListener = l; return () => {}; },
   } as unknown as MisaoPaneStateSource;
   const onState = vi.fn();
+  const onSnapshot = vi.fn();
   const onDisconnected = vi.fn();
   const warn = vi.fn();
-  const events = new MisaoPaneStateEvents(source, onState, onDisconnected, { warn });
+  const events = new MisaoPaneStateEvents(source, { handleState: onState, handleSnapshot: onSnapshot, handleDisconnected: onDisconnected }, { warn });
   return {
-    events, subscribeEvents, unsubscribe, request, onState, onDisconnected, warn,
+    events, subscribeEvents, unsubscribe, request, onState, onSnapshot, onDisconnected, warn,
     emit: (e: Event) => handler!(e),
     gap: () => gapListener!({ stream: { kind: 'events' }, reason: 'epoch' } as GapInfo),
     connected: () => connectedListener!(),
@@ -58,22 +65,39 @@ describe('MisaoPaneStateEvents', () => {
     expect(onState).not.toHaveBeenCalled();
   });
 
-  it('re-reads every pane after the first subscription', async () => {
-    const { events, onState } = setup([{ paneId: PANE_A, agentState: 'idle', decidedBy: 'bytes' }]);
+  it('re-reads every pane after the first subscription, with its location', async () => {
+    const { events, onSnapshot, onState } = setup([pane(PANE_A, 'w_1', 'idle', 'bytes')]);
     await events.start();
-    expect(onState).toHaveBeenCalledWith({ paneId: PANE_A, state: 'idle', decidedBy: 'bytes' });
+    expect(onSnapshot).toHaveBeenCalledWith([
+      { paneId: PANE_A, state: 'idle', decidedBy: 'bytes', location: { workspace: 'azito', windowId: 'w_1', ordinal: 1 } },
+    ]);
+    expect(onState).not.toHaveBeenCalled();
   });
 
-  it('re-syncs all panes on a gap and on reconnect', async () => {
-    const { events, onState, request, gap, connected } = setup([{ paneId: PANE_A, agentState: 'working', decidedBy: 'exit' }]);
+  it('numbers the panes of each window in pane id order, whatever order the daemon lists them in', async () => {
+    const { events, onSnapshot } = setup([
+      pane(PANE_C, 'w_1', 'idle', 'bytes'),
+      pane(PANE_B, 'w_2', 'idle', 'bytes'),
+      pane(PANE_A, 'w_1', 'working', 'title'),
+    ]);
     await events.start();
-    onState.mockClear();
+    const ordinals = Object.fromEntries((onSnapshot.mock.calls[0][0] as Array<{ paneId: string; location: { windowId: string; ordinal: number } }>)
+      .map((s) => [s.paneId, `${s.location.windowId}#${s.location.ordinal}`]));
+    expect(ordinals).toEqual({ [PANE_A]: 'w_1#1', [PANE_C]: 'w_1#2', [PANE_B]: 'w_2#1' });
+  });
+
+  it('re-syncs all panes on a gap and on reconnect, with a single pane.list each', async () => {
+    const { events, onSnapshot, request, gap, connected } = setup([pane(PANE_A, 'w_1', 'working', 'exit')]);
+    await events.start();
+    onSnapshot.mockClear();
+    request.mockClear();
     gap();
     await flush();
-    expect(onState).toHaveBeenCalledTimes(1);
+    expect(onSnapshot).toHaveBeenCalledTimes(1);
     connected();
     await flush();
-    expect(onState).toHaveBeenCalledTimes(2);
+    expect(onSnapshot).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith('pane.list', {});
   });
 

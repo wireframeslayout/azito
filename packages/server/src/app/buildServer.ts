@@ -282,16 +282,12 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   const misaoActivityBridge = wiring.misao && new MisaoActivityBridge({
     resolver: paneHandleResolver,
+    findWindowByRef: (serverName, ref) => windowRepo.findByServerAndRef(serverName, ref),
     monitor: agentActivityMonitor,
     listServerNames: () => selectLocalMisaoServers(serverRepo.findAll()).map((srv) => srv.name),
     log: app.log,
   });
-  const misaoPaneStates = wiring.misao && misaoActivityBridge && new MisaoPaneStateEvents(
-    wiring.misao.connection,
-    (state) => misaoActivityBridge.handleState(state),
-    () => misaoActivityBridge.handleDisconnected(),
-    app.log,
-  );
+  const misaoPaneStates = wiring.misao && misaoActivityBridge && new MisaoPaneStateEvents(wiring.misao.connection, misaoActivityBridge, app.log);
 
   notificationBus.on((event) => {
     if (event.type === 'sessions:updated') {
@@ -597,11 +593,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
     misao: wiring.misao && {
-      resolvePane: async (serverName, paneId) => (
-        selectLocalMisaoServers(serverRepo.findAll()).some((srv) => srv.name === serverName)
-          ? paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId))
-          : null
-      ),
+      // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
+      resolvePane: async (serverName, paneId) => {
+        if (!selectLocalMisaoServers(serverRepo.findAll()).some((srv) => srv.name === serverName)) return null;
+        try {
+          return await paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId));
+        } catch (err) {
+          app.log.warn(`[misao] could not resolve hook pane ${paneId} on ${serverName}: ${err instanceof Error ? err.message : String(err)}`);
+          return null;
+        }
+      },
       recordAgentActivity: (serverName, tmuxTarget, event) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event),
     },
   });

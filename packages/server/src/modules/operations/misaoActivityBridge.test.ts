@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { PaneOrdinal } from '@azito/shared';
+import type { MuxRef, PaneOrdinal } from '@azito/shared';
 import { MisaoActivityBridge, UNRESOLVED_PANE_TTL_MS, mapMisaoAgentState } from './misaoActivityBridge';
 import type { ResolvedWindow } from './PaneHandleResolver';
 
@@ -12,18 +12,24 @@ function resolved(ordinal: number, tmuxTarget = 'win-target'): ResolvedWindow {
 
 function setup(servers = ['misao1']) {
   const resolve = vi.fn<(serverName: string, handle: string) => Promise<ResolvedWindow | null>>(async () => resolved(1));
+  const findWindowByRef = vi.fn<(serverName: string, ref: MuxRef) => { tmuxTarget: string } | undefined>(() => undefined);
   const recordMuxSignal = vi.fn();
   const warn = vi.fn();
   let now = 1_000;
   const bridge = new MisaoActivityBridge({
     resolver: { resolveWindowByPaneHandle: resolve },
+    findWindowByRef,
     monitor: { recordMuxSignal },
     listServerNames: () => servers,
     log: { warn },
     now: () => now,
   });
-  return { bridge, resolve, recordMuxSignal, warn, advance: (ms: number) => { now += ms; } };
+  return { bridge, resolve, findWindowByRef, recordMuxSignal, warn, advance: (ms: number) => { now += ms; } };
 }
+
+const located = (state: string, ordinal = 1) => (
+  { paneId: PANE, state, decidedBy: 'bytes', location: { workspace: REF.workspace, windowId: REF.window, ordinal } }
+);
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
@@ -147,5 +153,79 @@ describe('MisaoActivityBridge', () => {
     bridge.handleState({ paneId: PANE, state: 'working', decidedBy: 'title' });
     await flush();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('daemon_unreachable'));
+  });
+  it('attributes a re-synced pane from its location without asking the daemon', async () => {
+    const { bridge, resolve, findWindowByRef, recordMuxSignal } = setup();
+    findWindowByRef.mockReturnValue({ tmuxTarget: 'win-target' });
+    bridge.handleSnapshot([located('working')]);
+    await flush();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(findWindowByRef).toHaveBeenCalledWith('misao1', REF);
+    expect(recordMuxSignal).toHaveBeenCalledWith('misao1', 'win-target', 'working', { decidedBy: 'bytes' });
+  });
+
+  it('ignores a re-synced pane that is not the first of its window', async () => {
+    const { bridge, findWindowByRef, recordMuxSignal } = setup();
+    findWindowByRef.mockReturnValue({ tmuxTarget: 'win-target' });
+    bridge.handleSnapshot([located('idle', 2)]);
+    await flush();
+    expect(recordMuxSignal).not.toHaveBeenCalled();
+  });
+
+  it('releases a recorded window whose pane is missing from a re-sync', async () => {
+    const { bridge, recordMuxSignal } = setup();
+    bridge.handleState({ paneId: PANE, state: 'working', decidedBy: 'title' });
+    await flush();
+    recordMuxSignal.mockClear();
+
+    bridge.handleSnapshot([]);
+    await flush();
+    expect(recordMuxSignal).toHaveBeenCalledWith('misao1', 'win-target', 'unknown');
+    bridge.handleDisconnected();
+    expect(recordMuxSignal).toHaveBeenCalledTimes(1);
+  });
+
+  it('forgets a recorded pane whose window row is gone', async () => {
+    const { bridge, resolve, recordMuxSignal } = setup();
+    bridge.handleState({ paneId: PANE, state: 'working', decidedBy: 'title' });
+    await flush();
+    resolve.mockResolvedValue(null);
+    bridge.handleState({ paneId: PANE, state: 'idle', decidedBy: 'bytes' });
+    await flush();
+    recordMuxSignal.mockClear();
+
+    bridge.handleDisconnected();
+    expect(recordMuxSignal).not.toHaveBeenCalled();
+  });
+
+  it('forgets the state of a failed resolution, so it is not retried on window changes', async () => {
+    const { bridge, resolve } = setup();
+    resolve.mockResolvedValueOnce(null);
+    bridge.handleState({ paneId: PANE, state: 'working', decidedBy: 'title' });
+    await flush();
+    resolve.mockRejectedValueOnce(new Error('daemon_unreachable'));
+    bridge.handleWindowsChanged();
+    await flush();
+    resolve.mockClear();
+
+    bridge.handleWindowsChanged();
+    await flush();
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it('keeps a newer state when an older resolution fails', async () => {
+    const { bridge, resolve, recordMuxSignal } = setup();
+    let fail!: () => void;
+    let succeed!: () => void;
+    resolve
+      .mockImplementationOnce(() => new Promise((_, reject) => { fail = () => reject(new Error('boom')); }))
+      .mockImplementationOnce(() => new Promise((r) => { succeed = () => r(resolved(1)); }));
+    bridge.handleState({ paneId: PANE, state: 'working', decidedBy: 'title' });
+    bridge.handleState({ paneId: PANE, state: 'idle', decidedBy: 'bytes' });
+    fail();
+    await flush();
+    succeed();
+    await flush();
+    expect(recordMuxSignal).toHaveBeenCalledWith('misao1', 'win-target', 'idle', { decidedBy: 'bytes' });
   });
 });

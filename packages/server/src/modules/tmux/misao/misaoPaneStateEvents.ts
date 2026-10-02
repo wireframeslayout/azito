@@ -1,5 +1,6 @@
 import type { EventHandler, Subscription } from '@misao/sdk' with { 'resolution-mode': 'import' };
 import type { MisaoDisconnectSource, MisaoEventSource, MisaoRpc } from './MisaoConnection';
+import { sortPanes, type MisaoPane } from './misaoMapping';
 
 export interface MisaoPaneState {
   paneId: string;
@@ -7,6 +8,22 @@ export interface MisaoPaneState {
   state: string;
   /** The daemon's deciding rule: exit / a profile name / title / bytes / none. */
   decidedBy: string;
+  /** Where the pane lives, known when the state comes from a full pane list (re-sync) rather than an event. */
+  location?: MisaoPaneLocation;
+}
+
+export interface MisaoPaneLocation {
+  workspace: string;
+  windowId: string;
+  /** 1-based position of the pane in its window (pane id order), as `MisaoMuxClient` numbers panes. */
+  ordinal: number;
+}
+
+/** Receives the daemon's pane states: single changes, full re-syncs (every pane the daemon knows), and connection loss. */
+export interface MisaoPaneStateReceiver {
+  handleState(state: MisaoPaneState): void;
+  handleSnapshot(states: MisaoPaneState[]): void;
+  handleDisconnected(): void;
 }
 
 export type MisaoPaneStateSource = MisaoEventSource & MisaoDisconnectSource & Pick<MisaoRpc, 'request'>;
@@ -18,6 +35,21 @@ function readPaneState(event: Parameters<EventHandler>[0]): MisaoPaneState | und
   const { state, decidedBy } = data as { state?: unknown; decidedBy?: unknown };
   if (typeof state !== 'string' || typeof decidedBy !== 'string') return undefined;
   return { paneId: event.paneId, state, decidedBy };
+}
+
+/** Pane ids are ULIDs, so id order within a window is creation order — the ordinal `MisaoMuxClient` uses. */
+function toSnapshot(panes: readonly MisaoPane[]): MisaoPaneState[] {
+  const nextOrdinal = new Map<string, number>();
+  return sortPanes(panes).map((pane) => {
+    const ordinal = (nextOrdinal.get(pane.window.id) ?? 0) + 1;
+    nextOrdinal.set(pane.window.id, ordinal);
+    return {
+      paneId: pane.paneId,
+      state: pane.agentState,
+      decidedBy: pane.decidedBy,
+      location: { workspace: pane.workspace, windowId: pane.window.id, ordinal },
+    };
+  });
 }
 
 /**
@@ -32,8 +64,7 @@ export class MisaoPaneStateEvents {
 
   constructor(
     private readonly source: MisaoPaneStateSource,
-    private readonly onState: (state: MisaoPaneState) => void,
-    private readonly onDisconnected: () => void,
+    private readonly receiver: MisaoPaneStateReceiver,
     private readonly log: { warn(message: string): void },
   ) {}
 
@@ -44,7 +75,7 @@ export class MisaoPaneStateEvents {
     this.stopListening = [
       this.source.onConnected(() => { this.syncAll(true); }),
       this.source.onGap(() => { this.syncAll(false); }),
-      this.source.onDisconnected(this.onDisconnected),
+      this.source.onDisconnected(() => this.receiver.handleDisconnected()),
     ];
     await this.ensureSubscribed();
     await this.resync();
@@ -77,11 +108,11 @@ export class MisaoPaneStateEvents {
   private async resync(): Promise<void> {
     const panes = await this.source.request('pane.list', {});
     if (!this.started) return;
-    for (const pane of panes) this.onState({ paneId: pane.paneId, state: pane.agentState, decidedBy: pane.decidedBy });
+    this.receiver.handleSnapshot(toSnapshot(panes));
   }
 
   private readonly handleEvent: EventHandler = (event) => {
     const paneState = readPaneState(event);
-    if (paneState) this.onState(paneState);
+    if (paneState) this.receiver.handleState(paneState);
   };
 }

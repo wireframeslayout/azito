@@ -117,8 +117,14 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
       { getRunning: () => ({}) } as unknown as ExecuteTaskUseCase,
       windowRepo, registry, serverRepo, { emit } as unknown as NotificationBus,
     );
-    const bridge = new MisaoActivityBridge({ resolver, monitor, listServerNames: () => [SERVER.name], log: { warn } });
-    paneStates = new MisaoPaneStateEvents(connection, (state) => bridge.handleState(state), () => bridge.handleDisconnected(), { warn });
+    const bridge = new MisaoActivityBridge({
+      resolver,
+      findWindowByRef: (serverName, ref) => windowRepo.findByServerAndRef(serverName, ref),
+      monitor,
+      listServerNames: () => [SERVER.name],
+      log: { warn },
+    });
+    paneStates = new MisaoPaneStateEvents(connection, bridge, { warn });
     await paneStates.start();
   });
 
