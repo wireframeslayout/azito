@@ -4,6 +4,7 @@
 
 export type ActivityDecidedBy =
   | 'tier0_supervisor'
+  | 'tier0_mux'
   | 'tier1_hook'
   | 'tier2_title'
   | 'tier3_heuristic'
@@ -40,6 +41,8 @@ export interface ActivityDiagnosticRow {
     bound: boolean;
   };
   hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
+  /** マルチプレクサ（misao）自身が報告した状態。`decidedBy` は misao 側の判定ルール名（exit / プロファイル名 / title / bytes）。 */
+  mux?: { status: 'working' | 'idle' | 'blocked' | 'done' | 'unknown'; decidedBy?: string; at: number };
   supervisorMatchedBy?: 'muxPaneRef' | 'windowKey' | null;
   probe?: {
     status: 'working' | 'idle' | 'offline';
@@ -52,9 +55,9 @@ export interface ActivityDiagnosticRow {
   lastTransition?: { running: boolean; reason?: ActivityStopReason; at: number };
 }
 
-/** イベント駆動（supervisor / hook）で判定されている Tier。フォールバック Tier と対になる。 */
+/** イベント駆動（supervisor / mux / hook）で判定されている Tier。フォールバック Tier と対になる。 */
 export function isEventDrivenTier(decidedBy: ActivityDecidedBy): boolean {
-  return decidedBy === 'tier0_supervisor' || decidedBy === 'tier1_hook';
+  return decidedBy === 'tier0_supervisor' || decidedBy === 'tier0_mux' || decidedBy === 'tier1_hook';
 }
 
 /** ステータスバー「稼働検知」アイテムのドット状態。 */
@@ -62,7 +65,7 @@ export type ActivityDotState = 'active' | 'inactive' | 'off';
 
 /**
  * 稼働検知ドットの状態。稼働（オフライン以外）が1件も無ければ消灯、イベント駆動（supervisor /
- * hook）で判定している行が1件以上あれば accent、フォールバック Tier だけなら dim。
+ * mux / hook）で判定している行が1件以上あれば accent、フォールバック Tier だけなら dim。
  * 行がまだ取れていない間（null）は消灯扱いにする — 未取得を「稼働あり」と見せない。
  */
 export function activityDotState(rows: ActivityDiagnosticRow[] | null): ActivityDotState {

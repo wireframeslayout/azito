@@ -213,6 +213,7 @@
     "stateOffline": "Offline",
     "stateNone": "Undecided",
     "tier0": "tier0 supervisor",
+    "tier0Mux": "tier0 misao",
     "tier1": "tier1 hook",
     "tier2": "tier2 title",
     "tier3": "tier3 heuristic",
