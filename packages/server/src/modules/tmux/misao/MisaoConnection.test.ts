@@ -13,6 +13,8 @@ interface FakeClientControl {
   clients: FakeClient[];
   /** Errors returned by successive connect() calls; once empty, connect succeeds. */
   connectFailures: Error[];
+  /** Throws from subscribeLines when set. */
+  subscribeLinesError?: () => never;
 }
 
 class FakeClient {
@@ -26,6 +28,14 @@ class FakeClient {
 
   onStateChange(cb: StateListener): () => void { this.stateListeners.push(cb); return () => {}; }
   onGap(cb: (gap: unknown) => void): () => void { this.gapListeners.push(cb); return () => {}; }
+  subscriptionErrorListeners: Array<(info: unknown) => void> = [];
+  lineHandlers = new Map<string, (line: unknown) => void>();
+  onSubscriptionError(cb: (info: unknown) => void): () => void { this.subscriptionErrorListeners.push(cb); return () => {}; }
+  async subscribeLines(paneId: string, handler: (line: unknown) => void): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> {
+    this.control.subscribeLinesError?.();
+    this.lineHandlers.set(paneId, handler);
+    return { unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } };
+  }
   onError(): () => void { return () => {}; }
   async connect(): Promise<void> {
     this.connectCalls += 1;
@@ -153,6 +163,32 @@ describe('MisaoConnection', () => {
     off();
     for (const cb of control.clients[0].gapListeners) cb(gap);
     expect(late).toHaveBeenCalledTimes(1);
+  });
+
+  describe('lines', () => {
+    it('subscribes a pane through the client and fans subscription errors out to listeners', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const handler = vi.fn();
+      await connection.subscribeLines('p_1', handler);
+      expect(control.clients[0].lineHandlers.get('p_1')).toBe(handler);
+      const listener = vi.fn();
+      const off = connection.onSubscriptionError(listener);
+      const info = { stream: { kind: 'lines', paneId: 'p_1' }, error: new Error('refused') };
+      for (const cb of control.clients[0].subscriptionErrorListeners) cb(info);
+      expect(listener).toHaveBeenCalledWith(info);
+      off();
+      for (const cb of control.clients[0].subscriptionErrorListeners) cb(info);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it('translates a connection error from subscribeLines and rejects before start', async () => {
+      const { connection, control } = setup();
+      await expect(connection.subscribeLines('p_1', () => {})).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+      await connection.start();
+      control.subscribeLinesError = () => { throw new FakeMisaoConnectionError('not connected'); };
+      await expect(connection.subscribeLines('p_1', () => {})).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+    });
   });
 
   describe('request', () => {
