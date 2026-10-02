@@ -129,6 +129,7 @@
     "recheck": "Recheck",
     "rechecking": "Checking…",
     "foundation": "Foundation",
+    "misaoProtocol": "protocol {{version}}",
     "agentLabel": "Agent",
     "applySettings": "Apply Settings",
     "allInstalled": "All installed",
