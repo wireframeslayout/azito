@@ -54,7 +54,7 @@ interface MuxRuntimeFieldProps {
   value: MuxRuntime;
   options: readonly MuxRuntime[];
   onChange: (v: MuxRuntime) => void;
-  /** Persisted runtime; when it differs from `value` a migration warning is shown. Omitted in add mode. */
+  /** Persisted runtime; when it differs from `value` (between tmux runtimes) a migration warning is shown. Omitted in add mode. */
   originalValue?: MuxRuntime;
 }
 
@@ -84,7 +84,8 @@ function MuxRuntimeField({ value, options, onChange, originalValue }: MuxRuntime
           {t('serverModals.misaoHint')}
         </div>
       )}
-      {originalValue && value !== originalValue && (
+      {/* The warning is about the tmux socket; moving to or from misao is covered by the misao hint. */}
+      {originalValue && value !== originalValue && value !== 'misao' && originalValue !== 'misao' && (
         <div style={{ fontSize: 'var(--font-sm)', color: 'var(--warning, #f0ad4e)', padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}>
           {t('serverModals.muxMigrationWarning')}
         </div>
