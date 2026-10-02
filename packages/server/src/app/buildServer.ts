@@ -75,7 +75,7 @@ import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modu
 import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
-import type { PaneOrdinal } from '@azito/shared';
+import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
 import { partitionByTmuxRuntime } from '../modules/servers/tmuxServers';
 import { selectLocalMisaoServers } from '../modules/tmux/misao/misaoDriver';
 import { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
@@ -596,6 +596,14 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     verifyToken: verifyWebhookToken,
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
+    misao: wiring.misao && {
+      resolvePane: async (serverName, paneId) => (
+        selectLocalMisaoServers(serverRepo.findAll()).some((srv) => srv.name === serverName)
+          ? paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId))
+          : null
+      ),
+      recordAgentActivity: (serverName, tmuxTarget, event) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event),
+    },
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });
   await app.register(hooksRoutes, { notificationBus, verifyToken: verifyWebhookToken });
