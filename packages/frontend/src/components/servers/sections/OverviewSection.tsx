@@ -448,7 +448,7 @@ export default function OverviewSection({
 
         <KvCard title={t('overview.runtimeTitle')}>
           <KvRow label={t('overview.muxRuntimeLabel')}>
-            <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 6, fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
               {server.muxRuntime === 'misao' ? t('overview.muxMisao')
                 : server.muxRuntime === 'managed' ? t('overview.muxManaged')
                 : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
