@@ -1,15 +1,10 @@
 import type { MuxRuntime } from '@azito/shared';
 
-export type { MuxRuntime };
-
-/** Server types that can run a misao mux are limited to local; agent/ssh stay on tmux. */
-type ServerKind = 'local' | 'agent' | string;
-
 /**
- * Runtimes the server form offers. misao is experimental: only local servers, and only
+ * Runtimes the server form offers. misao is experimental: only local servers (agent/ssh stay on tmux), and only
  * when the hub reports AZITO_EXPERIMENTAL_MISAO (GET /api/health `experimentalMisao`).
  */
-export function muxRuntimeOptions(serverType: ServerKind, misaoEnabled: boolean): MuxRuntime[] {
+export function muxRuntimeOptions(serverType: string, misaoEnabled: boolean): MuxRuntime[] {
   return serverType === 'local' && misaoEnabled ? ['system', 'managed', 'misao'] : ['system', 'managed'];
 }
 
