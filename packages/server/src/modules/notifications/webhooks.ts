@@ -11,7 +11,7 @@ import type { ResolvedWindow } from '../operations/PaneHandleResolver';
  * the field is ignored and the tmux fields stay required.
  */
 export interface MisaoWebhookOptions {
-  /** The window a misao pane belongs to, or null when no registered window owns it. */
+  /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
   resolvePane: (serverName: string, paneId: string) => Promise<ResolvedWindow | null>;
   recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event']) => void;
 }

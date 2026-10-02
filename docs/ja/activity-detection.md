@@ -543,8 +543,8 @@ request`）を返します。
   `unknown` になる。
 - **hook。** `$TMUX_PANE` が無く `$MISAO_PANE_ID`（`p_` + ULID 26文字）がある場合、3つの hook は
   tmux のフィールドの代わりに `misaoPaneId` を送る。ハブは `PaneHandleResolver` で窓を解決し、
-  Tier 1 の hook 状態の記録・保留中質問の記録をその窓に対して行う。解決できないペインは 200 で
-  何も記録せず、形式不正の ID は 400。フラグオフでは `misaoPaneId` は無視され、tmux のフィールドが
-  必須のまま。
+  Tier 1 の hook 状態の記録・保留中質問の記録をその窓に対して行う。解決できないペイン（デーモンに
+  届かない場合を含む）は 200 で何も記録せず、形式不正の ID は 400。フラグオフでは `misaoPaneId` は
+  無視され、tmux のフィールドが必須のまま。
 - **診断。** `GET /api/debug/activity` の行に `mux: { status, decidedBy?, at }` が載り、パネルでは
   `tier0 misao` と表示される。

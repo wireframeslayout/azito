@@ -575,7 +575,8 @@ tmux behavior above is unchanged.
 - **Hooks.** With `$TMUX_PANE` absent and `$MISAO_PANE_ID` (`p_` + 26 ULID characters) set, the
   three hook scripts send `misaoPaneId` instead of the tmux fields. The hub resolves the window
   through `PaneHandleResolver` and records the Tier 1 hook state / opens the pending question on
-  it. An unknown pane answers 200 and records nothing; a malformed id is 400. With the flag off
-  `misaoPaneId` is ignored and the tmux fields stay required.
+  it. An unknown pane (including one that cannot be resolved because the daemon is unreachable)
+  answers 200 and records nothing; a malformed id is 400. With the flag off `misaoPaneId` is
+  ignored and the tmux fields stay required.
 - **Diagnostics.** `GET /api/debug/activity` rows carry `mux: { status, decidedBy?, at }`, and the
   panel shows `tier0 misao`.
