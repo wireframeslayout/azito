@@ -1920,7 +1920,7 @@ export default function TaskPanel({
                   fontSize: 'var(--font-sm)',
                   lineHeight: 1.5,
                 }}>
-                  <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
+                  <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-dim)' }}>
                     {t('executionApproval.followUpPreview')}
                   </div>
                   {approvalData.pendingFollowUpPhases && approvalData.pendingFollowUpPhases.length > 0 && (
