@@ -237,7 +237,7 @@ describe('MisaoMuxClient reads', () => {
     daemon.failures.set('pane.info', new MuxDriverUnavailableError('misao', 'daemon_unreachable'));
     expect(await client.probePane(server, handle(running))).toEqual({ alive: false, verified: false });
     daemon.failures.set('pane.info', new Error('boom'));
-    await expect(client.probePane(server, handle(running))).rejects.toThrow('boom');
+    expect(await client.probePane(server, handle(running))).toEqual({ alive: false, verified: false });
   });
 
   it('reads pid and foreground command from pane.info, null for a missing pane', async () => {
@@ -293,7 +293,9 @@ describe('MisaoMuxClient writes', () => {
     expect(ref).toEqual(refOf('proj', daemon.workspaces.get('proj')![0].windowId));
     expect(result).toEqual({ stdout: '', stderr: '', code: 0 });
     expect(daemon.callsTo('window.create')[0]).toEqual({ workspace: 'proj', name: 'main' });
-    expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, env: { FOO: 'bar' } });
+    expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { FOO: 'bar' } });
+    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
+    expect(daemon.panes[0].env).toEqual({});
   });
 
   it('openWorkspace runs a command through a login shell and generates a window name unless exact', async () => {
@@ -326,7 +328,8 @@ describe('MisaoMuxClient writes', () => {
     const { ref, windowName } = await client.openWindow(server, 'proj', 'win', { extraEnv: { K: 'v' } });
     expect(windowName).toMatch(/^win--[a-z0-9]{4}$/);
     expect(ref.workspace).toBe('proj');
-    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: windowName }, env: { K: 'v' } });
+    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: windowName }, ephemeralEnv: { K: 'v' } });
+    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
     const exact = await client.openWindow(server, 'proj', 'fixed', { exactName: true });
     expect(exact.windowName).toBe('fixed');
   });
@@ -369,8 +372,9 @@ describe('MisaoMuxClient writes', () => {
     expect(daemon.callsTo('pane.open')[0]).toEqual({
       cmd: ['/bin/zsh'], cwd: '/repo', windowId: w,
       labels: { origin: 'hub', name: 'main', windowId: '806', task: '12' },
-      env: { TOKEN: 't' },
+      ephemeralEnv: { TOKEN: 't' },
     });
+    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
     expect(res.handle).toBe(daemon.panes[1].paneId);
     expect((await client.listPanesByRef(server, refOf('proj', w))).map((p) => p.ordinal)).toEqual([1, 2]);
   });
@@ -423,6 +427,19 @@ describe('MisaoMuxClient input', () => {
     await client.sendTextToHandle(server, handle(p), 'Enter');
     await client.sendTextToHandle(server, handle(p), 'line1\nline2');
     expect(daemon.writes()).toEqual(['Enter', 'line1\nline2']);
+  });
+
+  it('waits after a long text before returning, so a following Enter is not folded into the paste', async () => {
+    const wait = vi.fn(async () => {});
+    const { daemon, client } = setup({ wait });
+    const w = daemon.addWindow('proj', 'main');
+    const p = daemon.addPane(w);
+    await client.sendTextToHandle(server, handle(p), 'x'.repeat(501));
+    expect(daemon.writes()).toEqual(['x'.repeat(501)]);
+    expect(wait).toHaveBeenCalledWith(3000);
+    wait.mockClear();
+    await client.sendTextToHandle(server, handle(p), 'x'.repeat(500));
+    expect(wait).not.toHaveBeenCalled();
   });
 
   it('surfaces a missing pane as an RPC error', async () => {

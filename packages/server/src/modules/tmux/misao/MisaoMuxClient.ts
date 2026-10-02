@@ -2,7 +2,7 @@ import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
 import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
-import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
+import { MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { generateWindowName } from '../windowNameUtils';
 import type { MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
@@ -12,6 +12,8 @@ import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, 
 const PANE_NOT_FOUND = 1001;
 const LONG_TEXT_BYTES = 500;
 const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
+/** Same settle time tmux's sendLongText waits after a paste, so a following Enter is not folded into it. */
+const LONG_TEXT_PASTE_SETTLE_MS = 3000;
 
 export interface MisaoMuxClientOptions {
   /** Shell panes are started with, resolved at the boundary. */
@@ -152,9 +154,9 @@ export class MisaoMuxClient implements IMuxClient {
     let info: MisaoPane | null;
     try {
       info = await this.paneInfo(handle);
-    } catch (err) {
-      if (err instanceof MuxDriverUnavailableError) return { alive: false, verified: false };
-      throw err;
+    } catch {
+      // Like tmux's checkPaneLiveness: a probe never throws, a failure just means "could not verify".
+      return { alive: false, verified: false };
     }
     if (!info) return { alive: false, verified: true };
     if (info.processState === 'running') return { alive: true, verified: true };
@@ -168,7 +170,8 @@ export class MisaoMuxClient implements IMuxClient {
       cwd: source.cwd,
       windowId: source.window.id,
       labels: inheritedLabels(source),
-      ...(env ? { env } : {}),
+      // ephemeralEnv: env would be persisted by the daemon and shown by pane.info/pane.list (secrets such as task tokens).
+      ...(env ? { ephemeralEnv: env } : {}),
     });
     return { handle: asPaneHandle(paneId), result: { stdout: paneId, stderr: '', code: 0 } };
   }
@@ -197,6 +200,7 @@ export class MisaoMuxClient implements IMuxClient {
 
   async sendTextToHandle(_server: ServerConfig, handle: PaneHandle, text: string): Promise<void> {
     await this.write(handle, text);
+    if (Buffer.byteLength(text, 'utf8') > LONG_TEXT_BYTES) await this.wait(LONG_TEXT_PASTE_SETTLE_MS);
   }
 
   async panePidByHandle(_server: ServerConfig, handle: PaneHandle): Promise<number | null> {
@@ -274,7 +278,8 @@ export class MisaoMuxClient implements IMuxClient {
         cmd: command ? [this.options.shell, '-lc', command] : [this.options.shell],
         windowId,
         labels: { origin: 'hub', name: windowName },
-        ...(extraEnv ? { env: extraEnv } : {}),
+        // ephemeralEnv: env would be persisted by the daemon and shown by pane.info/pane.list (secrets such as task tokens).
+        ...(extraEnv ? { ephemeralEnv: extraEnv } : {}),
       });
     } catch (err) {
       await this.rpc.request('window.close', { windowId }).catch(() => undefined);

@@ -131,6 +131,14 @@ describe('MisaoConnection', () => {
     expect(onConnected).toHaveBeenCalledTimes(2);
   });
 
+  it('logs the cause when the SDK closes the connection permanently, and stays closed', async () => {
+    const { connection, control, warn } = setup();
+    await connection.start();
+    for (const cb of control.clients[0].stateListeners) cb({ status: 'closed', cause: new Error('protocol mismatch') } as never);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('protocol mismatch'));
+    expect(connection.availability().available).toBe(false);
+  });
+
   it('forwards gap notifications registered before and after start', async () => {
     const { connection, control } = setup();
     const early = vi.fn();

@@ -133,6 +133,36 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     ref2 = { ...ref2, workspace: 'azm-ws2' };
   });
 
+  it('keeps secret env out of pane.info, pane.list and persistence.json while still injecting it', async () => {
+    const secretKey = 'AZITO_TASK_TOKEN';
+    const splitKey = 'AZITO_SPLIT_SECRET';
+    const secret = 'azm-secret-value-9f3c1';
+    const splitSecret = 'azm-split-secret-value-7b2d4';
+    const { ref } = await client.openWindow(server, 'azm-ws2', 'secret', { exactName: true, extraEnv: { [secretKey]: secret } });
+    const pane = await client.resolvePane(server, ref, 1);
+    const split = await client.splitPaneByHandle(server, pane, 'h', { [splitKey]: splitSecret });
+
+    // Injected into the child (the expanded length only appears once the shell evaluated it)...
+    await client.sendTextToHandle(server, pane, 'echo env-len-${#' + secretKey + '}');
+    await client.sendKeysToHandle(server, pane, ['Enter']);
+    await waitForScreen(pane, `env-len-${secret.length}`);
+    await client.sendTextToHandle(server, split.handle, 'echo env-len-${#' + splitKey + '}');
+    await client.sendKeysToHandle(server, split.handle, ['Enter']);
+    await waitForScreen(split.handle, `env-len-${splitSecret.length}`);
+
+    // ...but never exposed or persisted.
+    const exposed = JSON.stringify([
+      await connection.request('pane.info', { paneId: pane }),
+      await connection.request('pane.info', { paneId: split.handle }),
+      await connection.request('pane.list', {}),
+    ]);
+    for (const leaked of [secretKey, secret, splitKey, splitSecret]) expect(exposed).not.toContain(leaked);
+    const persisted = fs.readFileSync(path.join(dir, 'persistence.json'), 'utf8');
+    expect(persisted).toContain(ref.window);
+    for (const leaked of [secretKey, secret, splitKey, splitSecret]) expect(persisted).not.toContain(leaked);
+    await client.closeWindow(server, ref);
+  });
+
   it('delivers input to registered windows through WindowInputService, and only to their own panes', async () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
     registry.register('misao', client);

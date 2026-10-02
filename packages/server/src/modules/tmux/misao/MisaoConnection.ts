@@ -108,6 +108,9 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
       this.status = 'connected';
       for (const listener of this.connectedListeners) listener();
     } else {
+      if (state.status === 'closed' && state.cause) {
+        this.options.log.warn(`[misao] connection closed permanently: ${state.cause.message}`);
+      }
       this.status = state.status === 'closed' ? 'closed' : 'disconnected';
     }
   }
