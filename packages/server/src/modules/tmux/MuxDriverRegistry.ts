@@ -34,8 +34,4 @@ export class MuxDriverRegistry {
     if (!availability.available) throw new MuxDriverUnavailableError(muxKindForRuntime(server.muxRuntime), availability.reason);
     return this.drivers.get(muxKindForRuntime(server.muxRuntime))!;
   }
-
-  has(kind: MuxDriverKind): boolean {
-    return this.drivers.has(kind);
-  }
 }

@@ -226,9 +226,9 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
-  const transportFactory = new TransportFactory(publicUrl, { misaoEnabled });
-  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   const muxDriverRegistry = new MuxDriverRegistry({ misaoEnabled });
+  const transportFactory = new TransportFactory(publicUrl, { muxAvailability: (server) => muxDriverRegistry.availability(server) });
+  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
