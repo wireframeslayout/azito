@@ -186,13 +186,15 @@ export interface ServersRouteOptions {
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
   muxDriverRegistry: MuxDriverRegistry;
+  /** Reports the misao daemon for install-status of misao servers. Wired only when the misao driver is. */
+  misaoDaemonStatus?: () => Promise<{ installed: boolean; version?: string; detail?: string }>;
   onMuxRuntimeChanged?: (change: { previous: ServerConfig; next: ServerConfig }) => void;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxRuntimeChanged } = opts;
+  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxRuntimeChanged, misaoDaemonStatus } = opts;
   const misaoEnabled = opts.misaoEnabled ?? false;
   const muxRuntimeWhitelist: string[] = allowedMuxRuntimes(misaoEnabled);
 
@@ -1210,8 +1212,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const isRemote = srv.type === 'agent';
       const osName = (await transport.exec('uname -s')).stdout.trim();
 
-      const [tmuxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
-        checkTmux(),
+      const isMisao = muxKindForRuntime(srv.muxRuntime) === 'misao';
+      const [muxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
+        isMisao ? (misaoDaemonStatus?.() ?? { installed: false, detail: 'misao_disabled' }) : checkTmux(),
         checkNode(),
         checkHarness(),
         isRemote ? checkTailscale() : null,
@@ -1220,7 +1223,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       ]);
 
       const result: Record<string, unknown> = {
-        tmux: tmuxResult,
+        [isMisao ? 'misao' : 'tmux']: muxResult,
         node: nodeResult,
         aztHarness: harnessResult,
       };
