@@ -1517,7 +1517,7 @@ export class ExecuteTaskUseCase {
       });
   }
 
-  async followUp(unitId: number, taskId: number, comment: string, opts?: { savedBody?: boolean; phaseNames?: string[] }): Promise<void> {
+  async followUp(unitId: number, taskId: number, comment: string, opts?: { phaseNames?: string[] }): Promise<void> {
     const unitForRun = this.unitRepo.findById(unitId);
     if (!unitForRun) throw new Error('Unit not found');
 
@@ -1554,12 +1554,10 @@ export class ExecuteTaskUseCase {
     // mid-run, and the next follow-up (including the one the answer-submit
     // endpoint issues) must not resume it unattended. When blocked, the
     // composed `comment` is saved in pending_follow_up_body so approval can
-    // re-deliver it (Issue #276). When opts.savedBody is true (re-execution
-    // after approval), the pre-lock gate is skipped — the fingerprint was
-    // just approved — but reverifyGateInLock still runs inside the lock.
-    if (!opts?.savedBody) {
-      this.enforceExecutionGate(task, unitId, 'follow_up', fuBaseBranch, comment, opts?.phaseNames);
-    }
+    // re-deliver it (Issue #276). After approval the fingerprint matches so
+    // the gate passes through; if state changed since approval it re-blocks
+    // and body is re-saved automatically.
+    this.enforceExecutionGate(task, unitId, 'follow_up', fuBaseBranch, comment, opts?.phaseNames);
 
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
@@ -1592,7 +1590,7 @@ export class ExecuteTaskUseCase {
     if (primaryWindow && !runningInWindow) {
       if (primaryWindow.sleeping) {
         wakeResult = await this.primaryWindowWaker.wake(
-          primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
+          primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true },
         );
       } else {
         const fuCheckDriver = this.resolveDriver(server);
@@ -1610,7 +1608,7 @@ export class ExecuteTaskUseCase {
         if (!alive) {
           this.windowRepo.update(primaryWindow.id, { sleeping: true });
           wakeResult = await this.primaryWindowWaker.wake(
-            primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true },
+            primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true },
           );
         }
       }
@@ -2154,9 +2152,21 @@ export class ExecuteTaskUseCase {
       }
     }
 
+    // Wake sleeping primary window before the lock (same pattern as
+    // followUp — Issue #276 review fix 3). The gate at line 2144 is the
+    // authoritative check, so pass gateVerifiedByCaller to skip respawn's
+    // own in-lock reverification.
+    const rsmTaskWindows = this.windowRepo.findByTask(taskId);
+    const rsmPrimaryWindow = rsmTaskWindows.find((w) => isPrimaryTaskWindow(w));
+    if (rsmPrimaryWindow?.sleeping) {
+      await this.primaryWindowWaker.wake(
+        rsmPrimaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true },
+      );
+    }
+
     // Use the primary window from windowRepo instead of task.tmuxWindow —
     // the task column can lag behind when a window is respawned or renamed
-    // independently (Issue #276).
+    // independently (Issue #276). Re-read after potential wake above.
     const taskWindows = this.windowRepo.findByTask(taskId);
     const primaryWindow = taskWindows.find((w) => isPrimaryTaskWindow(w));
     const windowName = primaryWindow

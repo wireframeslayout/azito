@@ -582,8 +582,13 @@ export async function decideExecutionApproval(
     if (!body) {
       failApprovedOperation('follow_up', new Error(`Task ${taskId}: follow-up body was not preserved`));
     } else {
-      const phases: string[] | undefined = task.pendingFollowUpPhases ? JSON.parse(task.pendingFollowUpPhases) : undefined;
-      executeTaskUseCase.followUp(unitId as number, taskId, body, { savedBody: true, phaseNames: phases })
+      let phases: string[] | undefined;
+      try {
+        phases = task.pendingFollowUpPhases ? JSON.parse(task.pendingFollowUpPhases) : undefined;
+      } catch {
+        phases = undefined;
+      }
+      executeTaskUseCase.followUp(unitId as number, taskId, body, { phaseNames: phases })
         .catch((err: unknown) => failApprovedOperation('follow_up', err));
     }
   } else if (operation === 'resume') {

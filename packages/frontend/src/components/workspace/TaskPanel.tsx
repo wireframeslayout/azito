@@ -1911,6 +1911,28 @@ export default function TaskPanel({
                 </Notice>
               )}
 
+              {approvalData.pendingFollowUpPreview && (
+                <div style={{
+                  padding: '8px 12px',
+                  background: 'var(--bg-elevated, #2a2a2a)',
+                  borderRadius: 'var(--radius-sm, 6px)',
+                  fontSize: 13,
+                  lineHeight: 1.5,
+                }}>
+                  <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
+                    {t('executionApproval.followUpPreview')}
+                  </div>
+                  <div style={{
+                    whiteSpace: 'pre-wrap',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 12,
+                    color: 'var(--text-primary)',
+                  }}>
+                    {approvalData.pendingFollowUpPreview}
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                 {t('executionApproval.reapprovalNote')}
               </div>

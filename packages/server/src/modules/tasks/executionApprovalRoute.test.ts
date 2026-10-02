@@ -988,6 +988,95 @@ describe('POST /api/tasks/:id/approve-execution (Issue #328 review)', () => {
       taskId: 1, unitId: 20, type: 'status_change', content: expect.objectContaining({ status: 'failed', operation: 'restore' }),
     }));
   });
+
+  // ── Issue #276 follow-up approval tests ──
+
+  it('approving a follow_up operation calls followUp with the saved body and phases', async () => {
+    const task = makeTask({
+      pendingOperation: 'follow_up',
+      pendingOperationPriorStatus: 'running',
+      pendingFollowUpBody: 'Please fix the tests',
+      pendingFollowUpPhases: '["implementing"]',
+    });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().pendingOperation).toBeNull();
+    expect(getTask().pendingFollowUpBody).toBeNull();
+    expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, 'Please fix the tests', { phaseNames: ['implementing'] });
+    expect(opts.executeTaskUseCase.execute).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+  });
+
+  it('approving a follow_up operation with no phases passes undefined phaseNames', async () => {
+    const task = makeTask({
+      pendingOperation: 'follow_up',
+      pendingOperationPriorStatus: 'running',
+      pendingFollowUpBody: 'Just a follow-up',
+      pendingFollowUpPhases: null,
+    });
+    const { opts } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.followUp).toHaveBeenCalledWith(20, 1, 'Just a follow-up', { phaseNames: undefined });
+  });
+
+  it('denying a follow_up operation clears pending body and sets failed', async () => {
+    const task = makeTask({
+      pendingOperation: 'follow_up',
+      pendingOperationPriorStatus: 'running',
+      pendingFollowUpBody: 'Please fix the tests',
+      pendingFollowUpPhases: '["implementing"]',
+    });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: false } });
+
+    expect(res.statusCode).toBe(200);
+    expect(getTask().status).toBe('failed');
+    expect(getTask().pendingOperation).toBeNull();
+    expect(getTask().pendingFollowUpBody).toBeNull();
+    expect(getTask().pendingFollowUpPhases).toBeNull();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+  });
+
+  it('follow_up approval failure when body was not preserved marks the task failed', async () => {
+    const task = makeTask({
+      pendingOperation: 'follow_up',
+      pendingOperationPriorStatus: 'running',
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
+    });
+    const { opts, getTask } = makeStatefulOpts(task);
+    const fingerprint = currentFingerprint(opts, task);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/approve-execution', payload: { approved: true, fingerprint } });
+    await new Promise((r) => setImmediate(r));
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(getTask().status).toBe('failed');
+  });
 });
 
 // Issue #328 fourteenth-round review: GET .../execution-approval and POST

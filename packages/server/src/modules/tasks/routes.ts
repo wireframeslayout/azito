@@ -520,9 +520,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingFollowUpPreview: task.pendingFollowUpBody
           ? task.pendingFollowUpBody.slice(0, 200) + (task.pendingFollowUpBody.length > 200 ? '…' : '')
           : null,
-        pendingFollowUpPhases: task.pendingFollowUpPhases
-          ? JSON.parse(task.pendingFollowUpPhases) as string[]
-          : null,
+        pendingFollowUpPhases: (() => {
+          if (!task.pendingFollowUpPhases) return null;
+          try { return JSON.parse(task.pendingFollowUpPhases) as string[]; }
+          catch { return null; }
+        })(),
       };
     },
   );

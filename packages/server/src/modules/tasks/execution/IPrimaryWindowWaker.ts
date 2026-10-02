@@ -2,6 +2,7 @@ export interface IPrimaryWindowWaker {
   wake(windowId: number, serverName: string, opts?: {
     skipAgentLaunch?: boolean;
     gateAlreadyEnforced?: boolean;
+    gateVerifiedByCaller?: boolean;
   }): Promise<{ tmuxTarget: string }>;
 
   findRunningSession(

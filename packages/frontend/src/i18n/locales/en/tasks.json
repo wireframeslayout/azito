@@ -68,6 +68,7 @@
       }
     },
     "baseBranchUnresolvable": "Could not detect the default branch. Execution will fail in this state. Please set the project's default branch.",
+    "followUpPreview": "Approving will send this follow-up:",
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
     "approve": "Approve",
     "deny": "Deny",

@@ -172,7 +172,17 @@ describe('migration 076: pending follow-up columns', () => {
     expect(row.pending_follow_up_phases).toBe(phases);
   });
 
-  it('is idempotent for existing tasks', () => {
+  it('is idempotent — running twice does not throw', () => {
+    db.transaction(() => m076.up(db))();
+    // Running a second time should not throw
+    db.transaction(() => m076.up(db))();
+
+    const info = db.prepare('PRAGMA table_info(tasks)').all() as Array<{ name: string }>;
+    expect(info.some((c) => c.name === 'pending_follow_up_body')).toBe(true);
+    expect(info.some((c) => c.name === 'pending_follow_up_phases')).toBe(true);
+  });
+
+  it('existing tasks get NULL defaults', () => {
     const taskId = Number(
       db.prepare(
         `INSERT INTO tasks (project_id, title, status) VALUES (1, 'Existing Task', 'review')`,
