@@ -77,7 +77,7 @@ import { AgentEventStream } from '../modules/servers/transport/AgentEventStream'
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
 import { partitionByTmuxRuntime } from '../modules/servers/tmuxServers';
-import { selectLocalMisaoServers } from '../modules/tmux/misao/misaoDriver';
+import { selectLocalMisaoServers, syncMisaoChangeHooks } from '../modules/tmux/misao/misaoDriver';
 import { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
 import { MisaoActivityBridge } from '../modules/operations/misaoActivityBridge';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
@@ -479,10 +479,11 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
     serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, misaoEnabled: wiring.misaoEnabled,
-    onMuxRuntimeChanged: (serverName) => {
-      transportFactory.invalidate(serverName);
-      paneHandleResolver.clearServer(serverName);
-      supervisorRegistry.clearServerPaneRefs(serverName);
+    onMuxRuntimeChanged: ({ previous, next }) => {
+      transportFactory.invalidate(next.name);
+      paneHandleResolver.clearServer(next.name);
+      supervisorRegistry.clearServerPaneRefs(next.name);
+      syncMisaoChangeHooks(wiring.misao, previous, next, app.log);
     },
   });
   await app.register(sessionsRoutes, {
@@ -629,7 +630,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
   await app.register(chatCommandsRoutes, { chatCommandLoader });
   await app.register(supervisorsRoutes, { supervisorRegistry });
-  await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
+  await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled, misaoEnabled: wiring.misaoEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),

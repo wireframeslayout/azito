@@ -52,3 +52,28 @@ export function registerMisaoDriver(
   });
   return { connection, driver };
 }
+
+/**
+ * Keeps the daemon's change-event subscription in step with a runtime switch made while the hub runs
+ * (startup installs it only for servers already on misao). Failure to install is not fatal: the
+ * subscription is established when the daemon becomes reachable.
+ */
+export function syncMisaoChangeHooks(
+  misao: MisaoHandle | undefined,
+  previous: ServerConfig,
+  next: ServerConfig,
+  log: { warn(message: string): void },
+): void {
+  if (!misao) return;
+  const wasMisao = selectLocalMisaoServers([previous]).length > 0;
+  const isMisao = selectLocalMisaoServers([next]).length > 0;
+  if (isMisao && !wasMisao) {
+    misao.driver.installChangeHooks(next).catch((err) => {
+      log.warn(`Change events for ${next.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
+    });
+  } else if (wasMisao && !isMisao) {
+    misao.driver.uninstallChangeHooks(next).catch((err) => {
+      log.warn(`Could not stop change events for ${next.name}: ${err}`);
+    });
+  }
+}

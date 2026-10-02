@@ -186,7 +186,7 @@ export interface ServersRouteOptions {
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
   muxDriverRegistry: MuxDriverRegistry;
-  onMuxRuntimeChanged?: (serverName: string) => void;
+  onMuxRuntimeChanged?: (change: { previous: ServerConfig; next: ServerConfig }) => void;
 }
 
 // ─── Plugin ───
@@ -685,7 +685,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           );
         }
         if (validPutMux !== undefined && validPutMux !== srv.muxRuntime) {
-          onMuxRuntimeChanged?.(request.params.name);
+          onMuxRuntimeChanged?.({ previous: srv, next: { ...srv, type: effectiveType, muxRuntime: validPutMux as MuxRuntime } });
         }
         if (effectiveType !== 'agent') {
           // Issue #29 review, Important finding 1: an isolation-invariant

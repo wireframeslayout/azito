@@ -12,10 +12,13 @@ interface HealthRouteOptions {
   // polled-at-startup source of hub-wide capability flags (see deployMode
   // above). See TaskOwnedPaneBadge.tsx for the one consumer.
   scopedAuthEnabled: boolean;
+  // AZITO_EXPERIMENTAL_MISAO: lets the frontend offer the misao mux runtime.
+  // Omitted from the response when off so the payload is unchanged by default.
+  misaoEnabled: boolean;
 }
 
 const healthRoutes: FastifyPluginCallback<HealthRouteOptions> = (fastify, opts, done) => {
-  const { deployModeDetector, scopedAuthEnabled } = opts;
+  const { deployModeDetector, scopedAuthEnabled, misaoEnabled } = opts;
 
   fastify.get('/api/health', async () => {
     const release = getReleaseInfo();
@@ -26,6 +29,7 @@ const healthRoutes: FastifyPluginCallback<HealthRouteOptions> = (fastify, opts, 
       version: release?.version ?? 'dev',
       deployMode: deployModeDetector.detect(),
       scopedAuthEnabled,
+      ...(misaoEnabled && { experimentalMisao: true }),
       ...(release && {
         commit: release.commit,
         bundleHash: release.bundleHash,

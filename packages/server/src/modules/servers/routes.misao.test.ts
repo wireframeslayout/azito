@@ -136,3 +136,23 @@ describe('POST /api/servers/:name/agent/install on a misao server', () => {
     expect(opts.serverRepo.update).not.toHaveBeenCalled();
   });
 });
+
+describe('PUT /api/servers/:name onMuxRuntimeChanged', () => {
+  it('reports the previous and next server when the runtime changes', async () => {
+    const onMuxRuntimeChanged = vi.fn();
+    const opts = { ...makeOpts(true, makeServer()), onMuxRuntimeChanged };
+    const res = await (await buildApp(opts)).inject({ method: 'PUT', url: '/api/servers/srv', payload: { muxRuntime: 'misao' } });
+    expect(res.statusCode).toBe(200);
+    expect(onMuxRuntimeChanged).toHaveBeenCalledTimes(1);
+    const { previous, next } = onMuxRuntimeChanged.mock.calls[0][0];
+    expect(previous.muxRuntime).toBe('system');
+    expect(next).toMatchObject({ name: 'srv', type: 'local', muxRuntime: 'misao' });
+  });
+
+  it('is not called when the runtime stays the same', async () => {
+    const onMuxRuntimeChanged = vi.fn();
+    const opts = { ...makeOpts(true, makeServer()), onMuxRuntimeChanged };
+    await (await buildApp(opts)).inject({ method: 'PUT', url: '/api/servers/srv', payload: { muxRuntime: 'system' } });
+    expect(onMuxRuntimeChanged).not.toHaveBeenCalled();
+  });
+});
