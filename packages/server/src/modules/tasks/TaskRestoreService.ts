@@ -31,7 +31,7 @@ import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
 import { type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
-import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
+import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -652,6 +652,7 @@ export class TaskRestoreService {
         taskId: task.id,
         serverName,
         tmuxTarget: dbTarget,
+        muxRef: ref,
         label: windowName,
         isPrimary: true,
         windowType: unit?.workerType ? 'agent' : 'terminal',
@@ -663,7 +664,7 @@ export class TaskRestoreService {
         paneLayout: null,
         sleeping: false,
       });
-      await labelRegisteredWindow(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId: task.id });
+      await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId: task.id }, windowRepo);
 
       // task.branch is deliberately NOT written here (Issue #328 review,
       // fourth recurrence of this exact self-invalidation bug — see

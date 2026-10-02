@@ -201,6 +201,8 @@ function buildService(opts: {
     }),
     splitPaneByHandle: vi.fn(async (_server: unknown, _handle: unknown, _dir: 'h' | 'v', _env?: Record<string, string>) => ({ handle: '%1', result: { stdout: '', stderr: '', code: 0 } })),
     resolvePane: vi.fn(async () => '%0'),
+    supportsPaneLabels: false,
+    labelWindowPanes: vi.fn(async () => undefined),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
     captureLayout: vi.fn(async () => ({ layout: '', panes: [{ index: 0, ordinal: 1, command: 'bash', path: '/home', title: '' }] })),
     applyLayout: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
@@ -311,6 +313,46 @@ function buildService(opts: {
 
   return { service, windowRepo, tmux, muxDriverRegistry, sentCommands, clearExitMarker, taskRepo, logRepo, serverRepo, projectSecretRepo, events, paneEnvService };
 }
+
+describe('WindowRespawnService.respawn — pane labels (misao)', () => {
+  const layout = {
+    layout: '',
+    panes: [
+      { index: 0, command: null, workingDirectory: null, title: null },
+      { index: 1, command: null, workingDirectory: null, title: null },
+    ],
+  };
+
+  it('labels the recreated window with its row id and task id, after the panes were restored', async () => {
+    const win = makeWindow({ id: 7, taskId: 5, paneLayout: layout });
+    const { service, tmux } = buildService({ window: win, task: makeTask({ id: 5 }) });
+    tmux.supportsPaneLabels = true;
+
+    await service.respawn(7, makeServer());
+
+    expect(tmux.labelWindowPanes).toHaveBeenCalledTimes(1);
+    expect(tmux.labelWindowPanes).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tmux', workspace: 'azito' }), { windowId: 7, taskId: 5 });
+    expect(tmux.splitPaneByHandle.mock.invocationCallOrder[0]).toBeLessThan(tmux.labelWindowPanes.mock.invocationCallOrder[0]);
+  });
+
+  it('labels a non-task window with the window id only', async () => {
+    const win = makeWindow({ id: 7, taskId: null, tmuxTarget: 'azito:manual--ab12' });
+    const { service, tmux } = buildService({ window: win });
+    tmux.supportsPaneLabels = true;
+
+    await service.respawn(7, makeServer());
+
+    expect(tmux.labelWindowPanes).toHaveBeenCalledWith(expect.anything(), expect.anything(), { windowId: 7 });
+  });
+
+  it('does not label through a driver without pane labels (tmux)', async () => {
+    const { service, tmux } = buildService({ window: makeWindow({ id: 7, taskId: 5 }), task: makeTask({ id: 5 }) });
+
+    await service.respawn(7, makeServer());
+
+    expect(tmux.labelWindowPanes).not.toHaveBeenCalled();
+  });
+});
 
 describe('WindowRespawnService.respawn — supervisor wrap', () => {
   it('wraps the respawn command for agent windows on a local server', async () => {

@@ -51,7 +51,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { labelRegisteredWindow } from '../../tmux/labelRegisteredWindow';
+import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
@@ -1332,7 +1332,7 @@ export class ExecuteTaskUseCase {
       paneLayout: null,
       sleeping: false,
     });
-    await labelRegisteredWindow(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId });
+    await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
     const workerLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs);
@@ -1788,7 +1788,7 @@ export class ExecuteTaskUseCase {
             paneLayout: null,
             sleeping: false,
           });
-          if (created.ref) await labelRegisteredWindow(this.resolveDriver(created.server), created.server, created.ref, { windowId: followUpWindowId, taskId });
+          if (created.ref) await labelAddedWindowOrRemove(this.resolveDriver(created.server), created.server, created.ref, { windowId: followUpWindowId, taskId }, this.windowRepo);
         }
 
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };

@@ -21,7 +21,7 @@ import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
-import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
+import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -54,14 +54,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   };
 
   // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
-  async function labelOrRemoveWindow(srv: ServerConfig, ref: MuxRef, windowId: number, taskId?: number): Promise<void> {
-    try {
-      await labelRegisteredWindow(driverFor(srv), srv, ref, { windowId, ...(taskId !== undefined ? { taskId } : {}) });
-    } catch (err) {
-      windowRepo.remove(windowId);
-      throw err;
-    }
-  }
+  const labelOrRemoveWindow = (srv: ServerConfig, ref: MuxRef, windowId: number, taskId?: number): Promise<void> =>
+    labelAddedWindowOrRemove(driverFor(srv), srv, ref, { windowId, ...(taskId !== undefined ? { taskId } : {}) }, windowRepo);
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });

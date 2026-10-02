@@ -38,6 +38,7 @@ import {
 } from '../tasks/execution/WindowRotation';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
+import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -531,6 +532,8 @@ export class WindowRespawnService {
       }
 
       this.windowRepo.update(windowId, { tmuxTarget: dbTarget, muxRef: newRef, sleeping: false });
+      // After pane restoration so every pane of the window (including the split ones) is labelled.
+      await labelRegisteredWindow(restoreDriver, respawnServer, newRef, { windowId, ...(task ? { taskId: task.id } : {}) });
 
       return { tmuxTarget: dbTarget };
     };
