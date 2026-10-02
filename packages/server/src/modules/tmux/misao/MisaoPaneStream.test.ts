@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import { MisaoPaneStream } from './MisaoPaneStream';
-import type { MisaoLineSource, MisaoRpc } from './MisaoConnection';
+import type { MisaoLineSource } from './MisaoConnection';
 
 const PANE = asPaneHandle('p_1');
 const DONE = 'AZITO_DONE_7_abc';
@@ -11,8 +11,6 @@ class FakeSource {
   gapListeners = new Set<(gap: unknown) => void>();
   errorListeners = new Set<(info: unknown) => void>();
   unsubscribed = 0;
-  screen = '';
-  screenError: Error | undefined;
   subscribeError: Error | undefined;
   private release: (() => void) | undefined;
   /** Holds the subscribe reply until release() is called. */
@@ -28,11 +26,6 @@ class FakeSource {
   releaseSubscribe(): void { this.release?.(); }
   onGap(l: (gap: unknown) => void): () => void { this.gapListeners.add(l); return () => { this.gapListeners.delete(l); }; }
   onSubscriptionError(l: (info: unknown) => void): () => void { this.errorListeners.add(l); return () => { this.errorListeners.delete(l); }; }
-  async request(method: string): Promise<unknown> {
-    if (method !== 'pane.screen') throw new Error(`unexpected ${method}`);
-    if (this.screenError) throw this.screenError;
-    return { text: this.screen };
-  }
   emitGap(paneId: string, reason: 'epoch' | 'truncated'): void {
     for (const l of this.gapListeners) l({ stream: { kind: 'lines', paneId }, reason });
   }
@@ -40,7 +33,7 @@ class FakeSource {
 
 function setup(): { source: FakeSource; stream: MisaoPaneStream; markers: unknown[][]; gaps: unknown[]; errors: unknown[] } {
   const source = new FakeSource();
-  const stream = new MisaoPaneStream(PANE, source as unknown as MisaoLineSource & MisaoRpc);
+  const stream = new MisaoPaneStream(PANE, source as unknown as MisaoLineSource);
   const markers: unknown[][] = [];
   const gaps: unknown[] = [];
   const errors: unknown[] = [];
@@ -92,29 +85,14 @@ describe('MisaoPaneStream', () => {
     expect(source.unsubscribed).toBe(1);
   });
 
-  it('on a gap of its own pane emits gap and scans the screen for markers without buffering it', async () => {
-    const { source, stream, markers, gaps } = setup();
+  it('reports a gap of its own pane without touching the buffer', async () => {
+    const { source, stream, gaps } = setup();
     stream.start();
     await flush();
     source.lineHandler!({ text: 'before' });
-    source.screen = `old output\n${DONE}\n`;
     source.emitGap('p_1', 'epoch');
-    await flush();
     expect(gaps).toEqual([{ reason: 'epoch' }]);
-    expect(markers).toEqual([['phase_complete', 'before\n']]);
     expect(stream.getBuffer()).toBe('before\n');
-  });
-
-  it('keeps a half-read questions block across a screen scan', async () => {
-    const { source, stream, markers } = setup();
-    stream.start();
-    await flush();
-    source.lineHandler!({ text: 'AZITO_QUESTIONS_7_abc: [{"text":"a",' });
-    source.screen = 'unrelated screen\n';
-    source.emitGap('p_1', 'truncated');
-    await flush();
-    source.lineHandler!({ text: '"type":"text"}]' });
-    expect(markers.map((m) => m[0])).toEqual(['questions_json']);
   });
 
   it('ignores gaps of other panes and other streams', async () => {
@@ -125,16 +103,6 @@ describe('MisaoPaneStream', () => {
     for (const l of source.gapListeners) l({ stream: { kind: 'events' }, reason: 'epoch' });
     await flush();
     expect(gaps).toEqual([]);
-  });
-
-  it('reports a failed screen read as subscription_error', async () => {
-    const { source, stream, errors } = setup();
-    stream.start();
-    await flush();
-    source.screenError = new Error('screen failed');
-    source.emitGap('p_1', 'epoch');
-    await flush();
-    expect(errors).toEqual([source.screenError]);
   });
 
   it('reports a failed subscribe and a refused re-subscribe of its own pane only', async () => {

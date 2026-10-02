@@ -116,6 +116,8 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
     stream.setMarkers('AZITO_DONE_2_n2', 'AZITO_QUESTIONS_2_n2');
     stream.enableMarkerDetection();
     const detected = watchMarkers(stream);
+    const gaps: unknown[] = [];
+    stream.on('gap', (gap) => gaps.push(gap));
     stream.start();
     try {
       await vi.waitFor(() => expect(stream.getBuffer()).toContain('started'), { timeout: 10000, interval: 50 });
@@ -125,6 +127,9 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
       }, { timeout: 15000, interval: 100 });
       await proxy.up();
       await expect(detected).resolves.toBe('phase_complete');
+      // Replayed by the SDK's since/epoch re-subscribe, not lost: no gap, and the line is in the buffer.
+      expect(gaps).toEqual([]);
+      expect(stream.getBuffer()).toContain('AZITO_DONE_2_n2');
     } finally {
       stream.stop();
     }

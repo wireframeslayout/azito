@@ -297,8 +297,9 @@ describe('MisaoMuxClient writes', () => {
     expect(ref).toEqual(refOf('proj', daemon.workspaces.get('proj')![0].windowId));
     expect(result).toEqual({ stdout: '', stderr: '', code: 0 });
     expect(daemon.callsTo('window.create')[0]).toEqual({ workspace: 'proj', name: 'main' });
-    expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, env: { FOO: 'bar' } });
-    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('ephemeralEnv');
+    expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { FOO: 'bar' } });
+    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
+    expect(daemon.panes[0].env).toEqual({});
   });
 
   it('openWorkspace runs a command through a login shell and generates a window name unless exact', async () => {
@@ -331,8 +332,8 @@ describe('MisaoMuxClient writes', () => {
     const { ref, windowName } = await client.openWindow(server, 'proj', 'win', { extraEnv: { K: 'v' } });
     expect(windowName).toMatch(/^win--[a-z0-9]{4}$/);
     expect(ref.workspace).toBe('proj');
-    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: windowName }, env: { K: 'v' } });
-    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('ephemeralEnv');
+    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: windowName }, ephemeralEnv: { K: 'v' } });
+    expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
     const exact = await client.openWindow(server, 'proj', 'fixed', { exactName: true });
     expect(exact.windowName).toBe('fixed');
   });

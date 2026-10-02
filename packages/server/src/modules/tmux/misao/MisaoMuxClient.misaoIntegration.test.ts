@@ -135,7 +135,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
   it('keeps secret env out of pane.info, pane.list and persistence.json while still injecting it', async () => {
     const secretKey = 'AZITO_TASK_TOKEN';
-    const splitKey = 'AZITO_SECRET_SPLIT';
+    const splitKey = 'AZITO_SPLIT_SECRET';
     const secret = 'azm-secret-value-9f3c1';
     const splitSecret = 'azm-split-secret-value-7b2d4';
     const { ref } = await client.openWindow(server, 'azm-ws2', 'secret', { exactName: true, extraEnv: { [secretKey]: secret } });

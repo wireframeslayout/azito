@@ -1,12 +1,10 @@
-import { ISOLATION_MASKED_ENV } from './isolationMaskedEnv';
-
-const SECRET_ENV_KEYS: ReadonlySet<string> = new Set([...Object.keys(ISOLATION_MASKED_ENV), 'AZITO_TASK_TOKEN', 'AZITO_HUB_PUSH']);
-const SECRET_ENV_PREFIX = 'AZITO_SECRET_';
+/** Keys known to carry no credential. Any other key (task token, AZITO_SECRET_*, isolation masks, ...) stays ephemeral. */
+const PERSISTABLE_ENV_KEYS: ReadonlySet<string> = new Set(['AZITO_TASK_ID', 'AZITO_AGENT_PORT']);
 
 export interface SplitPaneEnv {
   /** Safe to persist and show (pane.info / pane.list). */
   env: Record<string, string>;
-  /** Credentials and their isolation masks: must live only in the pane process. */
+  /** Everything else: must live only in the pane process. */
   ephemeralEnv: Record<string, string>;
 }
 
@@ -14,8 +12,7 @@ export interface SplitPaneEnv {
 export function splitPaneEnv(env: Record<string, string>): SplitPaneEnv {
   const result: SplitPaneEnv = { env: {}, ephemeralEnv: {} };
   for (const [key, value] of Object.entries(env)) {
-    const isSecret = SECRET_ENV_KEYS.has(key) || key.startsWith(SECRET_ENV_PREFIX);
-    (isSecret ? result.ephemeralEnv : result.env)[key] = value;
+    (PERSISTABLE_ENV_KEYS.has(key) ? result.env : result.ephemeralEnv)[key] = value;
   }
   return result;
 }

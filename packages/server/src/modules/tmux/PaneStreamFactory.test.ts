@@ -3,7 +3,7 @@ import { asPaneHandle } from '@azito/shared';
 import { PaneStreamFactory } from './PaneStreamFactory';
 import { PaneOutputStream } from './PaneOutputStream';
 import { MisaoPaneStream } from './misao/MisaoPaneStream';
-import type { MisaoLineSource, MisaoRpc } from './misao/MisaoConnection';
+import type { MisaoLineSource } from './misao/MisaoConnection';
 
 describe('PaneStreamFactory', () => {
   const server = { name: 's7', type: 'agent' as const, host: 'h', agentPort: 3002, agentToken: 't', muxRuntime: 'system' as const };
@@ -18,7 +18,7 @@ describe('PaneStreamFactory', () => {
   describe('local servers', () => {
     const misaoServer = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, muxRuntime: 'misao' as const };
     const tmuxServer = { ...misaoServer, muxRuntime: 'system' as const };
-    const misaoLines = {} as MisaoLineSource & MisaoRpc;
+    const misaoLines = {} as MisaoLineSource;
     const misaoFactory = new PaneStreamFactory(transportFactory, misaoLines);
     const pane = asPaneHandle('p_1');
 

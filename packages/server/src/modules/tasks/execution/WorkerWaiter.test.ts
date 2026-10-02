@@ -46,16 +46,13 @@ describe('WorkerWaiter.startPaneStream', () => {
   });
 });
 
-describe('WorkerWaiter.waitForWorker stream events', () => {
-  it('logs gaps and subscription errors, and finishes on abort', async () => {
+describe('WorkerWaiter.startPaneStream stream events', () => {
+  it('logs gaps and subscription errors, including ones reported during start()', () => {
     const { waiter, stream, appendLog } = setup('');
-    const abort = new AbortController();
-    const waiting = waiter.waitForWorker(server, handle, 1, 2, abort.signal, stream as unknown as IPaneStream);
+    stream.start.mockImplementation(() => { stream.emit('subscription_error', new Error('pane not found')); });
+    waiter.startPaneStream(server, handle, 1, 2);
     stream.emit('gap', { reason: 'epoch' });
-    stream.emit('subscription_error', new Error('pane not found'));
-    abort.abort();
-    await expect(waiting).resolves.toMatchObject({ classification: { status: 'stopped' } });
-    expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_gap', reason: 'epoch' });
     expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_subscription_error', message: 'pane not found' });
+    expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_gap', reason: 'epoch' });
   });
 });

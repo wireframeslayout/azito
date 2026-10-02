@@ -3,7 +3,7 @@ import type { IPaneStream, IPaneStreamFactory } from './PaneStream';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { PaneOutputStream } from './PaneOutputStream';
-import type { MisaoLineSource, MisaoRpc } from './misao/MisaoConnection';
+import type { MisaoLineSource } from './misao/MisaoConnection';
 import { MisaoPaneStream } from './misao/MisaoPaneStream';
 
 type StreamServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>;
@@ -12,7 +12,7 @@ export class PaneStreamFactory implements IPaneStreamFactory {
   /** `misaoLines` is set only when the misao driver is enabled (AZITO_EXPERIMENTAL_MISAO). */
   constructor(
     private transportFactory: TransportFactory,
-    private misaoLines?: MisaoLineSource & MisaoRpc,
+    private misaoLines?: MisaoLineSource,
   ) {}
 
   create(handle: PaneHandle | string, server: StreamServer, pane?: PaneHandle): IPaneStream {
