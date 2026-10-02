@@ -36,7 +36,7 @@ import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
 import { resolveTerminalTarget } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
-import sessionsRoutes from '../modules/tmux/routes/sessions';
+import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
 import gitRoutes from '../modules/git/routes';
 import sidekicksRoutes from '../modules/sidekicks/routes';
@@ -482,6 +482,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     misaoDaemonStatus: wiring.misao && (() => describeMisaoDaemon(wiring.misao!.connection)),
     onMuxRuntimeChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);
+      // The session cache is shared across mux kinds; drop the previous runtime's listing.
+      invalidateSessionCache(next.name);
       paneHandleResolver.clearServer(next.name);
       supervisorRegistry.clearServerPaneRefs(next.name);
       syncMisaoChangeHooks(wiring.misao, previous, next, app.log);
