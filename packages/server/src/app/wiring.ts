@@ -6,6 +6,7 @@
 
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
+import * as os from 'os';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
@@ -23,6 +24,8 @@ import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClie
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
+import { registerMisaoDriver, resolveMisaoRuntime, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
+import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
 import { PaneClassifier } from '../modules/llm/PaneClassifier';
@@ -109,6 +112,8 @@ export interface SharedInfra {
   transportFactory: TransportFactory;
   tmuxClient: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
+  /** Present only when AZITO_EXPERIMENTAL_MISAO is on. Created but not started: main.ts starts it. */
+  misao?: MisaoHandle;
   llmClient: ILlmClient;
   agentRegistry: AgentRegistry;
   paneClassifier: PaneClassifier;
@@ -221,7 +226,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false, misaoEnabled: boolean = false): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false, misaoEnabled: boolean = false, misaoRuntime?: MisaoRuntime): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
@@ -239,6 +244,12 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const worktreeServiceFactory = new WorktreeServiceFactory();
   const storageClient = new MinioStorageClient();
   const notificationBus = new NotificationBus();
+  const misao = misaoRuntime
+    ? registerMisaoDriver(muxDriverRegistry, misaoRuntime, (serverName) => {
+      invalidateSessionCache(serverName);
+      notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
+    }, console)
+    : undefined;
   const sidekickPackageLoader = new SidekickPackageLoader(undefined, dataPaths.sidekicks);
   const sidekickPackageService = new SidekickPackageService(sidekickPackageLoader, dataPaths.sidekicks);
   const sidekickSyncService = new SidekickSyncService();
@@ -275,6 +286,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     transportFactory,
     tmuxClient,
     muxDriverRegistry,
+    misao,
     llmClient,
     agentRegistry,
     paneClassifier,
@@ -550,6 +562,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   }
 
   const misaoEnabled = resolveMisaoEnabled();
+  const misaoRuntime = misaoEnabled ? await resolveMisaoRuntime({ env: process.env, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' }) : undefined;
   const repos = buildRepositories(db, misaoEnabled);
   const extractHost = (sshHostStr: string): { host: string; port: number } => {
     const atIdx = sshHostStr.indexOf('@');
@@ -587,7 +600,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled, misaoEnabled);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled, misaoEnabled, misaoRuntime);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   // Constructed here, once, and passed to both `buildFetchDistributionService`

@@ -77,6 +77,7 @@ import { AgentEventStream } from '../modules/servers/transport/AgentEventStream'
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
 import type { PaneOrdinal } from '@azito/shared';
 import { partitionByTmuxRuntime } from '../modules/servers/tmuxServers';
+import { selectLocalMisaoServers } from '../modules/tmux/misao/misaoDriver';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
@@ -796,6 +797,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     agentActivityMonitor.stop();
     const localServers = partitionByTmuxRuntime(serverRepo.findAll()).tmux.filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
+    if (wiring.misao) {
+      for (const srv of selectLocalMisaoServers(serverRepo.findAll())) await wiring.misao.driver.uninstallChangeHooks(srv);
+      wiring.misao.connection.close();
+    }
     for (const stream of agentEventStreams) stream.stop();
     notificationBus.destroy();
   });

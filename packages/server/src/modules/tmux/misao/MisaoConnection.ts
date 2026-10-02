@@ -21,7 +21,7 @@ export interface MisaoEventSource {
 
 export interface MisaoConnectionOptions {
   socketPath: string;
-  loadSdk: () => Promise<MisaoSdk>;
+  sdk: MisaoSdk;
   log: { warn(message: string): void };
 }
 
@@ -32,7 +32,6 @@ type Status = 'idle' | 'connected' | 'disconnected' | 'closed';
  * so the first connect is retried here with the SDK's own backoff until it succeeds or the connection is closed.
  */
 export class MisaoConnection implements MisaoRpc, MisaoEventSource {
-  private sdk: MisaoSdk | undefined;
   private client: MisaoClient | undefined;
   private status: Status = 'idle';
   private retryTimer: NodeJS.Timeout | undefined;
@@ -41,17 +40,16 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
 
   constructor(private readonly options: MisaoConnectionOptions) {}
 
-  /** Loads the SDK and makes the first connect attempt; later attempts continue in the background. Never rejects on an unreachable daemon. */
+  /** Makes the first connect attempt; later attempts continue in the background. Never rejects on an unreachable daemon. */
   async start(): Promise<void> {
     if (this.client) throw new Error('MisaoConnection already started');
-    const sdk = await this.options.loadSdk();
+    const { sdk } = this.options;
     const client = new sdk.MisaoClient({ socketPath: this.options.socketPath });
-    this.sdk = sdk;
     this.client = client;
     client.onStateChange((state) => this.handleState(state));
     client.onGap((gap) => { for (const listener of this.gapListeners) listener(gap); });
     client.onError((err) => this.options.log.warn(`[misao] callback error: ${err instanceof Error ? err.message : String(err)}`));
-    await this.connectAttempt(client, sdk, 1);
+    await this.connectAttempt(client, 1);
   }
 
   availability(): MuxDriverAvailability {
@@ -85,7 +83,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
   }
 
   rpcErrorCode(err: unknown): number | undefined {
-    return this.sdk && err instanceof this.sdk.MisaoRpcError ? err.code : undefined;
+    return err instanceof this.options.sdk.MisaoRpcError ? err.code : undefined;
   }
 
   close(): void {
@@ -101,7 +99,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
   }
 
   private translate(err: unknown): unknown {
-    return this.sdk && err instanceof this.sdk.MisaoConnectionError ? new MuxDriverUnavailableError('misao', 'daemon_unreachable') : err;
+    return err instanceof this.options.sdk.MisaoConnectionError ? new MuxDriverUnavailableError('misao', 'daemon_unreachable') : err;
   }
 
   private handleState(state: ConnectionState): void {
@@ -114,8 +112,9 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
     }
   }
 
-  private async connectAttempt(client: MisaoClient, sdk: MisaoSdk, attempt: number): Promise<void> {
+  private async connectAttempt(client: MisaoClient, attempt: number): Promise<void> {
     if (this.status === 'closed') return;
+    const { sdk } = this.options;
     try {
       await client.connect();
     } catch (err) {
@@ -125,7 +124,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
       }
       if (attempt === 1) this.options.log.warn(`[misao] daemon not reachable, retrying in the background: ${err.message}`);
       const delayMs = sdk.computeBackoffDelay(attempt, sdk.DEFAULT_BACKOFF);
-      this.retryTimer = setTimeout(() => { void this.connectAttempt(client, sdk, attempt + 1); }, delayMs);
+      this.retryTimer = setTimeout(() => { void this.connectAttempt(client, attempt + 1); }, delayMs);
       this.retryTimer.unref();
     }
   }

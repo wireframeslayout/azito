@@ -63,7 +63,7 @@ function createFakeSdk(): { sdk: MisaoSdk; control: FakeClientControl } {
 function setup() {
   const { sdk, control } = createFakeSdk();
   const warn = vi.fn();
-  const connection = new MisaoConnection({ socketPath: '/tmp/x.sock', loadSdk: async () => sdk, log: { warn } });
+  const connection = new MisaoConnection({ socketPath: '/tmp/x.sock', sdk, log: { warn } });
   return { connection, control, warn };
 }
 
