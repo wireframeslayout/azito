@@ -12,6 +12,8 @@ import { encodeMisaoKey } from './misaoKeys';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
 const PANE_NOT_FOUND = 1001;
+/** The pane has exited, or was restored as `stopped` after a daemon restart and has no process to attach to. */
+const PANE_EXITED = 1002;
 const LONG_TEXT_BYTES = 500;
 const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
 /** Same settle time tmux's sendLongText waits after a paste, so a following Enter is not folded into it. */
@@ -155,7 +157,9 @@ export class MisaoMuxClient implements IMuxClient {
       });
     } catch (err) {
       client.close();
-      throw this.rpc.rpcErrorCode(err) === PANE_NOT_FOUND ? new Error('WINDOW_NOT_FOUND') : err;
+      // A stopped pane can never be attached, so it must not look retryable: the browser reconnects on any other close.
+      const code = this.rpc.rpcErrorCode(err);
+      throw code === PANE_NOT_FOUND || code === PANE_EXITED ? new Error('WINDOW_NOT_FOUND') : err;
     }
   }
 

@@ -56,11 +56,13 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
   }
 
   write(data: string): void {
+    if (this.finished) return;
     const { paneId, clientId } = this.options;
     void this.send(() => this.options.client.request('pane.write', { paneId, data, clientId, source: 'terminal' }));
   }
 
   resize(cols: number, rows: number): void {
+    if (this.finished) return;
     const { paneId, clientId } = this.options;
     void this.send(() => this.options.client.request('pane.resize', { paneId, cols, rows, clientId }));
   }
@@ -73,6 +75,8 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
     try {
       await op();
     } catch (err) {
+      // Requests still in flight when the stream finished reject with the closed connection; nothing to report.
+      if (this.finished) return;
       // A finished pane has nobody to tell about keystrokes; it stays visible as its final screen.
       if (this.options.rpcErrorCode(err) === PANE_EXITED) return;
       this.options.log.warn(`[misao] terminal ${this.options.clientId} request failed: ${err instanceof Error ? err.message : String(err)}`);

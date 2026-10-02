@@ -566,6 +566,15 @@ describe('MisaoMuxClient openTerminal', () => {
     expect(attach.close).toHaveBeenCalled();
   });
 
+  it('maps an attach on a stopped pane (daemon restarted) to WINDOW_NOT_FOUND so the browser stops reconnecting', async () => {
+    const attach = fakeAttachClient(async () => { throw new FakeRpcError(1002, 'pane is stopped'); });
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
+    expect(attach.close).toHaveBeenCalled();
+  });
+
   it('closes the connection and rethrows other attach failures unchanged', async () => {
     const failure = new FakeRpcError(1004, 'unsupported');
     const attach = fakeAttachClient(async () => { throw failure; });

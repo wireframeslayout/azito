@@ -125,6 +125,20 @@ describe('MisaoTerminalStream', () => {
     expect(closed).not.toHaveBeenCalled();
   });
 
+  it('ignores input after it finished, including requests that were in flight', async () => {
+    const { fake, stream, warn } = await open();
+    let rejectInFlight: (err: unknown) => void = () => {};
+    fake.request.mockImplementationOnce(() => new Promise((_, reject) => { rejectInFlight = reject; }));
+    stream.write('a');
+    stream.close();
+    rejectInFlight(new Error('connection closed'));
+    stream.write('b');
+    stream.resize(80, 24);
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fake.request.mock.calls.filter(([method]) => method !== 'pane.attach')).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it('rejects when the attach fails', async () => {
     const fake = fakeClient();
     fake.request.mockRejectedValueOnce(new FakeRpcError(1001));
