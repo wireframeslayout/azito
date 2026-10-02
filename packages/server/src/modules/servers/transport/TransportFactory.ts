@@ -4,13 +4,27 @@ import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
+import { muxKindForRuntime } from '@azito/shared';
+import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
+
+export interface TransportFactoryOptions {
+  misaoEnabled?: boolean;
+}
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport>();
 
-  constructor(private publicUrl: string) {}
+  private misaoEnabled: boolean;
+
+  constructor(private publicUrl: string, options: TransportFactoryOptions = {}) {
+    this.misaoEnabled = options.misaoEnabled ?? false;
+  }
 
   getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
+    // Never fall back to a tmux transport for a non-tmux runtime; checked before the cache so a stale tmux entry is not returned.
+    if (muxKindForRuntime(server.muxRuntime) !== 'tmux') {
+      throw new MuxDriverUnavailableError('misao', this.misaoEnabled ? 'driver_not_registered' : 'misao_disabled');
+    }
     const key = `${server.type}:${server.name}`;
     const existing = this.cache.get(key);
     if (existing && server.type === 'agent') {
