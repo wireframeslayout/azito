@@ -4,8 +4,10 @@ import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
+import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
+import * as detectDefaultBranchModule from '../git/detectDefaultBranch';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig } from '../servers/Server';
 import type { ITaskRepository, Task } from '../tasks/Task';
@@ -91,6 +93,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
@@ -1812,5 +1816,349 @@ describe('WindowRespawnService — in-lock execution-gate TOCTOU (Issue #29 Step
       manifestHash: expect.any(String),
       pendingOperationWindowId: 1,
     });
+  });
+});
+
+describe('WindowRespawnService — inLockGate callback (Issue #276)', () => {
+  const PASSING_REPORT = JSON.stringify({ kind: 'verification', verified: true });
+
+  function allowProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: null, branch: 'main', tmuxSession: 'azito', inputPolicy: 'allow' as const, distributeCode: false, distributionRepositoryId: null };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
+  }
+
+  function verifiedServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
+    return makeServer({
+      isolationIntent: true,
+      isolationVerifiedAt: '2026-01-01T00:00:00Z',
+      isolationReport: PASSING_REPORT,
+      ...overrides,
+    });
+  }
+
+  it('inLockGate callback is called instead of default respawn reverification', async () => {
+    const task = makeTask({ id: 11, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: 'abc' });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 11, isPrimary: true, tmuxTarget: 'azito:task-11--ab12' });
+    const inLockGate = vi.fn();
+    const { service, tmux, taskRepo, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    // Make the in-lock refetch return a server matching the one passed to
+    // respawn() — otherwise the snapshot-mismatch guard fires first.
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name }));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-11--ab12', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await service.respawn(1, verifiedServer(), { gateAlreadyEnforced: true, inLockGate });
+
+    expect(inLockGate).toHaveBeenCalledOnce();
+    // Called with the fresh server from the lock
+    expect(inLockGate).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }));
+    // Default respawn gate (recordExecutionGateBlock) was NOT called
+    expect(taskRepo.recordExecutionGateBlock).not.toHaveBeenCalled();
+  });
+
+  it('inLockGate that throws prevents window creation', async () => {
+    const task = makeTask({ id: 12, unitId: 10, inputTrust: 'untrusted', executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 2, taskId: 12, isPrimary: true, tmuxTarget: 'azito:task-12--cd34' });
+    const inLockGate = vi.fn(() => { throw new Error('gate blocked'); });
+    const { service, tmux, serverRepo } = buildService({
+      window: win, task, unit, projectServerRepo: allowProjectServerRepo(),
+    });
+    serverRepo.findByName.mockImplementation((name: string) => verifiedServer({ name }));
+    tmux.listWorkspaces.mockResolvedValue([{
+      name: 'azito',
+      windowCount: 1,
+      attached: false,
+      created: 0,
+      windows: [{ name: 'task-12--cd34', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await expect(service.respawn(2, verifiedServer(), { gateAlreadyEnforced: true, inLockGate })).rejects.toThrow('gate blocked');
+
+    // Old window was NOT killed and new window was NOT created
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.openWorkspace).not.toHaveBeenCalled();
+  });
+});
+
+describe('WindowRespawnService.respawn — baseBranch auto-detection (Issue #63)', () => {
+  function manualApprovalProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'findByProject'> {
+    const row = { projectId: 1, serverName: 'local-server', workingDirectory: '/repo', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null };
+    return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
+  }
+
+  it('passes detected baseBranch as override to resolveExecutionManifest and persists it', async () => {
+    vi.spyOn(detectDefaultBranchModule, 'detectDefaultBranch').mockResolvedValue('master');
+    const task = makeTask({ id: 7, unitId: 10, inputTrust: 'untrusted', baseBranch: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 7, windowType: 'agent', workerType: 'claude' });
+    const { service, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: manualApprovalProjectServerRepo(),
+    });
+
+    // The approval fingerprint uses the same detection; the respawn gate
+    // computes the same hash. Compute the expected hash the approval screen
+    // would produce:
+    const approvalManifest = resolveExecutionManifest(
+      task, {
+        unitRepo: { findById: vi.fn(() => unit) } as any,
+        projectRepo: { findById: vi.fn(() => null) } as any,
+        projectServerRepo: manualApprovalProjectServerRepo() as any,
+        serverRepo: { findByName: vi.fn(() => makeServer()) } as any,
+        projectSecretRepo: { findByProject: vi.fn(() => []) } as any,
+        unitTypeLoader: { get: vi.fn(() => undefined), getOrThrow: vi.fn(() => { throw new Error(); }) } as any,
+        sidekickLoader: { findByName: vi.fn(() => null), findDefaultForTag: vi.fn(() => null), list: vi.fn(() => []) } as any,
+      },
+      'continuation',
+      buildRespawnManifestInput(win),
+      'local-server',
+      'master',
+    );
+    const approvedHash = hashExecutionManifest(approvalManifest.manifest);
+    // Pre-approve so the gate passes:
+    task.executionApprovedFingerprintHash = approvedHash;
+
+    await service.respawn(1, makeServer());
+
+    // Detection result persisted:
+    expect(taskRepo.update).toHaveBeenCalledWith(7, { baseBranch: 'master' });
+    // In-memory task updated:
+    expect(task.baseBranch).toBe('master');
+
+    vi.restoreAllMocks();
+  });
+
+  it('persists detected baseBranch on respawn even when the gate blocks (pending_approval)', async () => {
+    vi.spyOn(detectDefaultBranchModule, 'detectDefaultBranch').mockResolvedValue('master');
+    const task = makeTask({ id: 8, unitId: 10, inputTrust: 'untrusted', baseBranch: null, executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 8, windowType: 'agent', workerType: 'claude' });
+    const { service, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: manualApprovalProjectServerRepo(),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    // Detection + persistence still happens before the gate:
+    expect(taskRepo.update).toHaveBeenCalledWith(8, { baseBranch: 'master' });
+
+    vi.restoreAllMocks();
+  });
+
+  it('does not persist baseBranch when detection returns null (fail fast at gate)', async () => {
+    vi.spyOn(detectDefaultBranchModule, 'detectDefaultBranch').mockResolvedValue(null);
+    const task = makeTask({ id: 9, unitId: 10, inputTrust: 'untrusted', baseBranch: null, executionApprovedFingerprintHash: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ taskId: 9, windowType: 'agent', workerType: 'claude' });
+    const { service, taskRepo } = buildService({
+      window: win, task, unit, projectServerRepo: manualApprovalProjectServerRepo(),
+    });
+
+    // null detection → manifest has branches.base = null → gate blocks
+    // with pending_approval (hash mismatch against the null-approved hash)
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(/requires approval/);
+
+    // baseBranch was NOT persisted (nothing to persist):
+    expect(taskRepo.update).not.toHaveBeenCalledWith(9, expect.objectContaining({ baseBranch: expect.anything() }));
+    expect(task.baseBranch).toBeNull();
+
+    vi.restoreAllMocks();
+  });
+});
+
+// ─── Issue #274: findRunningSessionForTask + duplicate session guard ───
+
+/**
+ * Builds a service variant with process-detection mocks: the tmux driver
+ * gains `panePidByHandle` and the transport gains `exec` (for `ps` output).
+ * `extraWindows` feeds `windowRepo.findByTask`.
+ */
+function buildServiceWithProcessDetection(opts: {
+  window: Window;
+  task?: Task | null;
+  unit?: Unit | null;
+  extraWindows?: Window[];
+  panePidByHandle?: (server: unknown, handle: unknown) => Promise<number | null>;
+  psOutput?: string;
+  psExecThrows?: boolean;
+}) {
+  const exec = opts.psExecThrows
+    ? vi.fn(async () => { throw new Error('ps failed'); })
+    : vi.fn(async () => ({ stdout: opts.psOutput ?? '', stderr: '', code: 0 }));
+
+  const transportFactory: Pick<TransportFactory, 'getTransport'> = {
+    getTransport: vi.fn(() => ({ exec })) as any,
+  };
+
+  const result = buildService({
+    window: opts.window,
+    task: opts.task,
+    unit: opts.unit,
+    transportFactory,
+  });
+
+  // Inject panePidByHandle onto the tmux mock (not present in the base
+  // buildService fixture).
+  (result.tmux as any).panePidByHandle = opts.panePidByHandle ?? vi.fn(async () => 1234);
+
+  // Wire findByTask to return `extraWindows` (the windows to scan).
+  if (opts.extraWindows) {
+    (result.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue(opts.extraWindows);
+  }
+
+  return { ...result, exec };
+}
+
+describe('WindowRespawnService.findRunningSessionForTask', () => {
+  it('returns the window where the agentSessionId is running', async () => {
+    const sleepingWin = makeWindow({ id: 10, taskId: 5, sleeping: true, tmuxTarget: 'azito:task-sleeping' });
+    const aliveWin = makeWindow({ id: 20, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-alive' });
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+
+    // ps output: PID 1234 is the shell, PID 1235 is claude with our sessionId
+    const psOutput = [
+      '  1234     1      10 bash',
+      `  1235  1234       5 /usr/local/bin/claude --resume ${sessionId} --dangerously-skip-permissions`,
+    ].join('\n');
+
+    const { service } = buildServiceWithProcessDetection({
+      window: aliveWin,
+      extraWindows: [sleepingWin, aliveWin],
+      psOutput,
+    });
+
+    const result = await service.findRunningSessionForTask(5, sessionId, 'local-server');
+
+    expect(result).toEqual({ windowId: 20, tmuxTarget: 'azito:task-alive' });
+  });
+
+  it('returns null when PID resolution fails', async () => {
+    const aliveWin = makeWindow({ id: 20, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-alive' });
+    const sessionId = '550e8400-e29b-41d4-a716-446655440000';
+
+    const psOutput = `  1234     1      10 bash\n  1235  1234       5 claude --resume ${sessionId}`;
+
+    const { service } = buildServiceWithProcessDetection({
+      window: aliveWin,
+      extraWindows: [aliveWin],
+      psOutput,
+      // listPanesByRef succeeds but panePidByHandle throws
+      panePidByHandle: vi.fn(async () => { throw new Error('pane gone'); }),
+    });
+
+    const result = await service.findRunningSessionForTask(5, sessionId, 'local-server');
+
+    // The whole window is skipped (catch around pane resolution) → null
+    expect(result).toBeNull();
+  });
+
+  it('returns null when a different agentSessionId is running', async () => {
+    const aliveWin = makeWindow({ id: 20, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-alive' });
+    const targetSessionId = 'aaaa-bbbb-cccc-dddd';
+    const differentSessionId = 'xxxx-yyyy-zzzz-wwww';
+
+    // ps output has a DIFFERENT sessionId
+    const psOutput = [
+      '  1234     1      10 bash',
+      `  1235  1234       5 claude --resume ${differentSessionId} --dangerously-skip-permissions`,
+    ].join('\n');
+
+    const { service } = buildServiceWithProcessDetection({
+      window: aliveWin,
+      extraWindows: [aliveWin],
+      psOutput,
+    });
+
+    const result = await service.findRunningSessionForTask(5, targetSessionId, 'local-server');
+
+    expect(result).toBeNull();
+  });
+});
+
+describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)', () => {
+  it('throws when the same agentSessionId is running in a different window', async () => {
+    const sessionId = 'dup-session-1234';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: sessionId });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+    // Another window (id=999) where the session is actually running
+    const otherWin = makeWindow({ id: 999, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-other' });
+
+    const psOutput = [
+      '  5000     1      10 bash',
+      `  5001  5000       3 claude --resume ${sessionId} --dangerously-skip-permissions`,
+    ].join('\n');
+
+    const { service } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      // findRunningSessionForTask scans these windows
+      extraWindows: [otherWin],
+      psOutput,
+      // PID 5000 is from the OTHER window's pane
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    await expect(service.respawn(1, makeServer())).rejects.toThrow(DuplicateAgentSessionError);
+    await expect(service.respawn(1, makeServer())).rejects.toMatchObject({ windowId: 999 });
+  });
+
+  it('skips execution gate when gateAlreadyEnforced is true (Finding 1)', async () => {
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: null });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+
+    const { service, sentCommands } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      psOutput: '',
+      panePidByHandle: vi.fn(async () => null),
+    });
+
+    // With gateAlreadyEnforced, the gate should not be called again.
+    // If it WAS called, it would throw because the test setup has no
+    // proper approval configuration.
+    await service.respawn(1, makeServer(), { gateAlreadyEnforced: true });
+    expect(sentCommands.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not throw when a different agentSessionId is running in another window', async () => {
+    const sessionId = 'my-session-1234';
+    const task = makeTask({ id: 5, unitId: 10, agentSessionId: sessionId });
+    const unit = makeUnit({ id: 10 });
+    const win = makeWindow({ id: 1, taskId: 5, windowType: 'agent', workerType: 'claude' });
+    const otherWin = makeWindow({ id: 999, taskId: 5, sleeping: false, tmuxTarget: 'azito:task-other' });
+
+    // ps output has a DIFFERENT sessionId running
+    const psOutput = [
+      '  5000     1      10 bash',
+      '  5001  5000       3 claude --resume totally-different-session --dangerously-skip-permissions',
+    ].join('\n');
+
+    const { service, sentCommands } = buildServiceWithProcessDetection({
+      window: win,
+      task,
+      unit,
+      extraWindows: [otherWin],
+      psOutput,
+      panePidByHandle: vi.fn(async () => 5000),
+    });
+
+    // Should NOT throw — the different session is irrelevant
+    await service.respawn(1, makeServer());
+
+    // Respawn proceeded normally (agent launch command was sent)
+    expect(sentCommands.length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -16,7 +16,11 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
   }
 
   buildResumeFlags(sessionId: string): string {
-    return `--session-id ${sessionId} --resume`;
+    // `--resume <id>` resumes that session. Combining `--session-id` with
+    // `--resume` is rejected by current Claude Code ("--session-id can only be
+    // used with --continue or --resume if --fork-session is also specified"),
+    // which made every follow-up into a closed/sleeping window exit at launch.
+    return `--resume ${sessionId}`;
   }
 
   buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null): string | null {

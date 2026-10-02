@@ -76,6 +76,8 @@ interface TaskRow {
   pending_operation: string | null;
   pending_operation_window_id: number | null;
   pending_operation_prior_status: string | null;
+  pending_follow_up_body: string | null;
+  pending_follow_up_phases: string | null;
   worktree_path: string | null;
   worktree_branch: string | null;
   base_branch: string | null;
@@ -155,7 +157,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     // deny branch (passes status, leaves the fingerprint alone) of
     // tasks/execution/ExecutionApprovalDecision.ts's approve-execution handler.
     this.consumePendingApprovalStmt = db.prepare(
-      "UPDATE tasks SET status = COALESCE(?, status), execution_approved_fingerprint_hash = COALESCE(?, execution_approved_fingerprint_hash), pending_operation = NULL, pending_operation_window_id = NULL, pending_operation_prior_status = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'pending_approval' AND pending_operation IS NOT NULL",
+      "UPDATE tasks SET status = COALESCE(?, status), execution_approved_fingerprint_hash = COALESCE(?, execution_approved_fingerprint_hash), pending_operation = NULL, pending_operation_window_id = NULL, pending_operation_prior_status = NULL, pending_follow_up_body = NULL, pending_follow_up_phases = NULL, updated_at = datetime('now') WHERE id = ? AND status = 'pending_approval' AND pending_operation IS NOT NULL",
     );
     // Guarded compare-and-swap for recordExecutionGateBlock() (Issue #328
     // review round) — mirrors consumePendingApprovalStmt's guard style. Only
@@ -171,7 +173,7 @@ export class SqliteTaskRepository implements ITaskRepository {
     // task be revived via later approval. See recordExecutionGateBlock's own
     // doc comment on ITaskRepository for the race this closes.
     this.recordExecutionGateBlockStmt = db.prepare(
-      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, updated_at = datetime('now') WHERE id = ? AND status = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
+      "UPDATE tasks SET status = 'pending_approval', pending_operation = ?, pending_operation_window_id = ?, pending_operation_prior_status = ?, pending_follow_up_body = ?, pending_follow_up_phases = ?, updated_at = datetime('now') WHERE id = ? AND status = ? AND pending_operation IS NULL AND (execution_approved_fingerprint_hash IS NULL OR execution_approved_fingerprint_hash != ?)",
     );
     // Guarded compare-and-swap for preApproveExecution() (creation-time
     // pre-approval) — see that method's doc comment on ITaskRepository.
@@ -394,6 +396,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       priorStatus: TaskStatus;
       manifestHash: string;
       pendingOperationWindowId?: number | null;
+      pendingFollowUpBody?: string | null;
+      pendingFollowUpPhases?: string | null;
     },
   ): boolean {
     // A caller-supplied snapshot must never already be 'pending_approval' —
@@ -408,6 +412,8 @@ export class SqliteTaskRepository implements ITaskRepository {
       fields.pendingOperation,
       fields.pendingOperationWindowId ?? null,
       fields.priorStatus,
+      fields.pendingFollowUpBody ?? null,
+      fields.pendingFollowUpPhases ?? null,
       id,
       fields.priorStatus,
       fields.manifestHash,
@@ -538,12 +544,15 @@ export class SqliteTaskRepository implements ITaskRepository {
         | 'resume'
         | 'resume_await_answer'
         | 'resume_await_plan_review'
+        | 'follow_up'
         | 'restore'
         | 'respawn'
         | 'recover_session_legacy'
         | null,
       pendingOperationWindowId: row.pending_operation_window_id ?? null,
       pendingOperationPriorStatus: (row.pending_operation_prior_status ?? null) as TaskStatus | null,
+      pendingFollowUpBody: row.pending_follow_up_body ?? null,
+      pendingFollowUpPhases: row.pending_follow_up_phases ?? null,
       distributionRepositoryId: row.distribution_repository_id ?? null,
       createdByKind: row.created_by_kind as Task['createdByKind'],
       createdById: row.created_by_id ?? null,

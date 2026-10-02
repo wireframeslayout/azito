@@ -21,6 +21,7 @@ import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './exe
 import type { KillOutcome } from '../tmux/killOutcome';
 import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
+import { DuplicateAgentSessionError } from '../windows/DuplicateAgentSessionError';
 import { hashExecutionManifest } from './execution/ExecutionManifest';
 import { failAsyncTaskOperation } from './execution/AppendLog';
 import { decideExecutionApproval, decideExecutionPreApproval, denyPendingApproval, resolvePendingApprovalManifest, type ApprovalOrigin } from './execution/ExecutionApprovalDecision';
@@ -33,7 +34,7 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
-import { type MuxRef, tmuxTargetFromMuxRef, muxRefFromTmuxTarget } from '@azito/shared';
+import { type MuxRef, tmuxTargetFromMuxRef, muxRefFromTmuxTarget, isValidModelId } from '@azito/shared';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -42,6 +43,9 @@ function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConf
   if (typeof obj['enabled'] !== 'boolean') throw new Error(`${fieldName}.enabled must be boolean`);
   if (typeof obj['provider'] !== 'string') throw new Error(`${fieldName}.provider must be string`);
   if (typeof obj['model'] !== 'string') throw new Error(`${fieldName}.model must be string`);
+  if (obj['model'] && !isValidModelId(obj['model'] as string)) {
+    throw new Error(`${fieldName}.model contains invalid characters`);
+  }
   if (obj['enabled'] && (!obj['provider'] || !obj['model'])) {
     throw new Error(`${fieldName}: provider and model are required when enabled is true`);
   }
@@ -322,6 +326,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
+        pendingFollowUpBody: null,
+        pendingFollowUpPhases: null,
       }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
       return { ok: true, id };
     } catch (err: unknown) {
@@ -421,13 +427,13 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // window throws rather than silently falling back to the wrong
       // manifest; surfaced here as a 409, not a display of stale/incorrect
       // data.
-      let manifest: ReturnType<typeof resolvePendingApprovalManifest>['manifest'];
-      let unit: ReturnType<typeof resolvePendingApprovalManifest>['unit'];
-      let serverName: ReturnType<typeof resolvePendingApprovalManifest>['serverName'];
-      let projectServer: ReturnType<typeof resolvePendingApprovalManifest>['projectServer'];
+      let manifest: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['manifest'];
+      let unit: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['unit'];
+      let serverName: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['serverName'];
+      let projectServer: Awaited<ReturnType<typeof resolvePendingApprovalManifest>>['projectServer'];
       try {
-        ({ manifest, unit, serverName, projectServer } = resolvePendingApprovalManifest(task, {
-          unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo,
+        ({ manifest, unit, serverName, projectServer } = await resolvePendingApprovalManifest(task, {
+          unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, transportFactory,
         }));
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
@@ -504,8 +510,23 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           // injected" notice, matching what `secretNames` above already
           // reflects (empty for an isolated server).
           isolationIntent: manifest.server.isolationIntent,
+          // Issue #63: true when auto-detection of the repository's default
+          // branch failed (the approval screen already attempted detection
+          // via resolveAndDetectBaseBranch). Surfaced so the approval screen
+          // can warn that execution will fail without a configured base branch.
+          baseBranchUnresolvable: manifest.branches.base === null,
         },
         secretNames,
+        pendingFollowUpPreview: (() => {
+          if (!task.pendingFollowUpBody) return null;
+          const marker = '## User Instructions\n';
+          const idx = task.pendingFollowUpBody.indexOf(marker);
+          const userPart = idx >= 0 ? task.pendingFollowUpBody.slice(idx + marker.length) : task.pendingFollowUpBody;
+          return userPart.slice(0, 200) + (userPart.length > 200 ? '…' : '');
+        })(),
+        pendingFollowUpPhases: task.pendingFollowUpPhases
+          ? JSON.parse(task.pendingFollowUpPhases) as string[]
+          : null,
       };
     },
   );
@@ -574,16 +595,16 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       // Denial is not meaningful here (nothing is blocked to deny) — the
       // caller falls through to the ordinary 400 below.
       if (task.status === 'open' && task.inputTrust === 'untrusted' && task.pendingOperation === null && body.approved) {
-        const outcome = decideExecutionPreApproval(
-          { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events: executeTaskUseCase.events },
+        const outcome = await decideExecutionPreApproval(
+          { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events: executeTaskUseCase.events, transportFactory },
           { taskId, unitId, fingerprint: body.fingerprint as string, origin: origin ?? 'creation_form' },
           request.log,
         );
         return reply.status(outcome.status).send(outcome.body);
       }
 
-      const outcome = decideExecutionApproval(
-        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog: auditLogService },
+      const outcome = await decideExecutionApproval(
+        { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog: auditLogService, transportFactory },
         { taskId, unitId, approved: body.approved, fingerprint: body.approved ? (body.fingerprint as string) : undefined, origin, actor: request.principal ?? OPERATOR_PRINCIPAL },
         request.log,
       );
@@ -836,6 +857,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
+        pendingFollowUpBody: null,
+        pendingFollowUpPhases: null,
       }, { kind: 'task', id: parentId, generation }, actor);
 
       return reply.status(201).send({ ok: true, id });
@@ -1086,6 +1109,9 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           result = await respawnService.respawn(primaryWindow.id, srv);
         } catch (err) {
           if (replyToExecutionGateError(err, reply)) return;
+          if (err instanceof DuplicateAgentSessionError) {
+            return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, message: err.message });
+          }
           throw err;
         }
         const windowName = task.tmuxWindow || `task-${task.id}`;

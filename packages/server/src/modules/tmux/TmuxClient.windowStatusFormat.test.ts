@@ -14,7 +14,7 @@ function makeClient(
   const factory = {
     getTransport: () => ({ execMux }),
   } as unknown as TransportFactory;
-  return new TmuxClient(factory, PUBLIC_URL, '', LOCAL_URL);
+  return new TmuxClient(factory, PUBLIC_URL, '', LOCAL_URL, 'wh-tok');
 }
 
 // Issue #28 Phase A last-round fix: setWindowStatusFormat() (the tmux

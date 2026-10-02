@@ -291,7 +291,7 @@ export interface ProcessActivityProbeEntry {
  * folding it into "not blocked" is what would announce a completion for a pane
  * that is still sitting on a prompt.
  */
-type ScreenVerdict = 'blocked' | 'not_blocked' | 'unknown';
+type ScreenVerdict = 'blocked' | 'error' | 'not_blocked' | 'unknown';
 
 /** Cached outcome of a key's screen checks — see screenVerdict(). */
 interface ScreenCheckState {
@@ -358,7 +358,7 @@ export type ActivityDecidedBy =
   | 'none';
 
 /** The state that decision produced. `'none'` = nothing decided this tick. */
-export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 'none';
+export type ActivityDecidedState = 'working' | 'blocked' | 'error' | 'idle' | 'offline' | 'none';
 
 /**
  * A lower rung that refined — never overruled — the deciding tier's state.
@@ -1375,6 +1375,10 @@ export class AgentActivityMonitor {
                 decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'blocked', w.taskId ?? undefined);
                 next.set(key, { ...entry, status: 'blocked' });
                 continue;
+              } else if (classified === 'error') {
+                reasons.set(key, 'api_error');
+                decide(key, w.serverName, w.tmuxTarget, 'tier1_hook', 'error', w.taskId ?? undefined);
+                continue;
               }
             }
           }
@@ -1414,6 +1418,11 @@ export class AgentActivityMonitor {
           // able to speak for this key again (e.g. a later tick reverting to
           // 'unknown' must re-earn the debounce from scratch).
           this.activityHistory.delete(key);
+          if (classified === 'error') {
+            reasons.set(key, 'api_error');
+            decide(key, w.serverName, w.tmuxTarget, 'tier2_title', 'error', w.taskId ?? undefined);
+            continue;
+          }
           if (classified === 'idle') {
             // Tier 2 read the agent's own UI (title/screen) and saw it back at
             // rest — for a key it previously called working, that is a
@@ -1579,7 +1588,7 @@ export class AgentActivityMonitor {
     // about the title's verdict changes.
     if (w.workerType === 'claude' && (titleOnly === 'working' || titleOnly === 'idle')) {
       const verdict = await this.screenVerdict(server, w, window, paneIndex, key);
-      if (verdict === 'blocked') return 'blocked';
+      if (verdict === 'blocked' || verdict === 'error') return verdict;
       if (verdict === 'not_blocked') return titleOnly;
       // Could not read the screen: the title alone is exactly what is untrustworthy
       // here, so hold the previous tick's status rather than acting on it.
@@ -1639,6 +1648,13 @@ export class AgentActivityMonitor {
       const status = await this.refinedStatusFor(key, w, servers, sessionsByServer, sessionErrors);
       if (!status) continue;
 
+      if (status === 'error') {
+        reasons.set(key, 'api_error');
+        const decision = decisions.get(key);
+        if (decision) decisions.set(key, { ...decision, state: 'error', refinedBy: 'tier2_title' });
+        continue;
+      }
+
       next.set(key, { ...entry, status });
       // The key is running after all, so the completion recorded at the Tier 0
       // rung must not fire. It is recorded again — and then read — on the tick
@@ -1666,7 +1682,7 @@ export class AgentActivityMonitor {
     servers: Map<string, ServerConfig | null>,
     sessionsByServer: Map<string, TmuxSession[]>,
     sessionErrors: Set<string>,
-  ): Promise<'working' | 'blocked' | null> {
+  ): Promise<'working' | 'blocked' | 'error' | null> {
     // Both of these are permanent facts rather than a failed look, so they
     // release the key instead of holding it: an agent type the classifier has
     // no rules for can never produce a blocked verdict, and a missing server
@@ -1685,7 +1701,7 @@ export class AgentActivityMonitor {
     const { windowSpec } = parseWindowTarget(w.tmuxTarget);
     const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
     const verdict = await this.screenVerdict(server, w, window, paneIndex, key);
-    if (verdict === 'blocked') return 'blocked';
+    if (verdict === 'blocked' || verdict === 'error') return verdict;
     if (verdict === 'unknown') return this.heldStatusOnUnknown(key);
     return null;
   }
@@ -1762,9 +1778,8 @@ export class AgentActivityMonitor {
     const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
     if (screenTail === null) return 'unknown';
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
-    return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail }) === 'blocked'
-      ? 'blocked'
-      : 'not_blocked';
+    const state = classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
+    return state === 'blocked' || state === 'error' ? state : 'not_blocked';
   }
 
   /**

@@ -5,7 +5,7 @@ import {
   type PaneAgentState as SharedPaneAgentState,
 } from '@azito/shared';
 
-export type PaneAgentState = 'working' | 'idle' | 'blocked' | 'unknown';
+export type PaneAgentState = 'working' | 'idle' | 'blocked' | 'error' | 'unknown';
 
 const _typeCheckForward: PaneAgentState = '' as SharedPaneAgentState;
 const _typeCheckReverse: SharedPaneAgentState = '' as PaneAgentState;

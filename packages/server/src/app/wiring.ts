@@ -79,6 +79,7 @@ import { SqliteBrowserGroupRepository } from '../modules/browser/SqliteBrowserGr
 import { AgentRegistry, createDefaultRegistry } from '../modules/agents/registry';
 
 import { ExecuteTaskUseCase } from '../modules/tasks/execution/ExecuteTaskUseCase';
+import type { IPrimaryWindowWaker } from '../modules/tasks/execution/IPrimaryWindowWaker';
 import { AgentActivityMonitor } from '../modules/operations/AgentActivityMonitor';
 import { InteractionMonitor } from '../modules/notifications/InteractionMonitor';
 import { PaneHandleResolver } from '../modules/operations/PaneHandleResolver';
@@ -89,6 +90,7 @@ import { WindowActivityStatusService } from '../modules/windows/WindowActivitySt
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
+import type { GitIdentity } from '../modules/git/ensureGitIdentity';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
 import { UsageService } from '../modules/usage/UsageService';
 import { UpdateChannelResolver } from '../modules/system/UpdateChannelResolver';
@@ -197,6 +199,7 @@ export interface SystemUpdateModule {
 
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
   uiToken: string;
+  webhookToken: string;
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
@@ -215,13 +218,13 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const agentInstaller = new AgentInstaller(sshClient, agentBundler);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const transportFactory = new TransportFactory(publicUrl);
-  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl);
+  const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
@@ -357,7 +360,7 @@ function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos
 // execute()/restore() may clear `task.distributionRepositoryId`, so
 // `buildExecuteTaskUseCase`/`buildApplicationServices` (TaskRestoreService)
 // must be able to read from it too.
-function readHubGitIdentity(): { name: string; email: string } | null {
+function readHubGitIdentity(): GitIdentity | null {
   try {
     const name = execFileSync('git', ['config', '--global', 'user.name'], { encoding: 'utf-8' }).trim();
     const email = execFileSync('git', ['config', '--global', 'user.email'], { encoding: 'utf-8' }).trim();
@@ -368,18 +371,17 @@ function readHubGitIdentity(): { name: string; email: string } | null {
   }
 }
 
-function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository): FetchDistributionService {
+function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null): FetchDistributionService {
   const sftpService = new SftpService(infra.sshClient);
   const hubRepoCache = new HubRepoCache(dataPaths.dir);
   const remoteBundleOps = new RemoteBundleOps();
-  const hubGitIdentity = readHubGitIdentity();
   // sshClient passed to normalize the outer lock key's host identity (Issue
   // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
   // `sshHostResolver` constructor doc comment.
   return new FetchDistributionService(hubRepoCache, remoteBundleOps, sftpService, distributionStateRepo, infra.sshClient, hubGitIdentity);
 }
 
-function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, harnessPrefix?: string): ApplicationServices {
+function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix?: string): ApplicationServices {
   const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
@@ -412,6 +414,7 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
     scopedAuthEnabled,
     fetchDistributionService,
     distributionStateRepo,
+    hubGitIdentity,
   });
   // windowSessionResolver / windowActivityStatusService: shared by transcriptsRoutes
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
@@ -437,6 +440,7 @@ function buildExecuteTaskUseCase(
   fetchDistributionService: FetchDistributionService,
   distributionStateRepo: SqliteDistributionStateRepository,
   dataPaths: DataPaths,
+  hubGitIdentity: GitIdentity | null,
   harnessPrefix?: string,
 ): ExecuteTaskUseCase {
 
@@ -478,7 +482,17 @@ function buildExecuteTaskUseCase(
     fetchDistributionService,
     distributionStateRepo,
     infra.muxDriverRegistry,
+    // Issue #274: adapter from WindowRespawnService to IPrimaryWindowWaker,
+    // avoiding a direct WindowRespawnService import in ExecuteTaskUseCase
+    // (dependency direction: tasks → windows would be a layer violation).
+    {
+      wake: (windowId, serverName, opts) =>
+        appServices.windowRespawnService.wakeWindow(windowId, serverName, opts),
+      findRunningSession: (taskId, agentSessionId, serverName) =>
+        appServices.windowRespawnService.findRunningSessionForTask(taskId, agentSessionId, serverName),
+    } satisfies IPrimaryWindowWaker,
     harnessPrefix,
+    hubGitIdentity,
   );
 }
 
@@ -523,7 +537,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -569,7 +583,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   // Constructed here, once, and passed to both `buildFetchDistributionService`
@@ -580,10 +594,11 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // instance, not two separately-constructed repositories over the same
   // table.
   const distributionStateRepo = new SqliteDistributionStateRepository(db);
-  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo);
-  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, harnessPrefix);
+  const hubGitIdentity = readHubGitIdentity();
+  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo, hubGitIdentity);
+  const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, hubGitIdentity, harnessPrefix);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, harnessPrefix);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, hubGitIdentity, harnessPrefix);
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
@@ -592,6 +607,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
 
   return {
     uiToken,
+    webhookToken,
     agentBundler,
     ...infra,
     ...repos,

@@ -158,6 +158,8 @@ export function reverifyExecutionGateInLock(
   scopedAuthEnabled: boolean,
   manifestHash: string,
   windowId: number | null = null,
+  followUpBody?: string | null,
+  followUpPhases?: string | null,
 ): void {
   if (task.inputTrust !== 'untrusted') return;
 
@@ -184,6 +186,8 @@ export function reverifyExecutionGateInLock(
       priorStatus: task.status,
       manifestHash,
       pendingOperationWindowId: windowId,
+      pendingFollowUpBody: followUpBody,
+      pendingFollowUpPhases: followUpPhases,
     });
     if (unitId !== null) {
       if (recorded) {

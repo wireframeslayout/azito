@@ -89,6 +89,9 @@ export function resolveTaskPromptVars(
       // (the distribution-aware value an upper-tier caller may pass in) —
       // falls back to `repositories[0]` for callers that can't resolve it.
       gitProvider: resolvedGitProvider ?? project.repositories?.[0]?.provider ?? 'github',
+      // #423: the system-resolved branch the worktree is on — used in SKILL.md
+      // to instruct the worker to stay on the current branch.
+      branchName: task.worktreeBranch ?? task.branch ?? '',
     },
     project: {
       sidekickPrompt: [project.sidekickPrompt, unit?.systemPrompt].filter(Boolean).join('\n\n'),

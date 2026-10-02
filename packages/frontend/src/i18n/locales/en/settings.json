@@ -208,6 +208,7 @@
     "colTransition": "Last transition",
     "stateWorking": "Working",
     "stateBlocked": "Blocked",
+    "stateError": "API Error",
     "stateIdle": "Idle",
     "stateOffline": "Offline",
     "stateNone": "Undecided",

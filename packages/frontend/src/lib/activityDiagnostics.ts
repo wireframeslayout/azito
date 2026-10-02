@@ -10,7 +10,7 @@ export type ActivityDecidedBy =
   | 'tier4_probe'
   | 'none';
 
-export type ActivityDecidedState = 'working' | 'blocked' | 'idle' | 'offline' | 'none';
+export type ActivityDecidedState = 'working' | 'blocked' | 'error' | 'idle' | 'offline' | 'none';
 
 export type ActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
 

@@ -230,7 +230,7 @@ export class ActivityTracker extends EventEmitter {
    * held for confirmation (see IDLE_* constants).
    */
   private applyClassified(now: number, sum: number, s: PaneAgentState, by: DecidedBy): void {
-    const desired: ActivityState = s === 'idle' ? 'idle' : 'active';
+    const desired: ActivityState = s === 'idle' || s === 'error' ? 'idle' : 'active';
     const status: AgentStatus | undefined =
       s === 'working' ? 'working' : s === 'blocked' ? 'blocked' : undefined;
 

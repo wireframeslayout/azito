@@ -6,7 +6,7 @@ import { migrateDataIfNeeded } from './shared/dataMigration';
 import { initSecretBox } from './shared/crypto/SecretBox';
 import { initVapidKeyManager } from './modules/notifications/push/VapidKeyManager';
 import { openDatabase } from './shared/db/Database';
-import { resolveUiToken } from './shared/uiToken';
+import { resolveUiToken, resolveWebhookToken } from './shared/uiToken';
 import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
@@ -84,18 +84,26 @@ async function main(): Promise<void> {
 
   const db = openDatabase(paths.db);
   const uiToken = resolveUiToken(paths.uiToken);
+  const webhookToken = resolveWebhookToken(paths.webhookToken);
 
   const app = Fastify({ logger: true });
   const PORT = parseInt(process.env.PORT || '3001', 10);
   const HOST = process.env.AZITO_BIND ?? '127.0.0.1';
   if (HOST === '0.0.0.0' || HOST === '::') {
-    app.log.error('AZITO_BIND must not be 0.0.0.0 or :: — bind to 127.0.0.1 or a Tailscale IP');
+    app.log.error('AZITO_BIND must not be 0.0.0.0 or :: — bind to 127.0.0.1');
     process.exit(1);
+  }
+  if (HOST !== '127.0.0.1' && HOST !== '::1' && HOST !== 'localhost') {
+    app.log.warn(
+      `AZITO_BIND is set to a non-loopback address (${HOST}). Local tmux panes use` +
+      ` http://127.0.0.1:${PORT} to reach the hub, which will fail when the hub does not` +
+      ` listen on loopback. Consider removing AZITO_BIND and using 'tailscale serve' instead.`,
+    );
   }
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
-  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken);
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
   const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);
@@ -164,7 +172,7 @@ async function main(): Promise<void> {
 
   // ─── Startup: recover stuck tasks ───
 
-  new RecoverStuckTasksUseCase(
+  const recoverStuckTasks = new RecoverStuckTasksUseCase(
     wiring.taskRepo,
     wiring.unitRepo,
     wiring.serverRepo,
@@ -176,7 +184,14 @@ async function main(): Promise<void> {
     wiring.agentTurnRepo,
     app.log,
     wiring.unitTypeLoader,
-  ).run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+  );
+  recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+
+  setInterval(() => {
+    recoverStuckTasks.runPeriodic(wiring.executeTaskUseCase.getRunning()).catch((err) => {
+      app.log.warn(`Periodic stuck task recovery failed: ${err}`);
+    });
+  }, 5 * 60_000);
 
   // ─── Startup: check agent versions ───
 

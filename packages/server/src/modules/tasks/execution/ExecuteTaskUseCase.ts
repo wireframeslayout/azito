@@ -20,6 +20,8 @@ import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService'
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
 import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
+import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
+import { ensureClaudeTrust } from '../../agents/claude/ensureClaudeTrust';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ProjectRepositoryWithToken as ProjectRepository, ProjectRepository as ProjectRepositoryEntry } from '../../projects/Project';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
@@ -35,7 +37,7 @@ import { shellQuote } from '../../../shared/shellQuote';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
-import { WorkerInputService } from './WorkerInputService';
+import { WorkerInputService, WorkerNotRunningError } from './WorkerInputService';
 import { PushVerifier } from './PushVerifier';
 import { GitInfoCollector } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
@@ -47,16 +49,18 @@ import { shouldSupervise } from '../../supervisors/SupervisorLaunch';
 import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
-import { TuiWorkerRuntime } from './runtime/TuiWorkerRuntime';
+import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
+import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
 import type { SqliteAgentTurnRepository } from '../turns/SqliteAgentTurnRepository';
 import type { TurnSignalHub } from '../turns/TurnSignalHub';
 import type { AgentTurn } from '../turns/AgentTurn';
+import type { IPrimaryWindowWaker } from './IPrimaryWindowWaker';
+import { isPrimaryTaskWindow } from '../../windows/Window';
 
 // ─── Helpers ───
 
@@ -168,7 +172,13 @@ export class ExecuteTaskUseCase {
     // left untouched rather than cleared. See the field's use below.
     private distributionStateRepo: IDistributionStateRepository | null = null,
     private muxDriverRegistry: MuxDriverRegistry,
+    // Issue #274: wakes sleeping primary windows and detects running sessions
+    // for follow-up's window resolution, without pulling WindowRespawnService
+    // as a direct dependency (avoids circular dependency direction: tasks →
+    // windows is forbidden). Wired as an adapter in wiring.ts.
+    private primaryWindowWaker: IPrimaryWindowWaker,
     private harnessPrefix?: string,
+    private hubGitIdentity: GitIdentity | null = null,
   ) {
     this.gitInfoCollector = new GitInfoCollector(this.transportFactory);
     this.pushVerifier = new PushVerifier(this.transportFactory, this.gitProvider);
@@ -330,7 +340,10 @@ export class ExecuteTaskUseCase {
   enforceExecutionGate(
     task: Task,
     unitId: number,
-    operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review',
+    operation: 'execute' | 'resume' | 'resume_await_answer' | 'resume_await_plan_review' | 'follow_up',
+    baseBranchOverride?: string | null,
+    followUpBody?: string,
+    followUpPhases?: string[],
   ) {
     // resolveExecutionManifest() re-resolves the same (task.unitId ??
     // project.defaultUnitId) / serverName the caller already resolved via
@@ -358,7 +371,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, operation === 'execute' ? 'execute' : 'continuation');
+    }, operation === 'execute' ? 'execute' : 'continuation', undefined, undefined, baseBranchOverride);
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: the 3-point AND gate for 'allow' is re-evaluated on
     // every entry point, not just resolved once at approval time — see
@@ -394,6 +407,8 @@ export class ExecuteTaskUseCase {
         pendingOperation: operation,
         priorStatus: task.status,
         manifestHash,
+        pendingFollowUpBody: followUpBody,
+        pendingFollowUpPhases: followUpPhases ? JSON.stringify(followUpPhases) : undefined,
       });
       if (recorded) {
         // Separate 'status_change' log entry (Issue #51), not just the
@@ -450,6 +465,9 @@ export class ExecuteTaskUseCase {
     unitId: number,
     operation: NonNullable<Task['pendingOperation']>,
     freshServer: ServerConfig,
+    baseBranchOverride?: string | null,
+    followUpBody?: string | null,
+    followUpPhases?: string | null,
   ): { project: ReturnType<typeof resolveExecutionManifest>['project']; projectServer: ReturnType<typeof resolveExecutionManifest>['projectServer'] } {
     // Same 'execute' vs 'continuation' mapping as enforceExecutionGate()
     // above — only a FRESH execute() (never distributed anything this run)
@@ -464,7 +482,7 @@ export class ExecuteTaskUseCase {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, operation === 'execute' ? 'execute' : 'continuation');
+    }, operation === 'execute' ? 'execute' : 'continuation', undefined, undefined, baseBranchOverride);
     const manifestHash = hashExecutionManifest(manifest);
     reverifyExecutionGateInLock(
       { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
@@ -475,6 +493,9 @@ export class ExecuteTaskUseCase {
       freshServer,
       this.scopedAuthEnabled,
       manifestHash,
+      null,
+      followUpBody,
+      followUpPhases,
     );
     return { project, projectServer };
   }
@@ -679,11 +700,33 @@ export class ExecuteTaskUseCase {
     // to `ServerConfig | null`.
     let server: ServerConfig = serverAtStart;
 
+    // Issue #63: detect baseBranch BEFORE the execution gate so the
+    // fingerprint includes the auto-detected value. The approval screen
+    // computes the same detection, so the hashes match. When detection
+    // succeeds and no configured value existed, persist it so all
+    // subsequent resolveBaseBranch calls (PhaseLoopRunner re-verification,
+    // resume gate checks) return the same value.
+    const prelimProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const prelimProject = this.projectRepo.findById(task.projectId);
+    const prelimWorkingDir = prelimProjectServer?.workingDirectory || null;
+    const detectedBaseBranch = await resolveAndDetectBaseBranch(
+      task, prelimProjectServer, prelimProject,
+      this.transportFactory.getTransport(server), prelimWorkingDir,
+    );
+    if (!detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
+      this.appendLog(taskId, unitId, 'command', { type: 'base_branch_unresolvable' });
+      throw new Error('ベースブランチを自動検出できません。プロジェクトまたはタスクの既定ブランチを設定してください');
+    }
+    if (detectedBaseBranch && !resolveBaseBranch(task, prelimProjectServer, prelimProject)) {
+      this.taskRepo.update(taskId, { baseBranch: detectedBaseBranch } as Partial<Task>);
+      task.baseBranch = detectedBaseBranch;
+    }
+
     // Untrusted-input execution gate (Issue #328): must run before the
     // resource guard, before any tmux window, before any worktree, before
     // any secret is injected. Resolves project/projectServer once for reuse
     // below.
-    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute');
+    const { project, projectServer } = this.enforceExecutionGate(task, unitId, 'execute', detectedBaseBranch);
 
     // リソースひっ迫時はウィンドウ作成前に中断する（タスクは開始前なので status は変更しない）。
     // force 指定（フロントの「それでも実行」）でスキップできる。
@@ -868,7 +911,7 @@ export class ExecuteTaskUseCase {
             return { result, windowName: createdRef.window, ref: createdRef };
           },
             (fs) => {
-              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs);
+              const locked = this.reverifyGateInLock(currentTask, unitId, 'execute', fs, detectedBaseBranch);
               lockedProject = locked.project;
               lockedProjectServer = locked.projectServer;
             },
@@ -902,16 +945,13 @@ export class ExecuteTaskUseCase {
     const windowTarget = tmuxTargetFromMuxRef(ref);
     const handle = await executeDriver.resolvePane(server, ref, 1);
 
-    // Canonicalized ONCE, immediately after resolution (Issue #87
-    // third-party review, 11th round, Important finding 1) — see
-    // `canonicalizeBaseBranch`'s doc comment in TaskExecutionEnv.ts. Computed
-    // unconditionally (not only when `workingDir` is set) because fetch
-    // distribution's own prerequisite checks (via performDistribution) need
-    // it regardless of whether a working directory happens to be configured.
-    // Resolved from `lockedProjectServer`/`lockedProject` (Issue #87
-    // 16th-round review, Important finding 2), not the pre-lock
-    // `projectServer`/`project` — see reverifyGateInLock's doc comment.
-    const baseBranch = canonicalizeBaseBranch(resolveBaseBranch(task, lockedProjectServer, lockedProject));
+    // Issue #63: baseBranch was already detected and persisted BEFORE
+    // enforceExecutionGate, but that used pre-lock snapshots. Re-resolve
+    // from the locked row: resolveBaseBranch returns the persisted value
+    // (execute() persisted it above), or, as a safety net, falls back to
+    // the pre-lock detection.
+    const configuredBranch = resolveBaseBranch(task, lockedProjectServer, lockedProject);
+    const baseBranch = configuredBranch ? canonicalizeBaseBranch(configuredBranch) : detectedBaseBranch!;
 
     // Fetch distribution (Issue #87 Phase 1: isolated servers, unconditionally
     // — they hold no git credentials of their own, so distribution is not
@@ -1183,6 +1223,55 @@ export class ExecuteTaskUseCase {
         baseBranch,
       });
 
+      try {
+        const identityResult = await ensureGitIdentity(
+          server.type,
+          this.transportFactory.getTransport(server),
+          wt.path,
+          this.hubGitIdentity,
+        );
+        if (identityResult.action === 'applied') {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'git_identity_applied',
+            fields: identityResult.fields,
+          });
+        } else if (identityResult.action === 'hub_missing') {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'git_identity_missing',
+          });
+        }
+      } catch (err) {
+        this.appendLog(taskId, unitId, 'command', {
+          type: 'git_identity_failed',
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+
+      if (unit.workerType === 'claude' && workingDir) {
+        try {
+          const transport = this.transportFactory.getTransport(server);
+          const resolver = this.pathResolverFactory.create(server.type, transport);
+          const resolvedWorkingDir = await resolver.resolveRealPath(workingDir);
+          const trustResult = await ensureClaudeTrust(
+            server.type,
+            transport,
+            resolvedWorkingDir,
+          );
+          if (trustResult.action === 'registered') {
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: resolvedWorkingDir });
+          } else if (trustResult.action === 'skipped') {
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_skipped', reason: trustResult.reason });
+          } else if (trustResult.action === 'failed') {
+            this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_failed', reason: trustResult.reason });
+          }
+        } catch (err) {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'claude_trust_failed',
+            reason: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+
       effectiveDir = wt.path;
 
       try {
@@ -1304,7 +1393,14 @@ export class ExecuteTaskUseCase {
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
-        // Keep the historical "launch failure is not fatal here" behaviour, but never hide it.
+        if (launchErr instanceof TuiNotReadyError && launchErr.trustDialogDetected) {
+          this.appendLog(taskId, unitId, 'command', {
+            type: 'claude_trust_dialog_detected',
+            message: `Claude Code の信頼確認ダイアログで起動が停止しました。作業ディレクトリ ${effectiveDir || workingDir} を信頼済みにしてください`,
+          });
+          this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
+          return;
+        }
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
       }
     }
@@ -1421,7 +1517,7 @@ export class ExecuteTaskUseCase {
       });
   }
 
-  async followUp(unitId: number, taskId: number, comment: string): Promise<void> {
+  async followUp(unitId: number, taskId: number, comment: string, opts?: { phaseNames?: string[] }): Promise<void> {
     const unitForRun = this.unitRepo.findById(unitId);
     if (!unitForRun) throw new Error('Unit not found');
 
@@ -1436,17 +1532,100 @@ export class ExecuteTaskUseCase {
     // why this is explicitly typed `ServerConfig` rather than inferred.
     let server: ServerConfig = serverAtStart;
 
+    // Issue #63: ensure baseBranch is persisted so the gate fingerprint
+    // matches the approval screen. Normally execute() already persisted it,
+    // but if execute() crashed before persistence this is the safety net.
+    const fuProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const fuProject = this.projectRepo.findById(task.projectId);
+    let fuBaseBranch: string | null | undefined;
+    if (!resolveBaseBranch(task, fuProjectServer, fuProject)) {
+      fuBaseBranch = await resolveAndDetectBaseBranch(
+        task, fuProjectServer, fuProject,
+        this.transportFactory.getTransport(serverAtStart), fuProjectServer?.workingDirectory || null,
+      );
+      if (fuBaseBranch) {
+        this.taskRepo.update(taskId, { baseBranch: fuBaseBranch } as Partial<Task>);
+      }
+    }
+
     // Same gate as execute() (Issue #328). A follow-up can resume a worker
     // just as much as a fresh execute() can — e.g. a description edit on an
     // untrusted task invalidates its approval hash while the task is
     // mid-run, and the next follow-up (including the one the answer-submit
-    // endpoint issues) must not resume it unattended. The `comment` for this
-    // particular call is not persisted anywhere and is lost when blocked;
-    // the caller must resubmit it after approval (see approve-execution).
-    this.enforceExecutionGate(task, unitId, 'resume');
+    // endpoint issues) must not resume it unattended. When blocked, the
+    // composed `comment` is saved in pending_follow_up_body so approval can
+    // re-deliver it (Issue #276). After approval the fingerprint matches so
+    // the gate passes through; if state changed since approval it re-blocks
+    // and body is re-saved automatically.
+    this.enforceExecutionGate(task, unitId, 'follow_up', fuBaseBranch, comment, opts?.phaseNames);
 
-    this.appendLog(taskId, unitId, 'user_comment', { text: comment });
     this.taskRepo.updateStatus(taskId, 'in_progress');
+
+    // ===== Pre-lock phase (Issue #274) =====
+    // Wake sleeping primary windows and detect running sessions BEFORE
+    // acquiring runExclusiveForTask — wake() internally calls respawn()
+    // which also takes the same per-task lock, so calling it inside the
+    // lock would deadlock.
+    const taskWindows = this.windowRepo.findByTask(taskId);
+    const primaryWindow = taskWindows.find((w) => isPrimaryTaskWindow(w));
+
+    let wakeResult: { tmuxTarget: string } | null = null;
+    // Track if we found the session running in a different window.
+    let runningInWindow: { windowId: number; tmuxTarget: string } | null = null;
+
+    // 1. Duplicate session detection: check regardless of whether a primary
+    //    window record exists (Finding 4 — a task can have agentSessionId
+    //    but no window row if the row was lost).
+    if (task.agentSessionId) {
+      const running = await this.primaryWindowWaker.findRunningSession(
+        task.id, task.agentSessionId, serverName,
+      );
+      if (running && (!primaryWindow || running.windowId !== primaryWindow.id)) {
+        runningInWindow = running;
+      }
+    }
+
+    // 2-3. Primary window sleeping/dead detection and wake.
+    if (primaryWindow && !runningInWindow) {
+      if (primaryWindow.sleeping) {
+        wakeResult = await this.primaryWindowWaker.wake(
+          primaryWindow.id, serverName, {
+            skipAgentLaunch: true, gateAlreadyEnforced: true,
+            inLockGate: (fs) => {
+              const t = this.taskRepo.findById(taskId);
+              if (!t) throw new Error(`Task ${taskId} not found`);
+              this.reverifyGateInLock(t, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+            },
+          },
+        );
+      } else {
+        const fuCheckDriver = this.resolveDriver(server);
+        let alive = false;
+        try {
+          if (primaryWindow.muxRef) {
+            alive = await fuCheckDriver.windowExists(server, primaryWindow.muxRef);
+          } else {
+            const resolved = await fuCheckDriver.resolveRef(server, primaryWindow.tmuxTarget);
+            alive = resolved ? await fuCheckDriver.windowExists(server, resolved) : true;
+          }
+        } catch {
+          alive = true;
+        }
+        if (!alive) {
+          this.windowRepo.update(primaryWindow.id, { sleeping: true });
+          wakeResult = await this.primaryWindowWaker.wake(
+            primaryWindow.id, serverName, {
+              skipAgentLaunch: true, gateAlreadyEnforced: true,
+              inLockGate: (fs) => {
+                const t = this.taskRepo.findById(taskId);
+                if (!t) throw new Error(`Task ${taskId} not found`);
+                this.reverifyGateInLock(t, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+              },
+            },
+          );
+        }
+      }
+    }
 
     // Ensure tmux session exists. Same throwaway-bootstrap-window reasoning
     // as execute() above — including the same `isolationMaskForServer`
@@ -1477,6 +1656,7 @@ export class ExecuteTaskUseCase {
       await sleep(500);
     }
 
+    // ===== Lock phase =====
     // Threaded to the working-directory-rejected rollback below (needs the
     // specific generation to revoke — see that branch's comment); stays null
     // when the `windowExists` result is true, since nothing was rotated.
@@ -1488,22 +1668,58 @@ export class ExecuteTaskUseCase {
       // The ENTIRE "read current window state -> decide whether to rotate ->
       // create -> persist" sequence now runs inside runExclusiveForTask, not
       // just the create/persist half (Issue #28 third-party review, TOCTOU
-      // finding): the old code computed `windowExists` from a `task`/tmux
-      // snapshot taken BEFORE the lock. Two concurrent follow-ups for the
-      // same not-yet-running task could both observe "no window yet" from
-      // their own pre-lock snapshot, both enter the rotation, and the
-      // second's issueNextGeneration() would revoke the first's
-      // still-being-created generation before its window creation even
-      // resolved — runExclusiveForTask only serializes the callbacks, it
-      // doesn't protect state read before either callback started. Reading
-      // `task.tmuxWindow` fresh from the repository INSIDE the lock, and
-      // re-checking tmux for it there too, means the decision is always made
-      // against the latest state any prior queued rotation for this task
-      // (execute()/followUp()/respawn()) actually persisted.
+      // finding). Reading `task.tmuxWindow` fresh from the repository INSIDE
+      // the lock, and re-checking tmux for it there too, means the decision
+      // is always made against the latest state any prior queued rotation
+      // for this task (execute()/followUp()/respawn()) actually persisted.
       ({ windowName, windowExists, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
+        // Issue #274: if a running session was found in a different window,
+        // use that window directly.
+        if (runningInWindow) {
+          const parts = runningInWindow.tmuxTarget.split(':');
+          const runningWindowName = parts[1]?.split('.')[0] || runningInWindow.tmuxTarget;
+          return { windowName: runningWindowName, windowExists: true, tokenId: null, server };
+        }
+
+        // Issue #274: if we woke a sleeping primary window, re-read the
+        // window record to verify it's still ours and alive, then use it.
+        if (wakeResult && primaryWindow) {
+          const freshWin = this.windowRepo.findById(primaryWindow.id);
+          if (freshWin && !freshWin.sleeping) {
+            // Verify the woken window actually exists in tmux.
+            const wakeDriver = this.resolveDriver(server);
+            const wakeRef = freshWin.muxRef ?? muxRefFromTmuxTarget(freshWin.tmuxTarget);
+            let wokenAlive = false;
+            try {
+              wokenAlive = await wakeDriver.windowExists(server, wakeRef);
+            } catch {}
+            if (wokenAlive) {
+              // Issue #274 review: re-verify the execution gate inside the
+              // per-task lock — state may have changed between the pre-lock
+              // gate (line 1549) and lock acquisition.
+              const freshTask = this.taskRepo.findById(taskId);
+              if (!freshTask) throw new Error(`Task ${taskId} not found`);
+              this.reverifyGateInLock(freshTask, unitId, 'follow_up', server, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+
+              const parts = freshWin.tmuxTarget.split(':');
+              const wokenWindowName = parts[1]?.split('.')[0] || freshWin.tmuxTarget;
+              this.taskRepo.update(taskId, { tmuxWindow: wokenWindowName } as Partial<Task>);
+              return { windowName: wokenWindowName, windowExists: false, tokenId: null, server };
+            }
+          }
+          // Wake result is stale — fall through to the standard path.
+        }
+
         const currentTask = this.taskRepo.findById(taskId);
         if (!currentTask) throw new Error(`Task ${taskId} not found`);
-        const candidateWindowName = currentTask.tmuxWindow || `task-${task.id}`;
+
+        // Finding 2: prefer the primary window's tmuxTarget/muxRef over
+        // task.tmuxWindow — the task column can lag behind when a window
+        // is respawned or renamed independently.
+        const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
+        const candidateWindowName = freshPrimary
+          ? (freshPrimary.muxRef?.window || freshPrimary.tmuxTarget.split(':')[1]?.split('.')[0] || `task-${task.id}`)
+          : (currentTask.tmuxWindow || `task-${task.id}`);
         let exists = false;
         try {
           const fuDriver = this.resolveDriver(server);
@@ -1512,6 +1728,10 @@ export class ExecuteTaskUseCase {
           if (ws) exists = ws.windows.some((w) => w.name === candidateWindowName);
         } catch {}
         if (exists) {
+          // Sync task.tmuxWindow with the actual window name.
+          if (currentTask.tmuxWindow !== candidateWindowName) {
+            this.taskRepo.update(taskId, { tmuxWindow: candidateWindowName } as Partial<Task>);
+          }
           return { windowName: candidateWindowName, windowExists: true, tokenId: null, server };
         }
 
@@ -1534,9 +1754,39 @@ export class ExecuteTaskUseCase {
           return { result, windowName: fuRef.window, ref: fuRef };
         },
           true,
-          (fs) => this.reverifyGateInLock(currentTask, unitId, 'resume', fs),
+          (fs) => this.reverifyGateInLock(currentTask, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null),
         );
         this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+
+        // Register or update the primary window row.
+        const newTmuxTarget = `${muxWorkspace}:${created.windowName}`;
+        if (freshPrimary) {
+          this.windowRepo.update(freshPrimary.id, {
+            tmuxTarget: newTmuxTarget,
+            muxRef: created.ref,
+            sleeping: false,
+          });
+        } else {
+          this.windowRepo.add({
+            ownerType: 'task',
+            projectId: null,
+            taskId,
+            serverName,
+            tmuxTarget: newTmuxTarget,
+            muxRef: created.ref,
+            label: created.windowName,
+            isPrimary: true,
+            windowType: unit.workerType ? 'agent' as const : 'terminal' as const,
+            workerType: unit.workerType,
+            workerModel: unit.workerModel,
+            agentSessionId: task.agentSessionId,
+            launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
+            workingDirectory: task.worktreePath || task.workingDirectory || null,
+            paneLayout: null,
+            sleeping: false,
+          });
+        }
+
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {
@@ -1548,6 +1798,14 @@ export class ExecuteTaskUseCase {
       throw new Error(`Failed to create task window: ${err instanceof Error ? err.message : err}`);
     }
     server = createdServer;
+
+    // Moved after the lock phase so that user_comment is logged only when
+    // ALL gate checks (outer enforceExecutionGate AND in-lock
+    // reverifyGateInLock) have passed. Before this move the log was written
+    // between the outer gate and the lock; if reverifyGateInLock blocked
+    // (re-saving the body for approval), user_comment was logged once here
+    // and a second time on the post-approval re-execution (Issue #276 nit).
+    this.appendLog(taskId, unitId, 'user_comment', { text: comment });
 
     const fuMainDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: fuMainDriver.kind, workspace: muxWorkspace, window: windowName };
@@ -1639,6 +1897,21 @@ export class ExecuteTaskUseCase {
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
         } catch (launchErr) {
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch_failed', message: (launchErr as Error).message });
+          this.taskRepo.updateStatus(taskId, 'failed');
+          if (tokenId) {
+            try {
+              await rollbackWindowReference(
+                fuMainDriver.closeWindow(server, ref),
+                this.paneEnvService, tokenId,
+                'followup_worker_launch_failed_rollback',
+                () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+                () => {},
+              );
+            } catch (rollbackErr) {
+              this.appendLog(taskId, unitId, 'command', { type: 'followup_rollback_failed', message: (rollbackErr as Error).message });
+            }
+          }
+          throw new Error(`Follow-up worker launch failed: ${(launchErr as Error).message}`);
         }
       }
     }
@@ -1727,7 +2000,11 @@ export class ExecuteTaskUseCase {
       } catch (err: unknown) {
         followUpStream.stop();
         followUpSignalStream.stop();
-        this.appendLog(taskId, unitId, 'status_change', { status: 'send_error', message: (err as Error).message });
+        const isDeadWorker = err instanceof WorkerNotRunningError;
+        this.appendLog(taskId, unitId, 'status_change', {
+          status: isDeadWorker ? 'worker_not_running' : 'send_error',
+          message: (err as Error).message,
+        });
         this.taskRepo.updateStatus(taskId, 'failed');
         return;
       }
@@ -1747,6 +2024,13 @@ export class ExecuteTaskUseCase {
         this.taskRepo.update(taskId, { pendingQuestions: JSON.stringify(classification.questions || []) } as Partial<Task>);
         this.appendLog(taskId, unitId, 'status_change', { status: 'waiting_for_human', question: output });
         this.taskRepo.updateStatus(taskId, 'waiting_input');
+        return;
+      }
+
+      if (classification.status === 'stopped' && !abortController.signal.aborted) {
+        this.appendLog(taskId, unitId, 'output', output);
+        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Agent stopped unexpectedly during follow-up' });
+        this.taskRepo.updateStatus(taskId, 'failed');
         return;
       }
 
@@ -1857,12 +2141,26 @@ export class ExecuteTaskUseCase {
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
 
+    // Issue #63: same baseBranch detection safety net as followUp().
+    const rsmProjectServer = this.projectServerRepo.find(task.projectId, serverName);
+    const rsmProject = this.projectRepo.findById(task.projectId);
+    let rsmBaseBranch: string | null | undefined;
+    if (!resolveBaseBranch(task, rsmProjectServer, rsmProject)) {
+      rsmBaseBranch = await resolveAndDetectBaseBranch(
+        task, rsmProjectServer, rsmProject,
+        this.transportFactory.getTransport(server), rsmProjectServer?.workingDirectory || null,
+      );
+      if (rsmBaseBranch) {
+        this.taskRepo.update(taskId, { baseBranch: rsmBaseBranch } as Partial<Task>);
+      }
+    }
+
     // Same gate as execute()/followUp() (Issue #328). Reached from
     // approve-plan's "resume from implementing" flow and from startup
     // recovery (RecoverStuckTasksUseCase) — both resume a worker that may
     // have gone stale for an untrusted task (description edited since the
     // approval this run started under).
-    this.enforceExecutionGate(task, unitId, 'resume');
+    this.enforceExecutionGate(task, unitId, 'resume', rsmBaseBranch);
 
     // Validate currentPhase against unitType phases
     if (task.currentPhase) {
@@ -1875,7 +2173,36 @@ export class ExecuteTaskUseCase {
       }
     }
 
-    const windowName = task.tmuxWindow || `task-${task.id}`;
+    // Wake a sleeping primary window before the lock (Issue #276). Provide
+    // an inLockGate that re-verifies the gate with 'resume' operation under
+    // the server isolation lock, so approval is not asked for again but
+    // state changes since the outer gate are caught.
+    const rsmTaskWindows = this.windowRepo.findByTask(taskId);
+    const rsmPrimaryWindow = rsmTaskWindows.find((w) => isPrimaryTaskWindow(w));
+    if (rsmPrimaryWindow?.sleeping) {
+      await this.primaryWindowWaker.wake(rsmPrimaryWindow.id, serverName, {
+        gateAlreadyEnforced: true,
+        inLockGate: (fs) => {
+          const t = this.taskRepo.findById(taskId);
+          if (!t) throw new Error(`Task ${taskId} not found`);
+          this.reverifyGateInLock(t, unitId, 'resume', fs, rsmBaseBranch);
+        },
+      });
+    }
+
+    // Use the primary window from windowRepo instead of task.tmuxWindow —
+    // the task column can lag behind when a window is respawned or renamed
+    // independently (Issue #276). Re-read after potential wake above.
+    const taskWindows = this.windowRepo.findByTask(taskId);
+    const primaryWindow = taskWindows.find((w) => isPrimaryTaskWindow(w));
+    let windowName: string;
+    if (primaryWindow) {
+      const resolved = primaryWindow.muxRef?.window || primaryWindow.tmuxTarget.split(':')[1]?.split('.')[0];
+      if (!resolved) throw new Error(`Cannot resolve window name for primary window ${primaryWindow.id} (task ${taskId})`);
+      windowName = resolved;
+    } else {
+      windowName = task.tmuxWindow || `task-${task.id}`;
+    }
     const resumeDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: resumeDriver.kind, workspace: muxWorkspace, window: windowName };
     const windowTarget = tmuxTargetFromMuxRef(ref);

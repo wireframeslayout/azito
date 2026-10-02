@@ -39,6 +39,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
   sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
@@ -255,6 +257,8 @@ describe('POST /api/tasks/:id/archive', () => {
         pendingOperation: null,
         pendingOperationWindowId: null,
         pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
   sleepAfterPush: null,
       });
       return true;

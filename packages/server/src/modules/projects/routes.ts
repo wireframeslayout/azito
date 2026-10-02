@@ -173,7 +173,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       // chain (TaskExecutionEnv.ts) whenever a task doesn't override it, so
       // it needs the same rejection of new `refs/...`/`origin/...` input
       // (Issue #87 third-party review, 11th round, Important finding 1).
-      // Empty string clears the field (falls back to 'main' downstream) and
+      // Empty string clears the field (triggers auto-detection downstream) and
       // is intentionally exempt, same as the task-side check.
       // Issue #87 14th-round review, Minor finding 3: the destructured
       // `default_branch?: string` annotation above is a compile-time
@@ -846,6 +846,8 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           pendingOperation: null,
           pendingOperationWindowId: null,
           pendingOperationPriorStatus: null,
+          pendingFollowUpBody: null,
+          pendingFollowUpPhases: null,
         }, originFromPrincipal(request.principal), request.principal ?? OPERATOR_PRINCIPAL);
         return { ok: true, taskId, issue: { number: issue.number, title: issue.title } };
       } catch (err: unknown) {

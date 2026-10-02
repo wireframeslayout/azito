@@ -4,6 +4,9 @@ import { mkdtempSync, mkdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { ExecuteTaskUseCase } from './ExecuteTaskUseCase';
+vi.mock('../../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () => ({ action: 'already_set' })) }));
+import { ensureGitIdentity } from '../../git/ensureGitIdentity';
+
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
 // resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
 // the no-credential path deterministically, instead of depending on whoever
@@ -60,6 +63,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     pendingOperation: null,
     pendingOperationWindowId: null,
     pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     sleepAfterPush: null,
     createdByKind: 'operator',
     createdById: null,
@@ -351,6 +356,7 @@ function buildUseCase(opts: {
     closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     sendKeysToHandle: vi.fn(async () => {}),
+    paneCommandByHandle: vi.fn(async () => 'claude'),
     checkPaneExists: vi.fn(async () => true),
     windowExists: vi.fn(async () => true),
     listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -454,6 +460,8 @@ function buildUseCase(opts: {
     (opts.fetchDistributionService as any) ?? null,
     (opts.distributionStateRepo as any) ?? null,
     { resolve: () => tmux } as any,
+    // Issue #274: primaryWindowWaker mock — no-op for most tests.
+    { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
   );
 
   return { useCase, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -512,7 +520,11 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     const createSessionServer = (tmux.openWorkspace as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const createWindowServer = (tmux.openWindow as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const resolvePaneServer = (tmux.resolvePane as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    const getTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    // Issue #63: getTransport is now called once BEFORE the lock (for
+    // baseBranch auto-detection, a read-only git query) with the initial
+    // server row — that's calls[0]. Post-lock transport usage goes through
+    // performDistribution's transportFactory reference.
+    const preGateTransportServer = (transportFactory.getTransport as ReturnType<typeof vi.fn>).mock.calls[0][0];
 
     // ensureSessionWithLock's lock span re-read the server for the session
     // bootstrap — openWorkspace must see that row.
@@ -522,11 +534,13 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // than ensureSessionWithLock's, never the same or an earlier one.
     expect(createWindowServer.agentVersion).not.toBe(createSessionServer.agentVersion);
     // Everything execute() does after createRotatedWindow returns
-    // (resolvePane, the worktree transport) must keep using THAT exact
-    // fresh row, not fall back to the `server` resolved before either lock
-    // span ran.
+    // (resolvePane) must keep using THAT exact fresh row, not fall back to
+    // the `server` resolved before either lock span ran.
     expect(resolvePaneServer.agentVersion).toBe(createWindowServer.agentVersion);
-    expect(getTransportServer.agentVersion).toBe(createWindowServer.agentVersion);
+    // Pre-gate baseBranch detection uses the initial server (pre-lock) —
+    // this is intentional: the detection is a read-only git query that
+    // does not need the post-lock freshness guarantee.
+    expect(preGateTransportServer.agentVersion).toBe('gen-1');
   });
 
   // Same Issue #29 review (10th pass) fix as execute()'s own test above,
@@ -591,6 +605,37 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     // A leftover exit marker from the previous run on this exact target must not
     // suppress `supervised` while the new supervisor isn't registered yet.
     expect(supervisorRegistry.clearExitMarker).toHaveBeenCalledWith('local-server', 'azito:w1');
+  });
+
+  it('followUp() rejects and marks the task as failed when runtime.resume() throws (Issue #421 regression)', async () => {
+    const unit = makeUnit({ id: 50, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 5, serverName: 'local-server', unitId: 50, tmuxWindow: null });
+    const { useCase, taskRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    // Make the worker launch fail: sendKeysToHandle throws when the claude
+    // launch command is sent (the second call — the first is `cd`).
+    (tmux.sendKeysToHandle as ReturnType<typeof vi.fn>).mockImplementation(async (_server: unknown, _handle: unknown, keys: string[]) => {
+      if ((keys as string[])[0]?.includes('claude')) {
+        throw new Error('TUI launch failed');
+      }
+    });
+
+    await expect(useCase.followUp(50, 5, 'please continue')).rejects.toThrow(/Follow-up worker launch failed/);
+
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(5, 'failed');
+    // sendPrompt must NOT have been called — the prompt text is never sent
+    // when the worker launch fails.
+    const promptCalls = tmux.sendKeysToHandle.mock.calls.filter(
+      (call: unknown[]) => {
+        const keys = call[2] as string[];
+        return keys[0]?.includes('please continue');
+      },
+    );
+    expect(promptCalls).toHaveLength(0);
   });
 
   it('wraps the worker launch sendKeysToHandle command for an agent window on a local server (http-signal mode)', async () => {
@@ -1164,10 +1209,9 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
 
     expect(tmux.listWorkspaces).not.toHaveBeenCalled();
     expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
-    // pendingOperation 'resume' lets the approval handler resume via
-    // resumeStateMachine() rather than re-inferring it from task.tmuxWindow
-    // (Issue #328 third-round review finding 1).
-    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'resume', priorStatus: 'open', manifestHash: expect.any(String) });
+    // pendingOperation 'follow_up' lets the approval handler re-execute
+    // followUp() with the saved body text (Issue #276).
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(1, { pendingOperation: 'follow_up', priorStatus: 'open', manifestHash: expect.any(String), pendingFollowUpBody: 'please continue', pendingFollowUpPhases: undefined });
   });
 
   it('resumeStateMachine(): blocks resuming an untrusted task with a stale approval', async () => {
@@ -1221,7 +1265,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     // already non-null (mirrors SqliteTaskRepository's real guard).
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledTimes(2);
     expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(1, 1, { pendingOperation: 'execute', priorStatus: 'review', manifestHash: expect.any(String) });
-    expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(2, 1, { pendingOperation: 'resume', priorStatus: 'pending_approval', manifestHash: expect.any(String) });
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenNthCalledWith(2, 1, { pendingOperation: 'follow_up', priorStatus: 'pending_approval', manifestHash: expect.any(String), pendingFollowUpBody: 'please continue', pendingFollowUpPhases: undefined });
 
     // Exactly one 'status_change' notification went out (from the FIRST
     // block) — the second, no-op block must not emit a duplicate/misleading
@@ -1231,7 +1275,7 @@ describe('ExecuteTaskUseCase execution gate (Issue #328)', () => {
     );
     expect(statusChangeCalls).toHaveLength(1);
     expect(statusChangeCalls[0][3]).toEqual({ status: 'pending_approval', operation: 'execute' });
-    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', { type: 'execution_gate_already_pending', operation: 'resume' });
+    expect(logRepo.append).toHaveBeenCalledWith(1, 10, 'command', { type: 'execution_gate_already_pending', operation: 'follow_up' });
   });
 });
 
@@ -1502,6 +1546,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeysToHandle: vi.fn(async (_server: unknown, _target: string, _keys: string[]) => {}),
+      paneCommandByHandle: vi.fn(async () => 'claude'),
       startPipePane: vi.fn(async () => {}),
       stopPipePane: vi.fn(async () => {}),
       startOutputStream: vi.fn(async () => {}),
@@ -1584,6 +1629,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       null,
       null,
       { resolve: () => tmux } as any,
+      { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2524,6 +2570,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
       sendKeysToHandle: vi.fn(async () => {}),
+      paneCommandByHandle: vi.fn(async () => 'claude'),
       checkPaneExists: vi.fn(async () => true),
       windowExists: vi.fn(async () => true),
       listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: '%0', title: '', command: 'bash', active: true }]),
@@ -2603,6 +2650,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       null,
       null,
       { resolve: () => tmux } as any,
+      { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
     );
 
     // execute() itself resolves once setup (session/window/worktree
@@ -2748,7 +2796,7 @@ function buildDistributionGateHarness(opts: {
   taskWorkingDirectory?: string | null;
   /** Overrides task.branch (default null) — for the localBranchSynced fail-fast tests (Important finding 1). */
   taskBranch?: string | null;
-  /** Overrides task.baseBranch (default null, which resolveBaseBranch falls back to 'main' for). */
+  /** Overrides task.baseBranch (default null — triggers auto-detection via detectDefaultBranch). */
   taskBaseBranch?: string | null;
   /** Issue #87 review, 6th pass, Important finding 1: set false to construct the
    * use case WITHOUT a fetchDistributionService (mirrors an unwired hub) — for the
@@ -3892,6 +3940,87 @@ describe('ExecuteTaskUseCase base-branch canonicalization before distribution (I
   });
 });
 
+describe('ExecuteTaskUseCase base_branch_unresolvable fail-fast (Issue #63 review)', () => {
+  it('throws and logs base_branch_unresolvable when no configured or auto-detected base branch exists', async () => {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70, baseBranch: null });
+    const { useCase, logRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    // resolveAndDetectBaseBranch calls transport.exec for `git remote show origin`;
+    // simulate a repo with no HEAD branch detected.
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    });
+
+    await expect(useCase.execute(70, 70)).rejects.toThrow('ベースブランチを自動検出できません');
+
+    const logCalls = (logRepo.append as ReturnType<typeof vi.fn>).mock.calls;
+    const unresolvableLog = logCalls.find(
+      (c: unknown[]) => typeof c[2] === 'string' && c[2] === 'command' && (c[3] as { type: string }).type === 'base_branch_unresolvable',
+    );
+    expect(unresolvableLog).toBeDefined();
+  });
+
+  it('succeeds when auto-detection returns a branch and persists it on the task', async () => {
+    const unit = makeUnit({ id: 71, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 71, serverName: 'local-server', unitId: 71, baseBranch: null });
+    const { useCase, taskRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    // detectDefaultBranch first tries `git symbolic-ref refs/remotes/origin/HEAD`,
+    // then falls back to checking main/master refs.
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/develop', stderr: '', code: 0 })),
+    });
+
+    // execute() will throw later (phase loop mock), but baseBranch persistence
+    // happens before the phase loop.
+    try { await useCase.execute(71, 71); } catch {}
+
+    const updateCalls = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 71 && (c[1] as { baseBranch?: string }).baseBranch === 'develop',
+    );
+    expect(persistCall).toBeDefined();
+  });
+});
+
+describe('ExecuteTaskUseCase.followUp base-branch detection safety net (Issue #63 review)', () => {
+  it('detects and persists baseBranch when task.baseBranch is null (crash before persistence in execute)', async () => {
+    const unit = makeUnit({ id: 72, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 72, serverName: 'local-server', unitId: 72,
+      baseBranch: null, status: 'in_progress', tmuxWindow: 'task-72',
+    });
+    const { useCase, taskRepo, transportFactory } = buildUseCase({
+      task,
+      project: makeProject({ defaultBranch: null }),
+      units: [unit],
+      projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
+    });
+    (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
+      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/main', stderr: '', code: 0 })),
+    });
+
+    // followUp throws later (phase loop mock), but detection+persistence
+    // happens before the gate.
+    try { await useCase.followUp(72, 72, 'test comment'); } catch {}
+
+    const updateCalls = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls;
+    const persistCall = updateCalls.find(
+      (c: unknown[]) => c[0] === 72 && (c[1] as { baseBranch?: string }).baseBranch === 'main',
+    );
+    expect(persistCall).toBeDefined();
+  });
+});
+
 // Issue #87 13th-round review, Important finding: isPushCompleted() (the
 // startup-recovery fallback for a task stuck mid-pushing, see
 // RecoverStuckTasksUseCase) must resolve the SAME repository fetch
@@ -4123,5 +4252,629 @@ describe('ExecuteTaskUseCase.isPushCompleted uses the task-recorded distribution
     await harness.useCase.isPushCompleted(1);
 
     expect(harness.gitProvider.findPullRequestByBranch).toHaveBeenCalledWith(repoAWithToken, 'task/1-slug');
+  });
+});
+
+describe('ExecuteTaskUseCase git identity fallback (#425)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+
+  function setupIdentityTest(mockBehavior: () => void) {
+    const unit = makeUnit({ id: 70, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 70, serverName: 'local-server', unitId: 70, workingDirectory: '/some/work/dir' });
+    const harness = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    harness.worktreeServiceFactory.create.mockReturnValue({
+      create: vi.fn(async () => ({ path: '/some/work/dir/.worktrees/task-70', branch: 'task/70' })),
+    });
+    mockBehavior();
+    return harness;
+  }
+
+  it('logs git_identity_missing when hub identity is unavailable and continues execution', async () => {
+    const { useCase, logRepo } = setupIdentityTest(() => {
+      vi.mocked(ensureGitIdentity).mockResolvedValueOnce({ action: 'hub_missing' });
+    });
+
+    await useCase.execute(70, 70);
+
+    expect(logRepo.append).toHaveBeenCalledWith(70, 70, 'command', { type: 'git_identity_missing' });
+  });
+
+  it('logs git_identity_failed with message and continues execution when ensureGitIdentity throws', async () => {
+    const { useCase, logRepo } = setupIdentityTest(() => {
+      vi.mocked(ensureGitIdentity).mockRejectedValueOnce(new Error('git config write failed'));
+    });
+
+    await useCase.execute(70, 70);
+
+    expect(logRepo.append).toHaveBeenCalledWith(70, 70, 'command', { type: 'git_identity_failed', message: 'git config write failed' });
+  });
+
+  it('logs git_identity_applied with only the fields that were actually set', async () => {
+    const { useCase, logRepo } = setupIdentityTest(() => {
+      vi.mocked(ensureGitIdentity).mockResolvedValueOnce({
+        action: 'applied',
+        fields: [{ key: 'user.email', value: 'hub@example.com' }],
+      });
+    });
+
+    await useCase.execute(70, 70);
+
+    expect(logRepo.append).toHaveBeenCalledWith(70, 70, 'command', {
+      type: 'git_identity_applied',
+      fields: [{ key: 'user.email', value: 'hub@example.com' }],
+    });
+  });
+});
+
+// ─── Issue #274: follow-up primary window wake ───
+
+describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('wakes a sleeping primary window and reuses it instead of creating a new one', async () => {
+    const unit = makeUnit({ id: 80, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 5, serverName: 'local-server', unitId: 80, tmuxWindow: 'task-5', agentSessionId: 'sess-abc' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const sleepingWindow = {
+      id: 50, ownerType: 'task' as const, isPrimary: true, taskId: 5,
+      serverName: 'local-server', tmuxTarget: 'azito:task-5',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-5' },
+      label: 'task-5', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-abc',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+
+    // After wake, findById returns the window as no longer sleeping.
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+
+    // The woken window exists in tmux.
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    // listWorkspaces is checked inside the lock fallback; returning the
+    // window as present makes it consistent.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-5', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-5' });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    await useCase.followUp(80, 5, 'please continue');
+
+    expect(waker.wake).toHaveBeenCalledWith(50, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true, inLockGate: expect.any(Function) });
+    // No new window was created via createRotatedWindow.
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('registers a new primary window when no window record exists', async () => {
+    const unit = makeUnit({ id: 81, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 6, serverName: 'local-server', unitId: 81, tmuxWindow: null });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    // No existing windows for this task.
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    // No existing tmux workspace — followUp will create one.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+
+    await useCase.followUp(81, 6, 'please continue');
+
+    // wake was never called — no window to wake.
+    expect(waker.wake).not.toHaveBeenCalled();
+    // A new primary window was registered.
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({
+      isPrimary: true,
+      ownerType: 'task',
+      taskId: 6,
+    }));
+  });
+
+  it('sends follow-up to the window where the session is running when it differs from primary', async () => {
+    const unit = makeUnit({ id: 82, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 7, serverName: 'local-server', unitId: 82, tmuxWindow: 'task-7', agentSessionId: 'sess-xyz' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 50, ownerType: 'task' as const, isPrimary: true, taskId: 7,
+      serverName: 'local-server', tmuxTarget: 'azito:task-7',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-7' },
+      label: 'task-7', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-xyz',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    // Session is running in a DIFFERENT window (id=99).
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      windowId: 99, tmuxTarget: 'azito:task-7-alt',
+    });
+
+    // The target window's workspace must exist so resolvePane works.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-7-alt', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.followUp(82, 7, 'please continue');
+
+    // wake was NOT called — the session is already running elsewhere.
+    expect(waker.wake).not.toHaveBeenCalled();
+    // No new window was created.
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    // The follow-up used the alternate window's target.
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-7-alt' }),
+      1,
+    );
+  });
+
+  it('does not treat a different agentSessionId as a duplicate', async () => {
+    const unit = makeUnit({ id: 83, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 8, serverName: 'local-server', unitId: 83, tmuxWindow: 'task-8', agentSessionId: 'sess-different' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 60, ownerType: 'task' as const, isPrimary: true, taskId: 8,
+      serverName: 'local-server', tmuxTarget: 'azito:task-8',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-8' },
+      label: 'task-8', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-different',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    // No running session found (different sessionId or not running).
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The window exists in tmux — normal flow.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-8', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.followUp(83, 8, 'please continue');
+
+    // Normal flow: no wake, no new window creation.
+    expect(waker.wake).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    // Used the existing window.
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-8' }),
+      1,
+    );
+  });
+
+  it('wake is called outside runExclusiveForTask to avoid deadlock (5s timeout)', async () => {
+    const unit = makeUnit({ id: 84, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 9, serverName: 'local-server', unitId: 84, tmuxWindow: 'task-9', agentSessionId: 'sess-lock' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const sleepingWindow = {
+      id: 70, ownerType: 'task' as const, isPrimary: true, taskId: 9,
+      serverName: 'local-server', tmuxTarget: 'azito:task-9',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-9' },
+      label: 'task-9', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-lock',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-9', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    // Finding 5: mock wake acquires the same per-task lock that followUp's
+    // lock phase uses — if wake were ever moved inside runExclusiveForTask,
+    // this would deadlock and the 5s timeout would fire.
+    const { runExclusiveForTask } = await import('./WindowRotation.js');
+    (waker.wake as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      await runExclusiveForTask(9, async () => {});
+      return { tmuxTarget: 'azito:task-9' };
+    });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The test itself is the deadlock guard: if wake() were called inside
+    // runExclusiveForTask, the lock would never release and this would hang.
+    const result = Promise.race([
+      useCase.followUp(84, 9, 'continue'),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('deadlock: followUp did not complete within 5s')), 5_000)),
+    ]);
+
+    await expect(result).resolves.toBeUndefined();
+    expect(waker.wake).toHaveBeenCalledWith(70, 'local-server', { skipAgentLaunch: true, gateAlreadyEnforced: true, inLockGate: expect.any(Function) });
+  }, 10_000);
+
+  it('sends follow-up to running session even when no primary window record exists (Finding 4)', async () => {
+    const unit = makeUnit({ id: 85, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 10, serverName: 'local-server', unitId: 85, tmuxWindow: 'task-10', agentSessionId: 'sess-orphan' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    // No window records at all for this task.
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    // Session IS running in window 88.
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue({
+      windowId: 88, tmuxTarget: 'azito:task-10-orphan',
+    });
+
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-10-orphan', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.followUp(85, 10, 'continue');
+
+    expect(waker.wake).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-10-orphan' }),
+      1,
+    );
+  });
+
+  it('uses primary window target even when task.tmuxWindow points to a dead window (Finding 2)', async () => {
+    const unit = makeUnit({ id: 86, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 11, serverName: 'local-server', unitId: 86, tmuxWindow: 'dead-window', agentSessionId: 'sess-stale' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 75, ownerType: 'task' as const, isPrimary: true, taskId: 11,
+      serverName: 'local-server', tmuxTarget: 'azito:task-11-real',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-11-real' },
+      label: 'task-11-real', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-stale',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The primary window's name (task-11-real) exists, NOT the dead task.tmuxWindow.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-11-real', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    await useCase.followUp(86, 11, 'continue');
+
+    // Should use the primary window, not the stale task.tmuxWindow.
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-11-real' }),
+      1,
+    );
+    // Should NOT create a new window.
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    // Should NOT register a second primary window.
+    expect(windowRepo.add).not.toHaveBeenCalled();
+  });
+
+  it('does not register a duplicate primary window when one already exists (Finding 2)', async () => {
+    const unit = makeUnit({ id: 87, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 12, serverName: 'local-server', unitId: 87, tmuxWindow: null });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 76, ownerType: 'task' as const, isPrimary: true, taskId: 12,
+      serverName: 'local-server', tmuxTarget: 'azito:task-12-old',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-12-old' },
+      label: 'task-12-old', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: null,
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    // Window does NOT exist in tmux — force the create path.
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    await useCase.followUp(87, 12, 'continue');
+
+    // Window was created, but windowRepo.add was NOT called because a
+    // primary row already existed — windowRepo.update should be used instead.
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(windowRepo.update).toHaveBeenCalledWith(76, expect.objectContaining({
+      sleeping: false,
+    }));
+  });
+
+  it('blocks when the in-lock gate re-verification finds a stale approval after wake', async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const gatePS = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const unit = makeUnit({ id: 88, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 13, serverName: 'local-server', unitId: 88, tmuxWindow: 'task-13',
+      agentSessionId: 'sess-gate',
+      inputTrust: 'untrusted',
+    });
+    const { useCase, windowRepo, tmux, taskRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: gatePS,
+    });
+
+    // Pre-compute the approval hash so the PRE-LOCK gate passes.
+    const { manifest } = resolveExecutionManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo,
+      projectSecretRepo: projectSecretRepo as any,
+      unitTypeLoader: unitTypeLoader as any,
+      sidekickLoader: sidekickLoader as any,
+    }, 'continuation');
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    const sleepingWindow = {
+      id: 55, ownerType: 'task' as const, isPrimary: true, taskId: 13,
+      serverName: 'local-server', tmuxTarget: 'azito:task-13',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-13' },
+      label: 'task-13', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-gate',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-13' });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The PRE-LOCK gate passes (approval hash is valid). But inside
+    // the lock, findById returns a task whose approval was invalidated
+    // (hash cleared) — simulating a concurrent description edit.
+    const staleFreshTask = { ...task, executionApprovedFingerprintHash: null };
+    (taskRepo.findById as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(task)          // followUp() line 1515: pre-lock read
+      .mockReturnValueOnce(staleFreshTask); // in-lock reverifyGateInLock
+
+    await expect(useCase.followUp(88, 13, 'try again')).rejects.toThrow(/requires approval/);
+
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+  });
+
+  it('followUp on untrusted task with sleeping primary window: outer gate blocks as follow_up with body before wake', async () => {
+    const gatePS = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const unit = makeUnit({ id: 89, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 14, serverName: 'local-server', unitId: 89, tmuxWindow: 'task-14',
+      agentSessionId: 'sess-b1',
+      inputTrust: 'untrusted',
+      executionApprovedFingerprintHash: null,
+    });
+    const { useCase, taskRepo, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: gatePS,
+    });
+
+    const sleepingWindow = {
+      id: 56, ownerType: 'task' as const, isPrimary: true, taskId: 14,
+      serverName: 'local-server', tmuxTarget: 'azito:task-14',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-14' },
+      label: 'task-14', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-b1',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+
+    await expect(useCase.followUp(89, 14, 'Fix the tests', { phaseNames: ['implementing'] }))
+      .rejects.toThrow(/requires approval/);
+
+    // Blocked as 'follow_up' with body and phases preserved
+    expect(taskRepo.recordExecutionGateBlock).toHaveBeenCalledWith(14, expect.objectContaining({
+      pendingOperation: 'follow_up',
+      pendingFollowUpBody: 'Fix the tests',
+      pendingFollowUpPhases: '["implementing"]',
+    }));
+    // Wake was NOT called — the outer gate blocked before reaching wake
+    expect(waker.wake).not.toHaveBeenCalled();
+  });
+
+  it('user_comment is not logged when reverifyGateInLock blocks after outer gate passed', async () => {
+    const { resolveExecutionManifest, hashExecutionManifest } = await import('./ExecutionManifest.js');
+    const gatePS = { workingDirectory: null, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const };
+    const unit = makeUnit({ id: 90, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({
+      id: 15, serverName: 'local-server', unitId: 90, tmuxWindow: 'task-15',
+      agentSessionId: 'sess-nodup',
+      inputTrust: 'untrusted',
+    });
+    const { useCase, windowRepo, tmux, taskRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, logRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: gatePS,
+    });
+
+    // Pre-compute approval hash so the PRE-LOCK gate passes.
+    const { manifest } = resolveExecutionManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo,
+      projectSecretRepo: projectSecretRepo as any,
+      unitTypeLoader: unitTypeLoader as any,
+      sidekickLoader: sidekickLoader as any,
+    }, 'continuation');
+    task.executionApprovedFingerprintHash = hashExecutionManifest(manifest);
+
+    const sleepingWindow = {
+      id: 57, ownerType: 'task' as const, isPrimary: true, taskId: 15,
+      serverName: 'local-server', tmuxTarget: 'azito:task-15',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-15' },
+      label: 'task-15', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: 'sess-nodup',
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-15' });
+    (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+    // The PRE-LOCK gate passes but in-lock reverify finds stale approval.
+    const staleFreshTask = { ...task, executionApprovedFingerprintHash: null };
+    (taskRepo.findById as ReturnType<typeof vi.fn>)
+      .mockReturnValueOnce(task)          // followUp() pre-lock read
+      .mockReturnValueOnce(staleFreshTask); // in-lock reverifyGateInLock
+
+    await expect(useCase.followUp(90, 15, 'try again')).rejects.toThrow(/requires approval/);
+
+    // user_comment must NOT have been logged — the appendLog is now after
+    // the lock, so reverifyGateInLock blocking prevents it.
+    const userCommentCalls = (logRepo.append as ReturnType<typeof vi.fn>).mock.calls
+      .filter((c: unknown[]) => {
+        const content = c[3] as { text?: string } | undefined;
+        return c[2] === 'user_comment' && content?.text === 'try again';
+      });
+    expect(userCommentCalls).toHaveLength(0);
+  });
+});
+
+describe('ExecuteTaskUseCase.resumeStateMachine — primary window (Issue #276)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('uses primary window muxRef when task.tmuxWindow points to a dead window', async () => {
+    const unit = makeUnit({ id: 91, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 16, serverName: 'local-server', unitId: 91, tmuxWindow: 'dead-window-xyz' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const primaryWin = {
+      id: 80, ownerType: 'task' as const, isPrimary: true, taskId: 16,
+      serverName: 'local-server', tmuxTarget: 'azito:task-16',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-16' },
+      label: 'task-16', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: null,
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: false, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([primaryWin]);
+
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-16', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.resumeStateMachine(91, 16);
+
+    // Should use primary window muxRef (task-16), NOT task.tmuxWindow (dead-window-xyz).
+    expect(tmux.resolvePane).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ window: 'task-16' }),
+      1,
+    );
+  });
+
+  it('wakes a sleeping primary window with inLockGate, without skipAgentLaunch', async () => {
+    const unit = makeUnit({ id: 92, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 17, serverName: 'local-server', unitId: 92, tmuxWindow: 'task-17' });
+    const { useCase, windowRepo, tmux } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+
+    const sleepingWindow = {
+      id: 81, ownerType: 'task' as const, isPrimary: true, taskId: 17,
+      serverName: 'local-server', tmuxTarget: 'azito:task-17',
+      muxRef: { kind: 'tmux' as const, workspace: 'azito', window: 'task-17' },
+      label: 'task-17', projectId: null, windowType: 'agent' as const,
+      workerType: 'claude', workerModel: 'opus', agentSessionId: null,
+      launchCommand: null, workingDirectory: null, paneLayout: null,
+      sleeping: true, createdAt: '2026-01-01T00:00:00Z',
+    };
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([sleepingWindow]);
+
+    const waker = (useCase as any).primaryWindowWaker;
+    (waker.wake as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:task-17' });
+
+    // After wake, re-read returns the window as no longer sleeping.
+    (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue({ ...sleepingWindow, sleeping: false });
+    (tmux.windowExists as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{
+      name: 'azito', windowCount: 1, attached: true, created: 0,
+      windows: [{ name: 'task-17', index: 0, active: true, panes: [], activity: 0 }],
+    }]);
+
+    await useCase.resumeStateMachine(92, 17);
+
+    // Wake called with gateAlreadyEnforced + inLockGate, but WITHOUT skipAgentLaunch
+    // (unlike followUp which passes skipAgentLaunch: true).
+    expect(waker.wake).toHaveBeenCalledWith(81, 'local-server', {
+      gateAlreadyEnforced: true,
+      inLockGate: expect.any(Function),
+    });
   });
 });

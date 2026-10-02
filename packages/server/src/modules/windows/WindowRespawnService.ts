@@ -1,4 +1,5 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
+import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -12,6 +13,7 @@ import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { parsePsOutput, argsContainSessionId } from '../transcripts/agentProcessDetection';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
 import { shellQuote } from '../../shared/shellQuote';
@@ -22,7 +24,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
-import { resolveMuxWorkspace } from '../tasks/execution/TaskExecutionEnv';
+import { resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch } from '../tasks/execution/TaskExecutionEnv';
 import {
   confirmOldWindowGone,
   createPlainWindowInLock,
@@ -183,7 +185,7 @@ export class WindowRespawnService {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  async respawn(windowId: number, server: ServerConfig): Promise<{ tmuxTarget: string }> {
+  async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
 
@@ -210,11 +212,36 @@ export class WindowRespawnService {
     // applies (Issue #328 fifth-round review).
     let task: Task | null = null;
     let unitId: number | null = null;
+    let respawnBaseBranch: string | null | undefined;
     if (win.taskId !== null) {
       task = this.taskRepo.findById(win.taskId);
     }
-    if (task) {
-      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win));
+    if (task && !opts?.gateAlreadyEnforced) {
+      // Issue #63: detect and persist baseBranch before the gate so the
+      // fingerprint matches the approval screen's detection.
+      const rspProjectServer = this.projectServerRepo.find(task.projectId, server.name);
+      const rspProject = this.projectRepo.findById(task.projectId);
+      if (!resolveBaseBranch(task, rspProjectServer, rspProject)) {
+        respawnBaseBranch = await resolveAndDetectBaseBranch(
+          task, rspProjectServer, rspProject,
+          this.transportFactory.getTransport(server), rspProjectServer?.workingDirectory || null,
+        );
+        if (respawnBaseBranch) {
+          this.taskRepo.update(task.id, { baseBranch: respawnBaseBranch } as Partial<Task>);
+          task.baseBranch = respawnBaseBranch;
+        }
+      }
+      unitId = this.enforceExecutionGate(task, server, 'respawn', windowId, buildRespawnManifestInput(win), respawnBaseBranch);
+    }
+
+    // Issue #274: duplicate session detection — if the same agentSessionId
+    // is already running in a DIFFERENT window for this task, reject the
+    // respawn to prevent launching a second instance of the same conversation.
+    if (task && task.agentSessionId) {
+      const running = await this.findRunningSessionForTask(task.id, task.agentSessionId, server.name);
+      if (running && running.windowId !== windowId) {
+        throw new DuplicateAgentSessionError(running.windowId);
+      }
     }
 
     // Whether `win` is the task's PRIMARY worker window — the only window a
@@ -345,11 +372,25 @@ export class WindowRespawnService {
         // pre-respawn window an in-lock block is supposed to leave
         // untouched. Moving the same check here means a downgrade aborts
         // before anything is torn down.
-        if (isPrimary) {
-          // 'continuation': a respawn resumes a task whose working
-          // directory a past execute()/restore() already populated — it
-          // never distributes anything itself.
-          const { manifest, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
+        if (isPrimary && opts?.inLockGate) {
+          // Caller-provided gate (e.g. follow_up / resume) — delegates
+          // the in-lock re-verification to the caller so it can use the
+          // correct operation and manifest. If it throws (e.g.
+          // ExecutionGatePendingApprovalError), the exception propagates
+          // and the window is NOT killed or recreated.
+          opts.inLockGate(freshServer);
+        } else if (isPrimary) {
+          // Default respawn reverification: 'continuation' — a respawn
+          // resumes a task whose working directory a past execute()/
+          // restore() already populated — it never distributes anything
+          // itself.
+          // Issue #274 review: when gateAlreadyEnforced the OUTER
+          // enforceExecutionGate was correctly skipped (caller already
+          // ran it), but this IN-LOCK re-verification must still run —
+          // state may have changed between the caller's gate and lock
+          // acquisition. unitId may be null when the outer gate was
+          // skipped, so resolve it from the manifest.
+          const { manifest, unit: freshUnit, projectServer: freshProjectServer } = resolveExecutionManifest(task!, {
             unitRepo: this.unitRepo,
             projectRepo: this.projectRepo,
             projectServerRepo: this.projectServerRepo,
@@ -357,11 +398,12 @@ export class WindowRespawnService {
             projectSecretRepo: this.projectSecretRepo,
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
-          }, 'continuation', buildRespawnManifestInput(currentWin), freshServer.name);
+          }, 'continuation', buildRespawnManifestInput(currentWin), freshServer.name, respawnBaseBranch);
+          const lockUnitId = unitId ?? freshUnit?.id ?? null;
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task!,
-            unitId,
+            lockUnitId,
             'respawn',
             freshProjectServer,
             freshServer,
@@ -451,7 +493,17 @@ export class WindowRespawnService {
       const restoreDriver = this.resolveDriver(respawnServer);
       const newRef: MuxRef = ref ?? { kind: restoreDriver.kind, workspace: sessionName, window: newName };
       try {
-        if (win.paneLayout) {
+        if (opts?.skipAgentLaunch) {
+          // Issue #274: only restore working directory, skip agent launch.
+          // The caller (follow-up) will launch the agent itself.
+          if (!win.paneLayout && resolvedCwds.singleCwd) {
+            const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
+            await restoreDriver.sendKeysToHandle(respawnServer, paneId, [`cd -- ${shellQuote(resolvedCwds.singleCwd)}`, 'Enter']);
+          } else if (win.paneLayout) {
+            // Multi-pane: restore layout and cds, but no agent commands.
+            await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
+          }
+        } else if (win.paneLayout) {
           await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
         } else {
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
@@ -484,6 +536,79 @@ export class WindowRespawnService {
     };
 
     return task ? await runExclusiveForTask(task.id, run) : await run();
+  }
+
+  /**
+   * Issue #274: Checks whether an agent process with the given
+   * `agentSessionId` is already running in any window belonging to `taskId`
+   * on `serverName`. Returns the window where it was found, or `null`.
+   *
+   * Used to prevent launching a duplicate session: follow-up and respawn
+   * both call this before (re)creating a window.
+   */
+  async findRunningSessionForTask(
+    taskId: number,
+    agentSessionId: string,
+    serverName: string,
+  ): Promise<{ windowId: number; tmuxTarget: string } | null> {
+    const windows = this.windowRepo.findByTask(taskId);
+    const server = this.serverRepo.findByName(serverName);
+    if (!server) return null;
+
+    const driver = this.resolveDriver(server);
+    const transport = this.transportFactory.getTransport(server);
+
+    // Single ps snapshot for the whole check — same approach as
+    // WindowSessionResolver.detectWindowAgentProcess().
+    let psEntries: ReturnType<typeof parsePsOutput> | null = null;
+    try {
+      const { stdout, code } = await transport.exec('ps -e -o pid=,ppid=,etimes=,args=');
+      if (code !== 0) return null;
+      psEntries = parsePsOutput(stdout);
+    } catch {
+      return null;
+    }
+
+    for (const win of windows) {
+      if (win.sleeping) continue;
+
+      // Resolve pane PIDs for this window.
+      const rootPids: number[] = [];
+      try {
+        const ref = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
+        const panes = await driver.listPanesByRef(server, ref);
+        for (const pane of panes) {
+          const pid = await driver.panePidByHandle(server, pane.handle);
+          if (pid !== null) rootPids.push(pid);
+        }
+      } catch {
+        // Pane resolution failed — window is likely gone, skip it.
+        continue;
+      }
+
+      if (rootPids.length === 0) continue;
+
+      if (argsContainSessionId(psEntries, rootPids, agentSessionId)) {
+        return { windowId: win.id, tmuxTarget: win.tmuxTarget };
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Issue #274: Wakes a sleeping window by calling respawn() with the
+   * resolved server. This is the external entry point that
+   * IPrimaryWindowWaker.wake adapts to.
+   */
+  async wakeWindow(
+    windowId: number,
+    serverName: string,
+    opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void },
+  ): Promise<{ tmuxTarget: string }> {
+    const server = this.serverRepo.findByName(serverName);
+    if (!server) throw new Error(`Server ${serverName} not found`);
+    return this.respawn(windowId, server, opts);
   }
 
   /**
@@ -532,6 +657,7 @@ export class WindowRespawnService {
     operation: 'respawn' | 'recover_session_legacy',
     windowId: number | null,
     respawnInput?: RespawnManifestInput,
+    baseBranchOverride?: string | null,
   ): number | null {
     // `server` here is the ACTUAL server this respawn/legacy-recover will
     // run on (respawn()/resumeLegacySession() both resolve it from the
@@ -553,7 +679,7 @@ export class WindowRespawnService {
       projectSecretRepo: this.projectSecretRepo,
       unitTypeLoader: this.unitTypeLoader,
       sidekickLoader: this.sidekickLoader,
-    }, 'continuation', respawnInput, server.name);
+    }, 'continuation', respawnInput, server.name, baseBranchOverride);
     const unitId = unit?.id ?? null;
     const manifestHash = hashExecutionManifest(manifest);
     // Issue #29 Step 3a: `server` is the caller-resolved ACTUAL target
@@ -642,7 +768,20 @@ export class WindowRespawnService {
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
 
-    const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null);
+    // Issue #63: same detection safety net as respawn().
+    let legacyBaseBranch: string | null | undefined;
+    const legacyPs = this.projectServerRepo.find(task.projectId, server.name);
+    const legacyPj = this.projectRepo.findById(task.projectId);
+    if (!resolveBaseBranch(task, legacyPs, legacyPj)) {
+      legacyBaseBranch = await resolveAndDetectBaseBranch(
+        task, legacyPs, legacyPj,
+        this.transportFactory.getTransport(server), legacyPs?.workingDirectory || null,
+      );
+      if (legacyBaseBranch) {
+        this.taskRepo.update(task.id, { baseBranch: legacyBaseBranch } as Partial<Task>);
+      }
+    }
+    const unitId = this.enforceExecutionGate(task, server, 'recover_session_legacy', null, undefined, legacyBaseBranch);
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, server.name, this.projectServerRepo);
     // Window generation point — rotates the task token via createRotatedWindow,
@@ -688,7 +827,7 @@ export class WindowRespawnService {
             projectSecretRepo: this.projectSecretRepo,
             unitTypeLoader: this.unitTypeLoader,
             sidekickLoader: this.sidekickLoader,
-          }, 'continuation', undefined, freshServer.name);
+          }, 'continuation', undefined, freshServer.name, legacyBaseBranch);
           reverifyExecutionGateInLock(
             { taskRepo: this.taskRepo, logRepo: this.logRepo, events: this.events },
             task,
@@ -881,6 +1020,9 @@ export class WindowRespawnService {
     // inheriting the tmux SESSION's own environment instead (see
     // TmuxClient.splitPane's doc comment).
     paneEnv: Record<string, string>,
+    // Issue #274: when true, restore layout and working directories but do
+    // not launch agent commands — the caller will launch the agent itself.
+    skipAgentLaunch = false,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     const paneCount = paneLayout.panes.length;
@@ -911,14 +1053,16 @@ export class WindowRespawnService {
         await sleep(300);
       }
 
-      const workerType = pane.workerType || (pane.index === paneLayout.panes[0]?.index ? win.workerType : null);
-      const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
-      if (workerType) {
-        const strategy = this.sessionStrategyFactory.create(workerType);
-        const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
-        if (cmd) {
-          const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
-          await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
+      if (!skipAgentLaunch) {
+        const workerType = pane.workerType || (pane.index === paneLayout.panes[0]?.index ? win.workerType : null);
+        const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
+        if (workerType) {
+          const strategy = this.sessionStrategyFactory.create(workerType);
+          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
+          if (cmd) {
+            const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
+            await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
+          }
         }
       }
     }

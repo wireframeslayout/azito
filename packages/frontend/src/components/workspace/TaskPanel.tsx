@@ -1905,6 +1905,40 @@ export default function TaskPanel({
                 </div>
               </div>
 
+              {approvalData.execution.baseBranchUnresolvable && (
+                <Notice tone="warning">
+                  {t('executionApproval.baseBranchUnresolvable')}
+                </Notice>
+              )}
+
+              {approvalData.pendingFollowUpPreview && (
+                <div style={{
+                  padding: '8px 12px',
+                  marginTop: 8,
+                  background: 'var(--bg-elevated)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 'var(--font-sm)',
+                  lineHeight: 1.5,
+                }}>
+                  <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-dim)' }}>
+                    {t('executionApproval.followUpPreview')}
+                  </div>
+                  {approvalData.pendingFollowUpPhases && approvalData.pendingFollowUpPhases.length > 0 && (
+                    <div style={{ marginBottom: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                      {approvalData.pendingFollowUpPhases.join(', ')}
+                    </div>
+                  )}
+                  <div style={{
+                    whiteSpace: 'pre-wrap',
+                    fontFamily: 'var(--font-mono)',
+                    fontSize: 'var(--font-xs)',
+                    color: 'var(--text-primary)',
+                  }}>
+                    {approvalData.pendingFollowUpPreview}
+                  </div>
+                </div>
+              )}
+
               <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                 {t('executionApproval.reapprovalNote')}
               </div>

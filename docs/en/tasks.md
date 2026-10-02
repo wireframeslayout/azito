@@ -197,6 +197,22 @@ If a worker's output does not change during execution, stalling is detected in t
 2. **2-minute idle → LLM classification** — If output hasn't changed for 2 minutes, an LLM (PaneClassifier) performs fallback classification (`IDLE_TIMEOUT = 120_000`)
 3. **5-minute max (extendable)** — If completely unresponsive for 5 minutes, judged as stalled (`MAX_IDLE = 300_000`). The overall max phase duration is 30 minutes (60 minutes with extension)
 
+### Periodic Runtime Check
+
+Every 5 minutes, the server checks whether each `running` / `in_progress` task is registered as an
+execution run. An orphaned task (not registered, and more than 5 minutes past its `updatedAt`) is
+automatically moved to `failed`. Recovery is done manually by a person via
+`POST /api/units/:id/follow-up`.
+
+### Recovering from "Request timed out"
+
+When a Claude Code worker stops on an API error (such as `Request timed out`):
+
+1. Activity detection catches the API-error stop and sends a "Stopped due to an API error" notification (the `api_error` reason in [Activity Detection](activity-detection.md))
+2. If the task is running (managed by WorkerWaiter), it automatically moves `stopped` → `failed` within `MAX_IDLE` (5 minutes)
+3. If the execution run is orphaned, the periodic runtime check moves it to `failed` on its 5-minute cycle
+4. Resume with `follow-up`. If the API outage is still ongoing, wait before retrying
+
 ### UI Display
 
 In the task log view (TaskLogView), a warning bar appears when the task log connection becomes stale (no updates for an extended period). It displays the elapsed time along with a **Retry** button that re-establishes the connection.

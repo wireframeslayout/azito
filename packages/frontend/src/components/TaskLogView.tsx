@@ -43,7 +43,7 @@ function parseContent(raw: string): any {
 }
 
 /** Classify a log entry into a visual style bucket */
-function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | null {
+function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worker-prompt' | 'terminal' | 'done' | 'error' | 'launch' | 'auto-approve' | 'user-comment' | 'session-resumed' | 'warning' | 'info-identity' | null {
   if (type === 'user_comment') return 'user-comment';
   if (type === 'status_change') {
     if (typeof parsed === 'object' && parsed !== null) {
@@ -62,6 +62,8 @@ function classify(type: string, parsed: any): 'system' | 'orchestrator' | 'worke
   }
   if (type === 'command') {
     if (typeof parsed === 'object' && parsed !== null) {
+      if (parsed.type === 'git_identity_missing' || parsed.type === 'git_identity_failed') return 'warning';
+      if (parsed.type === 'git_identity_applied') return 'info-identity';
       if (parsed.type === 'wait_poll' || parsed.type === 'wait_start' || parsed.type === 'llm_classify') return null;
       if (parsed.type === 'worker_prompt') return 'worker-prompt';
       if (parsed.type === 'worker_launch') return 'launch';
@@ -82,6 +84,23 @@ function SystemBubble({ children, time }: { children: React.ReactNode; time: str
         {children}
         <span style={{ marginLeft: 8, fontSize: 'var(--font-2xs)', opacity: 0.7 }}>{timeAgo(time)}</span>
       </span>
+    </div>
+  );
+}
+
+function WarningBubble({ children, time }: { children: React.ReactNode; time: string }) {
+  return (
+    <div role="status" style={{ display: 'flex', justifyContent: 'center', padding: '8px 16px' }}>
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: 8,
+        padding: '8px 14px', borderRadius: 'var(--radius-md)',
+        background: 'color-mix(in srgb, var(--warning) 10%, var(--bg-card))',
+        fontSize: 'var(--font-xs)', color: 'var(--warning)',
+      }}>
+        <Icon name="warning" size={14} />
+        <span>{children}</span>
+        <span style={{ fontSize: 'var(--font-2xs)', opacity: 0.7 }}>{timeAgo(time)}</span>
+      </div>
     </div>
   );
 }
@@ -295,6 +314,26 @@ function UserCommentBubble({ parsed, time }: { parsed: any; time: string }) {
   );
 }
 
+function GitIdentityWarningBubble({ parsed, time }: { parsed: any; time: string }) {
+  const { t } = useTranslation('tasks');
+  if (typeof parsed === 'object' && parsed?.type === 'git_identity_failed') {
+    return <WarningBubble time={time}>{t('log.gitIdentityFailed', { reason: parsed.message || '' })}</WarningBubble>;
+  }
+  return <WarningBubble time={time}>{t('log.gitIdentityMissing')}</WarningBubble>;
+}
+
+function GitIdentityAppliedBubble({ parsed, time }: { parsed: any; time: string }) {
+  const { t } = useTranslation('tasks');
+  const fields = typeof parsed === 'object' && Array.isArray(parsed?.fields)
+    ? parsed.fields.map((f: { key: string; value: string }) => `${f.key}=${f.value}`).join(', ')
+    : '';
+  return (
+    <SystemBubble time={time}>
+      {t('log.gitIdentityApplied')}{fields ? ` (${fields})` : ''}
+    </SystemBubble>
+  );
+}
+
 // ── Render a single log entry ──
 
 function ChatBubble({ log }: { log: LogEntry }) {
@@ -334,6 +373,10 @@ function ChatBubble({ log }: { log: LogEntry }) {
       return <UserCommentBubble parsed={parsed} time={log.createdAt} />;
     case 'session-resumed':
       return <SessionResumedBubble parsed={parsed} time={log.createdAt} />;
+    case 'warning':
+      return <GitIdentityWarningBubble parsed={parsed} time={log.createdAt} />;
+    case 'info-identity':
+      return <GitIdentityAppliedBubble parsed={parsed} time={log.createdAt} />;
     default:
       return <SystemBubble time={log.createdAt}>{String(parsed)}</SystemBubble>;
   }
@@ -518,7 +561,7 @@ export default function TaskLogView({ taskId, unitId, taskStatus, maxHeight, fil
   }, [commentText, unitId, taskId, sending, showToast]);
 
   const containerStyle: React.CSSProperties = fillHeight
-    ? { display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }
+    ? { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }
     : { position: 'relative' };
 
   const scrollStyle: React.CSSProperties = fillHeight

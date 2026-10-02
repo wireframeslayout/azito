@@ -16,7 +16,8 @@ const launchBinding = resolveLaunchBinding(args);
 const agentKind = /\bclaude\b/.test(args.command) ? 'claude' as const
   : /\bcodex\b/.test(args.command) ? 'codex' as const : null;
 
-const hubEnv = resolveHubEnv();
+const hubResult = resolveHubEnv();
+const hubEnv = hubResult.ok ? hubResult.env : null;
 // With a hub attached, delay process exit slightly so the child_exit message
 // can flush over the WebSocket before the process dies.
 const proxy = new PtyProxy({ exitGraceMs: hubEnv ? 150 : 0 });
@@ -81,8 +82,9 @@ if (hubEnv) {
   readiness.onReady(() => hub.sendReady());
   hub.connect();
 } else {
+  const missing = hubResult.ok ? [] : hubResult.missing;
   process.stderr.write(
-    'tui-supervisor: AZITO_URL/AZITO_WEBHOOK_TOKEN not resolved; running pass-through without hub connection\n',
+    `tui-supervisor: missing ${missing.join(' and ')}; running pass-through without hub connection\n`,
   );
 }
 

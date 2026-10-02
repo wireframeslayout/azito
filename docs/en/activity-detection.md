@@ -225,6 +225,18 @@ tracking (by convention, changing one means updating `WORKING_SPINNER_RE` in
 Anything other than `claude` / `codex` (e.g. `generic`) always returns `unknown` and falls
 through to Tier 3 (`CLASSIFIABLE_AGENT_TYPES`).
 
+### The `api_error` rule (error state)
+
+The claude screen rules include `api_error`. It detects Claude Code's API error display (an
+`API Error` line followed by `Request timed out`, `Overloaded`, `Connection error` or
+`Service unavailable`) in the area above the prompt box (the `above` region) and classifies the
+pane as the `error` state.
+
+- It is distinct from a normal `idle` (successful completion); the stop transition carries the
+  `api_error` reason (§7)
+- Its priority is 80, lower than `permission_prompt` (85), so a select/confirm prompt on screen
+  still wins as blocked
+
 ### The screen check is tri-state (blocked / not_blocked / unknown)
 
 The answer of a screen check (`screenVerdict()`) has three values. `unknown` is **not** a
@@ -332,6 +344,7 @@ generated from `completed` only (interrupts, deletions and offline are not compl
 |---|---|---|
 | `completed` | supervisor active→idle / hook Stop / Tier 2 working→idle / Tier 4 observing `terminal_final` (including synthesized) | Creates a "finished" row (60min TTL; re-completion updates it and marks it unread). Sends a completion push notification |
 | `interrupted` | The tail ends on an interrupt marker (stop button / Esc) | No finished row |
+| `api_error` | Tier 2 detected a Claude API error message on the pane screen (§4). The agent has stopped, but not by completing normally | No finished row. Sends an "Stopped due to an API error" notification |
 | `deleted` | The tmux window disappeared (once, on the live→gone edge) or the `windows` row was deleted | Any matching finished row is removed immediately |
 | `offline` | The process vanished, the crash failsafe fired, or the supervisor sent `child_exit` / disconnected | No finished row |
 | `unknown` | A stop with no terminal evidence (e.g. the activity heuristic simply going stale) | No finished row |

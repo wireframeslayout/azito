@@ -7,6 +7,10 @@ export interface HubEnv {
   token: string;
 }
 
+export type HubEnvResult =
+  | { ok: true; env: HubEnv }
+  | { ok: false; missing: ('AZITO_URL' | 'AZITO_WEBHOOK_TOKEN')[] };
+
 const VALID_PREFIX = /^[a-z0-9-]+$/;
 
 /**
@@ -32,7 +36,7 @@ export function resolveEnvFilePath(env: NodeJS.ProcessEnv = process.env): string
 export function resolveHubEnv(
   env: NodeJS.ProcessEnv = process.env,
   envFilePath: string = resolveEnvFilePath(env),
-): HubEnv | null {
+): HubEnvResult {
   let fileValues: Record<string, string> = {};
   try {
     if (fs.existsSync(envFilePath)) {
@@ -44,8 +48,11 @@ export function resolveHubEnv(
 
   const url = env.AZITO_URL || fileValues.AZITO_URL;
   const token = env.AZITO_WEBHOOK_TOKEN || fileValues.AZITO_WEBHOOK_TOKEN;
-  if (!url || !token) return null;
-  return { url, token };
+  if (url && token) return { ok: true, env: { url, token } };
+  const missing: ('AZITO_URL' | 'AZITO_WEBHOOK_TOKEN')[] = [];
+  if (!url) missing.push('AZITO_URL');
+  if (!token) missing.push('AZITO_WEBHOOK_TOKEN');
+  return { ok: false, missing };
 }
 
 /**

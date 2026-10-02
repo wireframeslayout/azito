@@ -10,6 +10,7 @@ isDefault: true
 
 <rules>
 - Base branch: {{project.defaultBranch}}
+- Do not switch branches or create new branches. Stay on the current branch (`{{task.branchName}}`).
 {{task.targetBranch}}
 {{task.pushRules}}
 
@@ -26,6 +27,7 @@ isDefault: true
   その X を設定する。無ければ設定しない（gh がリポジトリのデフォルトブランチを base にする）
 - `AZITO_PR_BASE_FROM`（任意）: 上記「PR target branch:」行に「create it from Y」とある場合、その Y を
   設定する（base ブランチがリモートに存在しないときの作成元になる）
+- `AZITO_WORK_BRANCH`: `{{task.branchName}}`（タスクの作業ブランチ。HEAD と一致しない場合にスクリプトが警告を出す）
 - `AZITO_SKIP_PR`: 上記 <task> が「Pull Request を作成しない」指示であれば `1`、それ以外は未設定（`0`）
 - `AZITO_PR_TITLE`: PR を作成する場合のタイトル（簡潔にタスク内容を要約する）
 - `AZITO_PR_BODY`（任意）: PR 本文（変更の要約とテスト結果を含める）。未指定ならコミットメッセージが使われる
@@ -38,6 +40,7 @@ push されるのは worktree の**現在の作業ブランチ**（スクリプ�
 ```bash
 AZITO_GIT_PROVIDER="{{task.gitProvider}}" \
 AZITO_COMMIT_MESSAGE="<message>" \
+AZITO_WORK_BRANCH="{{task.branchName}}" \
 AZITO_PR_BASE="<base branch (only if specified in rules)>" \
 AZITO_SKIP_PR="0" \
 AZITO_PR_TITLE="<title>" \

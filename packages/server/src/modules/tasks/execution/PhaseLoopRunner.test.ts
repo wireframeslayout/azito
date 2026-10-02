@@ -94,6 +94,8 @@ function makeRunner(overrides: {
       pendingOperation: null,
       pendingOperationWindowId: null,
       pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
     })),
     update: vi.fn(),
     updateStatus: vi.fn(),
@@ -164,7 +166,7 @@ function makeRunner(overrides: {
   };
   const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
   const pullRequestCreator = { ensureCreated: vi.fn(async () => {}), ...overrides.pullRequestCreator };
-  const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false) }));
+  const getWorktreeService = vi.fn(() => ({ exists: vi.fn(async () => false), getBranch: vi.fn(async () => null) }));
   const appendLog = vi.fn();
   const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn() })), invalidate: vi.fn(), ...overrides.transportFactory };
   const sidekickSyncService = { sync: vi.fn(async () => {}), ...overrides.sidekickSyncService };
@@ -930,6 +932,84 @@ describe('PhaseLoopRunner repository selection agrees with distribution target (
   });
 });
 
+// #423 review: hub push notarization handles actualBranch (mismatch)
+// and push_branch_rejected (security) correctly in the isolated path.
+describe('PhaseLoopRunner hub push notarization actualBranch handling (#423 review)', () => {
+  const repo = { id: 1, name: 'origin', url: 'https://github.com/owner/repo.git', provider: 'github' as const, owner: 'owner', repoName: 'repo', token: 'ghp_test', hasToken: true };
+
+  function makePushingUnit(overrides: Record<string, unknown> = {}) {
+    return makeUnitForRun({
+      phaseConfig: {
+        planning: { enabled: false }, implementing: { enabled: false },
+        reviewing: { enabled: false }, testing: { enabled: false },
+      },
+      ...overrides,
+    });
+  }
+
+  it('updates worktreeBranch and logs push_branch_mismatch when notarize returns actualBranch', async () => {
+    const notarize = vi.fn(async () => ({ status: 'notarized' as const, sha: 'a'.repeat(40), actualBranch: 'fix/xxx' }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, appendLog, pullRequestCreator } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repo] }));
+    projectRepo.findRepositoryById = vi.fn(() => repo) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repo.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', repo, true);
+
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
+      type: 'push_branch_mismatch', expected: 'task/1-slug', actual: 'fix/xxx',
+    }));
+    expect(taskRepo.update).toHaveBeenCalledWith(1, { worktreeBranch: 'fix/xxx' });
+    expect(pullRequestCreator.ensureCreated).toHaveBeenCalledWith(1, 1, repo, 'fix/xxx', expect.anything());
+  });
+
+  it('fails task and logs push_branch_mismatch when notarize returns push_branch_rejected', async () => {
+    const notarize = vi.fn(async () => ({
+      status: 'failed' as const,
+      error: 'push_branch_rejected: worker HEAD \'main\' is a protected branch (one of: main)',
+      actualBranch: 'main',
+    }));
+    const { runner, taskRepo, projectRepo, projectServerRepo, appendLog } = makeRunner({
+      pushNotaryService: { notarize },
+    });
+    projectRepo.findById = vi.fn(() => ({ id: 10, sidekickPrompt: '', defaultBranch: 'main', defaultUnitId: null, repositories: [repo] }));
+    projectRepo.findRepositoryById = vi.fn(() => repo) as any;
+    projectServerRepo.find = vi.fn(() => ({
+      projectId: 10, serverName: 'isolated-1', workingDirectory: '/work', branch: null, tmuxSession: 'azito',
+      inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: repo.id,
+    })) as any;
+    taskRepo.findById = vi.fn(() => ({
+      id: 1, projectId: 10, title: 'Test Task', description: 'desc', status: 'pushing',
+      targetBranch: null, baseBranch: null, skipPr: false, worktreePath: null,
+      workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
+    } as any));
+    const unit = makePushingUnit();
+    const isolatedServer = { name: 'isolated-1', type: 'agent', isolationIntent: true } as any;
+
+    await runner.stateMachineLoop(unit, 'isolated-1', { ...task, status: 'running' as const, currentPhase: 'pushing' }, isolatedServer, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', repo, true);
+
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'command', expect.objectContaining({
+      type: 'push_branch_mismatch', expected: 'task/1-slug', actual: 'main',
+    }));
+    expect(appendLog).toHaveBeenCalledWith(1, 1, 'status_change', expect.objectContaining({
+      status: 'hub_push_failed',
+    }));
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(1, 'failed');
+  });
+});
+
 // Issue #87 review (forge/87-mirror follow-up), Important finding 1: the
 // repository stateMachineLoop uses for every downstream decision must be the
 // value the CALLER passed in (`distributionRepoEntry`), never a fresh
@@ -1442,6 +1522,8 @@ describe('PhaseLoopRunner isolation cutoff (Issue #29 docs review, finding 1)', 
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     const approvedUnitRepo = { findById: vi.fn(() => originalUnit) };
@@ -1560,6 +1642,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     const { manifest } = resolveExecutionManifest(
@@ -1598,6 +1682,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approved against the ORIGINAL Unit config (what a human actually saw).
@@ -1658,6 +1744,8 @@ describe('PhaseLoopRunner execution gate re-check per phase (Issue #328 ninth-ro
       status: 'running', currentPhase: 'planning', planMarkdown: 'THE PLAN', targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approved against the ORIGINAL Unit config (what a human actually saw).
@@ -1902,6 +1990,8 @@ describe('PhaseLoopRunner isolation cutoff re-reads isolationIntent per phase (#
       status: 'running', currentPhase: 'pushing', planMarkdown: null, targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', worktreeBranch: 'task/1-slug', branch: null, summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approve against the SAME config resolveExecutionManifest will see at run
@@ -1962,6 +2052,8 @@ describe('PhaseLoopRunner isolation cutoff re-reads isolationIntent per phase (#
       status: 'running', currentPhase: 'pushing', planMarkdown: null, targetBranch: null, baseBranch: null,
       skipPr: false, selfReviewCount: 0, worktreePath: null, workingDirectory: '/work', worktreeBranch: null, branch: null, summaryJson: null,
       inputTrust: 'untrusted' as const, pendingOperation: null, pendingOperationWindowId: null, pendingOperationPriorStatus: null,
+      pendingFollowUpBody: null,
+      pendingFollowUpPhases: null,
       executionApprovedFingerprintHash: null as string | null,
     };
     // Approve against the config resolveExecutionManifest will see

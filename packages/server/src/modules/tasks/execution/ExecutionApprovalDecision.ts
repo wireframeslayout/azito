@@ -14,7 +14,8 @@ import type { SidekickPackageLoader } from '../../sidekicks/SidekickPackageLoade
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { TaskRestoreService } from '../TaskRestoreService';
 import { resolveExecutionManifest, hashExecutionManifest, type ExecutionManifestResolution } from './ExecutionManifest';
-import { resolveTaskServerName } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveAndDetectBaseBranch } from './TaskExecutionEnv';
+import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { appendLogAndEmit, failAsyncTaskOperation } from './AppendLog';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
@@ -35,6 +36,7 @@ export interface PendingApprovalManifestDeps {
   unitTypeLoader: UnitTypeLoader;
   sidekickLoader: SidekickPackageLoader;
   windowRepo: IWindowRepository;
+  transportFactory: TransportFactory;
 }
 
 /**
@@ -66,10 +68,10 @@ export interface PendingApprovalManifestDeps {
  * approved/executed outcome; both call sites here surface it as an error
  * response instead.
  */
-export function resolvePendingApprovalManifest(
+export async function resolvePendingApprovalManifest(
   task: Task,
   deps: PendingApprovalManifestDeps,
-): ExecutionManifestResolution {
+): Promise<ExecutionManifestResolution> {
   // operationKind: derived from `task.pendingOperation` itself — the gate
   // that blocked this task already recorded WHICH entry point it was (see
   // Task.pendingOperation's doc comment). `null` also maps to 'execute'
@@ -110,6 +112,18 @@ export function resolvePendingApprovalManifest(
       : task.pendingOperation === 'restore'
         ? 'redistribute'
         : 'continuation';
+  // Issue #63: detect baseBranch so the fingerprint includes the
+  // auto-detected value, matching what execute()/restore() will use.
+  const serverName = task.pendingOperation === 'respawn'
+    ? (task.pendingOperationWindowId !== null ? deps.windowRepo.findById(task.pendingOperationWindowId)?.serverName : null)
+    : resolveTaskServerName(task, deps.projectServerRepo);
+  const serverConfig = serverName ? deps.serverRepo.findByName(serverName) : null;
+  const projectServer = serverName ? deps.projectServerRepo.find(task.projectId, serverName) : null;
+  const project = deps.projectRepo.findById(task.projectId);
+  const workingDir = projectServer?.workingDirectory || null;
+  const transport = serverConfig ? deps.transportFactory.getTransport(serverConfig) : null;
+  const baseBranchOverride = await resolveAndDetectBaseBranch(task, projectServer, project, transport, workingDir);
+
   if (task.pendingOperation === 'respawn') {
     const windowId = task.pendingOperationWindowId;
     const win = windowId !== null ? deps.windowRepo.findById(windowId) : null;
@@ -118,9 +132,9 @@ export function resolvePendingApprovalManifest(
         `Task ${task.id} is pending_approval for a "respawn" operation but its recorded window (id ${windowId ?? 'null'}) no longer exists — cannot resolve the manifest a respawn would actually use.`,
       );
     }
-    return resolveExecutionManifest(task, deps, operationKind, buildRespawnManifestInput(win), win.serverName);
+    return resolveExecutionManifest(task, deps, operationKind, buildRespawnManifestInput(win), win.serverName, baseBranchOverride);
   }
-  return resolveExecutionManifest(task, deps, operationKind);
+  return resolveExecutionManifest(task, deps, operationKind, undefined, undefined, baseBranchOverride);
 }
 
 /**
@@ -199,6 +213,7 @@ export interface ExecutionApprovalDeps {
    * carry the deciding principal, which execution_log's entries do not.
    */
   auditLog: AuditLogService;
+  transportFactory: TransportFactory;
 }
 
 export interface ExecutionApprovalParams {
@@ -300,7 +315,7 @@ interface ApprovalLogger {
  */
 function resolveApprovedStatus(operation: NonNullable<Task['pendingOperation']>, priorStatus: TaskStatus): TaskStatus {
   if (operation === 'execute') return 'open' as TaskStatus;
-  if (operation === 'resume') return 'running' as TaskStatus;
+  if (operation === 'resume' || operation === 'follow_up') return 'running' as TaskStatus;
   return priorStatus;
 }
 
@@ -366,11 +381,11 @@ export function denyPendingApproval(
   return { consumed: true, status: denyStatus };
 }
 
-export function decideExecutionApproval(
+export async function decideExecutionApproval(
   deps: ExecutionApprovalDeps,
   params: ExecutionApprovalParams,
   log: ApprovalLogger,
-): ExecutionApprovalOutcome {
+): Promise<ExecutionApprovalOutcome> {
   const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, respawnService, executeTaskUseCase, taskRestoreService, auditLog } = deps;
   const { taskId, unitId, approved, fingerprint, origin, actor = OPERATOR_PRINCIPAL } = params;
 
@@ -416,7 +431,7 @@ export function decideExecutionApproval(
   // approval) rather than consume it and then have nothing runnable to
   // dispatch to, which would leave the task silently stuck with a cleared
   // pendingOperation but nothing executed (Issue #328 review fix 2).
-  if ((operation === 'execute' || operation === 'resume') && unitId === null) {
+  if ((operation === 'execute' || operation === 'resume' || operation === 'follow_up') && unitId === null) {
     return {
       status: 409,
       body: { error: `Task ${taskId} has no resolvable Unit — cannot approve a "${operation}" operation without one. Assign a Unit to the task or its project, then retry.` },
@@ -425,8 +440,8 @@ export function decideExecutionApproval(
 
   let manifest: ExecutionManifestResolution['manifest'];
   try {
-    ({ manifest } = resolvePendingApprovalManifest(task, {
-      unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo,
+    ({ manifest } = await resolvePendingApprovalManifest(task, {
+      unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, windowRepo, transportFactory: deps.transportFactory,
     }));
   } catch (err) {
     // Do NOT consume the approval — same reasoning as the fingerprint
@@ -559,6 +574,25 @@ export function decideExecutionApproval(
         .then(() => emitCurrentStatus('restore'))
         .catch((err: unknown) => failApprovedOperation('restore', err));
     }
+  } else if (operation === 'follow_up') {
+    // Issue #276: re-execute followUp() with the saved body text. `task` was
+    // read at line 392 BEFORE consumePendingApproval cleared the columns, so
+    // pendingFollowUpBody/pendingFollowUpPhases are still populated here.
+    const body = task.pendingFollowUpBody;
+    if (!body) {
+      failApprovedOperation('follow_up', new Error(`Task ${taskId}: follow-up body was not preserved`));
+    } else {
+      // A corrupt saved phase list must not silently widen the follow-up to
+      // every remaining phase — JSON.parse throws inside the promise chain,
+      // so it fails the approved operation like any other follow-up error.
+      const savedPhases = task.pendingFollowUpPhases;
+      Promise.resolve()
+        .then(() => {
+          const phases = savedPhases ? JSON.parse(savedPhases) as string[] : undefined;
+          return executeTaskUseCase.followUp(unitId as number, taskId, body, { phaseNames: phases });
+        })
+        .catch((err: unknown) => failApprovedOperation('follow_up', err));
+    }
   } else if (operation === 'resume') {
     // status is already 'running' (see resolveApprovedStatus()) — this is
     // also the status RecoverStuckTasksUseCase's RECOVERABLE_STATUSES already
@@ -636,6 +670,7 @@ export interface ExecutionPreApprovalDeps {
   unitTypeLoader: UnitTypeLoader;
   sidekickLoader: SidekickPackageLoader;
   events: ExecuteTaskUseCase['events'];
+  transportFactory: TransportFactory;
 }
 
 export interface ExecutionPreApprovalParams {
@@ -703,12 +738,12 @@ export interface ExecutionPreApprovalParams {
  * further, only extends the same boundary to a second, narrower window
  * (a task that was never blocked at all).
  */
-export function decideExecutionPreApproval(
+export async function decideExecutionPreApproval(
   deps: ExecutionPreApprovalDeps,
   params: ExecutionPreApprovalParams,
   _log: ApprovalLogger,
-): ExecutionApprovalOutcome {
-  const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events } = deps;
+): Promise<ExecutionApprovalOutcome> {
+  const { taskRepo, logRepo, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, events, transportFactory } = deps;
   const { taskId, unitId, fingerprint, origin } = params;
 
   const task = taskRepo.findById(taskId);
@@ -731,7 +766,15 @@ export function decideExecutionPreApproval(
   // strictly BEFORE its first execute() ever runs, so the current
   // project-server configuration is exactly what that first execute() is
   // about to distribute from.
-  const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'execute');
+  // Issue #63: detect baseBranch so the fingerprint matches execute().
+  const preApprovalServerName = resolveTaskServerName(task, projectServerRepo);
+  const preApprovalServer = preApprovalServerName ? serverRepo.findByName(preApprovalServerName) : null;
+  const preApprovalProjectServer = preApprovalServerName ? projectServerRepo.find(task.projectId, preApprovalServerName) : null;
+  const preApprovalProject = projectRepo.findById(task.projectId);
+  const preApprovalWorkingDir = preApprovalProjectServer?.workingDirectory || null;
+  const preApprovalTransport = preApprovalServer ? transportFactory.getTransport(preApprovalServer) : null;
+  const preApprovalBaseBranch = await resolveAndDetectBaseBranch(task, preApprovalProjectServer, preApprovalProject, preApprovalTransport, preApprovalWorkingDir);
+  const { manifest } = resolveExecutionManifest(task, { unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader }, 'execute', undefined, undefined, preApprovalBaseBranch);
   const currentHash = hashExecutionManifest(manifest);
   if (fingerprint !== currentHash) {
     // Same TOCTOU close as decideExecutionApproval's fingerprint check above

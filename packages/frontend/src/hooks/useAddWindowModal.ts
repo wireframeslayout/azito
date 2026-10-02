@@ -36,7 +36,7 @@ export function buildAgentCommand(
   if (agent === 'none') return '';
   if (agent === 'custom') return (customCommand || '').trim();
   let cmd = baseCommand;
-  if (model) cmd += ` --model ${model}`;
+  if (model) cmd += ` --model '${model.replace(/'/g, "'\\''")}'`;
   return cmd;
 }
 

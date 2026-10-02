@@ -17,6 +17,13 @@ const definition: AgentDefinition = {
     { id: 'haiku', label: 'Haiku (latest)' },
     { id: 'fable', label: 'Fable (latest)' },
 
+    { id: 'claude-opus-5-5', label: 'Opus 5.5' },
+    { id: 'claude-opus-5-5[1m]', label: 'Opus 5.5 — 1M ctx' },
+    { id: 'claude-fable-5-1', label: 'Fable 5.1' },
+    { id: 'claude-fable-5-1[1m]', label: 'Fable 5.1 — 1M ctx' },
+    { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5' },
+    { id: 'claude-sonnet-5-5[1m]', label: 'Sonnet 5.5 — 1M ctx' },
+
     { id: 'claude-opus-5', label: 'Opus 5 — 200K ctx' },
     { id: 'claude-opus-5[1m]', label: 'Opus 5 — 1M ctx' },
     { id: 'claude-fable-5', label: 'Fable 5 — 1M ctx' },

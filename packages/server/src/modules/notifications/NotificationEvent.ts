@@ -5,8 +5,10 @@
  * push "agent finished" MUST gate on 'completed'; the other reasons mean the
  * agent stopped being observed as running for a different cause (user interrupt,
  * window deleted, process/connection gone, or simply not attributable).
+ * 'api_error' means the agent's screen shows an API failure (e.g. request
+ * timed out) and it is sitting idle, not that it finished its work.
  */
-export type AgentActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
+export type AgentActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'api_error' | 'unknown';
 
 export type NotificationEvent =
   | { type: 'sessions:updated'; payload: { serverName: string } }

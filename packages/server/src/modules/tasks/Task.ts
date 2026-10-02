@@ -108,6 +108,7 @@ export interface Task {
    * | 'resume'                   | whatever it was mid-run (e.g. 'running')                              | run resumeStateMachine(); it manages status itself                | 'failed'                          | 'failed'                 |
    * | 'resume_await_answer'      | 'waiting_input' / 'review'                                            | restore to pendingOperationPriorStatus — NO auto resume; the human must resubmit the SAME answers to POST /api/tasks/:id/answer (they were never persisted) | 'failed' | n/a (nothing is run) |
    * | 'resume_await_plan_review' | 'phase_review'                                                        | restore to pendingOperationPriorStatus — NO auto resume; the human must resubmit the SAME decision to POST /api/units/:id/approve-plan (feedback was never persisted) | 'failed' | n/a (nothing is run) |
+   * | 'follow_up'                | whatever it was mid-run (e.g. 'review'/'running')                      | run followUp() with saved body; it manages status itself           | 'failed'                          | 'failed'                 |
    * | 'restore'                  | 'archived'                                                            | run restore(); restore() sets 'open' on success itself             | 'archived' (not 'failed' — nothing ran) | 'failed' |
    * | 'respawn'                  | whatever the window's task had                                       | run respawn(); on success restore to pendingOperationPriorStatus  | 'failed'                          | 'failed'                 |
    * | 'recover_session_legacy'   | whatever the task had                                                 | run resumeLegacySession(); on success restore to pendingOperationPriorStatus | 'failed'                | 'failed'                 |
@@ -128,8 +129,11 @@ export interface Task {
    * round review's "forgotten wiring" bug happened, silently falling back
    * to the wrong resumed operation):
    * - 'execute'  — ExecuteTaskUseCase.enforceExecutionGate (execute() entry)
-   * - 'resume'   — ExecuteTaskUseCase.enforceExecutionGate (followUp()/
-   *                resumeStateMachine() entries reached WITHOUT a route-level
+   * - 'follow_up' — ExecuteTaskUseCase.enforceExecutionGate (followUp()
+   *                entry); pendingFollowUpBody/pendingFollowUpPhases are set
+   *                alongside to preserve the composed comment for re-delivery
+   * - 'resume'   — ExecuteTaskUseCase.enforceExecutionGate (resumeStateMachine()
+   *                entry reached WITHOUT a route-level
    *                pre-check, e.g. RecoverStuckTasksUseCase)
    * - 'resume_await_answer'      — ExecuteTaskUseCase.enforceExecutionGate,
    *                passed explicitly by POST /api/tasks/:id/answer's
@@ -152,6 +156,7 @@ export interface Task {
     | 'resume'
     | 'resume_await_answer'
     | 'resume_await_plan_review'
+    | 'follow_up'
     | 'restore'
     | 'respawn'
     | 'recover_session_legacy'
@@ -178,6 +183,10 @@ export interface Task {
    * pendingOperation/pendingOperationWindowId (059 has never shipped).
    */
   pendingOperationPriorStatus: TaskStatus | null;
+  /** Saved follow-up body text when pendingOperation === 'follow_up' — the composed comment that was lost when the gate blocked, to be re-delivered on approval. */
+  pendingFollowUpBody: string | null;
+  /** Saved follow-up phase names (JSON-serialized string[]) when pendingOperation === 'follow_up'. */
+  pendingFollowUpPhases: string | null;
   worktreePath: string | null;
   worktreeBranch: string | null;
   baseBranch: string | null;
@@ -457,6 +466,8 @@ export interface ITaskRepository {
       priorStatus: TaskStatus;
       manifestHash: string;
       pendingOperationWindowId?: number | null;
+      pendingFollowUpBody?: string | null;
+      pendingFollowUpPhases?: string | null;
     },
   ): boolean;
   /**

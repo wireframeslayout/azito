@@ -94,7 +94,8 @@
   "tokenGate": {
     "title": "AZITO",
     "instruction": "Enter the UI token to continue.",
-    "tokenRequired": "Token is required"
+    "tokenRequired": "Token is required",
+    "storageDuration": "Saved in this browser for 60 days (extended on each visit)"
   },
   "windowPaneTree": {
     "noWindows": "No windows attached",
@@ -166,6 +167,7 @@
     "launchTimeout": "Launch timed out",
     "supervisedMonitoring": "Monitoring agent launch…",
     "continueDisplay": "Continuing to display",
+    "sessionAlreadyRunning": "This conversation is already open in {{windowId}}",
     "respawning": "Respawning…",
     "taskOwnedPaneBadge": "Task execution",
     "taskOwnedPaneTooltip": "Input into this pane does not elevate privileges. Perform operator actions from the browser or a session that has sourced operator.env.",
@@ -219,5 +221,10 @@
   },
   "docs": {
     "learnMore": "Learn more in the docs"
+  },
+  "modelSelect": {
+    "custom": "Other (enter ID)",
+    "invalidId": "Only A-Z, a-z, 0-9, ., _, :, - allowed (max 64 chars)",
+    "codexVersionNote": "gpt-6 models require Codex CLI 0.159 or later"
   }
 }

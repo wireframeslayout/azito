@@ -282,36 +282,29 @@ if [ ! -f "$ENV_FILE" ]; then
   # listing an origin the user does not use is harmless.
   ALLOWED_ORIGINS="http://localhost:3001"
   TS_DNS=""
-  TS_IP=""
   BIND_LINE="#AZITO_BIND=127.0.0.1"
   PUBLIC_URL_LINE="# AZITO_PUBLIC_URL=https://your-host.ts.net"
   if command -v tailscale >/dev/null 2>&1; then
     TS_DNS=$(tailscale status --self --json 2>/dev/null \
       | grep -o '"DNSName"[[:space:]]*:[[:space:]]*"[^"]*"' \
       | head -1 | sed 's/.*"\([^"]*\)"$/\1/' | sed 's/\.$//')
-    TS_IP=$(tailscale ip -4 2>/dev/null | head -1)
   fi
 
-  # AZITO listens on 127.0.0.1 by default. Adding the tailnet origin without
-  # also changing the bind address would look like remote access is set up
-  # while every connection is refused, so make the choice explicit here.
-  if [ -n "$TS_IP" ]; then
+  # AZITO always listens on 127.0.0.1: local tmux panes reach the hub through
+  # http://127.0.0.1:<port>, so binding to a Tailscale IP breaks them. Remote
+  # access goes through 'tailscale serve', which forwards to localhost.
+  if [ -n "$TS_DNS" ]; then
+    PUBLIC_URL_LINE="AZITO_PUBLIC_URL=https://${TS_DNS}"
     echo ""
-    echo "Tailscale detected (${TS_DNS:-$TS_IP})."
-    echo "  AZITO listens on 127.0.0.1 only unless you bind it to the tailnet."
-    echo "  Binding exposes the port to your tailnet; access still requires the UI token."
-    echo "  Alternative: keep 127.0.0.1 and run 'tailscale serve --bg 3001' for HTTPS."
-    if confirm "Listen on ${TS_IP} so other devices on your tailnet can connect?" n; then
-      BIND_LINE="AZITO_BIND=${TS_IP}"
-      PUBLIC_URL_LINE="AZITO_PUBLIC_URL=http://${TS_IP}:3001"
-      echo "  Will listen on ${TS_IP}:3001"
-    else
-      echo "  Keeping 127.0.0.1. Set AZITO_BIND in ${ENV_FILE} later to change this."
-      if [ -n "$TS_DNS" ]; then
-        PUBLIC_URL_LINE="AZITO_PUBLIC_URL=https://${TS_DNS}"
-        echo "  Set AZITO_PUBLIC_URL=https://${TS_DNS} (requires 'tailscale serve --bg 3001')."
-      fi
-    fi
+    echo "Tailscale detected (${TS_DNS})."
+    echo "  Set AZITO_PUBLIC_URL=https://${TS_DNS}"
+    echo "  For remote access, run: tailscale serve --bg 3001"
+  elif command -v tailscale >/dev/null 2>&1; then
+    echo ""
+    echo "Tailscale detected, but no MagicDNS name was found."
+    echo "  To use AZITO remotely, enable MagicDNS and HTTPS certificates in Tailscale,"
+    echo "  run 'tailscale serve --bg 3001', and set AZITO_PUBLIC_URL=https://<your-magicdns-name>"
+    echo "  in ${ENV_FILE}. Local use works as-is."
   fi
   if [ -n "$TS_DNS" ]; then
     ALLOWED_ORIGINS="${ALLOWED_ORIGINS},https://${TS_DNS},http://${TS_DNS}:3001"
@@ -324,9 +317,8 @@ PORT=3001
 # Origins allowed for CORS and WebSocket. Add entries here when you reach AZITO
 # from a new hostname, then restart the service.
 AZITO_ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
-# Listen address. Keep 127.0.0.1 when a reverse proxy (e.g. tailscale serve)
-# terminates TLS and forwards to localhost. Set a Tailscale IP only when you
-# connect to this port directly. 0.0.0.0 is rejected.
+# Listen address. Default is 127.0.0.1 — keep it and use a reverse proxy
+# (e.g. tailscale serve) for remote access. 0.0.0.0 is rejected.
 ${BIND_LINE}
 # URL that supervisors and remote agents use to reach this hub.
 # Must be reachable from tmux panes. When using tailscale serve,

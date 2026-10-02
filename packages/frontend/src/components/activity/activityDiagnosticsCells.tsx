@@ -24,6 +24,7 @@ export const TIER_LABEL_KEYS: Record<ActivityDecidedBy, string> = {
 export const STATE_LABEL_KEYS: Record<ActivityDecidedState, string> = {
   working: 'activityDiagnostics.stateWorking',
   blocked: 'activityDiagnostics.stateBlocked',
+  error: 'activityDiagnostics.stateError',
   idle: 'activityDiagnostics.stateIdle',
   offline: 'activityDiagnostics.stateOffline',
   none: 'activityDiagnostics.stateNone',
@@ -56,10 +57,12 @@ export function StateCell({ state }: { state: ActivityDecidedState }) {
   const label = t(STATE_LABEL_KEYS[state]);
   const glyph = state === 'working' ? <BrailleSpinner />
     : state === 'blocked' ? <BlockedDot />
-      : <StateDot tone="var(--text-dim)" hollow={state !== 'idle'} />;
+      : state === 'error' ? <StateDot tone="var(--danger)" />
+        : <StateDot tone="var(--text-dim)" hollow={state !== 'idle'} />;
   const color = state === 'working' ? 'var(--success)'
     : state === 'blocked' ? 'var(--warning)'
-      : 'var(--text-dim)';
+      : state === 'error' ? 'var(--danger)'
+        : 'var(--text-dim)';
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
       {glyph}

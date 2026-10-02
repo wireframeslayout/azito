@@ -67,6 +67,8 @@
         "verification_failed": "The target server's last isolation doctor run did not pass — re-verify it."
       }
     },
+    "baseBranchUnresolvable": "Could not detect the default branch. Execution will fail in this state. Please set the project's default branch.",
+    "followUpPreview": "Approving will send this follow-up:",
     "reapprovalNote": "Editing this task's title or description after approval will require re-approval.",
     "approve": "Approve",
     "deny": "Deny",
@@ -194,6 +196,9 @@
     "created": "Created"
   },
   "log": {
+    "gitIdentityMissing": "Git commit author is not configured. Please set git config --global user.name / user.email on the hub.",
+    "gitIdentityApplied": "Git author identity applied from hub",
+    "gitIdentityFailed": "Failed to set commit author: {{reason}}. Please check git config on the hub.",
     "orchestratorRequest": "Orchestrator request #{{iteration}}",
     "orchestratorThinking": "Orchestrator thinking...",
     "workerPrompt": "Worker Prompt",

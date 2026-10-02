@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveWorktreeCreateBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
+import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveWorktreeCreateBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import type { ProjectDetail } from '../../projects/Project';
 
@@ -81,6 +81,26 @@ describe('resolveUnitId', () => {
 
   it('returns null when project is null and task has no override', () => {
     expect(resolveUnitId({ unitId: null }, null)).toBeNull();
+  });
+});
+
+describe('resolveBaseBranch', () => {
+  it('returns the task baseBranch when present', () => {
+    expect(resolveBaseBranch({ baseBranch: 'develop' }, null, null)).toBe('develop');
+  });
+
+  it('falls back to projectServer.branch', () => {
+    expect(resolveBaseBranch({ baseBranch: '' }, { branch: 'staging' }, null)).toBe('staging');
+  });
+
+  it('falls back to project.defaultBranch', () => {
+    expect(resolveBaseBranch({ baseBranch: '' }, { branch: '' }, { defaultBranch: 'master' })).toBe('master');
+  });
+
+  it('returns null when all sources are empty/null (Issue #63)', () => {
+    expect(resolveBaseBranch({ baseBranch: '' }, null, null)).toBeNull();
+    expect(resolveBaseBranch({ baseBranch: '' }, { branch: '' }, { defaultBranch: '' })).toBeNull();
+    expect(resolveBaseBranch({ baseBranch: '' }, { branch: null as unknown as string }, null)).toBeNull();
   });
 });
 

@@ -23,6 +23,13 @@ export type AppendLogFn = (taskId: number, unitId: number, type: LogType, conten
 // (AgentActivityMonitor imports ExecuteTaskUseCase); importing back would cycle.
 const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
+export class WorkerNotRunningError extends Error {
+  constructor(public readonly foreground: string) {
+    super(`Worker is not running (foreground: ${foreground})`);
+    this.name = 'WorkerNotRunningError';
+  }
+}
+
 /**
  * Routes worker input through the supervisor's PTY when a BOUND supervisor is
  * connected for the target pane, otherwise falls back to tmux send-keys.
@@ -64,17 +71,21 @@ export class WorkerInputService {
         }
         this.logFallback(ctx, (err as Error).message);
       }
-      const foreground = await driver.paneCommandByHandle(server, handle);
-      if (foreground !== null && SHELL_COMMANDS.has(foreground)) {
-        if (ctx) {
-          this.appendLog(ctx.taskId, ctx.unitId, 'command', {
-            type: 'supervisor_inject_aborted_dead_worker',
-            foreground,
-          });
-        }
-        return;
-      }
     }
+
+    // Guard against sending to a bare shell — covers both the supervisor
+    // fallback path (sendCommand failed) and the no-supervisor path.
+    const foreground = await driver.paneCommandByHandle(server, handle);
+    if (foreground !== null && SHELL_COMMANDS.has(foreground)) {
+      if (ctx) {
+        this.appendLog(ctx.taskId, ctx.unitId, 'command', {
+          type: 'send_aborted_dead_worker',
+          foreground,
+        });
+      }
+      throw new WorkerNotRunningError(foreground);
+    }
+
     await driver.sendKeysToHandle(server, handle, [text, 'Enter']);
   }
 

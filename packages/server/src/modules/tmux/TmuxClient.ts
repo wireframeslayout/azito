@@ -119,8 +119,7 @@ export class TmuxClient implements IMuxClient {
     private uiToken: string,
     /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
     private localUrl: string,
-    /** Webhook token for hook auth. Falls back to uiToken when omitted. */
-    private webhookToken?: string,
+    private webhookToken: string,
   ) {}
 
   /**
@@ -135,6 +134,17 @@ export class TmuxClient implements IMuxClient {
    */
   private hubUrlFor(server: ServerConfig): string {
     return server.type === 'local' ? this.localUrl : this.publicUrl;
+  }
+
+  // Env args injected into every new-session / new-window via `-e`.
+  // Isolated servers must NOT receive hub secrets (isolationDoctor checks for
+  // their absence), so AZITO_WEBHOOK_TOKEN is only passed to non-isolated ones.
+  private baseEnvArgs(server: ServerConfig): string[] {
+    const args = ['-e', `AZITO_URL=${this.hubUrlFor(server)}`];
+    if (!server.isolationIntent) {
+      args.push('-e', `AZITO_WEBHOOK_TOKEN=${this.webhookToken}`);
+    }
+    return args;
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
@@ -227,7 +237,7 @@ export class TmuxClient implements IMuxClient {
     const windowName = options?.exactName && options?.windowName
       ? options.windowName
       : generateWindowName(options?.windowName || 'win');
-    const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
+    const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, ...this.baseEnvArgs(server)];
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -248,7 +258,7 @@ export class TmuxClient implements IMuxClient {
     // azito` try to create AT that window's index and fail with
     // "create window failed: index 1 in use" (observed on the server001 hub
     // when respawning a window while the RC hub ran in a window named azito-rc).
-    const args = ['new-window', '-t', `${sessionName}:`, '-n', windowName, '-e', `AZITO_URL=${this.hubUrlFor(server)}`];
+    const args = ['new-window', '-t', `${sessionName}:`, '-n', windowName, ...this.baseEnvArgs(server)];
     if (options?.extraEnv) {
       for (const [k, v] of Object.entries(options.extraEnv)) {
         args.push('-e', `${k}=${v}`);
@@ -794,7 +804,7 @@ export class TmuxClient implements IMuxClient {
     const transport = this.transportFactory.getTransport(server);
     const port = new URL(this.localUrl).port;
     const base = `http://localhost:${port}/api/hooks/tmux`;
-    const token = this.webhookToken ?? this.uiToken;
+    const token = this.webhookToken;
     for (const event of HOOK_EVENTS) {
       const hookValue = buildHookValue(base, event, { token, serverName: server.name });
       await transport.execMux({ kind: 'tmux', args: buildHookSetArgs(event, hookValue) });

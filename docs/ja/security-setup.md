@@ -40,10 +40,10 @@
 | 変数 | 必須 | 既定値 | 説明 |
 |---|---|---|---|
 | `AZITO_UI_TOKEN` | 任意 | `$AZITO_DATA_DIR/ui-token` を自動生成 | API / WebSocket 認証用トークン（operator の全権クレデンシャル）。env → ファイル → 自動生成の順で解決。`azito token show`（リリース版）で確認、`azito token rotate` でローテーション可能。ソース版では `packages/server/.env` または `data/ui-token` を直接参照。`azito token rotate` はローカルの `~/.azito/operator.env` と `~/.claude/settings.json` の MCP トークン（存在する場合のみ）を自動更新する。**`~/.azito/azitoctl*.env` は更新しない**（Issue #28 Phase B: このファイルには置かない） |
-| `AZITO_DATA_DIR` | 任意 | リポジトリルート直下（`data.db`, `data/*`） | 永続データディレクトリ。設定すると `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `browser-profile/`, `sidekicks/` がこのディレクトリ配下に統合される（mode 700）。バージョンディレクトリ方式での運用時に必須 |
+| `AZITO_DATA_DIR` | 任意 | リポジトリルート直下（`data.db`, `data/*`） | 永続データディレクトリ。設定すると `data.db`, `master.key`, `vapid-keys.json`, `ui-token`, `webhook-token`, `browser-profile/`, `sidekicks/` がこのディレクトリ配下に統合される（mode 700）。バージョンディレクトリ方式での運用時に必須 |
 | `AZITO_BIND` | 任意 | `127.0.0.1` | 待ち受けアドレス。`0.0.0.0` と `::` は明示的に拒否される。リモートアクセス時は Tailscale IP を指定 |
 | `AZITO_ALLOWED_ORIGINS` | 任意 | `http://localhost:5173,http://localhost:3001` | CORS と WebSocket の Origin 検証で許可するオリジン（カンマ区切り） |
-| `AZITO_WEBHOOK_TOKEN` | 任意 | 起動ごとにランダム生成 | hook / agent-signal / supervisor 用の共有トークン。固定したい場合に設定 |
+| `AZITO_WEBHOOK_TOKEN` | 任意 | `$AZITO_DATA_DIR/webhook-token` を自動生成・永続化 | hook / agent-signal / supervisor 用の共有トークン。env -> ファイル -> 自動生成の順で解決 |
 | `AZITO_MASTER_KEY` | 任意 | `$AZITO_DATA_DIR/master.key` を自動生成 | DB の秘密カラム暗号化キー（hex 64文字）。環境変数を優先 |
 | `AZITO_SIDEKICKS_DIR` | 任意 | `$AZITO_DATA_DIR/sidekicks` | ユーザー層 Sidekick パッケージの格納先。`AZITO_DATA_DIR` 設定時はその配下の `sidekicks/` がデフォルト |
 | `AZITO_VAPID_SUBJECT` | 任意 | `mailto:admin@example.com` | プッシュ通知の VAPID subject |
@@ -418,7 +418,7 @@ chmod 600 packages/server/.env
 cat packages/server/.env   # トークンを控える（ブラウザ入力と harness で使う）
 ```
 
-`AZITO_WEBHOOK_TOKEN` は省略可（起動ごとにランダム生成）ですが、harness と共有する必要があるため固定しておくと運用が楽です。
+`AZITO_WEBHOOK_TOKEN` は省略可です。env 未設定時は `$AZITO_DATA_DIR/webhook-token` から読み込み、存在しなければ自動生成して保存します（mode 600）。ローテーションするには値を変更するか `$AZITO_DATA_DIR/webhook-token` を削除してハブを再起動してください。
 
 ### 3. MinIO を使う場合（任意）
 

@@ -1,3 +1,4 @@
+export { isValidModelId } from './modelId';
 export { stripPaneSuffix, isSameWindowTarget, windowKey } from './windowKey';
 export { formatWindowId, isInternalWindowName, stripGeneratedSuffix } from './windowId';
 export {

@@ -59,7 +59,7 @@ function isStaleTier0(
 
 /** working/blocked first, then stable by server + target so the live table does not jump around. */
 const STATE_ORDER: Record<ActivityDiagnosticEntry['state'], number> = {
-  working: 0, blocked: 1, idle: 2, offline: 3, none: 4,
+  working: 0, blocked: 1, error: 2, idle: 3, offline: 4, none: 5,
 };
 
 /**

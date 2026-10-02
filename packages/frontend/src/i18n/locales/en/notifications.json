@@ -18,7 +18,8 @@
     "executionApproval": "Execution approval needed: {{title}}",
     "taskDone": "Task completed: {{title}}",
     "taskFailed": "Task failed: {{title}}",
-    "agentFinished": "Agent finished: {{label}}"
+    "agentFinished": "Agent finished: {{label}}",
+    "agentApiError": "{{label}} stopped due to API error"
   },
   "toast": {
     "dismissAriaLabel": "Dismiss notification"
