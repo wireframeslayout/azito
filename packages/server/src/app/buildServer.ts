@@ -78,11 +78,15 @@ import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBri
 import type { PaneOrdinal } from '@azito/shared';
 import { partitionByTmuxRuntime } from '../modules/servers/tmuxServers';
 import { selectLocalMisaoServers } from '../modules/tmux/misao/misaoDriver';
+import { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
+import { MisaoActivityBridge } from '../modules/operations/misaoActivityBridge';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
   tmuxHookManager: TmuxHookManager;
   agentEventStreams: AgentEventStream[];
+  /** Present only when AZITO_EXPERIMENTAL_MISAO is on. Created but not started: main.ts starts it once the daemon connection is. */
+  misaoPaneStates?: MisaoPaneStateEvents;
 }
 
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
@@ -276,9 +280,23 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (win) supervisorRegistry.setWindowId(event.serverName, event.target, win.id);
   });
 
+  const misaoActivityBridge = wiring.misao && new MisaoActivityBridge({
+    resolver: paneHandleResolver,
+    monitor: agentActivityMonitor,
+    listServerNames: () => selectLocalMisaoServers(serverRepo.findAll()).map((srv) => srv.name),
+    log: app.log,
+  });
+  const misaoPaneStates = wiring.misao && misaoActivityBridge && new MisaoPaneStateEvents(
+    wiring.misao.connection,
+    (state) => misaoActivityBridge.handleState(state),
+    () => misaoActivityBridge.handleDisconnected(),
+    app.log,
+  );
+
   notificationBus.on((event) => {
     if (event.type === 'sessions:updated') {
       paneHandleResolver.invalidate(event.payload.serverName);
+      misaoActivityBridge?.handleWindowsChanged();
     }
   });
 
@@ -798,6 +816,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     const localServers = partitionByTmuxRuntime(serverRepo.findAll()).tmux.filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
     if (wiring.misao) {
+      misaoPaneStates?.stop();
       for (const srv of selectLocalMisaoServers(serverRepo.findAll())) await wiring.misao.driver.uninstallChangeHooks(srv);
       wiring.misao.connection.close();
     }
@@ -805,5 +824,5 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     notificationBus.destroy();
   });
 
-  return { tmuxHookManager, agentEventStreams };
+  return { tmuxHookManager, agentEventStreams, misaoPaneStates };
 }
