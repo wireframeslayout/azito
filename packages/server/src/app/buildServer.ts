@@ -713,7 +713,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         return;
       }
 
-      handleTerminalConnection(socket, resolved.server, resolved.ref, resolvedOrdinal, cols, rows, transportFactory);
+      handleTerminalConnection(socket, resolved.server, resolved.ref, resolvedOrdinal, cols, rows, transportFactory, muxDriverRegistry);
     });
   });
 

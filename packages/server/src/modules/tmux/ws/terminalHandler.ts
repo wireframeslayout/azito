@@ -2,7 +2,8 @@ import type { WebSocket } from 'ws';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ITerminalStream, OpenTerminalOpts } from '../../servers/transport/ServerTransport';
-import type { MuxRef, PaneOrdinal } from '@azito/shared';
+import { muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 
 const PING_INTERVAL_MS = 15_000;
 const OPEN_TERMINAL_TIMEOUT_MS = 30_000;
@@ -15,6 +16,7 @@ export function handleTerminalConnection(
   cols: number,
   rows: number,
   transportFactory: TransportFactory,
+  muxDriverRegistry: MuxDriverRegistry,
   terminalOpts?: OpenTerminalOpts,
 ): void {
   let closed = false;
@@ -38,10 +40,10 @@ export function handleTerminalConnection(
 
   ws.on('close', cleanup);
 
-  // getTransport throws synchronously for an unavailable driver; route it through the promise chain so the client gets the error message.
-  const openPromise = Promise.resolve().then(() => transportFactory
-    .getTransport(server)
-    .openTerminal(ref, ordinal, cols, rows, terminalOpts));
+  // Resolving a driver/transport throws synchronously when it is unavailable; route it through the promise chain so the client gets the error message.
+  const openPromise = Promise.resolve().then(() => muxKindForRuntime(server.muxRuntime) === 'misao'
+    ? muxDriverRegistry.resolve(server).openTerminal(server, ref, ordinal, cols, rows)
+    : transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows, terminalOpts));
 
   openPromise.then((stream) => {
     if (closed) stream.close();
