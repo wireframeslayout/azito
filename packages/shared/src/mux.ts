@@ -67,6 +67,8 @@ export interface MuxPaneInfo {
   paneIndex: number;
   currentPath: string;
   currentCommand: string;
+  /** Driver-precomputed ref of the pane's window. Matching against a window's ref uses it when present (see paneInfoMatchesRef). */
+  ref?: MuxRef;
 }
 
 export type MuxExecRequest = { kind: 'tmux'; args: string[] };
