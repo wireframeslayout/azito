@@ -486,6 +486,19 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
 
+  it('labels the new primary window row and, when labelling fails, removes that row and rethrows', async () => {
+    const unit = makeUnit({ id: 43, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ serverName: 'local-server', unitId: 43 });
+    const { useCase, windowRepo, tmux } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+    const labelWindowPanes = vi.fn(async () => { throw new Error('set_label failed'); });
+    Object.assign(tmux, { supportsPaneLabels: true, labelWindowPanes });
+
+    await expect(useCase.execute(43, 1)).rejects.toThrow('set_label failed');
+
+    expect(labelWindowPanes).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tmux' }), { windowId: 1, taskId: 1 });
+    expect(windowRepo.remove).toHaveBeenCalledWith(1);
+  });
+
   // Issue #29 review (10th pass): Critical finding 1 (execute()'s session
   // bootstrap must run inside the isolation lock, against a freshly re-read
   // server) and Important finding 3 (the fresh `server` createRotatedWindow
@@ -4387,6 +4400,21 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
       ownerType: 'task',
       taskId: 6,
     }));
+  });
+
+  it('removes the newly registered primary window row and rethrows when labelling fails', async () => {
+    const unit = makeUnit({ id: 83, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 8, serverName: 'local-server', unitId: 83, tmuxWindow: null });
+    const { useCase, windowRepo, tmux } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const labelWindowPanes = vi.fn(async () => { throw new Error('set_label failed'); });
+    Object.assign(tmux, { supportsPaneLabels: true, labelWindowPanes });
+
+    await expect(useCase.followUp(83, 8, 'please continue')).rejects.toThrow('set_label failed');
+
+    expect(labelWindowPanes).toHaveBeenCalledWith(expect.anything(), expect.anything(), { windowId: 1, taskId: 8 });
+    expect(windowRepo.remove).toHaveBeenCalledWith(1);
   });
 
   it('sends follow-up to the window where the session is running when it differs from primary', async () => {

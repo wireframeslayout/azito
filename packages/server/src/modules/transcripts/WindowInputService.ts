@@ -1,6 +1,7 @@
 import { type PaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { paneInfoMatchesRef } from '../tmux/types';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
@@ -119,7 +120,7 @@ export class WindowInputService {
   private async listWindowPanes(driver: IMuxClient, server: ServerConfig, window: Window) {
     const ref = resolveWindowRef(window);
     const allPanes = await driver.listAllPanes(server);
-    return allPanes.filter((p) => p.sessionName === ref.workspace && windowSpecMatches(ref.window, p.windowIndex, p.windowName));
+    return allPanes.filter((p) => paneInfoMatchesRef(p, ref));
   }
 
   private resolveInterruptKey(workerType: string | null): InterruptKey {
@@ -131,12 +132,4 @@ export class WindowInputService {
     if (workerType === null) return 0;
     return getAgentTranscriptProfile(workerType)?.submitDelayMs ?? 0;
   }
-}
-
-function windowSpecMatches(windowSpec: string, windowIndex: number, windowName: string): boolean {
-  for (const spec of new Set([windowSpec, windowSpec.replace(/\.\d+$/, '')])) {
-    if (!spec) continue;
-    if (/^\d+$/.test(spec) ? spec === String(windowIndex) : spec === windowName) return true;
-  }
-  return false;
 }

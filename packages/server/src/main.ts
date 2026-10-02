@@ -14,6 +14,7 @@ import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckT
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
 import { reportMisaoServersWhenDisabled } from './modules/servers/misaoStartupCheck';
 import { partitionByTmuxRuntime } from './modules/servers/tmuxServers';
+import { selectLocalMisaoServers } from './modules/tmux/misao/misaoDriver';
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
@@ -154,6 +155,16 @@ async function main(): Promise<void> {
   const { tmux: tmuxServers, skipped: nonTmuxServers } = partitionByTmuxRuntime(wiring.serverRepo.findAll());
   for (const srv of nonTmuxServers) {
     app.log.info(`Skipping tmux startup hooks and linked-session GC for ${srv.name}: mux runtime '${srv.muxRuntime}' is not tmux`);
+  }
+
+  // Not awaited: the daemon may come up later. Change events for a server installed while the daemon is down
+  // start flowing as soon as the connection is established.
+  const misao = wiring.misao;
+  if (misao) {
+    const misaoServers = selectLocalMisaoServers(nonTmuxServers);
+    void misao.connection.start().then(() => Promise.all(misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
+      app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
+    }))));
   }
 
   for (const srv of tmuxServers) {

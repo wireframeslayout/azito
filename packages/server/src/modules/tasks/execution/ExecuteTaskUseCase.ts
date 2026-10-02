@@ -51,6 +51,7 @@ import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingAppro
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
+import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
@@ -1313,7 +1314,7 @@ export class ExecuteTaskUseCase {
 
     const windowType = unit.workerType ? 'agent' as const : 'terminal' as const;
 
-    this.windowRepo.add({
+    const windowRowId = this.windowRepo.add({
       ownerType: 'task',
       projectId: null,
       taskId,
@@ -1331,6 +1332,7 @@ export class ExecuteTaskUseCase {
       paneLayout: null,
       sleeping: false,
     });
+    await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
     const workerLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs);
@@ -1766,8 +1768,9 @@ export class ExecuteTaskUseCase {
             muxRef: created.ref,
             sleeping: false,
           });
+          if (created.ref) await labelRegisteredWindow(this.resolveDriver(created.server), created.server, created.ref, { windowId: freshPrimary.id, taskId });
         } else {
-          this.windowRepo.add({
+          const followUpWindowId = this.windowRepo.add({
             ownerType: 'task',
             projectId: null,
             taskId,
@@ -1785,6 +1788,7 @@ export class ExecuteTaskUseCase {
             paneLayout: null,
             sleeping: false,
           });
+          if (created.ref) await labelAddedWindowOrRemove(this.resolveDriver(created.server), created.server, created.ref, { windowId: followUpWindowId, taskId }, this.windowRepo);
         }
 
         return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };

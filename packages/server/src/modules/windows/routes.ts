@@ -21,6 +21,7 @@ import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -51,6 +52,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
     const availability = opts.muxDriverRegistry.availability(srv);
     return availability.available ? null : { error: 'mux_driver_unavailable', kind: muxKindForRuntime(srv.muxRuntime), reason: availability.reason };
   };
+
+  // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
+  const labelOrRemoveWindow = (srv: ServerConfig, ref: MuxRef, windowId: number, taskId?: number): Promise<void> =>
+    labelAddedWindowOrRemove(driverFor(srv), srv, ref, { windowId, ...(taskId !== undefined ? { taskId } : {}) }, windowRepo);
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -128,6 +133,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
@@ -169,6 +175,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           taskId: null,
           serverName,
           tmuxTarget: winTarget,
+          ...(win.ref ? { muxRef: win.ref } : {}),
           label: win.name || null,
           isPrimary: false,
           windowType: 'terminal',
@@ -180,6 +187,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           paneLayout: null,
           sleeping: false,
         });
+        if (win.ref) await labelOrRemoveWindow(srv, win.ref, winId);
         addedIds.push(winId);
       }
       notifyWindowsChanged(serverName);
@@ -267,6 +275,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId, id);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };

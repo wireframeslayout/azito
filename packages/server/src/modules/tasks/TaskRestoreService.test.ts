@@ -1,3 +1,4 @@
+import { muxRefFromTmuxTarget } from '@azito/shared';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { mkdtempSync, mkdirSync, realpathSync, rmSync } from 'fs';
@@ -163,6 +164,8 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
         closeWindow: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
         closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
         resolvePane: vi.fn(async () => '%0'),
+        supportsPaneLabels: false,
+        labelWindowPanes: vi.fn(async () => undefined),
         sendKeysToHandle: vi.fn(async () => {}),
         paneCommandByHandle: vi.fn(async () => null),
         windowExists: vi.fn(async () => true),
@@ -300,6 +303,41 @@ describe('TaskRestoreService', () => {
       tmuxTarget: 'azito:task-1',
     }));
     expect(deps.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'open', tmuxWindow: 'task-1' }));
+  });
+
+  it('stores the window ref with the row: for tmux it equals the ref derived from the target, so the stored value does not change', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+
+    await service.restore(task, log);
+
+    const added = (deps.windowRepo.add as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(added.muxRef).toEqual({ kind: 'tmux', workspace: 'azito', window: 'task-1' });
+    expect(added.muxRef).toEqual(muxRefFromTmuxTarget(added.tmuxTarget));
+    expect(mockDriver().labelWindowPanes).not.toHaveBeenCalled();
+  });
+
+  describe('with a driver that keeps pane labels', () => {
+    function useLabelingDriver(labelWindowPanes: ReturnType<typeof vi.fn>): void {
+      deps = makeDeps({ ...deps, muxDriverRegistry: overrideDriver(deps, { supportsPaneLabels: true, labelWindowPanes }) });
+      service = new TaskRestoreService(deps);
+    }
+
+    it('labels the panes with the row id and task id', async () => {
+      const labelWindowPanes = vi.fn(async () => undefined);
+      useLabelingDriver(labelWindowPanes);
+
+      await service.restore(makeTask({ serverName: 'test-server' }), log);
+
+      expect(labelWindowPanes).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1' }, { windowId: 100, taskId: 1 });
+    });
+
+    it('removes the row it just added and rethrows when labelling fails', async () => {
+      useLabelingDriver(vi.fn(async () => { throw new Error('set_label failed'); }));
+
+      await expect(service.restore(makeTask({ serverName: 'test-server' }), log)).rejects.toThrow('set_label failed');
+
+      expect(deps.windowRepo.remove).toHaveBeenCalledWith(100);
+    });
   });
 
   it('uses task.branch when available (skips slug generation, passes safe slug)', async () => {
