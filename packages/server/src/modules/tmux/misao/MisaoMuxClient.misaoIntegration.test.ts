@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import type { MuxRef, PaneHandle } from '@azito/shared';
+import type { MuxRef, PaneHandle, PaneOrdinal } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { IServerRepository } from '../../servers/Server';
 import type { IWindowRepository, Window } from '../../windows/Window';
@@ -93,8 +93,23 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
     const all = await client.listAllPanes(server);
     expect(all).toHaveLength(3);
-    expect(all.filter((p) => p.ref?.window === ref1.window).map((p) => p.paneIndex)).toEqual([0, 1]);
+    expect(all.filter((p) => p.ref?.window === ref1.window).map((p) => p.paneIndex)).toEqual([1, 2]);
     expect(all.every((p) => p.sessionName === 'azm-ws')).toBe(true);
+  });
+
+  it('lists 1-based indexes that resolve and attach as ordinals as-is', async () => {
+    const [workspace] = await client.listWorkspaces(server);
+    expect(workspace.windows.map((w) => w.index)).toEqual([1, 2]);
+    for (const window of workspace.windows) {
+      const handles = await client.listPanesByRef(server, window.ref!);
+      expect(window.panes.map((p) => p.index)).toEqual(handles.map((h) => h.ordinal));
+      for (const pane of window.panes) {
+        const ordinal = pane.index as PaneOrdinal;
+        expect(await client.resolvePane(server, window.ref!, ordinal)).toBe(handles.find((h) => h.ordinal === ordinal)?.handle);
+        const stream = await client.openTerminal(server, window.ref!, ordinal, 80, 24);
+        stream.close();
+      }
+    }
   });
 
   it('types into a pane and reads the screen back', async () => {
@@ -176,7 +191,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
     expect(await service.sendInput(7, firstPane, 'echo azito-input-ok')).toBe('ok');
     await waitForScreen(firstPane, 'azito-input-ok');
-    expect(await service.resolvePaneIndex(7, firstPane)).toBe(0);
+    expect(await service.resolvePaneIndex(7, firstPane)).toBe(1);
     expect(await service.sendInput(7, otherPane, 'echo must-not-arrive')).toBe('pane_not_found');
     expect(await service.resolvePaneIndex(7, otherPane)).toBe('pane_not_found');
     expect(await service.sendSignal(7, firstPane, 'key', '1')).toBe('ok');

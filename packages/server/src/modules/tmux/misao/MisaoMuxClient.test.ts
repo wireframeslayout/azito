@@ -162,12 +162,12 @@ describe('MisaoMuxClient reads', () => {
     daemon.addPane(w1, { processState: 'stopped', pid: null, cmd: ['/bin/bash', '-lc', 'x'] });
     const [ws] = await client.listWorkspaces(server);
     expect(ws).toMatchObject({ name: 'proj', windowCount: 2, attached: false });
-    expect(ws.windows[0]).toMatchObject({ index: 0, name: 'main', ref: refOf('proj', w1), activity: Math.floor(Date.parse('2026-10-02T00:00:10.500Z') / 1000) });
+    expect(ws.windows[0]).toMatchObject({ index: 1, name: 'main', ref: refOf('proj', w1), activity: Math.floor(Date.parse('2026-10-02T00:00:10.500Z') / 1000) });
     expect(ws.windows[0].panes).toEqual([
-      { index: 0, command: 'claude', title: 'T', width: 80, height: 24, active: false, pid: 99 },
-      { index: 1, command: '/bin/bash', title: '', width: 80, height: 24, active: false, pid: 0 },
+      { index: 1, command: 'claude', title: 'T', width: 80, height: 24, active: false, pid: 99 },
+      { index: 2, command: '/bin/bash', title: '', width: 80, height: 24, active: false, pid: 0 },
     ]);
-    expect(ws.windows[1]).toMatchObject({ index: 1, name: 'second', ref: refOf('proj', w2), panes: [], activity: 0 });
+    expect(ws.windows[1]).toMatchObject({ index: 2, name: 'second', ref: refOf('proj', w2), panes: [], activity: 0 });
   });
 
   it('listWorkspacesStrict reads the same data and propagates daemon errors', async () => {
@@ -200,7 +200,7 @@ describe('MisaoMuxClient reads', () => {
     await expect(client.listPanesByRef(server, refOf('proj', 'w_0000000000000000000000000Z'))).rejects.toThrow('not found');
   });
 
-  it('listAllPanes gives every pane a ref, window-relative 0-based indexes and the foreground command', async () => {
+  it('listAllPanes gives every pane a ref, window-relative 1-based indexes and the foreground command', async () => {
     const { daemon, client } = setup();
     const w1 = daemon.addWindow('proj', 'main');
     const w2 = daemon.addWindow('proj', 'other');
@@ -209,9 +209,9 @@ describe('MisaoMuxClient reads', () => {
     const third = daemon.addPane(w2, { cwd: '/c' });
     const panes = await client.listAllPanes(server);
     expect(panes).toHaveLength(3);
-    expect(panes[0]).toMatchObject({ sessionName: 'proj', windowIndex: 0, windowName: 'main', paneIndex: 0, currentPath: '/a', currentCommand: 'claude', ref: refOf('proj', w1) });
-    expect(panes.find((p) => p.paneId === second.paneId)).toMatchObject({ windowIndex: 1, paneIndex: 0, ref: refOf('proj', w2) });
-    expect(panes.find((p) => p.paneId === third.paneId)).toMatchObject({ windowIndex: 1, paneIndex: 1 });
+    expect(panes[0]).toMatchObject({ sessionName: 'proj', windowIndex: 1, windowName: 'main', paneIndex: 1, currentPath: '/a', currentCommand: 'claude', ref: refOf('proj', w1) });
+    expect(panes.find((p) => p.paneId === second.paneId)).toMatchObject({ windowIndex: 2, paneIndex: 1, ref: refOf('proj', w2) });
+    expect(panes.find((p) => p.paneId === third.paneId)).toMatchObject({ windowIndex: 2, paneIndex: 2 });
   });
 
   it('windowExists / resolveRef', async () => {
@@ -503,7 +503,7 @@ describe('MisaoMuxClient behind WindowInputService', () => {
     expect(await service.sendInput(5, handle(pane), 'hello')).toBe('ok');
     expect(daemon.writes()).toEqual(['hello', '\r']);
     expect(await service.sendInput(5, handle(otherPane), 'nope')).toBe('pane_not_found');
-    expect(await service.resolvePaneIndex(5, pane.paneId)).toBe(0);
+    expect(await service.resolvePaneIndex(5, pane.paneId)).toBe(1);
     expect(await service.resolvePaneIndex(5, otherPane.paneId)).toBe('pane_not_found');
     expect(isPaneInMode).not.toHaveBeenCalled();
   });
