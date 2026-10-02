@@ -23,6 +23,14 @@ usage_exit() {
 
 AZITOCTL_ENV_FILE="$HOME/.azito/azitoctl.env"
 
+# ── misao pane チェック ──
+# misao のペイン ($TMUX_PANE が無く、デーモンが $MISAO_PANE_ID を渡す) では稼働検知を
+# misao 自身が行う。supervisor を経由せず、そのまま起動する。
+if [[ -z "${TMUX_PANE:-}" && "${MISAO_PANE_ID:-}" =~ ^p_[0-9A-Z]{26}$ ]]; then
+  echo "azs: running in a misao pane (misao detects agent activity); launching without supervisor" >&2
+  exec "$@"
+fi
+
 # ── tmux内チェック ──
 # supervisor 登録には pane の target (session:window.pane) が要る。tmux 外
 # (直接 ssh ログインしたシェル等) では監視自体が成立しないため、supervisor

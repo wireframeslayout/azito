@@ -107,7 +107,7 @@ async function main(): Promise<void> {
 
   const localUrl = `http://127.0.0.1:${PORT}`;
   const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
-  const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
+  const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);
 
@@ -162,9 +162,14 @@ async function main(): Promise<void> {
   const misao = wiring.misao;
   if (misao) {
     const misaoServers = selectLocalMisaoServers(nonTmuxServers);
-    void misao.connection.start().then(() => Promise.all(misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
-      app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
-    }))));
+    void misao.connection.start().then(() => Promise.all([
+      ...misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
+        app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
+      })),
+      misaoPaneStates?.start().catch((err) => {
+        app.log.warn(`Activity events are not active yet (will start when the misao daemon is reachable): ${err}`);
+      }),
+    ]));
   }
 
   for (const srv of tmuxServers) {

@@ -21,6 +21,14 @@ describe('shouldSupervise', () => {
   it('is false for terminal windows on agent servers', () => {
     expect(shouldSupervise('agent', 'terminal')).toBe(false);
   });
+
+  it('is false for agent windows on a misao mux', () => {
+    expect(shouldSupervise('local', 'agent', 'misao')).toBe(false);
+  });
+
+  it('stays true for agent windows on a tmux mux', () => {
+    expect(shouldSupervise('local', 'agent', 'tmux')).toBe(true);
+  });
 });
 
 describe('wrapWithSupervisor', () => {

@@ -2212,6 +2212,21 @@ describe('AgentActivityMonitor', () => {
       }));
     });
 
+    it('drops the mux state of a window whose row was deleted, so no phantom tier0_mux row remains', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      expect(monitor.diagnostics()).toEqual([expect.objectContaining({ target: 'azito:agent-1', decidedBy: 'tier0_mux' })]);
+
+      findAll.mockReturnValue([]);
+      await monitor.tick();
+      await monitor.tick();
+
+      expect(monitor.diagnostics().filter((d: { target: string }) => d.target === 'azito:agent-1')).toEqual([]);
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
     it('mux unknown falls through to lower tiers', async () => {
       findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
@@ -2277,6 +2292,184 @@ describe('AgentActivityMonitor', () => {
       const diag = monitor.diagnostics();
       const entry = diag.find((d: { target: string }) => d.target === 'azito:agent-1');
       expect(entry?.decidedBy).not.toBe('tier0_mux');
+    });
+  });
+
+  describe('Tier 0 mux on a misao server (blocked refinement from the screen)', () => {
+    const BLOCKED_SCREEN = '  1. Yes\n  2. No\n  Enter to select · Esc to cancel';
+    const PROMPT_SCREEN = '❯ ';
+    const MISAO_REF = { kind: 'misao' as const, workspace: 'azito', window: 'w_01J8ZK3M5N7P9Q2R4S6T8V0WXY' };
+    const drain = () => new Promise<void>((r) => setTimeout(r, 10));
+
+    let screen: string;
+    let paneActivity: number;
+    let screenReads: ReturnType<typeof vi.fn>;
+    let resolvePane: ReturnType<typeof vi.fn>;
+
+    function arrange(window: Partial<Window> = { muxRef: MISAO_REF }): void {
+      screen = PROMPT_SCREEN;
+      paneActivity = nowSec() - 5;
+      screenReads = vi.fn(async () => ({ stdout: screen, stderr: '', code: 0 }));
+      resolvePane = vi.fn().mockResolvedValue('p_01J8ZK3M5N7P9Q2R4S6T8V0WXA');
+      findByName.mockReturnValue({ name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig);
+      monitor = new AgentActivityMonitor(
+        { getRunning } as unknown as ExecuteTaskUseCase,
+        { findAll } as unknown as IWindowRepository,
+        mockRegistry(listSessions, screenReads, resolvePane),
+        { findByName } as unknown as IServerRepository,
+        { emit } as unknown as NotificationBus,
+      );
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1', workerType: 'claude', ...window })]);
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, paneActivity, [makePane({ command: 'claude', title: '✳ idle' })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+    }
+
+    /** A redraw changes the screen and always bumps the pane's activity, which the screen-check cache keys off. */
+    function drawScreen(next: string): void {
+      screen = next;
+      paneActivity += 1;
+    }
+
+    function diagnosticsRow() {
+      return monitor.diagnostics().find((d) => d.target === 'azito:agent-1');
+    }
+
+    function stopPayloads(): Array<Record<string, unknown>> {
+      return emit.mock.calls.map(([event]) => event.payload).filter((p) => p.running === false);
+    }
+
+    it('a working mux state with a blocked screen is blocked, still decided by tier0_mux and marked refinedBy tier2_title', async () => {
+      arrange();
+      screen = BLOCKED_SCREEN;
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'title' });
+      await drain();
+
+      expect(monitor.snapshot()).toEqual([expect.objectContaining({ target: 'azito:agent-1', running: true, status: 'blocked' })]);
+      expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'blocked', decidedBy: 'tier0_mux', refinedBy: 'tier2_title' }));
+    });
+
+    it('an exited signal that arrives while a tick is awaiting the screen still completes on the next tick', async () => {
+      arrange();
+      // A title the screen prefetch does not pick up, so the read happens inside this key's own evaluation.
+      listSessions.mockImplementation(async () => {
+        const sessions = makeSessions('azito', 'agent-1', 0, paneActivity, [makePane({ command: 'claude', title: 'claude' })]);
+        sessions[0].windows[0].ref = MISAO_REF;
+        return sessions;
+      });
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      emit.mockClear();
+
+      let releaseScreen!: () => void;
+      screenReads.mockImplementationOnce(() => new Promise((r) => {
+        releaseScreen = () => r({ stdout: screen, stderr: '', code: 0 });
+      }));
+      drawScreen(PROMPT_SCREEN);
+      const inFlight = monitor.tick();
+      await vi.waitFor(() => expect(releaseScreen).toBeDefined());
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'done', { decidedBy: 'exit' });
+      releaseScreen();
+      await inFlight;
+      expect(stopPayloads()).toEqual([]);
+
+      await monitor.tick();
+      expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
+    });
+
+    it('reads the first pane of the window found through its mux_ref', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+
+      expect(resolvePane).toHaveBeenCalledWith(expect.objectContaining({ muxRuntime: 'misao' }), MISAO_REF, 1);
+    });
+
+    it('a working mux state with an ordinary screen stays working without refinedBy', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+
+      expect(monitor.snapshot()[0].status).toBeUndefined();
+      expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'working', decidedBy: 'tier0_mux' }));
+      expect(diagnosticsRow()?.refinedBy).toBeUndefined();
+    });
+
+    it('an idle mux state with a blocked screen stays running as blocked and emits no completion', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      drawScreen(BLOCKED_SCREEN);
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+      await drain();
+
+      expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, status: 'blocked' })]);
+      expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'blocked', decidedBy: 'tier0_mux', refinedBy: 'tier2_title' }));
+      expect(stopPayloads()).toEqual([]);
+    });
+
+    it('an idle mux state with an ordinary screen stops the key', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+      await drain();
+
+      expect(monitor.snapshot()).toEqual([]);
+      expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1' })]);
+    });
+
+    it('an exited (done) pane is a completion even when its last screen looks blocked, with no refinedBy', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      drawScreen(BLOCKED_SCREEN);
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'done', { decidedBy: 'exit' });
+      await drain();
+
+      expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
+      expect(monitor.snapshot()).toEqual([]);
+      expect(diagnosticsRow()?.refinedBy).toBeUndefined();
+    });
+
+    it('holds the blocked status when the screen cannot be read', async () => {
+      arrange();
+      screen = BLOCKED_SCREEN;
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      screenReads.mockResolvedValue({ stdout: '', stderr: 'gone', code: 1 });
+      await monitor.tick();
+
+      expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, status: 'blocked' })]);
+    });
+
+    it('does not guess a tmux pane for a misao window without a mux_ref', async () => {
+      arrange({ muxRef: undefined });
+      screen = BLOCKED_SCREEN;
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+
+      expect(resolvePane).not.toHaveBeenCalled();
+      expect(monitor.snapshot()[0]).toEqual(expect.objectContaining({ running: true }));
+      expect(monitor.snapshot()[0].status).toBeUndefined();
+    });
+
+    it('exposes the mux material (status, rule name, time) in diagnostics', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working', { decidedBy: 'bytes' });
+      await drain();
+
+      expect(diagnosticsRow()?.mux).toEqual({ status: 'working', decidedBy: 'bytes', at: expect.any(Number) });
+    });
+
+    it('recordResolvedHookSignal records a Tier 1 hook state for the resolved window', async () => {
+      arrange();
+      monitor.recordResolvedHookSignal('local', 'azito:agent-1', 'start');
+      await drain();
+
+      expect(diagnosticsRow()?.hook).toEqual(expect.objectContaining({ lastEvent: 'start', matchedBy: 'muxPaneRef' }));
     });
   });
 

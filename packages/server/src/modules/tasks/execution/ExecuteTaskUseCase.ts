@@ -53,7 +53,7 @@ import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
+import { muxKindForRuntime, muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -1381,7 +1381,7 @@ export class ExecuteTaskUseCase {
         }
       }
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
-      if (shouldSupervise(server.type, windowType)) {
+      if (shouldSupervise(server.type, windowType, muxKindForRuntime(server.muxRuntime))) {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
       const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
@@ -1887,7 +1887,7 @@ export class ExecuteTaskUseCase {
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
         const primaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
         const followUpWindowType = primaryWin?.windowType ?? 'terminal';
-        if (shouldSupervise(server.type, followUpWindowType)) {
+        if (shouldSupervise(server.type, followUpWindowType, muxKindForRuntime(server.muxRuntime))) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }
         try {

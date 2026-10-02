@@ -24,6 +24,11 @@ export interface MisaoEventSource {
   onConnected(listener: () => void): () => void;
 }
 
+export interface MisaoDisconnectSource {
+  /** Fires once when a connected daemon connection is lost (not on each failed reconnect attempt). */
+  onDisconnected(listener: () => void): () => void;
+}
+
 /** Per-pane line stream. The SDK re-subscribes after a reconnect; a re-subscribe the daemon refuses is reported through onSubscriptionError. */
 export interface MisaoLineSource {
   subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription>;
@@ -43,11 +48,12 @@ type Status = 'idle' | 'connected' | 'disconnected' | 'closed';
  * The hub's single connection to the misao daemon. The SDK retries only after a first successful connect,
  * so the first connect is retried here with the SDK's own backoff until it succeeds or the connection is closed.
  */
-export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoLineSource {
+export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconnectSource, MisaoLineSource {
   private client: MisaoClient | undefined;
   private status: Status = 'idle';
   private retryTimer: NodeJS.Timeout | undefined;
   private readonly connectedListeners = new Set<() => void>();
+  private readonly disconnectedListeners = new Set<() => void>();
   private readonly gapListeners = new Set<(gap: GapInfo) => void>();
   private readonly subscriptionErrorListeners = new Set<(info: SubscriptionErrorInfo) => void>();
 
@@ -109,6 +115,11 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoLineSou
     return () => { this.connectedListeners.delete(listener); };
   }
 
+  onDisconnected(listener: () => void): () => void {
+    this.disconnectedListeners.add(listener);
+    return () => { this.disconnectedListeners.delete(listener); };
+  }
+
   rpcErrorCode(err: unknown): number | undefined {
     return err instanceof this.options.sdk.MisaoRpcError ? err.code : undefined;
   }
@@ -142,7 +153,9 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoLineSou
       if (state.status === 'closed' && state.cause) {
         this.options.log.warn(`[misao] connection closed permanently: ${state.cause.message}`);
       }
+      const wasConnected = this.status === 'connected';
       this.status = state.status === 'closed' ? 'closed' : 'disconnected';
+      if (wasConnected) for (const listener of this.disconnectedListeners) listener();
     }
   }
 

@@ -100,7 +100,7 @@ packages/
       modules/                     # Feature modules (1 module = 1 responsibility; routes+service+repository together)
         tmux/                      # [base] TmuxClient, PaneOutputStream/PaneStream(Factory), TmuxHookManager
           routes/, ws/             # HTTP routes (sessions, hooks) + WS handlers (terminal, agent-terminal)
-          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal), MisaoPaneStream (task output read from the daemon's line stream instead of pipe-pane; a gap is only logged as `pane_stream_gap` — completion/questions are detected from the signal file) — only with AZITO_EXPERIMENTAL_MISAO=1, local servers only
+          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal), MisaoPaneStateEvents (the daemon's `pane.state` activity events, consumed by `operations/misaoActivityBridge.ts`), MisaoPaneStream (task output read from the daemon's line stream instead of pipe-pane; a gap is only logged as `pane_stream_gap` — completion/questions are detected from the signal file) — only with AZITO_EXPERIMENTAL_MISAO=1, local servers only
         servers/                  # [base] Server entity, SqliteServerRepository, install status parsing
           transport/               # ServerTransport interface + Local/Ssh/Agent implementations, AgentPaneStream/EventStream
           ssh/                     # SshClient (persistent shell pool, marker-based exec)
@@ -387,8 +387,15 @@ packages/
 - Ref-based window operations (5-A): `/api/servers/:name/mux/windows/:ref/{kill,rename,panes,...}` — same operations via MuxRef for unregistered windows
 - `GET /api/windows/pane-loading-state` accepts `?windowId=` in addition to `?server_name=&tmux_target=`
 - Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target, windowId? }[]`; no operations table anymore)
+- misao windows (`AZITO_EXPERIMENTAL_MISAO=1`, local servers only): no tui-supervisor (`shouldSupervise(..., muxKind)` is false for
+  misao). The daemon's `pane.state` events (`MisaoPaneStateEvents` → `MisaoActivityBridge`, first pane of a window only) drive
+  `tier0_mux` through `recordMuxSignal()`; because the misao core never reports `blocked`, a `tier0_mux` working/idle row on a
+  misao window is confirmed against the window's first-pane screen (resolved from `mux_ref`, no title pre-check) and refined to
+  blocked with `refinedBy: 'tier2_title'`. The three hooks send `misaoPaneId` (from `$MISAO_PANE_ID`) instead of tmux fields when
+  `$TMUX_PANE` is absent; the webhooks honour it only with the flag on. Diagnostics rows carry `mux: { status, decidedBy?, at }`.
+  See `docs/{ja,en}/activity-detection.md` §13
 - Activity diagnostics: `GET /api/debug/activity` (read-only Tier attribution per window — `decidedBy`
-  (`tier0_supervisor`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
+  (`tier0_supervisor`/`tier0_mux`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
   hook / probe material and the last announced transition; rendered in Settings → System「稼働検知診断」).
   `refinedBy: 'tier2_title'` は「Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した」印
   （claude は AskUserQuestion 選択中もタイトルが idle グリフ `✳ ` のままで、タイトルしか見ない supervisor が

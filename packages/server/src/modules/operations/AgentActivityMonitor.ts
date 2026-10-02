@@ -340,6 +340,25 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
   await Promise.all(workers);
 }
 
+function isMisaoServer(server: ServerConfig): boolean {
+  return muxKindForRuntime(server.muxRuntime) === 'misao';
+}
+
+/**
+ * The pane a screen check reads. tmux windows are addressed by their stored
+ * tmux coordinates; a misao window has no such coordinates, so its first pane
+ * is found through the window's mux_ref — and a misao window without one is
+ * unreadable (null), never guessed from a tmux target.
+ */
+function screenTargetFor(
+  server: ServerConfig,
+  w: AgentWindow,
+  paneIndex: number | null,
+): { ref: MuxRef; ordinal: number } | null {
+  if (isMisaoServer(server)) return w.muxRef ? { ref: w.muxRef, ordinal: 1 } : null;
+  return { ref: w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget), ordinal: paneIndex ?? 1 };
+}
+
 /** Mux-native agent status values (e.g. pane.agent_status_changed). */
 export type MuxAgentStatus = 'working' | 'idle' | 'blocked' | 'done' | 'unknown';
 
@@ -406,6 +425,8 @@ export interface ActivityDiagnosticEntry {
    */
   refinedBy?: ActivityRefinedBy;
   hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
+  /** The mux's last reported agent state; `decidedBy` is the mux's own rule name (e.g. misao's exit / title / bytes / a profile). */
+  mux?: { status: MuxAgentStatus; decidedBy?: string; at: number };
   probe?: {
     status: 'working' | 'idle' | 'offline';
     tailState?: string;
@@ -568,7 +589,7 @@ export class AgentActivityMonitor {
   // Mux-native agent state (e.g. pane.agent_status_changed events).
   // Wired into the collect() ladder as Tier 0 mux — below supervisor, above
   // Tier 1 hooks. Keyed by windowKey(serverName, target).
-  private muxStates = new Map<string, { status: MuxAgentStatus; at: number; serverName: string; target: string }>();
+  private muxStates = new Map<string, { status: MuxAgentStatus; at: number; serverName: string; target: string; decidedBy?: string }>();
   // Tier 4 cache: last snapshot of the process/transcript probe, keyed the same
   // as every other tier. Refreshed in the background (see refreshProcessProbe)
   // so collect() never awaits the probe's ps/tmux walk.
@@ -670,6 +691,7 @@ export class AgentActivityMonitor {
     return [...this.decisions.entries()].map(([key, decision]) => {
       const hook = this.hookStates.get(key);
       const probe = this.processStates.get(key);
+      const mux = this.muxStates.get(key);
       return {
         serverName: decision.serverName,
         target: decision.target,
@@ -679,6 +701,7 @@ export class AgentActivityMonitor {
         evidenceAt: decision.evidenceAt,
         refinedBy: decision.refinedBy,
         hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const, matchedBy: this.hookMatchedBy.get(key) } : undefined,
+        mux: mux ? { status: mux.status, decidedBy: mux.decidedBy, at: mux.at } : undefined,
         probe: probe
           ? {
             status: probe.status,
@@ -715,10 +738,7 @@ export class AgentActivityMonitor {
     if (signal.muxPaneRef && this.paneHandleResolver) {
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
-        const key = windowKey(signal.serverName, resolved.tmuxTarget);
-        this.hookStates.set(key, { status, at });
-        this.hookMatchedBy.set(key, 'muxPaneRef');
-        void this.tick();
+        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event);
         return;
       }
       if (resolved === undefined) {
@@ -743,6 +763,17 @@ export class AgentActivityMonitor {
       this.hookMatchedBy.set(key, 'windowSpec');
     }
 
+    void this.tick();
+  }
+
+  /**
+   * Record a Tier 1 hook signal for a window the caller already resolved
+   * (by mux pane handle), then tick immediately.
+   */
+  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event']): void {
+    const key = windowKey(serverName, tmuxTarget);
+    this.hookStates.set(key, { status: event === 'start' ? 'running' : 'idle', at: Date.now() });
+    this.hookMatchedBy.set(key, 'muxPaneRef');
     void this.tick();
   }
 
@@ -800,19 +831,16 @@ export class AgentActivityMonitor {
    * Tier 1 hooks. `done` is treated as an explicit completion (the key is
    * removed from `muxStates` so lower tiers can take over). `unknown` is
    * stored but skipped during tier evaluation (lower tiers decide).
+   * `detail.decidedBy` is the mux's own rule name, kept for diagnostics only.
    */
   recordMuxSignal(
     serverName: string,
     target: string,
     status: MuxAgentStatus,
+    detail?: { decidedBy?: string },
   ): void {
     const key = windowKey(serverName, target);
-    if (status === 'done') {
-      this.muxStates.set(key, { status: 'done', at: Date.now(), serverName, target });
-      void this.tick();
-      return;
-    }
-    this.muxStates.set(key, { status, at: Date.now(), serverName, target });
+    this.muxStates.set(key, { status, at: Date.now(), serverName, target, decidedBy: detail?.decidedBy });
     void this.tick();
   }
 
@@ -925,6 +953,9 @@ export class AgentActivityMonitor {
   private async collect(): Promise<CollectResult> {
     this.tickCounter++;
     this.kickProcessProbeRefresh();
+    // Only `done` entries this tick has seen expire below: one recorded while
+    // the tick is awaiting has not been evaluated yet.
+    const muxStatesAtStart = new Set(this.muxStates.values());
     const allWindows = this.windowRepo.findAll();
     this.windowIdByKey.clear();
     for (const w of allWindows) {
@@ -943,8 +974,9 @@ export class AgentActivityMonitor {
       state: ActivityDecidedState,
       taskId?: number,
       evidenceAt?: number,
+      refinedBy?: ActivityRefinedBy,
     ): void => {
-      decisions.set(key, { serverName, target, decidedBy, state, taskId, evidenceAt });
+      decisions.set(key, { serverName, target, decidedBy, state, taskId, evidenceAt, refinedBy });
     };
     // Candidate keys a Tier 0 supervisor reported idle on this tick, mapped to
     // the `windows` row and the entry they would publish if the Tier 2 blocked
@@ -1013,6 +1045,12 @@ export class AgentActivityMonitor {
           windowId: this.windowIdByKey.get(key),
         });
       }
+    }
+
+    // A mux state belongs to a registered window or a running execution; once neither exists nothing
+    // reports that key again, so its last state would otherwise linger as a phantom tier0_mux row.
+    for (const key of [...this.muxStates.keys()]) {
+      if (!this.windowIdByKey.has(key) && !operationKeys.has(key)) this.muxStates.delete(key);
     }
 
     // Keys that were operation runs on the previous tick and are not anymore:
@@ -1168,8 +1206,10 @@ export class AgentActivityMonitor {
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
-      const classified = await this.classifyCandidateState(server, w, window, pi, key);
-      if (classified === 'blocked') {
+      const blocked = isMisaoServer(server)
+        ? await this.isMisaoScreenBlocked(server, w, window, key)
+        : await this.classifyCandidateState(server, w, window, pi, key) === 'blocked';
+      if (blocked) {
         next.set(key, { ...entry, status: 'blocked' });
         // The *running* verdict still belongs to the rung recorded above (Tier 0
         // or the run registry); only the refined state changes here.
@@ -1257,6 +1297,10 @@ export class AgentActivityMonitor {
           if (mapped.state === 'idle') {
             if (mapped.reason) reasons.set(key, mapped.reason);
             decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'idle', w.taskId ?? undefined, muxState.at);
+            // A misao pane whose process exited cannot be waiting on the user, so its screen is not
+            // consulted: a blocked verdict would drop the completion recorded above.
+            const muxServer = servers.get(w.serverName);
+            if (muxState.status === 'done' && muxServer && isMisaoServer(muxServer)) continue;
             tier0IdlePending.set(key, {
               window: w,
               entry: {
@@ -1276,12 +1320,19 @@ export class AgentActivityMonitor {
           // mux working/blocked — for claude, also check screen for blocked
           // (mux blocked detection is unverified; same as supervisor path).
           let effectiveMuxStatus = mapped.state === 'blocked' ? 'blocked' as const : undefined;
+          let muxRefinedBy: ActivityRefinedBy | undefined;
           if (w.workerType === 'claude' && effectiveMuxStatus !== 'blocked') {
             const server = servers.get(w.serverName);
             if (server) {
               const sessions = sessionsByServer.get(w.serverName) ?? [];
               const muxWindow = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
-              if (muxWindow) {
+              if (muxWindow && isMisaoServer(server)) {
+                // The misao core never reports blocked; only the screen can.
+                if (await this.isMisaoScreenBlocked(server, w, muxWindow, key)) {
+                  effectiveMuxStatus = 'blocked';
+                  muxRefinedBy = 'tier2_title';
+                }
+              } else if (muxWindow) {
                 const { windowSpec: ws } = parseWindowTarget(w.tmuxTarget);
                 const pi = extractPaneIndex(ws, muxWindow.index, muxWindow.name);
                 const classified = await this.classifyCandidateState(server, w, muxWindow, pi, key);
@@ -1289,7 +1340,7 @@ export class AgentActivityMonitor {
               }
             }
           }
-          decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', effectiveMuxStatus ?? 'working', w.taskId ?? undefined, muxState.at);
+          decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', effectiveMuxStatus ?? 'working', w.taskId ?? undefined, muxState.at, muxRefinedBy);
           next.set(key, {
             serverName: w.serverName,
             target: w.tmuxTarget,
@@ -1553,7 +1604,7 @@ export class AgentActivityMonitor {
     // state is no longer authoritative. Removing the entry lets lower tiers
     // take over on subsequent ticks (e.g. the window may be reused).
     for (const [key, mux] of this.muxStates) {
-      if (mux.status === 'done') this.muxStates.delete(key);
+      if (mux.status === 'done' && muxStatesAtStart.has(mux)) this.muxStates.delete(key);
     }
 
     this.previousLiveKeys = liveKeys;
@@ -1608,8 +1659,9 @@ export class AgentActivityMonitor {
     const activityAdvanced = prevHistory !== undefined && window.activity > prevHistory.lastActivity;
     if (!activityAdvanced) return 'unknown';
 
-    const ref = w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget);
-    const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
+    const target = screenTargetFor(server, w, paneIndex);
+    if (!target) return 'unknown';
+    const screenTail = await this.captureScreenTail(server, target.ref, target.ordinal);
     if (screenTail === null) return 'unknown';
     return classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
   }
@@ -1781,12 +1833,31 @@ export class AgentActivityMonitor {
     paneIndex: number | null,
   ): Promise<ScreenVerdict> {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
-    const ref = w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget);
-    const screenTail = await this.captureScreenTail(server, ref, paneIndex ?? 1);
+    const target = screenTargetFor(server, w, paneIndex);
+    if (!target) return 'unknown';
+    const screenTail = await this.captureScreenTail(server, target.ref, target.ordinal);
     if (screenTail === null) return 'unknown';
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     const state = classifyPaneState({ paneTitle, agentType: w.workerType, screenTail });
     return state === 'blocked' || state === 'error' ? state : 'not_blocked';
+  }
+
+  /**
+   * Whether a misao window's screen says it is waiting on the user. The misao
+   * core never reports `blocked`, so Tier 0 mux's working/idle is confirmed
+   * against the screen directly, with no title pre-check. 'blocked' is the only
+   * refinement (a working/idle mux state is never promoted); a screen that could
+   * not be read holds the previous tick's status, like the Tier 0 idle refinement.
+   */
+  private async isMisaoScreenBlocked(
+    server: ServerConfig,
+    w: AgentWindow,
+    window: TmuxWindow,
+    key: string,
+  ): Promise<boolean> {
+    const verdict = await this.screenVerdict(server, w, window, null, key);
+    if (verdict === 'unknown') return this.heldStatusOnUnknown(key) === 'blocked';
+    return verdict === 'blocked';
   }
 
   /**

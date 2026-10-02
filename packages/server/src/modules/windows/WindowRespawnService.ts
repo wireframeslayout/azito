@@ -3,7 +3,7 @@ import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
+import { muxKindForRuntime, muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -266,7 +266,7 @@ export class WindowRespawnService {
     const allowedRoot = this.resolveAllowedRoot(win, server.name);
     const resolvedCwds = await this.resolveAllCwds(server, win, allowedRoot);
 
-    const supervise = shouldSupervise(server.type, win.windowType);
+    const supervise = shouldSupervise(server.type, win.windowType, muxKindForRuntime(server.muxRuntime));
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
@@ -856,7 +856,7 @@ export class WindowRespawnService {
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
         const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
-        const isSupervised = shouldSupervise(server.type, 'agent');
+        const isSupervised = shouldSupervise(server.type, 'agent', muxKindForRuntime(server.muxRuntime));
         if (isSupervised) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }

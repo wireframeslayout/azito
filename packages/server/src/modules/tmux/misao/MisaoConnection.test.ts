@@ -141,6 +141,23 @@ describe('MisaoConnection', () => {
     expect(onConnected).toHaveBeenCalledTimes(2);
   });
 
+  it('notifies disconnect listeners once per loss, not for each failed reconnect attempt', async () => {
+    const { connection, control } = setup();
+    const onDisconnected = vi.fn();
+    connection.onDisconnected(onDisconnected);
+    await connection.start();
+    expect(onDisconnected).not.toHaveBeenCalled();
+
+    const reconnecting = { status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('lost') } as const;
+    for (const cb of control.clients[0].stateListeners) cb(reconnecting);
+    for (const cb of control.clients[0].stateListeners) cb({ ...reconnecting, attempt: 2 });
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+
+    for (const cb of control.clients[0].stateListeners) cb({ status: 'connected' });
+    for (const cb of control.clients[0].stateListeners) cb(reconnecting);
+    expect(onDisconnected).toHaveBeenCalledTimes(2);
+  });
+
   it('logs the cause when the SDK closes the connection permanently, and stays closed', async () => {
     const { connection, control, warn } = setup();
     await connection.start();
