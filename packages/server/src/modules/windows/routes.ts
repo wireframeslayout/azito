@@ -374,7 +374,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
       }
 
-      const supervised = shouldSupervise(srv.type, win.windowType);
+      const supervised = shouldSupervise(srv.type, win.windowType, muxKindForRuntime(srv.muxRuntime));
       const paneHandle = await driverFor(srv).resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
@@ -513,7 +513,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const win = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       const srv = serverRepo.findByName(serverName);
-      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType);
+      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType, muxKindForRuntime(srv.muxRuntime));
 
       const entry = supervisorRegistry
         .snapshot()
