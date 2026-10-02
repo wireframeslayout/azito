@@ -11,6 +11,8 @@ import type { IServerRepository } from '../../servers/Server';
 
 const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
 
+class FakeConnectionError extends Error {}
+
 class FakeRpcError extends Error {
   constructor(readonly code: number, message: string) { super(message); }
 }
@@ -121,6 +123,7 @@ class FakeDaemon implements MisaoRpc, MisaoEventSource {
   }
 
   rpcErrorCode(err: unknown): number | undefined { return err instanceof FakeRpcError ? err.code : undefined; }
+  isConnectionError(err: unknown): boolean { return err instanceof FakeConnectionError; }
 
   subscribeEvents = vi.fn(async () => ({ unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } }));
   onGap = vi.fn(() => () => {});
@@ -187,6 +190,7 @@ describe('MisaoMuxClient reads', () => {
     expect(await client.resolvePane(server, ref, 2)).toBe(b.paneId);
     await expect(client.resolvePane(server, ref, 4)).rejects.toThrow('out of range');
     await expect(client.resolvePane(server, ref, 0)).rejects.toThrow('out of range');
+    await expect(client.resolvePane(server, ref, 1.5)).rejects.toThrow('out of range');
     expect(await client.refFromPaneHandle(server, handle(c))).toEqual({ ref, ordinal: 3 });
     expect(await client.refFromPaneHandle(server, 'p_0000000000000000000000000Z' as PaneHandle)).toBeNull();
   });
@@ -555,6 +559,25 @@ describe('MisaoMuxClient openTerminal', () => {
     daemon.addPane(w);
     await expect(client.openTerminal(server, refOf('proj', w), 2 as PaneOrdinal, 80, 24)).rejects.toThrow('out of range (1..1)');
     expect(connectAttachClient).not.toHaveBeenCalled();
+  });
+
+  it.each([1.5, Number.NaN])('rejects a non-integer ordinal (%s) without opening a connection', async (ordinal) => {
+    const connectAttachClient = vi.fn();
+    const { daemon, client } = setup({ connectAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), ordinal as PaneOrdinal, 80, 24)).rejects.toThrow('out of range (1..2)');
+    expect(connectAttachClient).not.toHaveBeenCalled();
+  });
+
+  it('reports a connection lost during the attach as an unreachable daemon, closing the connection', async () => {
+    const attach = fakeAttachClient(async () => { throw new FakeConnectionError('connection closed'); });
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toMatchObject({ name: 'MuxDriverUnavailableError', reason: 'daemon_unreachable' });
+    expect(attach.close).toHaveBeenCalled();
   });
 
   it('closes the connection when the attach fails, mapping pane-not-found to WINDOW_NOT_FOUND', async () => {

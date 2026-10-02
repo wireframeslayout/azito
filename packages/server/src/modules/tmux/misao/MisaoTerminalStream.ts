@@ -2,8 +2,7 @@ import { EventEmitter } from 'node:events';
 import { StringDecoder } from 'node:string_decoder';
 import type { ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { MisaoAttachClient } from './MisaoConnection';
-
-const PANE_EXITED = 1002;
+import { MISAO_PANE_EXITED } from './misaoErrorCodes';
 
 export interface MisaoTerminalStreamOptions {
   client: MisaoAttachClient;
@@ -26,11 +25,14 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
   private finished = false;
   /** Output that arrived before anyone listened (the snapshot can land before open() resolves to its caller). */
   private pending: string[] = [];
+  /** A close that happened before anyone listened (pane.closed can arrive in the same chunk as the attach reply). */
+  private pendingClose = false;
 
   private constructor(private readonly options: MisaoTerminalStreamOptions) {
     super();
     this.on('newListener', (event) => {
       if (event === 'data') process.nextTick(() => this.flushPending());
+      if (event === 'close') process.nextTick(() => this.flushPendingClose());
     });
   }
 
@@ -48,6 +50,9 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
     client.onStateChange((state) => {
       if (state.status !== 'connected') stream.finish(true);
     });
+    // Each terminal subscribes to all daemon events just to see its pane.closed: simple and isolated per connection,
+    // at the cost of every event reaching every terminal (and pausing behind heavy raw output on the same connection).
+    // Follow-up if that shows: route pane.closed from the shared connection's MisaoChangeEvents subscription instead.
     await client.subscribeEvents((event) => {
       if (event.type === 'pane.closed' && event.paneId === paneId) stream.finish(true);
     });
@@ -78,7 +83,7 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
       // Requests still in flight when the stream finished reject with the closed connection; nothing to report.
       if (this.finished) return;
       // A finished pane has nobody to tell about keystrokes; it stays visible as its final screen.
-      if (this.options.rpcErrorCode(err) === PANE_EXITED) return;
+      if (this.options.rpcErrorCode(err) === MISAO_PANE_EXITED) return;
       this.options.log.warn(`[misao] terminal ${this.options.clientId} request failed: ${err instanceof Error ? err.message : String(err)}`);
       this.finish(true);
     }
@@ -90,10 +95,18 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
     for (const chunk of chunks) this.emit('data', chunk);
   }
 
+  private flushPendingClose(): void {
+    if (!this.pendingClose) return;
+    this.pendingClose = false;
+    this.emit('close');
+  }
+
   private finish(emitClose: boolean): void {
     if (this.finished) return;
     this.finished = true;
     this.options.client.close();
-    if (emitClose) this.emit('close');
+    if (!emitClose) return;
+    if (this.listenerCount('close') === 0) this.pendingClose = true;
+    else this.emit('close');
   }
 }

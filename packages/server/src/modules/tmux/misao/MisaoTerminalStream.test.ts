@@ -58,6 +58,21 @@ describe('MisaoTerminalStream', () => {
     await vi.waitFor(() => expect(data).toEqual(['snap']));
   });
 
+  it('does not lose a pane.closed that arrives with the attach reply, before anyone listens', async () => {
+    const fake = fakeClient();
+    fake.request.mockImplementation(async (method) => {
+      if (method === 'pane.attach') {
+        fake.output('p_1', Buffer.from('snap'));
+        fake.event({ type: 'pane.closed', paneId: 'p_1' });
+      }
+      return {};
+    });
+    const { data, closed } = await open(fake);
+    await vi.waitFor(() => expect(closed).toHaveBeenCalledTimes(1));
+    expect(data).toEqual(['snap']);
+    expect(fake.client.close).toHaveBeenCalledTimes(1);
+  });
+
   it('emits only the output of its own pane', async () => {
     const { fake, data } = await open();
     fake.output('p_other', Buffer.from('x'));

@@ -3,17 +3,15 @@ import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
 import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
-import { MuxOperationUnsupportedError } from '../MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { generateWindowName } from '../windowNameUtils';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
+import { MISAO_PANE_EXITED, MISAO_PANE_NOT_FOUND } from './misaoErrorCodes';
 import { MisaoTerminalStream } from './MisaoTerminalStream';
 import { encodeMisaoKey } from './misaoKeys';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
-const PANE_NOT_FOUND = 1001;
-/** The pane has exited, or was restored as `stopped` after a daemon restart and has no process to attach to. */
-const PANE_EXITED = 1002;
 const LONG_TEXT_BYTES = 500;
 const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
 /** Same settle time tmux's sendLongText waits after a paste, so a following Enter is not folded into it. */
@@ -134,21 +132,19 @@ export class MisaoMuxClient implements IMuxClient {
 
   async resolvePane(_server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal): Promise<PaneHandle> {
     const panes = await this.windowPanes(ref);
-    if (ordinal < 1 || ordinal > panes.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${panes.length}) for ${ref.window}`);
-    return asPaneHandle(panes[ordinal - 1].paneId);
+    return asPaneHandle(paneAtOrdinal(panes, ordinal, ref).paneId);
   }
 
   /** Attaches a browser terminal to one pane; every terminal is its own daemon client, so the daemon arbitrates the size. */
   async openTerminal(_server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     const { workspaces, panes } = await this.snapshot();
     if (!workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window))) throw new Error('WINDOW_NOT_FOUND');
-    const windowPanes = panesOfWindow(panes, ref.window);
-    if (ordinal < 1 || ordinal > windowPanes.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${windowPanes.length}) for ${ref.window}`);
+    const pane = paneAtOrdinal(panesOfWindow(panes, ref.window), ordinal, ref);
     const client = await this.options.connectAttachClient();
     try {
       return await MisaoTerminalStream.open({
         client,
-        paneId: windowPanes[ordinal - 1].paneId,
+        paneId: pane.paneId,
         clientId: `azito-term-${randomUUID()}`,
         cols,
         rows,
@@ -157,9 +153,10 @@ export class MisaoMuxClient implements IMuxClient {
       });
     } catch (err) {
       client.close();
+      if (this.rpc.isConnectionError(err)) throw new MuxDriverUnavailableError('misao', 'daemon_unreachable');
       // A stopped pane can never be attached, so it must not look retryable: the browser reconnects on any other close.
       const code = this.rpc.rpcErrorCode(err);
-      throw code === PANE_NOT_FOUND || code === PANE_EXITED ? new Error('WINDOW_NOT_FOUND') : err;
+      throw code === MISAO_PANE_NOT_FOUND || code === MISAO_PANE_EXITED ? new Error('WINDOW_NOT_FOUND') : err;
     }
   }
 
@@ -292,7 +289,7 @@ export class MisaoMuxClient implements IMuxClient {
     try {
       return await this.rpc.request('pane.info', { paneId: handle });
     } catch (err) {
-      if (this.rpc.rpcErrorCode(err) === PANE_NOT_FOUND) return null;
+      if (this.rpc.rpcErrorCode(err) === MISAO_PANE_NOT_FOUND) return null;
       throw err;
     }
   }
@@ -328,6 +325,12 @@ export class MisaoMuxClient implements IMuxClient {
       return { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
     }
   }
+}
+
+/** `ordinal` is 1-based; non-integers (a malformed `pane=` query) are rejected like out-of-range values. */
+function paneAtOrdinal(panes: MisaoPane[], ordinal: PaneOrdinal, ref: MuxRef): MisaoPane {
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > panes.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${panes.length}) for ${ref.window}`);
+  return panes[ordinal - 1];
 }
 
 function inheritedLabels(source: MisaoPane): Record<string, string> {

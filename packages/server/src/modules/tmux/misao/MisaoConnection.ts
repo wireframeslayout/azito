@@ -10,6 +10,8 @@ export interface MisaoRpc {
   request<M extends MethodName>(method: M, params: MethodParams<M>): Promise<MethodResult<M>>;
   /** The daemon's error code when `err` is an RPC error response, otherwise undefined. */
   rpcErrorCode(err: unknown): number | undefined;
+  /** True when `err` means the daemon connection is down (as opposed to an error response). */
+  isConnectionError(err: unknown): boolean;
 }
 
 /** What a terminal needs from its own daemon connection: attach is per connection, so each terminal owns one. */
@@ -89,6 +91,10 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
     return err instanceof this.options.sdk.MisaoRpcError ? err.code : undefined;
   }
 
+  isConnectionError(err: unknown): boolean {
+    return err instanceof this.options.sdk.MisaoConnectionError;
+  }
+
   close(): void {
     this.status = 'closed';
     if (this.retryTimer) clearTimeout(this.retryTimer);
@@ -102,7 +108,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource {
   }
 
   private translate(err: unknown): unknown {
-    return err instanceof this.options.sdk.MisaoConnectionError ? new MuxDriverUnavailableError('misao', 'daemon_unreachable') : err;
+    return this.isConnectionError(err) ? new MuxDriverUnavailableError('misao', 'daemon_unreachable') : err;
   }
 
   private handleState(state: ConnectionState): void {

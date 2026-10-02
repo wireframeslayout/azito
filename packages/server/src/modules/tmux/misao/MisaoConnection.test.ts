@@ -177,5 +177,11 @@ describe('MisaoConnection', () => {
       expect(connection.rpcErrorCode(rpcError)).toBe(1001);
       expect(connection.rpcErrorCode(new Error('x'))).toBeUndefined();
     });
+
+    it('tells connection errors apart from RPC errors', () => {
+      const { connection } = setup();
+      expect(connection.isConnectionError(new FakeMisaoConnectionError('not connected'))).toBe(true);
+      expect(connection.isConnectionError(new FakeMisaoRpcError(1001, 'pane not found'))).toBe(false);
+    });
   });
 });
