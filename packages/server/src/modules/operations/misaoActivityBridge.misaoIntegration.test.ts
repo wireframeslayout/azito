@@ -148,6 +148,15 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     expect(stopPayloads(target)[0]).toEqual(expect.objectContaining({ reason: 'completed' }));
   });
 
+  it('a process that exits while its last screen matches the blocked rules still ends as a completion', async () => {
+    const { target } = await launchAgent('exitblocked', BLOCKED_SCREEN, 'finish');
+
+    await waitFor(() => emit.mock.calls.some(([e]) => e.payload.target === target && e.payload.running === true));
+    await waitFor(() => stopPayloads(target).length > 0);
+    expect(stopPayloads(target)[0]).toEqual(expect.objectContaining({ reason: 'completed' }));
+    expect(diagnosticsOf(target)?.refinedBy).toBeUndefined();
+  });
+
   it('a pane that keeps redrawing a blocked screen is working in the daemon, blocked in the hub, still tier0_mux', async () => {
     const { target, screen } = await launchAgent('redraw', BLOCKED_SCREEN, 'redraw');
 

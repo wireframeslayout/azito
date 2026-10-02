@@ -2378,6 +2378,19 @@ describe('AgentActivityMonitor', () => {
       expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1' })]);
     });
 
+    it('an exited (done) pane is a completion even when its last screen looks blocked, with no refinedBy', async () => {
+      arrange();
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      drawScreen(BLOCKED_SCREEN);
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'done', { decidedBy: 'exit' });
+      await drain();
+
+      expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
+      expect(monitor.snapshot()).toEqual([]);
+      expect(diagnosticsRow()?.refinedBy).toBeUndefined();
+    });
+
     it('holds the blocked status when the screen cannot be read', async () => {
       arrange();
       screen = BLOCKED_SCREEN;

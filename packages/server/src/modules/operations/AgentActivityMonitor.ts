@@ -1288,6 +1288,10 @@ export class AgentActivityMonitor {
           if (mapped.state === 'idle') {
             if (mapped.reason) reasons.set(key, mapped.reason);
             decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'idle', w.taskId ?? undefined, muxState.at);
+            // A misao pane whose process exited cannot be waiting on the user, so its screen is not
+            // consulted: a blocked verdict would drop the completion recorded above.
+            const muxServer = servers.get(w.serverName);
+            if (muxState.status === 'done' && muxServer && isMisaoServer(muxServer)) continue;
             tier0IdlePending.set(key, {
               window: w,
               entry: {
