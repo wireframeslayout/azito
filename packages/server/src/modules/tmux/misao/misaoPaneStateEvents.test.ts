@@ -93,6 +93,19 @@ describe('MisaoPaneStateEvents', () => {
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
   });
 
+  it('unsubscribes a subscription that completes after stop()', async () => {
+    const { events, subscribeEvents, unsubscribe } = setup();
+    let complete!: () => void;
+    subscribeEvents.mockImplementationOnce(() => new Promise((r) => {
+      complete = () => r({ unsubscribe, cursor: { seq: 0, epoch: 'e' } });
+    }));
+    const starting = events.start();
+    events.stop();
+    complete();
+    await starting;
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
   it('stop() unsubscribes the event stream', async () => {
     const { events, unsubscribe } = setup();
     await events.start();

@@ -44,6 +44,20 @@ describe('MisaoActivityBridge', () => {
     expect(recordMuxSignal).toHaveBeenCalledWith('misao1', 'win-target', 'working', { decidedBy: 'title' });
   });
 
+  it('records only the newest state when an older resolution finishes last', async () => {
+    const { bridge, resolve, recordMuxSignal } = setup();
+    const pending: Array<() => void> = [];
+    resolve.mockImplementation(() => new Promise((r) => { pending.push(() => r(resolved(1))); }));
+    bridge.handleState({ paneId: PANE, state: 'working', decidedBy: 'bytes' });
+    bridge.handleState({ paneId: PANE, state: 'idle', decidedBy: 'bytes' });
+    pending[1]();
+    await flush();
+    pending[0]();
+    await flush();
+    expect(recordMuxSignal).toHaveBeenCalledTimes(1);
+    expect(recordMuxSignal).toHaveBeenCalledWith('misao1', 'win-target', 'idle', { decidedBy: 'bytes' });
+  });
+
   it('ignores panes other than the first one of a window', async () => {
     const { bridge, resolve, recordMuxSignal } = setup();
     resolve.mockResolvedValue(resolved(2));
