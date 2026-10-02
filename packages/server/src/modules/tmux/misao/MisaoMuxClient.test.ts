@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MuxRef, PaneHandle } from '@azito/shared';
+import type { MuxRef, PaneHandle, PaneOrdinal } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import { MisaoMuxClient } from './MisaoMuxClient';
-import type { MisaoEventSource, MisaoRpc } from './MisaoConnection';
+import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { WindowInputService } from '../../transcripts/WindowInputService';
@@ -10,6 +10,8 @@ import type { IWindowRepository, Window } from '../../windows/Window';
 import type { IServerRepository } from '../../servers/Server';
 
 const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+
+class FakeConnectionError extends Error {}
 
 class FakeRpcError extends Error {
   constructor(readonly code: number, message: string) { super(message); }
@@ -121,6 +123,7 @@ class FakeDaemon implements MisaoRpc, MisaoEventSource {
   }
 
   rpcErrorCode(err: unknown): number | undefined { return err instanceof FakeRpcError ? err.code : undefined; }
+  isConnectionError(err: unknown): boolean { return err instanceof FakeConnectionError; }
 
   subscribeEvents = vi.fn(async () => ({ unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } }));
   onGap = vi.fn(() => () => {});
@@ -130,11 +133,11 @@ class FakeDaemon implements MisaoRpc, MisaoEventSource {
   writes(): string[] { return this.callsTo('pane.write').map((p) => p.data as string); }
 }
 
-function setup(over: { wait?: (ms: number) => Promise<void> } = {}) {
+function setup(over: { wait?: (ms: number) => Promise<void>; connectAttachClient?: () => Promise<MisaoAttachClient> } = {}) {
   const daemon = new FakeDaemon();
   const onChange = vi.fn();
   const wait = over.wait ?? vi.fn(async () => {});
-  const client = new MisaoMuxClient(daemon, { shell: '/bin/zsh', onChange, log: { warn: vi.fn() } }, wait);
+  const client = new MisaoMuxClient(daemon, { shell: '/bin/zsh', onChange, log: { warn: vi.fn() }, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
   return { daemon, client, onChange, wait };
 }
 
@@ -187,6 +190,7 @@ describe('MisaoMuxClient reads', () => {
     expect(await client.resolvePane(server, ref, 2)).toBe(b.paneId);
     await expect(client.resolvePane(server, ref, 4)).rejects.toThrow('out of range');
     await expect(client.resolvePane(server, ref, 0)).rejects.toThrow('out of range');
+    await expect(client.resolvePane(server, ref, 1.5)).rejects.toThrow('out of range');
     expect(await client.refFromPaneHandle(server, handle(c))).toEqual({ ref, ordinal: 3 });
     expect(await client.refFromPaneHandle(server, 'p_0000000000000000000000000Z' as PaneHandle)).toBeNull();
   });
@@ -460,7 +464,6 @@ describe('MisaoMuxClient unsupported operations', () => {
     ['setPaneTitle', (c: MisaoMuxClient, h: PaneHandle) => c.setPaneTitle(server, h, 't')],
     ['captureLayout', (c: MisaoMuxClient, h: PaneHandle) => c.captureLayout(server, refOf('p', 'w'))],
     ['applyLayout', (c: MisaoMuxClient, h: PaneHandle) => c.applyLayout(server, refOf('p', 'w'), 'l')],
-    ['openTerminal', (c: MisaoMuxClient, h: PaneHandle) => c.openTerminal(server, refOf('p', 'w'), 1, 80, 24)],
   ])('%s throws MuxOperationUnsupportedError without calling the daemon', async (operation, call) => {
     const { daemon, client } = setup();
     const err = await call(client, 'p_0000000000000000000000000Z' as PaneHandle).catch((e: unknown) => e);
@@ -503,5 +506,105 @@ describe('MisaoMuxClient behind WindowInputService', () => {
     expect(await service.resolvePaneIndex(5, pane.paneId)).toBe(0);
     expect(await service.resolvePaneIndex(5, otherPane.paneId)).toBe('pane_not_found');
     expect(isPaneInMode).not.toHaveBeenCalled();
+  });
+});
+
+describe('MisaoMuxClient openTerminal', () => {
+  function fakeAttachClient(request: (method: string, params: Record<string, unknown>) => Promise<unknown> = async () => ({ head: 0, oldest: 0, truncated: false })) {
+    return {
+      request: vi.fn(request),
+      subscribeEvents: vi.fn(async () => ({ unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } })),
+      onNotification: vi.fn(() => () => {}),
+      onStateChange: vi.fn(() => () => {}),
+      close: vi.fn(),
+    };
+  }
+
+  it('attaches the ordinal-th pane of the window with a client id of its own', async () => {
+    const attach = fakeAttachClient();
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    const second = daemon.addPane(w);
+
+    await client.openTerminal(server, refOf('proj', w), 2 as PaneOrdinal, 100, 30);
+
+    expect(attach.request).toHaveBeenCalledWith('pane.attach', expect.objectContaining({ paneId: second.paneId, mode: 'raw', replay: 'snapshot', cols: 100, rows: 30, clientId: expect.stringMatching(/^azito-term-/) }));
+  });
+
+  it('gives every terminal a distinct client id', async () => {
+    const attaches = [fakeAttachClient(), fakeAttachClient()];
+    const { daemon, client } = setup({ connectAttachClient: async () => attaches.shift() as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    const first = attaches[0];
+    const second = attaches[1];
+    await client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24);
+    await client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24);
+    const idOf = (a: typeof first) => (a.request.mock.calls[0][1] as { clientId: string }).clientId;
+    expect(idOf(first)).not.toBe(idOf(second));
+  });
+
+  it('throws WINDOW_NOT_FOUND for a missing window without opening a connection', async () => {
+    const connectAttachClient = vi.fn();
+    const { client } = setup({ connectAttachClient });
+    await expect(client.openTerminal(server, refOf('proj', 'w_missing'), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
+    expect(connectAttachClient).not.toHaveBeenCalled();
+  });
+
+  it('rejects an ordinal out of range without opening a connection', async () => {
+    const connectAttachClient = vi.fn();
+    const { daemon, client } = setup({ connectAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 2 as PaneOrdinal, 80, 24)).rejects.toThrow('out of range (1..1)');
+    expect(connectAttachClient).not.toHaveBeenCalled();
+  });
+
+  it.each([1.5, Number.NaN])('rejects a non-integer ordinal (%s) without opening a connection', async (ordinal) => {
+    const connectAttachClient = vi.fn();
+    const { daemon, client } = setup({ connectAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), ordinal as PaneOrdinal, 80, 24)).rejects.toThrow('out of range (1..2)');
+    expect(connectAttachClient).not.toHaveBeenCalled();
+  });
+
+  it('reports a connection lost during the attach as an unreachable daemon, closing the connection', async () => {
+    const attach = fakeAttachClient(async () => { throw new FakeConnectionError('connection closed'); });
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toMatchObject({ name: 'MuxDriverUnavailableError', reason: 'daemon_unreachable' });
+    expect(attach.close).toHaveBeenCalled();
+  });
+
+  it('closes the connection when the attach fails, mapping pane-not-found to WINDOW_NOT_FOUND', async () => {
+    const attach = fakeAttachClient(async () => { throw new FakeRpcError(1001, 'pane not found'); });
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
+    expect(attach.close).toHaveBeenCalled();
+  });
+
+  it('maps an attach on a stopped pane (daemon restarted) to WINDOW_NOT_FOUND so the browser stops reconnecting', async () => {
+    const attach = fakeAttachClient(async () => { throw new FakeRpcError(1002, 'pane is stopped'); });
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
+    expect(attach.close).toHaveBeenCalled();
+  });
+
+  it('closes the connection and rethrows other attach failures unchanged', async () => {
+    const failure = new FakeRpcError(1004, 'unsupported');
+    const attach = fakeAttachClient(async () => { throw failure; });
+    const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w);
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toBe(failure);
+    expect(attach.close).toHaveBeenCalled();
   });
 });

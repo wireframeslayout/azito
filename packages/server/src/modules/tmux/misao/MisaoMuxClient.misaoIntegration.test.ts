@@ -10,7 +10,7 @@ import type { IWindowRepository, Window } from '../../windows/Window';
 import { WindowInputService } from '../../transcripts/WindowInputService';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
-import { MisaoConnection } from './MisaoConnection';
+import { MisaoConnection, connectDedicatedMisaoClient } from './MisaoConnection';
 import { MisaoMuxClient } from './MisaoMuxClient';
 import { selectLocalMisaoServers } from './misaoDriver';
 import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
@@ -49,7 +49,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
-    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn } });
+    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
     await connection.start();
     expect(connection.availability()).toEqual({ available: true });
   });
