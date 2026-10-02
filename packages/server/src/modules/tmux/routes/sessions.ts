@@ -187,7 +187,7 @@ function enrichSessions(sessions: TmuxSession[], serverName: string, windowRepo?
   return sessions.map(session => ({
     ...session,
     windows: session.windows.map(win => {
-      const ref: MuxRef = { kind: 'tmux', workspace: session.name, window: win.name };
+      const ref: MuxRef = win.ref ?? { kind: 'tmux', workspace: session.name, window: win.name };
       const dbWin = windowRepo?.findByServerAndRef(serverName, ref);
       return { ...win, ref: formatMuxRef(ref), windowId: dbWin?.id ?? null };
     }),
@@ -216,13 +216,19 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      // tmux path: optimized flow with cache + linked-session GC
+      // Cache is shared by all mux kinds; linked-session GC below is tmux-only
       const cached = sessionCache.get(request.params.name);
       if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) {
         return enrichSessions(cached.data, request.params.name, opts.windowRepo);
       }
 
       try {
+        if (opts.muxDriverRegistry && muxKindForRuntime(srv.muxRuntime ?? 'system') !== 'tmux') {
+          const workspaces = await opts.muxDriverRegistry.resolve(srv).listWorkspaces(srv);
+          sessionCache.set(request.params.name, { data: workspaces, ts: Date.now() });
+          return enrichSessions(workspaces, request.params.name, opts.windowRepo);
+        }
+
         const sessions = await tmux.listSessions(srv);
         sessionCache.set(request.params.name, { data: sessions, ts: Date.now() });
 

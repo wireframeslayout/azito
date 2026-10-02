@@ -1,11 +1,13 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import sessionsRoutes, { type SessionsRouteOptions } from './sessions';
+import sessionsRoutes, { invalidateSessionCache, type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { TmuxClient } from '../TmuxClient';
 import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { resolveKillOutcome } from '../killOutcome';
 import { KeyedMutex } from '../../../shared/keyedMutex';
+import { MuxDriverRegistry } from '../MuxDriverRegistry';
+import type { IMuxClient } from '../IMuxClient';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -794,5 +796,74 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
     expect(findByName).toHaveBeenCalledTimes(1);
     expect(resourceGuardCheck).toHaveBeenCalledWith(srvV2);
     expect(createWindow).toHaveBeenCalledWith(srvV2, 'session', undefined, expect.anything());
+  });
+});
+
+describe('GET /api/servers/:name/sessions on a misao server', () => {
+  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoRef = { kind: 'misao', workspace: 'ws-a', window: 'w_01' } as const;
+  const workspaces = [{
+    name: 'ws-a', windowCount: 1, attached: false, created: 0,
+    windows: [{ index: 0, name: 'main', active: false, panes: [], activity: 0, ref: misaoRef }],
+  }];
+  let app: FastifyInstance;
+
+  async function build(listWorkspaces: ReturnType<typeof vi.fn>, windowRepo = makeWindowRepo()) {
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', { listWorkspaces } as unknown as IMuxClient);
+    const tmux = { listSessions: vi.fn(), cleanupLinkedSessions: vi.fn() };
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(misaoServer),
+      tmux: tmux as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo,
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    await app.ready();
+    return { tmux, windowRepo };
+  }
+
+  afterEach(async () => {
+    invalidateSessionCache(misaoServer.name);
+    await app.close();
+  });
+
+  it('lists through the driver, uses the driver-computed ref, and never touches tmux', async () => {
+    const listWorkspaces = vi.fn(async () => workspaces);
+    const windowRepo = makeWindowRepo();
+    windowRepo.findByServerAndRef.mockReturnValue({ id: 42 });
+    const { tmux } = await build(listWorkspaces, windowRepo);
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()[0].windows[0]).toMatchObject({ ref: JSON.stringify(misaoRef), windowId: 42 });
+    expect(windowRepo.findByServerAndRef).toHaveBeenCalledWith('misao1', misaoRef);
+    expect(tmux.listSessions).not.toHaveBeenCalled();
+    expect(tmux.cleanupLinkedSessions).not.toHaveBeenCalled();
+  });
+
+  it('serves repeat reads from the cache until it is invalidated', async () => {
+    const listWorkspaces = vi.fn(async () => workspaces);
+    await build(listWorkspaces);
+
+    await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+    await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+    expect(listWorkspaces).toHaveBeenCalledTimes(1);
+
+    invalidateSessionCache('misao1');
+    await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+    expect(listWorkspaces).toHaveBeenCalledTimes(2);
+  });
+
+  it('surfaces a daemon failure as a 500 instead of an empty list', async () => {
+    await build(vi.fn(async () => { throw new Error('daemon unreachable'); }));
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'daemon unreachable' });
   });
 });
