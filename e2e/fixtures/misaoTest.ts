@@ -7,6 +7,8 @@
 import { test as base, Harness } from './test';
 import { MisaoDaemon } from './misaoDaemon';
 
+export { Harness };
+
 interface MisaoWorkerFixtures {
   misaoDaemon: MisaoDaemon;
 }
