@@ -2212,6 +2212,21 @@ describe('AgentActivityMonitor', () => {
       }));
     });
 
+    it('drops the mux state of a window whose row was deleted, so no phantom tier0_mux row remains', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));
+      monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+      await drain();
+      expect(monitor.diagnostics()).toEqual([expect.objectContaining({ target: 'azito:agent-1', decidedBy: 'tier0_mux' })]);
+
+      findAll.mockReturnValue([]);
+      await monitor.tick();
+      await monitor.tick();
+
+      expect(monitor.diagnostics().filter((d: { target: string }) => d.target === 'azito:agent-1')).toEqual([]);
+      expect(monitor.snapshot()).toEqual([]);
+    });
+
     it('mux unknown falls through to lower tiers', async () => {
       findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
       listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 0, nowSec()));

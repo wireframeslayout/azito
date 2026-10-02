@@ -1047,6 +1047,12 @@ export class AgentActivityMonitor {
       }
     }
 
+    // A mux state belongs to a registered window or a running execution; once neither exists nothing
+    // reports that key again, so its last state would otherwise linger as a phantom tier0_mux row.
+    for (const key of [...this.muxStates.keys()]) {
+      if (!this.windowIdByKey.has(key) && !operationKeys.has(key)) this.muxStates.delete(key);
+    }
+
     // Keys that were operation runs on the previous tick and are not anymore:
     // disarm Tier 4 for them until the probe re-observes them (see
     // processDisarmedKeys). Without this, a cached `working` from the run that
@@ -1200,10 +1206,10 @@ export class AgentActivityMonitor {
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
-      const classified = isMisaoServer(server)
-        ? await this.misaoScreenStatus(server, w, window, key)
-        : await this.classifyCandidateState(server, w, window, pi, key);
-      if (classified === 'blocked') {
+      const blocked = isMisaoServer(server)
+        ? await this.isMisaoScreenBlocked(server, w, window, key)
+        : await this.classifyCandidateState(server, w, window, pi, key) === 'blocked';
+      if (blocked) {
         next.set(key, { ...entry, status: 'blocked' });
         // The *running* verdict still belongs to the rung recorded above (Tier 0
         // or the run registry); only the refined state changes here.
@@ -1322,7 +1328,7 @@ export class AgentActivityMonitor {
               const muxWindow = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
               if (muxWindow && isMisaoServer(server)) {
                 // The misao core never reports blocked; only the screen can.
-                if (await this.misaoScreenStatus(server, w, muxWindow, key) === 'blocked') {
+                if (await this.isMisaoScreenBlocked(server, w, muxWindow, key)) {
                   effectiveMuxStatus = 'blocked';
                   muxRefinedBy = 'tier2_title';
                 }
@@ -1843,16 +1849,15 @@ export class AgentActivityMonitor {
    * refinement (a working/idle mux state is never promoted); a screen that could
    * not be read holds the previous tick's status, like the Tier 0 idle refinement.
    */
-  private async misaoScreenStatus(
+  private async isMisaoScreenBlocked(
     server: ServerConfig,
     w: AgentWindow,
     window: TmuxWindow,
     key: string,
-  ): Promise<'working' | 'blocked' | null> {
+  ): Promise<boolean> {
     const verdict = await this.screenVerdict(server, w, window, null, key);
-    if (verdict === 'blocked') return 'blocked';
-    if (verdict === 'unknown') return this.heldStatusOnUnknown(key);
-    return null;
+    if (verdict === 'unknown') return this.heldStatusOnUnknown(key) === 'blocked';
+    return verdict === 'blocked';
   }
 
   /**
