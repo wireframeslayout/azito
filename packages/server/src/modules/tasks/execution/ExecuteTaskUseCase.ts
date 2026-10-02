@@ -1590,7 +1590,14 @@ export class ExecuteTaskUseCase {
     if (primaryWindow && !runningInWindow) {
       if (primaryWindow.sleeping) {
         wakeResult = await this.primaryWindowWaker.wake(
-          primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true },
+          primaryWindow.id, serverName, {
+            skipAgentLaunch: true, gateAlreadyEnforced: true,
+            inLockGate: (fs) => {
+              const t = this.taskRepo.findById(taskId);
+              if (!t) throw new Error(`Task ${taskId} not found`);
+              this.reverifyGateInLock(t, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+            },
+          },
         );
       } else {
         const fuCheckDriver = this.resolveDriver(server);
@@ -1608,7 +1615,14 @@ export class ExecuteTaskUseCase {
         if (!alive) {
           this.windowRepo.update(primaryWindow.id, { sleeping: true });
           wakeResult = await this.primaryWindowWaker.wake(
-            primaryWindow.id, serverName, { skipAgentLaunch: true, gateAlreadyEnforced: true, gateVerifiedByCaller: true },
+            primaryWindow.id, serverName, {
+              skipAgentLaunch: true, gateAlreadyEnforced: true,
+              inLockGate: (fs) => {
+                const t = this.taskRepo.findById(taskId);
+                if (!t) throw new Error(`Task ${taskId} not found`);
+                this.reverifyGateInLock(t, unitId, 'follow_up', fs, fuBaseBranch, comment, opts?.phaseNames ? JSON.stringify(opts.phaseNames) : null);
+              },
+            },
           );
         }
       }
@@ -2152,16 +2166,21 @@ export class ExecuteTaskUseCase {
       }
     }
 
-    // Wake a sleeping primary window before the lock (Issue #276). Unlike
-    // followUp(), resumeStateMachine() neither launches the agent itself nor
-    // re-verifies the gate under the task lock, so let respawn() do both:
-    // relaunch the agent (--resume) and run its own in-lock 'continuation'
-    // gate — the same kind as the 'resume' gate above, so an approval that
-    // passed it is not asked for again.
+    // Wake a sleeping primary window before the lock (Issue #276). Provide
+    // an inLockGate that re-verifies the gate with 'resume' operation under
+    // the server isolation lock, so approval is not asked for again but
+    // state changes since the outer gate are caught.
     const rsmTaskWindows = this.windowRepo.findByTask(taskId);
     const rsmPrimaryWindow = rsmTaskWindows.find((w) => isPrimaryTaskWindow(w));
     if (rsmPrimaryWindow?.sleeping) {
-      await this.primaryWindowWaker.wake(rsmPrimaryWindow.id, serverName, { gateAlreadyEnforced: true });
+      await this.primaryWindowWaker.wake(rsmPrimaryWindow.id, serverName, {
+        gateAlreadyEnforced: true,
+        inLockGate: (fs) => {
+          const t = this.taskRepo.findById(taskId);
+          if (!t) throw new Error(`Task ${taskId} not found`);
+          this.reverifyGateInLock(t, unitId, 'resume', fs, rsmBaseBranch);
+        },
+      });
     }
 
     // Use the primary window from windowRepo instead of task.tmuxWindow —
@@ -2169,9 +2188,14 @@ export class ExecuteTaskUseCase {
     // independently (Issue #276). Re-read after potential wake above.
     const taskWindows = this.windowRepo.findByTask(taskId);
     const primaryWindow = taskWindows.find((w) => isPrimaryTaskWindow(w));
-    const windowName = primaryWindow
-      ? (primaryWindow.muxRef?.window || primaryWindow.tmuxTarget.split(':')[1]?.split('.')[0] || `task-${task.id}`)
-      : (task.tmuxWindow || `task-${task.id}`);
+    let windowName: string;
+    if (primaryWindow) {
+      const resolved = primaryWindow.muxRef?.window || primaryWindow.tmuxTarget.split(':')[1]?.split('.')[0];
+      if (!resolved) throw new Error(`Cannot resolve window name for primary window ${primaryWindow.id} (task ${taskId})`);
+      windowName = resolved;
+    } else {
+      windowName = task.tmuxWindow || `task-${task.id}`;
+    }
     const resumeDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: resumeDriver.kind, workspace: muxWorkspace, window: windowName };
     const windowTarget = tmuxTargetFromMuxRef(ref);

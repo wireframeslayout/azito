@@ -1914,9 +1914,9 @@ export default function TaskPanel({
               {approvalData.pendingFollowUpPreview && (
                 <div style={{
                   padding: '8px 12px',
-                  background: 'var(--bg-elevated, #2a2a2a)',
-                  borderRadius: 'var(--radius-sm, 6px)',
-                  fontSize: 13,
+                  background: 'var(--bg-elevated)',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 'var(--font-sm)',
                   lineHeight: 1.5,
                 }}>
                   <div style={{ fontWeight: 500, marginBottom: 4, color: 'var(--text-secondary)' }}>
@@ -1925,7 +1925,7 @@ export default function TaskPanel({
                   <div style={{
                     whiteSpace: 'pre-wrap',
                     fontFamily: 'var(--font-mono)',
-                    fontSize: 12,
+                    fontSize: 'var(--font-xs)',
                     color: 'var(--text-primary)',
                   }}>
                     {approvalData.pendingFollowUpPreview}
