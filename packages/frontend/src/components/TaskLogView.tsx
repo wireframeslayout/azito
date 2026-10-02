@@ -561,7 +561,7 @@ export default function TaskLogView({ taskId, unitId, taskStatus, maxHeight, fil
   }, [commentText, unitId, taskId, sending, showToast]);
 
   const containerStyle: React.CSSProperties = fillHeight
-    ? { display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }
+    ? { display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, position: 'relative' }
     : { position: 'relative' };
 
   const scrollStyle: React.CSSProperties = fillHeight
