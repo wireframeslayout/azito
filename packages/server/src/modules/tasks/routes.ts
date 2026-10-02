@@ -19,6 +19,7 @@ import { TaskCleanupService } from './TaskCleanupService';
 import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import type { ExecResult } from '../servers/transport/ServerTransport';
 import { replyToExecutionGateError } from './execution/ExecutionGate';
 import { DuplicateAgentSessionError } from '../windows/DuplicateAgentSessionError';
@@ -34,7 +35,7 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
-import { type MuxRef, tmuxTargetFromMuxRef, muxRefFromTmuxTarget, isValidModelId } from '@azito/shared';
+import { type MuxRef, muxRefFromTmuxTarget, isValidModelId } from '@azito/shared';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -954,7 +955,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const retryPrimaryWin = retryWindows.find((w) => w.isPrimary);
         const retryRef: MuxRef = retryPrimaryWin?.muxRef
           ?? muxRefFromTmuxTarget(`${muxWorkspace}:${windowName}`);
-        const target = tmuxTargetFromMuxRef(retryRef);
+        const target = muxWindowTarget(retryRef);
         const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => driver.closeWindow(srv, retryRef), () => {});
         if (!outcome.success) {
           return reply.status(409).send({

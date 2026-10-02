@@ -542,7 +542,8 @@ permanently locks in the following.
 | Smoke | Login → project creation → window registration → listing |
 
 Corresponding specs: `e2e/specs/activity.spec.ts`, `e2e/specs/question-answer.spec.ts`,
-`e2e/specs/smoke.spec.ts`.
+`e2e/specs/smoke.spec.ts`. misao windows (§13) are covered by `e2e/specs/misao.spec.ts` (with its own daemon on a temporary
+socket), which checks the `pane.state`-driven working row and the finished row produced by process exit.
 
 ## 13. misao windows (`AZITO_EXPERIMENTAL_MISAO=1`)
 

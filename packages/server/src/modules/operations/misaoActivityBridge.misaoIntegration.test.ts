@@ -39,7 +39,8 @@ const frame = () => {
 frame();
 if (mode === 'redraw' || mode === 'finish') setInterval(frame, 500);
 else setInterval(() => {}, 1000);
-if (mode === 'finish') setTimeout(() => process.exit(0), 5000);
+// 'finish' exits only once the test asks for it, so the daemon is always given time to report \`working\` first.
+if (mode === 'finish') setInterval(() => { if (fs.existsSync(screenFile + '.exit')) process.exit(0); }, 100);
 `;
 
 describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real misao daemon', () => {
@@ -71,6 +72,11 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     });
     await connection.request('pane.open', { cmd: [process.execPath, path.join(dir, 'fake-agent.js'), screen, mode], windowId });
     return { target: windowId, screen };
+  }
+
+  /** Lets a 'finish' agent exit; call it once the daemon has been seen to report the pane as working. */
+  function finishAgent(screen: string): void {
+    fs.writeFileSync(`${screen}.exit`, '');
   }
 
   function diagnosticsOf(target: string) {
@@ -145,19 +151,25 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
   });
 
   it('a command that prints and exits goes working, then ends as a completion decided by tier0_mux', async () => {
-    const { target } = await launchAgent('finish', PLAIN_OUTPUT, 'finish');
+    const { target, screen } = await launchAgent('finish', PLAIN_OUTPUT, 'finish');
 
-    await waitFor(() => emit.mock.calls.some(([e]) => e.payload.target === target && e.payload.running === true));
-    expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux' }));
+    // The hub's output heuristic (tier3) can announce working before the daemon's verdict arrives, and the
+    // diagnostics only reflect the daemon's once a later tick has merged it: wait for tier0_mux to take over.
+    await waitFor(() => diagnosticsOf(target)?.decidedBy === 'tier0_mux' && diagnosticsOf(target)?.state === 'working');
+    expect(diagnosticsOf(target)?.mux?.status).toBe('working');
+    expect(emit.mock.calls.some(([e]) => e.payload.target === target && e.payload.running === true)).toBe(true);
+
+    finishAgent(screen);
 
     await waitFor(() => stopPayloads(target).length > 0);
     expect(stopPayloads(target)[0]).toEqual(expect.objectContaining({ reason: 'completed' }));
   });
 
   it('a process that exits while its last screen matches the blocked rules still ends as a completion', async () => {
-    const { target } = await launchAgent('exitblocked', BLOCKED_SCREEN, 'finish');
+    const { target, screen } = await launchAgent('exitblocked', BLOCKED_SCREEN, 'finish');
 
-    await waitFor(() => emit.mock.calls.some(([e]) => e.payload.target === target && e.payload.running === true));
+    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'working');
+    finishAgent(screen);
     await waitFor(() => stopPayloads(target).length > 0);
     expect(stopPayloads(target)[0]).toEqual(expect.objectContaining({ reason: 'completed' }));
     expect(diagnosticsOf(target)?.refinedBy).toBeUndefined();
@@ -166,7 +178,8 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
   it('a pane that keeps redrawing a blocked screen is working in the daemon, blocked in the hub, still tier0_mux', async () => {
     const { target, screen } = await launchAgent('redraw', BLOCKED_SCREEN, 'redraw');
 
-    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'working');
+    // The diagnostics reflect the daemon's verdict only after a later tick merged it (tier3 may have decided before).
+    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'working' && diagnosticsOf(target)?.decidedBy === 'tier0_mux');
     expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux', refinedBy: 'tier2_title', state: 'blocked' }));
     expect(monitor.snapshot().find((e) => e.target === target)).toEqual(expect.objectContaining({ running: true, status: 'blocked' }));
 

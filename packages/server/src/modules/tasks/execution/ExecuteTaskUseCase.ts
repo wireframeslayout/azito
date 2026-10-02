@@ -53,7 +53,8 @@ import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { muxKindForRuntime, muxRefFromTmuxTarget, type MuxRef, type PaneHandle, tmuxTargetFromMuxRef } from '@azito/shared';
+import { muxKindForRuntime, muxRefFromTmuxTarget, type MuxRef, type PaneHandle } from '@azito/shared';
+import { muxWindowTarget } from '../../tmux/muxWindowTarget';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -943,7 +944,7 @@ export class ExecuteTaskUseCase {
 
     const executeDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: executeDriver.kind, workspace: muxWorkspace, window: windowName };
-    const windowTarget = tmuxTargetFromMuxRef(ref);
+    const windowTarget = muxWindowTarget(ref);
     const handle = await executeDriver.resolvePane(server, ref, 1);
 
     // Issue #63: baseBranch was already detected and persisted BEFORE
@@ -1813,7 +1814,7 @@ export class ExecuteTaskUseCase {
 
     const fuMainDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: fuMainDriver.kind, workspace: muxWorkspace, window: windowName };
-    const windowTarget = tmuxTargetFromMuxRef(ref);
+    const windowTarget = muxWindowTarget(ref);
     const handle = await fuMainDriver.resolvePane(server, ref, 1);
 
     if (!windowExists) {
@@ -2209,7 +2210,7 @@ export class ExecuteTaskUseCase {
     }
     const resumeDriver = this.resolveDriver(server);
     const ref: MuxRef = { kind: resumeDriver.kind, workspace: muxWorkspace, window: windowName };
-    const windowTarget = tmuxTargetFromMuxRef(ref);
+    const windowTarget = muxWindowTarget(ref);
     const handle = await resumeDriver.resolvePane(server, ref, 1);
 
     const abortController = new AbortController();
@@ -2314,7 +2315,7 @@ export class ExecuteTaskUseCase {
   getRunning(): Record<number, Array<{ taskId: number; target: string; serverName: string }>> {
     const result: Record<number, Array<{ taskId: number; target: string; serverName: string }>> = {};
     for (const [id, executions] of this.runningExecutions) {
-      result[id] = executions.map((e) => ({ taskId: e.taskId, target: tmuxTargetFromMuxRef(e.muxRef), serverName: e.serverName }));
+      result[id] = executions.map((e) => ({ taskId: e.taskId, target: muxWindowTarget(e.muxRef), serverName: e.serverName }));
     }
     return result;
   }

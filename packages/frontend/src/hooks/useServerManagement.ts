@@ -8,7 +8,7 @@ import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
 import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
-import { editableMuxRuntime } from '../lib/muxRuntimeForm';
+import { editableMuxRuntime, muxRuntimeOptions } from '../lib/muxRuntimeForm';
 
 export interface Server {
   name: string;
@@ -18,7 +18,7 @@ export interface Server {
   hasAgentToken?: boolean;
   agentVersion?: string;
   sshHost?: string;
-  muxRuntime?: 'system' | 'managed';
+  muxRuntime?: MuxRuntime;
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
   isolationIntent?: boolean;
@@ -92,7 +92,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [addHost, setAddHost] = useState('');
   const [addPort, setAddPort] = useState('3002');
   const [addToken, setAddToken] = useState('');
-  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [addMuxRuntime, setAddMuxRuntime] = useState<MuxRuntime>('system');
   const [addInstallSteps, setAddInstallSteps] = useState<InstallStep[]>([]);
   const [addLoading, setAddLoading] = useState(false);
 
@@ -101,7 +101,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<MuxRuntime>('system');
   // Issue #29 review (3rd pass), Important finding 4: mirrors
   // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
   // distinct from ServerDetailPage's).
@@ -259,7 +259,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime, muxRuntimeOptions('agent', false)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 

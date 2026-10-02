@@ -123,4 +123,5 @@ npm run dev
 | [タスク管理ガイド](./tasks.md) | タスクの作成・実行フロー、Worktree、停滞検知、ログ |
 | [ファイル操作ガイド](./files.md) | ファイルエクスプローラー、プレビュー、ダウンロード、外部エディタ連携 |
 | [tmux 設定ガイド](./tmux.md) | AZITO に必須/推奨の tmux 設定、managed/system モード別の適用方法 |
+| [misao 実行系統（実験的）](./misao.md) | tmux の代わりに misao デーモンを使う実験的な実行系統。有効化手順（`AZITO_EXPERIMENTAL_MISAO=1`）、サーバー設定での切替、トラブルシューティング |
 | [稼働検知 Tier 判定リファレンス](./activity-detection.md) | 稼働/ブロック/非稼働の判定ラダー（Tier 0〜4）、停止理由、タイミング定数、診断パネル、質問ライフサイクル |

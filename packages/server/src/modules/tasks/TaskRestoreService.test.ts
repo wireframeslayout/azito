@@ -545,6 +545,23 @@ describe('TaskRestoreService', () => {
     expect(deps.paneEnvService.revokeGeneration).toHaveBeenCalledWith(1, 'restore_rollback');
   });
 
+  it('restores onto a misao window whose ref has no tmux target', async () => {
+    const task = makeTask({ serverName: 'test-server' });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' };
+    deps = makeDeps({
+      ...deps,
+      muxDriverRegistry: overrideDriver(deps, {
+        openWindow: vi.fn(async () => ({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
+      }),
+    });
+    service = new TaskRestoreService(deps);
+
+    const result = await service.restore(task, log);
+
+    expect(result.tmuxTarget).toBe('azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
+    expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ muxRef: misaoRef }));
+  });
+
   it('throws when tmux window creation fails and task remains archived', async () => {
     const task = makeTask({ serverName: 'test-server' });
     deps = makeDeps({

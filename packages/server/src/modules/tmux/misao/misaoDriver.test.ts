@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
-import { registerMisaoDriver, resolveMisaoRuntime, selectLocalMisaoServers, type MisaoRuntime } from './misaoDriver';
+import { registerMisaoDriver, resolveMisaoRuntime, selectLocalMisaoServers, syncMisaoChangeHooks, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
 
 function runtime(connect: () => Promise<void>): MisaoRuntime {
   class FakeConnectionError extends Error {}
@@ -89,5 +89,44 @@ describe('resolveMisaoRuntime', () => {
 
   it('rejects a socket path the OS cannot bind', async () => {
     await expect(resolveMisaoRuntime({ env: { MISAO_SOCKET: `/tmp/${'a'.repeat(120)}.sock` }, homeDir: '/home/x', shell: '/bin/bash' })).rejects.toThrow();
+  });
+});
+
+describe('syncMisaoChangeHooks', () => {
+  const srv = (muxRuntime: 'system' | 'managed' | 'misao', type: 'local' | 'agent' = 'local') => ({ name: 's', type, muxRuntime }) as never;
+  const handle = () => {
+    const driver = { installChangeHooks: vi.fn(async () => {}), uninstallChangeHooks: vi.fn(async () => {}) };
+    return { misao: { driver } as unknown as MisaoHandle, driver };
+  };
+  const log = { warn: vi.fn() };
+
+  it('installs change events when a local server moves onto misao', () => {
+    const { misao, driver } = handle();
+    syncMisaoChangeHooks(misao, srv('system'), srv('misao'), log);
+    expect(driver.installChangeHooks).toHaveBeenCalledTimes(1);
+    expect(driver.uninstallChangeHooks).not.toHaveBeenCalled();
+  });
+
+  it('uninstalls change events when a server moves off misao', () => {
+    const { misao, driver } = handle();
+    syncMisaoChangeHooks(misao, srv('misao'), srv('managed'), log);
+    expect(driver.uninstallChangeHooks).toHaveBeenCalledTimes(1);
+    expect(driver.installChangeHooks).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for tmux-to-tmux switches or when misao is not wired', () => {
+    const { misao, driver } = handle();
+    syncMisaoChangeHooks(misao, srv('system'), srv('managed'), log);
+    syncMisaoChangeHooks(undefined, srv('system'), srv('misao'), log);
+    expect(driver.installChangeHooks).not.toHaveBeenCalled();
+    expect(driver.uninstallChangeHooks).not.toHaveBeenCalled();
+  });
+
+  it('warns instead of throwing when the daemon is unreachable', async () => {
+    const { misao, driver } = handle();
+    driver.installChangeHooks.mockRejectedValueOnce(new Error('down'));
+    syncMisaoChangeHooks(misao, srv('system'), srv('misao'), log);
+    await new Promise((r) => setImmediate(r));
+    expect(log.warn).toHaveBeenCalled();
   });
 });
