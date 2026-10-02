@@ -133,7 +133,7 @@ packages/
         supervisors/              # [base] SupervisorRegistry/Launch/Path — tui-supervisor process management
         system/                   # [upper] SystemUpdateService, DeployModeDetector, UpdateChannelResolver,
                                   #         updateScript (out-of-process self-update), serviceControl
-        health/                   # [upper] GET /api/health
+        health/                   # [upper] GET /api/health (hub-wide flags: scopedAuthEnabled, and experimentalMisao only when AZITO_EXPERIMENTAL_MISAO=1)
       shared/
         db/                       # Database.ts (SQLite/WAL) + migrations/ (001-072)
   frontend/                        # React 19 + Vite + TypeScript
@@ -429,6 +429,14 @@ temp `AZITO_DATA_DIR`, random free port, and an isolated tmux server via `TMUX_T
 `npx playwright install chromium`. The server honours `AZITO_E2E_FAST_INTERVALS=1` to shorten the activity
 monitor's *observation* periods only (probe refresh / cache TTL); judgment thresholds are unchanged and the
 variable has no effect when unset.
+
+`e2e/specs/misao.spec.ts` covers the experimental misao runtime (settings switch, window creation, terminal
+attach, task execution with the scripted `fake-agent/task-agent`, activity detection via `pane.state`,
+daemon-down notice). It starts its own `misao serve` from a temp dir (`e2e/fixtures/misaoDaemon.ts`, never the
+resident `~/.misao` daemon) and a hub with `AZITO_EXPERIMENTAL_MISAO=1` + `MISAO_SOCKET` pointing at it
+(`Harness.start({ misaoSocket })`, `fixtures/misaoTest.ts`). It needs a built misao checkout: `MISAO_CLI`
+(default `~/workspace/misao/packages/cli/dist/main.js`); without it the spec is skipped with a reason. The
+existing tmux specs and `fixtures/test.ts` are unaffected. Docs: `docs/{ja,en}/misao.md`.
 
 ### Adding a Migration
 1. Create `packages/server/src/shared/db/migrations/NNN_description.ts`

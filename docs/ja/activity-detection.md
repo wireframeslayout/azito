@@ -515,7 +515,8 @@ request`）を返します。
 | スモーク | ログイン → プロジェクト作成 → ウィンドウ登録 → 一覧表示の基本導線 |
 
 対応するスペック: `e2e/specs/activity.spec.ts`、`e2e/specs/question-answer.spec.ts`、
-`e2e/specs/smoke.spec.ts`。
+`e2e/specs/smoke.spec.ts`。misao 窓（§13）は `e2e/specs/misao.spec.ts`（一時ソケットの自前デーモンを使用）が
+`pane.state` 由来の稼働行と、プロセス終了による完了行を検証する。
 
 ## 13. misao 窓（`AZITO_EXPERIMENTAL_MISAO=1`）
 
