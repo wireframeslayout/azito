@@ -5,6 +5,7 @@ import { useServerStatuses } from './useServerStatuses';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
 import type { Window } from '../pages/workspace/types';
 import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
+import { parseMuxDriverStatus, type MuxDriverStatus } from '../lib/muxDriverStatus';
 
 // Issue #29 review, Important finding 2: isolation_report (cleanup/doctor
 // outcome JSON) is a detail-only field the servers-list API deliberately
@@ -129,6 +130,8 @@ interface UseServerDetailResult {
   sessions: Session[];
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
+  /** Whether the hub can reach this server's mux driver (detail API `mux`); 'unknown' until fetched or when the body is not understood. */
+  muxDriverStatus: MuxDriverStatus;
   isolationReport: IsolationReport | null;
   // Review round (Important finding 4): the cleanup-outcome counterpart to
   // isolationReport above — parsed independently from its own
@@ -166,6 +169,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
   const [isolationCleanupReport, setIsolationCleanupReport] = useState<IsolationReport | null>(null);
   const [isolationCleanupReportUnavailable, setIsolationCleanupReportUnavailable] = useState(false);
+  const [muxDriverStatus, setMuxDriverStatus] = useState<MuxDriverStatus>('unknown');
   const [windowMetaError, setWindowMetaError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -199,6 +203,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     setIsolationReportUnavailable(false);
     setIsolationCleanupReport(null);
     setIsolationCleanupReportUnavailable(false);
+    setMuxDriverStatus('unknown');
     setWindowMetaError(false);
     setLoading(true);
     setError(null);
@@ -289,6 +294,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         return { report: null, unavailable: false };
       }
 
+      const detailBody = detailResult !== null && detailResult.status >= 200 && detailResult.status < 300 ? detailResult.body : null;
+      setMuxDriverStatus(parseMuxDriverStatus(detailBody && typeof detailBody === 'object' ? (detailBody as { mux?: unknown }).mux : null));
+
       const verification = parseReportField('isolationReport');
       const cleanup = parseReportField('isolationCleanupReport');
       // Unavailability only matters (as UI-visible uncertainty) for a server
@@ -321,6 +329,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   return {
     server, servers, status, installStatus, sessions,
     windowById, taskById,
+    muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     windowMetaError,

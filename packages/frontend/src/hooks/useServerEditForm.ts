@@ -3,7 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import type { Server } from './useServerManagement';
 import { useToast } from './useToast';
-import { editableMuxRuntime } from '../lib/muxRuntimeForm';
+import type { MuxRuntime } from '@azito/shared';
+import { editableMuxRuntime, muxRuntimeOptions } from '../lib/muxRuntimeForm';
+import { useHealth } from './useHealth';
 
 // ServerDetailPage の編集モーダル専用フック。useServerManagement は全サーバーの
 // セッション取得 + 60sポーリング + イベント購読を伴うため、編集フォーム状態と
@@ -14,7 +16,7 @@ export function useServerEditForm() {
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<MuxRuntime>('system');
   // Issue #29 review (3rd pass), Important finding 4: isolationIntent had no
   // UI — the only way to declare a server isolated was a raw PUT. Mirrors
   // the other edit* fields: seeded from the server row on open, sent back
@@ -23,6 +25,7 @@ export function useServerEditForm() {
   const [editIsolationIntent, setEditIsolationIntent] = useState(false);
   const { showToast } = useToast();
   const { t } = useTranslation('servers');
+  const { misaoEnabled } = useHealth();
 
   const openEditModal = useCallback((srv: Server) => {
     setEditServer(srv);
@@ -30,24 +33,24 @@ export function useServerEditForm() {
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime, muxRuntimeOptions(srv.type, misaoEnabled)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
-  }, []);
+  }, [misaoEnabled]);
 
   // 成功時のみ true を返す。呼び出し元はこれを見て、バリデーション失敗/APIエラー時に
   // refresh を走らせないようにする。
   const handleEditServer = useCallback(async (): Promise<boolean> => {
     if (!editServer) return false;
-    if (!editHost.trim()) { showToast('Host is required'); return false; }
-    if (editType === 'agent') {
+    // A local server has no connection settings to edit; only its mux runtime can change.
+    const isLocal = editServer.type === 'local';
+    if (!isLocal) {
+      if (!editHost.trim()) { showToast('Host is required'); return false; }
       if (!editPort.trim()) { showToast('Port is required'); return false; }
     }
-    const body: Record<string, unknown> = {
-      type: editType,
-      host: editHost.trim(),
-      muxRuntime: editMuxRuntime,
-    };
-    if (editType === 'agent') {
+    const body: Record<string, unknown> = isLocal
+      ? { muxRuntime: editMuxRuntime }
+      : { type: editType, host: editHost.trim(), muxRuntime: editMuxRuntime };
+    if (!isLocal) {
       body.agentPort = parseInt(editPort.trim(), 10);
       if (editToken.trim()) {
         body.agentToken = editToken.trim();

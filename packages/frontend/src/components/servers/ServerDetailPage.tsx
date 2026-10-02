@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useServerDetail } from '../../hooks/useServerDetail';
+import { useHealth } from '../../hooks/useHealth';
 import { useServerEditForm } from '../../hooks/useServerEditForm';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { DEFAULT_SECTION, SERVER_SECTIONS } from './serverSections';
@@ -30,13 +31,14 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const isMobile = useIsMobile();
   const {
     server, servers, status, installStatus, sessions,
-    windowById, taskById,
+    windowById, taskById, muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     windowMetaError,
     loading, error, refresh,
   } = useServerDetail(serverName);
   const mgmt = useServerEditForm();
+  const { misaoEnabled } = useHealth();
 
   const activeSection: ServerSectionId = section && VALID_SECTIONS.has(section)
     ? section as ServerSectionId
@@ -108,6 +110,8 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               isolationReportUnavailable={isolationReportUnavailable}
               isolationCleanupReport={isolationCleanupReport}
               isolationCleanupReportUnavailable={isolationCleanupReportUnavailable}
+              muxDriverStatus={muxDriverStatus}
+              misaoEnabled={misaoEnabled}
               refresh={refresh}
               onEdit={() => mgmt.openEditModal(server)}
             />
