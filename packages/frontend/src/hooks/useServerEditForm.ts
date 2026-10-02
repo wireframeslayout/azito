@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import type { Server } from './useServerManagement';
 import { useToast } from './useToast';
+import { editableMuxRuntime } from '../lib/muxRuntimeForm';
 
 // ServerDetailPage の編集モーダル専用フック。useServerManagement は全サーバーの
 // セッション取得 + 60sポーリング + イベント購読を伴うため、編集フォーム状態と
@@ -29,7 +30,7 @@ export function useServerEditForm() {
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(srv.muxRuntime ?? 'system');
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 

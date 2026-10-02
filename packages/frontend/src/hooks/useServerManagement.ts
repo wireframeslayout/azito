@@ -8,6 +8,7 @@ import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
 import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import { editableMuxRuntime } from '../lib/muxRuntimeForm';
 
 export interface Server {
   name: string;
@@ -258,7 +259,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(srv.muxRuntime ?? 'system');
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 

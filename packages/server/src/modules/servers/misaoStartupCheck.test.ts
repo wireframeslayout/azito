@@ -12,6 +12,13 @@ describe('reportMisaoServersWhenDisabled', () => {
     expect(message).toContain('"alpha"');
     expect(message).toContain('AZITO_EXPERIMENTAL_MISAO=1');
     expect(message).toContain("'system'");
+    expect(message).toContain('PUT /api/servers/alpha {"muxRuntime":"system"}');
+  });
+
+  it('URL-encodes the server name in the PUT recovery hint', () => {
+    const logger = { error: vi.fn() };
+    reportMisaoServersWhenDisabled({ listNamesByMuxRuntime: () => ['my server'] }, false, logger);
+    expect(logger.error.mock.calls[0][0]).toContain('PUT /api/servers/my%20server {"muxRuntime":"system"}');
   });
 
   it('is silent when no misao server exists', () => {

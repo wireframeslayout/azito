@@ -14,7 +14,7 @@ export function reportMisaoServersWhenDisabled(repo: MisaoServerLister, misaoEna
   const names = repo.listNamesByMuxRuntime('misao');
   for (const name of names) {
     logger.error(
-      `Server "${name}" uses mux_runtime 'misao' but AZITO_EXPERIMENTAL_MISAO is not enabled; it is unavailable until the hub is started with AZITO_EXPERIMENTAL_MISAO=1 or its runtime is set back to 'system' in the server settings.`,
+      `Server "${name}" uses mux_runtime 'misao' but AZITO_EXPERIMENTAL_MISAO is not enabled; it is unavailable until the hub is started with AZITO_EXPERIMENTAL_MISAO=1 or its runtime is set back to 'system' (server settings, or PUT /api/servers/${encodeURIComponent(name)} {"muxRuntime":"system"}).`,
     );
   }
   return names;
