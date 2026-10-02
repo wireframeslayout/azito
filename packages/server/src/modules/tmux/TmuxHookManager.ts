@@ -1,5 +1,6 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
+import { partitionByTmuxRuntime } from '../servers/tmuxServers';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export class TmuxHookManager {
@@ -36,4 +37,19 @@ export class TmuxHookManager {
       }
     }
   }
+}
+
+/**
+ * Installs the tmux change hooks for a local server that a runtime switch moved onto tmux (startup installs
+ * them only for servers already on tmux). Failure is not fatal: the hooks are re-installed on the next start.
+ */
+export function syncTmuxChangeHooks(
+  hookManager: Pick<TmuxHookManager, 'install'>,
+  next: ServerConfig,
+  log: { warn(message: string): void },
+): void {
+  if (next.type !== 'local' || partitionByTmuxRuntime([next]).tmux.length === 0) return;
+  hookManager.install(next).catch((err) => {
+    log.warn(`Failed to install tmux hooks on ${next.name}: ${err}`);
+  });
 }

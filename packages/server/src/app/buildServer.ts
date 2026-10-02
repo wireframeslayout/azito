@@ -72,7 +72,7 @@ import { LocalRepoCloneService } from '../modules/git/LocalRepoCloneService';
 import { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modules/tmux/MuxCapabilityError';
-import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
+import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
@@ -484,6 +484,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       paneHandleResolver.clearServer(next.name);
       supervisorRegistry.clearServerPaneRefs(next.name);
       syncMisaoChangeHooks(wiring.misao, previous, next, app.log);
+      syncTmuxChangeHooks(tmuxHookManager, next, app.log);
     },
   });
   await app.register(sessionsRoutes, {
