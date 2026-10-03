@@ -7,10 +7,9 @@ import {
   type TerminalRef,
   terminalTabId,
   parseTerminalTabId,
-  terminalRefFromLegacyTarget,
-  findSessionWindowRef,
+  resolveTerminalRefFromTarget,
+  splitPaneSuffix,
   terminalRefDisplayLabel,
-  terminalRefFromTarget,
   isValidTerminalRef,
   } from '../lib/terminalRef';
 import type { Session } from '../pages/workspace/types';
@@ -36,6 +35,8 @@ export interface PersistedTab {
   /** @deprecated Use terminalRef instead. Kept for 1-release backward compat. */
   target?: string;
   terminalRef?: TerminalRef;
+  /** Opened by target string only: the tab connects with `target=` and the server resolves the window. */
+  resolveOnServer?: boolean;
   // File-specific
   filePath?: string;
   line?: number;
@@ -154,6 +155,12 @@ function normalizeLegacyTabId(id: string): string {
   return id;
 }
 
+/** The tab for a target the server resolves; its `target` keeps the pane so the WS connects to the right one. */
+export function serverResolvedTerminalTab(serverName: string, target: string, projectId?: number): PersistedTab {
+  const { windowPart, pane } = splitPaneSuffix(target);
+  return { id: `terminal:${serverName}/${windowPart}.${pane}`, type: 'terminal', label: windowPart, serverName, target: `${windowPart}.${pane}`, projectId, resolveOnServer: true };
+}
+
 /**
  * Strips the `dirty` flag from a hydrated tab. `dirty` is meant to be pure
  * in-memory editor state (see its field comment), but earlier code persisted
@@ -240,18 +247,19 @@ export function migrateTerminalTabs(
     if (!sessions) continue;
     // A window that is not listed can only be given a tmux ref; on any other driver that ref is
     // wrong (and is what the broken-tab repair hands over), so the tab is dropped.
-    if (findSessionWindowRef(sessions, parsed.target) === null) {
-      const tmux = isTmuxServer(parsed.serverName);
-      if (tmux === undefined) continue; // the server's runtime is not known yet: wait
-      if (!tmux) {
-        dropped.add(tab.id);
-        continue;
-      }
+    const tmux = isTmuxServer(parsed.serverName);
+    const resolution = resolveTerminalRefFromTarget(parsed.serverName, parsed.target, {
+      sessions,
+      muxKind: tmux === undefined ? undefined : tmux ? 'tmux' : 'misao',
+    });
+    if (resolution.status === 'wait') continue; // the server's runtime is not known yet
+    if (resolution.status === 'unresolved') {
+      if (!tab.resolveOnServer) dropped.add(tab.id); // a server-resolved tab stays: the server decides
+      continue;
     }
-    const ref = terminalRefFromLegacyTarget(parsed.serverName, parsed.target, sessions);
-    const terminalRef: TerminalRef = { ...ref, pane: parsed.pane } as TerminalRef;
+    const terminalRef: TerminalRef = { ...resolution.ref, pane: parsed.pane };
     const newId = terminalTabId(terminalRef);
-    migrated.set(tab.id, { ...tab, id: newId, terminalRef });
+    migrated.set(tab.id, { ...tab, id: newId, terminalRef, resolveOnServer: undefined });
     migratedIds.add(tab.id);
   }
   if (migrated.size === 0 && dropped.size === 0) return { tabs, changed: false, idMap, dropped };
@@ -403,24 +411,10 @@ export function useTabPersistence(storageKey?: string) {
     ));
   }, []);
 
-  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }, legacyOpts?: { reconnect?: boolean }) => {
-    let ref: TerminalRef;
-    let projectId: number | undefined;
-    let opts: { reconnect?: boolean } | undefined;
-    if (typeof serverNameOrRef === 'object') {
-      if (!isValidTerminalRef(serverNameOrRef)) {
-        console.error('[connectPane] ignoring invalid TerminalRef', serverNameOrRef);
-        return;
-      }
-      ref = serverNameOrRef;
-      projectId = typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined;
-      opts = typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined;
-    } else {
-      const serverName = serverNameOrRef;
-      const target = targetOrProjectId as string;
-      projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
-      opts = legacyOpts;
-      ref = terminalRefFromTarget(serverName, target);
+  const connectPane = useCallback((ref: TerminalRef, projectId?: number, opts?: { reconnect?: boolean }) => {
+    if (!isValidTerminalRef(ref)) {
+      console.error('[connectPane] ignoring invalid TerminalRef', ref);
+      return;
     }
     const tabId = terminalTabId(ref);
     if (opts?.reconnect) {
@@ -443,6 +437,11 @@ export function useTabPersistence(storageKey?: string) {
       terminalRef: ref,
       projectId,
     });
+  }, [openTab]);
+
+  /** Opens a terminal tab by target string only; the server resolves the window when the tab connects. */
+  const connectTarget = useCallback((serverName: string, target: string, projectId?: number) => {
+    openTab(serverResolvedTerminalTab(serverName, target, projectId));
   }, [openTab]);
 
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
@@ -685,5 +684,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

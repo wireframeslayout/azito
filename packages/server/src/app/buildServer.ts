@@ -6,7 +6,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
-import { taskPushUrl, agentPushUrl } from '../modules/notifications/push/pushLinks';
+import { taskPushUrl, agentActivityPushUrl } from '../modules/notifications/push/pushLinks';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import compress from '@fastify/compress';
@@ -19,6 +19,7 @@ import type { WebSocket } from 'ws';
 import { resolveRoot } from '../shared/releaseInfo';
 import type { Wiring } from './wiring';
 
+import type { ServerConfig } from '../modules/servers/Server';
 import serversRoutes from '../modules/servers/routes';
 import projectsRoutes from '../modules/projects/routes';
 import unitsRoutes from '../modules/units/routes';
@@ -34,7 +35,7 @@ import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
 import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
-import { resolveTerminalTarget } from './resolveTerminalTarget';
+import { resolveTerminalTarget, terminalPaneOrdinal } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
 import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
@@ -175,16 +176,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, projectId, running, status, reason } = event.payload;
+    const { serverName, target, label, taskId, running, status, reason } = event.payload;
 
-    const resolveUrl = (): string => {
-      if (projectId != null) return agentPushUrl({ projectId, serverName, target });
-      if (taskId != null) {
-        const found = taskRepo.findById(taskId);
-        if (found) return agentPushUrl({ projectId: found.projectId, serverName, target });
-      }
-      return agentPushUrl({ serverName, target });
-    };
+    const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 
     if (running === false && reason === 'completed') {
       const url = resolveUrl();
@@ -486,6 +480,17 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       syncTmuxChangeHooks(tmuxHookManager, next, app.log);
     },
   });
+  const buildSecondaryWindowEnv = (taskId: number, server: ServerConfig): Record<string, string> => {
+    const task = taskRepo.findById(taskId);
+    // Should be unreachable in practice (the caller only reaches here for
+    // a `windowRow.taskId` pulled from the same `windows` table row that
+    // references this task), but a task that no longer exists must not
+    // fall back to a legacy/empty env — mask both credentials exactly as
+    // buildEnvForSecondaryWindow's else-branch does. (The webhook token is not
+    // in this mask; on an isolated server the mux driver blanks it as well.)
+    if (!task) return { ...ISOLATION_MASKED_ENV };
+    return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
+  };
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
@@ -526,16 +531,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         killSession,
       );
     },
-    buildSecondaryWindowEnv: (taskId, server) => {
-      const task = taskRepo.findById(taskId);
-      // Should be unreachable in practice (the caller only reaches here for
-      // a `windowRow.taskId` pulled from the same `windows` table row that
-      // references this task), but a task that no longer exists must not
-      // fall back to a legacy/empty env — mask both credentials exactly as
-      // buildEnvForSecondaryWindow's else-branch does.
-      if (!task) return { ...ISOLATION_MASKED_ENV };
-      return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
-    },
+    buildSecondaryWindowEnv,
   });
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
@@ -562,6 +558,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
     windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
+    uiToken: wiring.uiToken, buildSecondaryWindowEnv, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
       return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
@@ -654,7 +651,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // ─── WebSocket ───
 
   await app.register(async (fastify) => {
-    fastify.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
+    fastify.get('/ws', { websocket: true }, async (socket: WebSocket, request) => {
       const origin = request.headers.origin;
       if (origin && !allowedOrigins.includes(origin)) {
         socket.close(1008, 'Forbidden origin');
@@ -733,8 +730,21 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const refParam = wsUrl.searchParams.get('ref');
       const paneParam = wsUrl.searchParams.get('pane');
 
-      const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
-      const resolved = resolveTerminalTarget({ serverName, windowId: windowIdParam, ref: refParam, target }, { serverRepo, windowRepo });
+      const resolvedOrdinal = terminalPaneOrdinal(paneParam, target) as PaneOrdinal;
+      const resolved = await resolveTerminalTarget(
+        { serverName, windowId: windowIdParam, ref: refParam, target },
+        {
+          serverRepo,
+          windowRepo,
+          resolveDriverRef: async (server, driverTarget) => {
+            try {
+              return await muxDriverRegistry.resolve(server).resolveRef(server, driverTarget);
+            } catch {
+              return null; // driver unavailable or daemon down: the target stays unresolved and the connection is rejected
+            }
+          },
+        },
+      );
       if (!resolved) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();

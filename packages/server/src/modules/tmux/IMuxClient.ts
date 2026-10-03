@@ -18,7 +18,7 @@ export interface IMuxClient {
 
   listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
   listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
-  openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult }>;
+  openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
   closeWorkspace(server: ServerConfig, workspace: string): Promise<ExecResult>;

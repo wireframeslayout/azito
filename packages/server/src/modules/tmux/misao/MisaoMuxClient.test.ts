@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { asPaneHandle, type MuxRef, type PaneHandle, type PaneOrdinal } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import { MisaoMuxClient } from './MisaoMuxClient';
+import { TmuxClient } from '../TmuxClient';
+import type { TransportFactory } from '../../servers/transport/TransportFactory';
+import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
@@ -10,6 +13,9 @@ import type { IWindowRepository, Window } from '../../windows/Window';
 import type { IServerRepository } from '../../servers/Server';
 
 const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const HUB_ENV = { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' };
+/** What every misao pane gets from hubPaneEnv on a non-isolated local server. */
+const HUB_PANE_ENV = { AZITO_URL: 'http://127.0.0.1:3001', AZITO_WEBHOOK_TOKEN: 'wh-token' };
 
 class FakeConnectionError extends Error {}
 
@@ -138,7 +144,7 @@ function setup(over: { wait?: (ms: number) => Promise<void>; connectAttachClient
   const daemon = new FakeDaemon();
   const onChange = vi.fn();
   const wait = over.wait ?? vi.fn(async () => {});
-  const client = new MisaoMuxClient(daemon, { shell: '/bin/zsh', onChange, log: { warn: vi.fn() }, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
+  const client = new MisaoMuxClient(daemon, { shell: '/bin/zsh', onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
   return { daemon, client, onChange, wait };
 }
 
@@ -224,6 +230,8 @@ describe('MisaoMuxClient reads', () => {
     expect(await client.windowExists(server, refOf('proj', 'w_0000000000000000000000000Z'))).toBe(false);
     expect(await client.resolveRef(server, w)).toEqual(refOf('proj', w));
     expect(await client.resolveRef(server, 'proj:main')).toEqual(refOf('proj', w));
+    expect(await client.resolveRef(server, `proj:${w}`)).toEqual(refOf('proj', w));
+    expect(await client.resolveRef(server, `nope:${w}`)).toBeNull();
     expect(await client.resolveRef(server, 'proj:dup')).toBeNull();
     expect(await client.resolveRef(server, 'proj:none')).toBeNull();
     expect(await client.resolveRef(server, 'nope:main')).toBeNull();
@@ -298,7 +306,7 @@ describe('MisaoMuxClient writes', () => {
     expect(ref).toEqual(refOf('proj', daemon.workspaces.get('proj')![0].windowId));
     expect(result).toEqual({ stdout: '', stderr: '', code: 0 });
     expect(daemon.callsTo('window.create')[0]).toEqual({ workspace: 'proj', name: 'main' });
-    expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { FOO: 'bar' } });
+    expect(daemon.callsTo('pane.open')[0]).toEqual({ cmd: ['/bin/zsh'], windowId: ref.window, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { ...HUB_PANE_ENV, FOO: 'bar' } });
     expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
     expect(daemon.panes[0].env).toEqual({});
   });
@@ -331,7 +339,7 @@ describe('MisaoMuxClient writes', () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');
     const opened = await client.openPaneInWindow(server, refOf('proj', w), { command: 'claude', extraEnv: { FOO: 'bar' } });
-    expect(daemon.callsTo('pane.open')).toEqual([{ cmd: ['/bin/zsh'], windowId: w, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { FOO: 'bar' } }]);
+    expect(daemon.callsTo('pane.open')).toEqual([{ cmd: ['/bin/zsh'], windowId: w, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { ...HUB_PANE_ENV, FOO: 'bar' } }]);
     expect(opened).toBe(daemon.panes[0].paneId);
     expect(daemon.callsTo('pane.write')).toEqual([{ paneId: opened, data: 'claude', source: 'hub' }, { paneId: opened, data: '\r', source: 'hub' }]);
   });
@@ -362,7 +370,7 @@ describe('MisaoMuxClient writes', () => {
     const { ref, windowName } = await client.openWindow(server, 'proj', 'win', { extraEnv: { K: 'v' } });
     expect(windowName).toMatch(/^win--[a-z0-9]{4}$/);
     expect(ref.workspace).toBe('proj');
-    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: windowName }, ephemeralEnv: { K: 'v' } });
+    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: windowName }, ephemeralEnv: { ...HUB_PANE_ENV, K: 'v' } });
     expect(daemon.callsTo('pane.open')[0]).not.toHaveProperty('env');
     const exact = await client.openWindow(server, 'proj', 'fixed', { exactName: true });
     expect(exact.windowName).toBe('fixed');
@@ -443,7 +451,7 @@ describe('MisaoMuxClient writes', () => {
       cmd: ['/bin/zsh'], cwd: '/repo', windowId: w,
       labels: { origin: 'hub', name: 'main', windowId: '806', task: '12' },
       env: { AZITO_TASK_ID: '12' },
-      ephemeralEnv: { AZITO_TASK_TOKEN: 't', AZITO_UI_TOKEN: '' },
+      ephemeralEnv: { ...HUB_PANE_ENV, AZITO_TASK_TOKEN: 't', AZITO_UI_TOKEN: '' },
     });
     expect(res.handle).toBe(daemon.panes[1].paneId);
     expect((await client.listPanesByRef(server, refOf('proj', w))).map((p) => p.ordinal)).toEqual([1, 2]);
@@ -462,6 +470,90 @@ describe('MisaoMuxClient writes', () => {
     expect(b1.labels).toEqual({});
     await client.labelWindowPanes(server, refOf('proj', w2), { windowId: 807 });
     expect(b1.labels).toEqual({ windowId: '807' });
+  });
+});
+
+describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () => {
+  const isolated = { name: 'local', type: 'local', muxRuntime: 'misao', isolationIntent: true } as ServerConfig;
+
+  it('gives every pane-creating call AZITO_URL and the webhook token as ephemeralEnv, never as persisted env', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    const source = daemon.addPane(w, {});
+    await client.openWorkspace(server, 'ws', { windowName: 'a', exactName: true });
+    await client.openWindow(server, 'proj', 'b');
+    await client.openPaneInWindow(server, refOf('proj', w));
+    await client.splitPaneByHandle(server, handle(source), 'v');
+    const opens = daemon.callsTo('pane.open');
+    expect(opens).toHaveLength(4);
+    for (const open of opens) {
+      expect(open.ephemeralEnv).toEqual(HUB_PANE_ENV);
+      expect(open).not.toHaveProperty('env');
+    }
+  });
+
+  it('keeps the hub secret out of every persisted field of the pane.open call', async () => {
+    const { daemon, client } = setup();
+    await client.openWorkspace(server, 'ws', { extraEnv: { AZITO_TASK_ID: '3', AZITO_TASK_TOKEN: 'task-secret' } });
+    const { ephemeralEnv, ...persisted } = daemon.callsTo('pane.open')[0];
+    expect(JSON.stringify(persisted)).not.toContain('wh-token');
+    expect(JSON.stringify(persisted)).not.toContain('task-secret');
+    expect(persisted.env).toEqual({ AZITO_TASK_ID: '3' });
+    expect(ephemeralEnv).toEqual({ ...HUB_PANE_ENV, AZITO_TASK_TOKEN: 'task-secret' });
+  });
+
+  it('lets the caller env override the hub env', async () => {
+    const { daemon, client } = setup();
+    await client.openWorkspace(server, 'ws', { extraEnv: { AZITO_WEBHOOK_TOKEN: 'override' } });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_WEBHOOK_TOKEN: 'override' });
+  });
+
+  it('does not hand the webhook token to an isolated server, and keeps the mask env the caller passes', async () => {
+    const { daemon, client } = setup();
+    await client.openWorkspace(isolated, 'ws', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
+  });
+
+  it('keeps the hub webhook token on a non-isolated server when the caller passes the scoped-auth mask (UI and agent token only)', async () => {
+    const { daemon, client } = setup();
+    await client.openWorkspace(server, 'ws', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ ...HUB_PANE_ENV, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+  });
+
+  it('blanks every hub credential on an isolated server even when no mask or a real token is passed', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    const source = daemon.addPane(w, {});
+    const leak = { AZITO_UI_TOKEN: 'ui', AZITO_AGENT_TOKEN: 'agent', AZITO_WEBHOOK_TOKEN: 'wh' };
+    const blank = { AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' };
+    await client.openWorkspace(isolated, 'ws', { extraEnv: leak });
+    await client.openWindow(isolated, 'proj', 'x', { extraEnv: leak });
+    await client.openPaneInWindow(isolated, refOf('proj', w));
+    await client.splitPaneByHandle(isolated, handle(source), 'h', leak);
+    for (const open of daemon.callsTo('pane.open')) expect(open.ephemeralEnv).toEqual(blank);
+  });
+
+  // The rule must be identical to TmuxClient's: capture the `-e` args tmux is given for the same server and
+  // compare them to what misao puts in the pane's env, for isolated and non-isolated servers.
+  it.each([
+    ['non-isolated local', { name: 'local', type: 'local', muxRuntime: 'misao' }],
+    ['isolated local', { name: 'local', type: 'local', muxRuntime: 'misao', isolationIntent: true }],
+  ])('passes the same env as TmuxClient for a %s server', async (_label, cfg) => {
+    const srv = cfg as ServerConfig;
+    const extraEnv = { AZITO_UI_TOKEN: srv.isolationIntent ? '' : 'ui-secret' };
+    const tmuxArgs: string[][] = [];
+    const factory = { getTransport: () => ({ execMux: async (req: { args: string[] }) => { tmuxArgs.push(req.args); return { stdout: '', stderr: '', code: 0 }; } }) } as unknown as TransportFactory;
+    await new TmuxClient(factory, HUB_ENV.publicUrl, 'ui-secret', HUB_ENV.localUrl, HUB_ENV.webhookToken).createWindow(srv, 'sess', 'win', { extraEnv });
+    const tmuxEnv: Record<string, string> = {};
+    const newWindow = tmuxArgs.find((a) => a[0] === 'new-window')!;
+    newWindow.forEach((arg, i) => { if (arg === '-e') { const [k, ...v] = newWindow[i + 1].split('='); tmuxEnv[k] = v.join('='); } });
+
+    const { daemon, client } = setup();
+    daemon.workspaces.set('proj', []);
+    await client.openWindow(srv, 'proj', 'win', { extraEnv });
+    const { env, ephemeralEnv } = daemon.callsTo('pane.open')[0] as { env?: Record<string, string>; ephemeralEnv?: Record<string, string> };
+    expect({ ...env, ...ephemeralEnv }).toEqual(tmuxEnv);
+    expect(splitPaneEnv(tmuxEnv).env).toEqual(env ?? {});
   });
 });
 

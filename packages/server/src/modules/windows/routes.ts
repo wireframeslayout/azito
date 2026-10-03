@@ -1,11 +1,11 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
-import { isPrimaryTaskWindow } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
@@ -23,7 +23,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -46,6 +46,12 @@ export interface WindowsRouteOptions {
   /** Drops the cached GET /sessions list of a server, so a client re-reading it after a respawn sees the new window. */
   invalidateSessionCache?: (serverName: string) => void;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
+  /** Operator UI token a manual pane gets on a non-isolated server. */
+  uiToken: string;
+  /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
+  /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
+  serverIsolationMutex: KeyedMutex;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -108,6 +114,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
+      if (!givenRef && srv && muxKindForRuntime(srv.muxRuntime) !== 'tmux')
+        return reply.status(400).send({ error: 'ref required for this server' });
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
@@ -241,6 +250,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
+      if (!givenRef && srv && muxKindForRuntime(srv.muxRuntime) !== 'tmux')
+        return reply.status(400).send({ error: 'ref required for this server' });
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
@@ -258,9 +270,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           const label = (body['label'] as string) || undefined;
           const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
-          return { ok: true, id: existing.id, adopted: true };
+          return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
         }
-        return { ok: true, id: existing.id };
+        return { ok: true, id: existing.id, tmuxTarget: existing.tmuxTarget };
       }
 
       if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
@@ -289,7 +301,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId, id);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
       notifyWindowsChanged(serverName);
-      return { ok: true, id: winId };
+      return { ok: true, id: winId, tmuxTarget };
     },
   );
 
@@ -593,28 +605,29 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   );
 
   // ── POST /api/windows/:id/panes ──
+  // The window and server rows, the primary/secondary task-window decision, the env and the split all run inside
+  // the per-server lock (see serverIsolationMutex's doc comment on SessionsRouteOptions), against rows fetched in it.
   fastify.post<{ Params: { id: string } }>(
     '/api/windows/:id/panes',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
-      const { window: win, ref } = resolveWindowById(windowRepo, id);
-      const srv = serverRepo.findByName(win.serverName);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const serverName = resolveWindowById(windowRepo, id).window.serverName;
+      return opts.serverIsolationMutex.withLock(serverName, async () => {
+        const { window: win, ref } = resolveWindowById(windowRepo, id);
+        const srv = serverRepo.findByName(win.serverName);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      if (win.taskId !== null && isPrimaryTaskWindow(win)) {
-        return reply.status(409).send({
-          error: 'primary_task_window_pane_add_unsupported',
-          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-        });
-      }
+        const paneEnv = resolvePaneAddEnv(win, srv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-      const body = request.body as { ordinal?: number; direction?: string };
-      const direction = (body.direction || 'v') as 'h' | 'v';
-      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).splitPaneByHandle(srv, handle, direction);
-      notifyWindowsChanged(win.serverName);
-      return { ok: true };
+        const body = request.body as { ordinal?: number; direction?: string };
+        const direction = (body.direction || 'v') as 'h' | 'v';
+        const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+        const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+        await driverFor(srv).splitPaneByHandle(srv, handle, direction, paneEnv.extraEnv);
+        notifyWindowsChanged(win.serverName);
+        return { ok: true };
+      });
     },
   );
 

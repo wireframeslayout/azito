@@ -9,7 +9,7 @@ import { Spinner } from './ui/Spinner';
 import { useTerminalTheme } from '../hooks/useTerminalTheme';
 import { createOsc52Extractor } from '../utils/osc52';
 import { buildWsUrl } from '../api/wsUrl';
-import { terminalWsParams, terminalRefFromTabTarget, terminalConnectionKey, type TerminalRef } from '../lib/terminalRef';
+import { terminalWsParams, legacyTargetWsParams, terminalRefFromTabTarget, terminalConnectionKey, type TerminalRef } from '../lib/terminalRef';
 import TerminalBackdrop from './TerminalBackdrop';
 import { TERMINAL_CLOSE } from '@azito/shared';
 import type { PaneUnavailableReason } from '../lib/paneState';
@@ -338,7 +338,7 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
           const effectiveRef = terminalRef ?? (target.includes(':') ? undefined : terminalRefFromTabTarget(serverName, target) ?? undefined);
           const wsParams = effectiveRef
             ? terminalWsParams(effectiveRef, terminal.cols, terminal.rows)
-            : { server: serverName, target, cols: String(terminal.cols), rows: String(terminal.rows) };
+            : legacyTargetWsParams(serverName, target, terminal.cols, terminal.rows);
           const ws = new WebSocket(buildWsUrl(wsParams));
           wsRef.current = ws;
           let firstMsg = true;

@@ -10,11 +10,12 @@ import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveRefForServer, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
+import { resolveRefForServer, resolvePaneHandle, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+import { muxWindowTarget } from '../muxWindowTarget';
 
 /** Generic route failure -> 500; an unreachable agent is rethrown so the app error handler answers 503. */
 function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
@@ -135,7 +136,7 @@ export interface SessionsRouteOptions {
    * non-null and `isPrimaryTaskWindow(win)` is false — buildServer.ts wires
    * this to look up the task and call `buildEnvForSecondaryWindow` on it.
    */
-  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
 
   /**
    * Issue #29 review (6th pass), Important finding 3: serializes the
@@ -387,42 +388,11 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             ? opts.windowRepo?.findByServerAndRef(request.params.name, resolvedRef)
             : opts.windowRepo?.findByServerAndTarget(request.params.name, target);
 
-          if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-            // The task's PRIMARY worker window. Its already-running first pane
-            // holds the currently-active AZITO_TASK_TOKEN generation in its
-            // process env, and that plaintext is never persisted anywhere
-            // (design v3 §2 — TaskPaneEnvironmentService issues but never
-            // stores a token's plaintext). There is therefore no value this
-            // route could hand the new pane that is simultaneously (a) the
-            // SAME generation the first pane already holds — required, since
-            // every pane in one tmux window must carry an identical env per
-            // TmuxClient.splitPane's doc comment — and (b) obtained without
-            // rotating, which would revoke that still-in-use generation out
-            // from under the running worker pane. Reject rather than either
-            // silently omitting the token (this finding's original bug) or
-            // minting a fresh, unrelated generation only the new pane would
-            // hold. Respawning the window (which rotates once and applies the
-            // new generation to every pane it recreates) is the supported way
-            // to add a pane here.
-            return reply.status(409).send({
-              error: 'primary_task_window_pane_add_unsupported',
-              message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-            });
-          }
+          // 409 for a task's primary window, the task's masked env for a secondary one, the manual-window env otherwise.
+          const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+          if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-          const extraEnv: Record<string, string> = windowRow && windowRow.taskId !== null
-            // Secondary task-owned window: masked-only env (no task token),
-            // same as its own (re)creation env.
-            ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
-            // Non-task window (manual/project/etc.) — legacy default,
-            // server-aware (Issue #29 review, Critical finding 1): withholds
-            // the token when this server is declared isolated. Manual/
-            // human-facing pane, so `uiTokenEnvForServer` (inject-capable)
-            // is correct here, unlike task session bootstrap's mask-only
-            // `isolationMaskForServer` (Issue #29 review, 11th pass).
-            : uiTokenEnvForServer(opts.uiToken, freshSrv);
-
-          await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', extraEnv);
+          await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', paneEnv.extraEnv);
           notifySessionsChanged(request.params.name);
           return { ok: true };
         });
@@ -877,29 +847,29 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   // ── POST /api/servers/:name/mux/windows/:ref/panes ──
+  // The server row, the task-window classification and the env are resolved inside the per-server lock
+  // (see serverIsolationMutex's doc comment), like the legacy add-pane route and `panes/open`.
   fastify.post<{ Params: { name: string; ref: string } }>(
     '/api/servers/:name/mux/windows/:ref/panes',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefForServer(request.params.ref, srv);
-      const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, freshSrv);
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
 
-      if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-        return reply.status(409).send({
-          error: 'primary_task_window_pane_add_unsupported',
-          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-        });
-      }
+        const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-      const body = request.body as { ordinal?: number; direction?: string };
-      const direction = (body.direction || 'v') as 'h' | 'v';
-      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
-      const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.splitPaneByHandle(srv, handle, direction);
-      notifySessionsChanged(request.params.name);
-      return { ok: true };
+        const body = request.body as { ordinal?: number; direction?: string };
+        const direction = (body.direction || 'v') as 'h' | 'v';
+        const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+        const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const handle = await resolvePaneHandle(muxClient, freshSrv, ref, ordinal);
+        await muxClient.splitPaneByHandle(freshSrv, handle, direction, paneEnv.extraEnv);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      });
     },
   );
 
@@ -919,21 +889,12 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
         const ref = resolveRefForServer(request.params.ref, freshSrv);
         const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
-        // A task's primary window: no env can give the new pane the live task-token generation (see the legacy add-pane route).
-        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-          return reply.status(409).send({
-            error: 'primary_task_window_pane_add_unsupported',
-            message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-          });
-        }
-        // Secondary task window: masked env (never the operator UI token); non-task window: the manual-window env.
-        const extraEnv = windowRow && windowRow.taskId !== null
-          ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
-          : uiTokenEnvForServer(opts.uiToken, freshSrv);
+        const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
         // A registered window's panes carry its windowId / task labels (labelWindowPanes); a new pane must too.
         const labels = windowRow ? { windowId: windowRow.id, ...(windowRow.taskId !== null ? { taskId: windowRow.taskId } : {}) } : undefined;
         const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
-        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv, labels });
+        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv: paneEnv.extraEnv, labels });
         notifySessionsChanged(request.params.name);
         return { ok: true };
       });
@@ -1072,16 +1033,17 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
         }
         try {
-          const { ref } = await driver.openWorkspace(freshSrv, name, { windowName });
+          const { ref, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
+          // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
+          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyRouteError(reply, err);
@@ -1106,9 +1068,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         try {
           const workspace = decodeURIComponent(request.params.workspace);
-          const created = await driver.openWindow(freshSrv, workspace, name);
+          const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
+          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyRouteError(reply, err);

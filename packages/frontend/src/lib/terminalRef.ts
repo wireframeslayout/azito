@@ -74,97 +74,100 @@ export function terminalRefFromWindow(
   return { kind: 'ref', serverName, ref, pane };
 }
 
-/**
- * Convert a raw tmux target string (e.g. "azito:win--abc.2") to a TerminalRef
- * without sessions data. Uses formatMuxRef(muxRefFromTmuxTarget(...)) to produce
- * a valid JSON ref string, and extracts the pane suffix.
- */
-export function terminalRefFromTarget(serverName: string, target: string, sessions?: Session[]): TerminalRef {
-  // With sessions the server-provided windowId / ref wins; a misao window must never be turned into a tmux-kind ref.
-  if (sessions) return terminalRefFromLegacyTarget(serverName, target, sessions);
-  const stripped = stripPaneSuffix(target);
-  let pane = 1;
-  if (stripped !== target) {
-    const dotIdx = target.lastIndexOf('.');
-    if (dotIdx >= 0) {
-      const suffix = target.slice(dotIdx + 1);
-      if (/^\d+$/.test(suffix)) pane = parseInt(suffix, 10);
-    }
-  }
-  try {
-    const muxRef = muxRefFromTmuxTarget(stripped);
-    return { kind: 'ref', serverName, ref: formatMuxRef(muxRef), pane };
-  } catch {
-    return { kind: 'ref', serverName, ref: formatMuxRef({ kind: 'tmux', workspace: '', window: stripped }), pane };
-  }
+/** What a target-string open knows about its server: the sessions the server reported and its mux kind. */
+export interface TerminalTargetContext {
+  sessions?: Session[];
+  /** undefined until the server list has reported this server. */
+  muxKind?: MuxDriverKind;
 }
 
-/** The session window a `<session>:<window name or index>` target (no pane suffix) names, as reported by the server. */
-function findSessionWindowByTarget(sessions: Session[], windowPart: string): TmuxWindow | null {
+export type TargetResolution =
+  | { status: 'ready'; ref: TerminalRef }
+  /** Not decidable yet: the server's mux kind or (for a non-tmux server) its sessions have not arrived. */
+  | { status: 'wait' }
+  /** The server's sessions are loaded and the target names no window on a non-tmux server. */
+  | { status: 'unresolved' };
+
+export function splitPaneSuffix(target: string): { windowPart: string; pane: number } {
+  const dotIdx = target.lastIndexOf('.');
+  if (dotIdx >= 0 && /^\d+$/.test(target.slice(dotIdx + 1))) {
+    return { windowPart: target.slice(0, dotIdx), pane: parseInt(target.slice(dotIdx + 1), 10) };
+  }
+  return { windowPart: target, pane: 1 };
+}
+
+/**
+ * Resolve a `<session>:<window>[.<pane>]` target to a TerminalRef. The server-reported windowId / ref in `sessions`
+ * always wins. A tmux-kind ref is synthesised from the target only for a tmux server: on any other mux kind it would
+ * name a window that does not exist, so the result waits for sessions (or is unresolved once they are loaded).
+ */
+export function resolveTerminalRefFromTarget(serverName: string, target: string, ctx: TerminalTargetContext = {}): TargetResolution {
+  const { windowPart, pane } = splitPaneSuffix(target);
+  // A tmux server keeps its first-match naming; any other mux must name one window, or the server decides.
+  const found = ctx.sessions ? findSessionWindowByTarget(ctx.sessions, windowPart, ctx.muxKind !== 'tmux') : null;
+  if (found === 'ambiguous') return { status: 'unresolved' };
+  const win = found;
+  if (win) {
+    return {
+      status: 'ready',
+      ref: win.windowId !== null
+        ? { kind: 'windowId', serverName, windowId: win.windowId, pane }
+        : { kind: 'ref', serverName, ref: win.ref, pane },
+    };
+  }
+  if (ctx.muxKind === 'tmux') {
+    let muxRef: MuxRef;
+    try {
+      muxRef = muxRefFromTmuxTarget(windowPart);
+    } catch {
+      muxRef = { kind: 'tmux', workspace: '', window: windowPart };
+    }
+    return { status: 'ready', ref: { kind: 'ref', serverName, ref: formatMuxRef(muxRef), pane } };
+  }
+  if (ctx.muxKind === undefined || !ctx.sessions) return { status: 'wait' };
+  return { status: 'unresolved' };
+}
+
+export function terminalRefFromTarget(serverName: string, target: string, ctx: TerminalTargetContext = {}): TerminalRef | null {
+  const r = resolveTerminalRefFromTarget(serverName, target, ctx);
+  return r.status === 'ready' ? r.ref : null;
+}
+
+/**
+ * The session window a `<session>:<window id | index | name>` target (no pane suffix) names, as reported by the server.
+ * An id or index matches exactly; a name must match one window when `strictNames` ('ambiguous' otherwise), so a
+ * duplicated name never connects to an arbitrary one of them.
+ */
+function findSessionWindowByTarget(sessions: Session[], windowPart: string, strictNames = false): TmuxWindow | 'ambiguous' | null {
   const colonIdx = windowPart.indexOf(':');
   if (colonIdx < 0) return null;
   const sessionName = windowPart.slice(0, colonIdx);
   const winSpec = windowPart.slice(colonIdx + 1);
   for (const sess of sessions) {
     if (sess.name !== sessionName) continue;
-    const win = sess.windows.find((w) => w.name === winSpec || String(w.index) === winSpec);
-    if (win) return win;
+    const byId = sess.windows.find((w) => refWindowId(w.ref) === winSpec);
+    if (byId) return byId;
+    const byIndex = sess.windows.find((w) => String(w.index) === winSpec);
+    if (byIndex) return byIndex;
+    const byName = sess.windows.filter((w) => w.name === winSpec);
+    if (byName.length === 1 || (byName.length > 1 && !strictNames)) return byName[0];
+    if (byName.length > 1) return 'ambiguous';
   }
   return null;
 }
 
+function refWindowId(ref: string): string | null {
+  try {
+    return parseMuxRef(ref).window;
+  } catch {
+    return null;
+  }
+}
+
 /** The ref the server reported for the window a `<session>:<window>[.<pane>]` target names. */
 export function findSessionWindowRef(sessions: Session[], target: string): string | null {
-  return findSessionWindowByTarget(sessions, stripPaneSuffix(target))?.ref ?? null;
-}
-
-export function terminalRefFromLegacyTarget(
-  serverName: string,
-  target: string,
-  sessions: Session[],
-): TerminalRef {
-  const dotIdx = target.lastIndexOf('.');
-  let pane = 1;
-  let windowPart = target;
-  if (dotIdx >= 0) {
-    const suffix = target.slice(dotIdx + 1);
-    if (/^\d+$/.test(suffix)) {
-      pane = parseInt(suffix, 10);
-      windowPart = target.slice(0, dotIdx);
-    }
-  }
-
-  const win = findSessionWindowByTarget(sessions, windowPart);
-  if (win) {
-    return win.windowId !== null
-      ? { kind: 'windowId', serverName, windowId: win.windowId, pane }
-      : { kind: 'ref', serverName, ref: win.ref, pane };
-  }
-
-  try {
-    const muxRef = muxRefFromTmuxTarget(windowPart);
-    return { kind: 'ref', serverName, ref: formatMuxRef(muxRef), pane };
-  } catch {
-    return { kind: 'ref', serverName, ref: formatMuxRef({ kind: 'tmux', workspace: '', window: windowPart }), pane };
-  }
-}
-
-export function migrateLegacyTerminalTabs(
-  tabIds: string[],
-  sessionsByServer: Map<string, Session[]>,
-): Map<string, string> {
-  const result = new Map<string, string>();
-  for (const id of tabIds) {
-    const parsed = parseTerminalTabId(id);
-    if (!parsed || parsed.kind !== 'legacy') continue;
-    const sessions = sessionsByServer.get(parsed.serverName) ?? [];
-    const ref = terminalRefFromLegacyTarget(parsed.serverName, `${parsed.target}`, sessions);
-    const newRef: TerminalRef = ref.kind === 'windowId'
-      ? { ...ref, pane: parsed.pane }
-      : { ...ref, pane: parsed.pane };
-    result.set(id, terminalTabId(newRef));
-  }
-  return result;
+  const found = findSessionWindowByTarget(sessions, stripPaneSuffix(target));
+  return found === null || found === 'ambiguous' ? null : found.ref;
 }
 
 /**
@@ -174,6 +177,12 @@ export function migrateLegacyTerminalTabs(
  */
 export function terminalConnectionKey(serverName: string, target: string, ref: TerminalRef | undefined): string {
   return `${serverName}|${target}|${ref ? terminalTabId(ref) : ''}`;
+}
+
+/** WS params for a target-only connection: the window part and the pane are sent apart, so `ws:win.2` is pane 2. */
+export function legacyTargetWsParams(serverName: string, target: string, cols: number, rows: number): Record<string, string> {
+  const { windowPart, pane } = splitPaneSuffix(target);
+  return { server: serverName, target: windowPart, pane: String(pane), cols: String(cols), rows: String(rows) };
 }
 
 export function terminalWsParams(r: TerminalRef, cols: number, rows: number): Record<string, string> {
@@ -314,15 +323,20 @@ function findSessionWindow(sessions: Session[] | undefined, match: (w: Session['
 }
 
 /**
- * Recover a TerminalRef from a persisted tab `target` when the tab carries no terminalRef:
- * `w<id>` (what connectPane stores for windowId tabs) → windowId form, a real tmux target →
- * ref form, anything else → null.
+ * Recover a TerminalRef from a persisted tab `target` when the tab carries no terminalRef: `w<id>` (what connectPane
+ * stores for windowId tabs) → windowId form, a `<session>:<window>` target → resolved like a target string (it may
+ * still be waiting for sessions / the server's mux kind), anything else → `none`.
  */
-export function terminalRefFromTabTarget(serverName: string, target: string, sessions?: Session[]): TerminalRef | null {
+export function resolveTabTargetRef(serverName: string, target: string, ctx: TerminalTargetContext = {}): TargetResolution | { status: 'none' } {
   const m = /^w(\d+)(?:\.(\d+))?$/.exec(target);
-  if (m) return { kind: 'windowId', serverName, windowId: parseInt(m[1], 10), pane: m[2] ? parseInt(m[2], 10) : 1 };
-  if (target.includes(':')) return terminalRefFromTarget(serverName, target, sessions);
-  return null;
+  if (m) return { status: 'ready', ref: { kind: 'windowId', serverName, windowId: parseInt(m[1], 10), pane: m[2] ? parseInt(m[2], 10) : 1 } };
+  if (target.includes(':')) return resolveTerminalRefFromTarget(serverName, target, ctx);
+  return { status: 'none' };
+}
+
+export function terminalRefFromTabTarget(serverName: string, target: string, ctx: TerminalTargetContext = {}): TerminalRef | null {
+  const r = resolveTabTargetRef(serverName, target, ctx);
+  return r.status === 'ready' ? r.ref : null;
 }
 
 /**
@@ -378,4 +392,24 @@ export function refTabMatchesTarget(tabRef: string, target: string): boolean {
   } catch {
     return false;
   }
+}
+
+/**
+ * What `POST /tasks/:id/windows` is sent for one window. tmux keeps the name-based target alone; every other mux kind must
+ * identify the window by its ref (a name-only registration would be stored with a tmux-kind ref), and its target is the
+ * ref's `<workspace>:<window>`. A non-tmux window without a resolved ref cannot be registered (null).
+ */
+export function taskWindowRegistration(opts: {
+  muxKind: MuxDriverKind | undefined;
+  target: string;
+  ref: string | null | undefined;
+}): { target: string; ref?: string } | null {
+  const { muxKind, target, ref } = opts;
+  if (muxKind === 'tmux') return { target };
+  if (muxKind === undefined || !ref) return null;
+  try {
+    const parsed = parseMuxRef(ref);
+    if (parsed.kind !== muxKind) return null;
+    return { target: `${parsed.workspace}:${parsed.window}`, ref };
+  } catch { return null; }
 }

@@ -11,6 +11,8 @@ import { LoadingState, TabBar, Button, EmptyState, IconButton } from '../compone
 import type { TabItem } from '../components/ui';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { useTabPersistence, type PersistedTab } from '../hooks/useTabPersistence';
+import { useTerminalTargetOpener } from '../hooks/useTerminalTargetOpener';
+import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 import { useBrowserKeepalive } from '../hooks/useBrowserKeepalive';
 import { useBrowserGroups } from '../hooks/useBrowserGroups';
 import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
@@ -98,7 +100,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -469,15 +471,23 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }, legacyOpts?: { reconnect?: boolean }) => {
-    const projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
-    if (typeof serverNameOrRef === 'object') {
-      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
-    } else {
-      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId), legacyOpts);
-    }
+  const connectRef = useCallback((ref: TerminalRef, projectId?: number, opts?: { reconnect?: boolean }) => {
+    connectPaneRaw(ref, projectId ?? currentProjectId, opts);
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
+  // A target string is resolved against the server's mux kind / sessions (and waits for them) — never into a tmux ref blindly.
+  const connectByTarget = useCallback((req: TerminalOpenTarget, projectId?: number) => {
+    connectTargetRaw(req.serverName, req.target, projectId ?? currentProjectId);
+    if (mobile) setSidebarOpen(false);
+  }, [connectTargetRaw, mobile, currentProjectId, setSidebarOpen]);
+  const openTerminalTarget = useTerminalTargetOpener({ servers, sessionData, connect: connectRef, connectByTarget });
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }) => {
+    if (typeof serverNameOrRef === 'object') {
+      connectRef(serverNameOrRef, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
+    } else {
+      openTerminalTarget({ serverName: serverNameOrRef, target: targetOrProjectId as string }, typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined);
+    }
+  }, [connectRef, openTerminalTarget]);
 
   const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
@@ -497,9 +507,9 @@ function WorkspaceInner() {
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);
   useEffect(() => {
-    setOnOpenInTerminal(connectPane);
+    setOnOpenInTerminal(openTerminalTarget);
     return () => setOnOpenInTerminal(null);
-  }, [connectPane, setOnOpenInTerminal]);
+  }, [openTerminalTarget, setOnOpenInTerminal]);
   // SP端末クイックキーフッター（Issue #69 T3）の右端▦がタブスイッチャーを開けるよう登録する
   // （TerminalContainer は TabContentRenderer 配下の深い位置にあり、mobileTabSwitcherOpen の
   // setter を prop drilling で届けるより WorkspaceTargetsContext 経由の方が既存の
@@ -785,22 +795,28 @@ function WorkspaceInner() {
     activate: boolean,
     extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; ref?: string },
   ) => {
+    const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
+    if (extra?.ref) body['ref'] = extra.ref;
+    if (extra?.windowType) body['window_type'] = extra.windowType;
+    if (extra?.workerType) body['worker_type'] = extra.workerType;
+    if (extra?.workerModel) body['worker_model'] = extra.workerModel;
+    if (extra?.workingDirectory) body['working_directory'] = extra.workingDirectory;
+    let res: { error?: string; tmuxTarget?: string };
     try {
-      const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
-      if (extra?.ref) body['ref'] = extra.ref;
-      if (extra?.windowType) body['window_type'] = extra.windowType;
-      if (extra?.workerType) body['worker_type'] = extra.workerType;
-      if (extra?.workerModel) body['worker_model'] = extra.workerModel;
-      if (extra?.workingDirectory) body['working_directory'] = extra.workingDirectory;
-      await api(`/tasks/${taskId}/windows`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-    } catch { /* project window was still added */ }
-    if (activate) {
-      selectTaskTerminal(taskId, { serverName, target: tmuxTarget });
+      res = await api<{ error?: string; tmuxTarget?: string }>(`/tasks/${taskId}/windows`, { method: 'POST', body: JSON.stringify(body) });
+    } catch (err) {
+      res = { error: err instanceof Error ? err.message : String(err) };
     }
-  }, []);
+    if (res.error || !res.tmuxTarget) {
+      // The project window was still added; only the task attachment failed.
+      console.error('task window add failed', res.error ?? 'missing tmuxTarget');
+      showToast(t(res.error === 'ref required for this server' ? 'workspace:toast.taskWindowRefRequired' : 'workspace:toast.taskWindowAddFailed'));
+      return;
+    }
+    if (activate) {
+      selectTaskTerminal(taskId, { serverName, target: res.tmuxTarget });
+    }
+  }, [showToast, t]);
 
   const addWindowModal = useAddWindowModal(id, project, servers, projectServers, refreshWorkspace, data.refreshSessions, connectPane, handleWindowAddedToTask);
 

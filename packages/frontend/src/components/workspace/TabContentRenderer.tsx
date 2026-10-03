@@ -153,6 +153,7 @@ export default function TabContentRenderer({
               serverName={tab.serverName!}
               target={tab.target!}
               terminalRef={tab.terminalRef}
+              resolveOnServer={tab.resolveOnServer}
               projectId={tab.projectId}
               project={project}
               allTasks={allTasks}

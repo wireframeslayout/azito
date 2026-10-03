@@ -21,7 +21,8 @@ import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
-import { resolveTerminalTarget, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
+import { resolveTerminalTarget, resolveTabTargetRef, type TerminalRef } from '../lib/terminalRef';
+import { PENDING_TERMINAL_OPEN_TTL_MS } from '../lib/terminalTargetOpen';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
@@ -47,6 +48,8 @@ interface TerminalContainerProps {
   serverName: string;
   target: string;
   terminalRef?: TerminalRef;
+  /** The tab was opened by target string only: connect with `target=` and let the server resolve the window. */
+  resolveOnServer?: boolean;
   projectId?: number;
   taskId?: number;
   project?: Project | null;
@@ -93,15 +96,35 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
   // sessions. Legacy callers (TaskPanel) pass a tmux target and no ref — derive the ref then.
-  const terminalRef = useMemo<TerminalRef | undefined>(
-    () => terminalRefProp ?? terminalRefFromTabTarget(serverName, rawTarget, sessions) ?? undefined,
-    [terminalRefProp, serverName, rawTarget, sessions],
+  const { servers } = useServerStatuses();
+  const serverRuntime = servers.find((s) => s.name === serverName)?.muxRuntime;
+  // Unknown until the server list arrives: registration then waits instead of guessing a mux kind.
+  const muxKind = serverRuntime ? muxKindForRuntime(serverRuntime) : undefined;
+  // A tab with a ref connects by it. Without one (a legacy tab not migrated yet, a task terminal before its window
+  // is known) the target is resolved against sessions: until it can be, nothing connects — a tmux-kind ref guessed
+  // for a misao window would be refused — and when it cannot be on a non-tmux server the window is missing.
+  const tabRef = useMemo(
+    () => (terminalRefProp ? { status: 'ready' as const, ref: terminalRefProp } : resolveTabTargetRef(serverName, rawTarget, { sessions, muxKind })),
+    [terminalRefProp, serverName, rawTarget, sessions, muxKind],
   );
+  const terminalRef = tabRef.status === 'ready' ? tabRef.ref : undefined;
+  const refWaiting = tabRef.status === 'wait';
+  // Sessions that do not arrive (the fetch failed, or the server is not among those fetched) must not leave the tab
+  // on "connecting" for good: after the deadline the tab connects by target and the server resolves it.
+  const [refWaitExpired, setRefWaitExpired] = useState(false);
+  useEffect(() => {
+    setRefWaitExpired(false);
+    if (!refWaiting) return;
+    const timer = setTimeout(() => setRefWaitExpired(true), PENDING_TERMINAL_OPEN_TTL_MS);
+    return () => clearTimeout(timer);
+  }, [refWaiting, serverName, rawTarget]);
+  const refPending = refWaiting && !refWaitExpired && !resolveOnServer;
+  const refUnresolved = tabRef.status === 'unresolved' && !resolveOnServer;
   const target = useMemo(() => {
     if (terminalRef) {
       return resolveTerminalTarget(terminalRef, sessions) ?? rawTarget;
@@ -110,11 +133,8 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   }, [rawTarget, terminalRef, sessions]);
 
   const { t } = useTranslation('common');
-  const { servers } = useServerStatuses();
-  const serverRuntime = servers.find((s) => s.name === serverName)?.muxRuntime;
-  // Unknown until the server list arrives: registration then waits instead of guessing a mux kind.
-  const muxKind = serverRuntime ? muxKindForRuntime(serverRuntime) : undefined;
-  const [windowMissing, setWindowMissing] = useState(false);
+  const [windowMissingState, setWindowMissing] = useState(false);
+  const windowMissing = windowMissingState || refUnresolved;
   const [paneUnavailable, setPaneUnavailable] = useState<PaneUnavailableReason | null>(null);
   const [disconnected, setDisconnected] = useState(false);
   const [connectFailed, setConnectFailed] = useState(false);
@@ -270,6 +290,8 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   const everSeen = useRef(false);
   useEffect(() => {
     if (!sessions) return;
+    // A tab the server resolves is judged by the server's answer (the WS error), not by sessions that may not list it.
+    if (resolveOnServer && !terminalRef) return;
     sessionsUpdateCount.current += 1;
 
     const result = checkWindowExists(sessions, terminalRef, target);
@@ -283,7 +305,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     setWindowMissing(false);
     setDisconnected(false);
     setConnectFailed(false);
-  }, [sessions, target, terminalRef]);
+  }, [sessions, target, terminalRef, resolveOnServer]);
 
   const activePane = useMemo(
     () => {
@@ -380,7 +402,16 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
           />
         ) : (
           <>
-        {!windowMissing && (
+        {refPending && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--text-dim)', fontSize: 'var(--font-base)', zIndex: 6 }}
+          >
+            {t('terminal.connecting')}
+          </div>
+        )}
+        {!windowMissing && !refPending && (
           <XTermView
             key={xtermKey}
             ref={xtermRef}
