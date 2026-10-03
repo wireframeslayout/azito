@@ -42,6 +42,9 @@ export async function resolveKillOutcome(execTmux: Promise<ExecResult>): Promise
   if (result.code === 0) {
     return { success: true, alreadyGone: false, result };
   }
+  if (result.alreadyGone === true) {
+    return { success: true, alreadyGone: true, result };
+  }
   const output = `${result.stderr || ''}${result.stdout || ''}`;
   // tmux's own wording differs slightly between kill-window ("can't find
   // window") and kill-session ("can't find session" / "no such session") —

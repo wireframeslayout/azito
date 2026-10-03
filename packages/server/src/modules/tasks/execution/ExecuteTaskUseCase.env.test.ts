@@ -1924,6 +1924,54 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     expect(windowRepo.add).toHaveBeenCalled();
   });
 
+  describe('misao leftover window lookup', () => {
+    const misaoRef = (workspace: string, window: string) => ({ kind: 'misao', workspace, window });
+    const win = (index: number, name: string, ref: ReturnType<typeof misaoRef>) => ({ index, name, active: false, panes: [], activity: 0, ref });
+
+    async function run(workspaces: unknown[]) {
+      const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
+      const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01OLD' });
+      const built = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit], projectServer: null });
+      (built.tmux as { kind: string }).kind = 'misao';
+      (built.tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(workspaces);
+      await built.useCase.execute(36, 46);
+      return built;
+    }
+
+    it('closes the window whose id matches exactly, with its driver ref', async () => {
+      const ref = misaoRef('azito', 'w_01OLD');
+      const { tmux } = await run([{ name: 'azito', windowCount: 1, attached: true, created: 0, windows: [win(1, 'task-46', ref)] }]);
+      expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
+      expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
+    });
+
+    it('does not close a different window that merely has the id as its name', async () => {
+      const real = misaoRef('azito', 'w_01OLD');
+      const { tmux } = await run([{ name: 'azito', windowCount: 2, attached: true, created: 0, windows: [win(1, 'w_01OLD', misaoRef('azito', 'w_02OTHER')), win(2, 'task-46', real)] }]);
+      expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
+      expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), real);
+    });
+
+    it('finds the window in another workspace after the workspace was renamed', async () => {
+      const ref = misaoRef('renamed-ws', 'w_01OLD');
+      const { tmux } = await run([{ name: 'renamed-ws', windowCount: 1, attached: true, created: 0, windows: [win(1, 'task-46', ref)] }]);
+      expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
+    });
+  });
+
+  it('execute(): tmux still matches the leftover window by name inside the task workspace only', async () => {
+    const unit = makeUnit({ id: 37, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 47, serverName: 'local-server', unitId: 37, tmuxWindow: 'old-window' });
+    const { useCase, tmux } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit], projectServer: null });
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: 'other', windowCount: 1, attached: true, created: 0, windows: [{ index: 3, name: 'old-window', active: false, panes: [], activity: 0 }] },
+      { name: 'azito', windowCount: 1, attached: true, created: 0, windows: [{ index: 5, name: 'old-window', active: false, panes: [], activity: 0 }] },
+    ]);
+    await useCase.execute(37, 47);
+    expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: '5' });
+  });
+
   it('execute(): revokes the new token generation and does not persist the window when createWindow resolves with a non-zero exit code', async () => {
     const unit = makeUnit({ id: 31, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 41, serverName: 'local-server', unitId: 31, tmuxWindow: null });

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MuxRef, PaneHandle, PaneOrdinal } from '@azito/shared';
+import { asPaneHandle, type MuxRef, type PaneHandle, type PaneOrdinal } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import { MisaoMuxClient } from './MisaoMuxClient';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
@@ -375,6 +375,42 @@ describe('MisaoMuxClient writes', () => {
     await expect(client.openWindow(server, 'proj')).rejects.toThrow('cannot spawn');
     expect(daemon.workspaces.get('proj')).toEqual([]);
     await expect(client.openWindow(server, 'missing')).rejects.toThrow('workspace not found');
+  });
+
+  it('flags a NotFound close as alreadyGone only when the daemon confirms the target is absent', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    daemon.failures.set('window.close', new FakeRpcError(1007, 'window not found: w_x'));
+    // Still listed (e.g. mid-close): not gone.
+    const live = await client.closeWindow(server, refOf('proj', w));
+    expect(live.code).toBe(1);
+    expect(live.alreadyGone).toBeUndefined();
+    // Absent from workspace.list: gone.
+    expect(await client.closeWindow(server, refOf('proj', 'w_missing'))).toMatchObject({ code: 1, alreadyGone: true });
+
+    daemon.failures.set('workspace.close', new FakeRpcError(1006, 'workspace not found'));
+    expect((await client.closeWorkspace(server, 'proj')).alreadyGone).toBeUndefined();
+    expect(await client.closeWorkspace(server, 'nope')).toMatchObject({ code: 1, alreadyGone: true });
+
+    daemon.failures.set('pane.close', new FakeRpcError(1001, 'pane not found'));
+    expect(await client.closePane(server, asPaneHandle('p_missing'))).toMatchObject({ code: 1, alreadyGone: true });
+  });
+
+  it('never flags a close that failed with another code, e.g. a child PaneNotFound aborting window/workspace close', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    daemon.failures.set('window.close', new FakeRpcError(1001, 'pane not found'));
+    expect((await client.closeWindow(server, refOf('proj', 'w_missing'))).alreadyGone).toBeUndefined();
+    daemon.failures.set('workspace.close', new FakeRpcError(1001, 'pane not found'));
+    expect((await client.closeWorkspace(server, 'nope')).alreadyGone).toBeUndefined();
+    daemon.failures.set('pane.close', new FakeRpcError(1007, 'window not found'));
+    expect((await client.closePane(server, asPaneHandle('p_missing'))).alreadyGone).toBeUndefined();
+    expect(w).toBeTruthy();
+  });
+
+  it('does not flag alreadyGone for a rename NotFound', async () => {
+    const { client } = setup();
+    expect((await client.renameWorkspace(server, 'nope', 'x')).alreadyGone).toBeUndefined();
   });
 
   it('close and rename report RPC errors as a failed ExecResult and rethrow connection errors', async () => {

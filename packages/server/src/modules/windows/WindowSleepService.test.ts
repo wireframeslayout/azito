@@ -135,6 +135,16 @@ describe('WindowSleepService', () => {
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 
+    it('sleeps a window whose misao window is already gone (NotFound flagged alreadyGone)', async () => {
+      const win = makeWindow();
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
+      closeWindow.mockResolvedValueOnce({ stdout: '', stderr: 'window not found: w_1', code: 1, alreadyGone: true });
+
+      await service.sleep(win.id);
+
+      expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
+    });
+
     it('uses muxRef from window when available', async () => {
       const customRef = { kind: 'tmux' as const, workspace: 'win--d299', window: 'main' };
       const win = makeWindow({ muxRef: customRef });

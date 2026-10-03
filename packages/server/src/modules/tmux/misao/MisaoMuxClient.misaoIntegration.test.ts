@@ -211,12 +211,14 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     const panes = await client.listPanesByRef(server, ref1);
     expect(await client.closePane(server, panes[1].handle)).toMatchObject({ code: 0 });
     await vi.waitFor(async () => expect(await client.listPanesByRef(server, ref1)).toHaveLength(1));
-    expect(await client.closePane(server, panes[1].handle)).toMatchObject({ code: 1 });
+    expect(await client.closePane(server, panes[1].handle)).toMatchObject({ code: 1, alreadyGone: true });
     expect(await client.probePane(server, panes[1].handle)).toEqual({ alive: false, verified: true });
 
     expect(await client.closeWindow(server, ref2)).toMatchObject({ code: 0 });
     expect(await client.windowExists(server, ref2)).toBe(false);
+    expect(await client.closeWindow(server, ref2)).toMatchObject({ code: 1, alreadyGone: true });
     expect(await client.closeWorkspace(server, 'azm-ws2')).toMatchObject({ code: 0 });
+    expect(await client.closeWorkspace(server, 'azm-ws2')).toMatchObject({ code: 1, alreadyGone: true });
     expect(await client.listWorkspaces(server)).toEqual([]);
     expect(await client.listAllPanes(server)).toEqual([]);
   });
