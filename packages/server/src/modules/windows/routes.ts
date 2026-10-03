@@ -49,7 +49,7 @@ export interface WindowsRouteOptions {
   /** Operator UI token a manual pane gets on a non-isolated server. */
   uiToken: string;
   /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
-  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
   /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
   serverIsolationMutex: KeyedMutex;
 }

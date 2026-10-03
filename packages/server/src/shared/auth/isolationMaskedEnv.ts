@@ -18,7 +18,16 @@
 export const ISOLATION_MASKED_ENV: Readonly<Record<string, string>> = Object.freeze({
   AZITO_UI_TOKEN: '',
   AZITO_AGENT_TOKEN: '',
-  // A driver that does not isolate the pane from its parent's env (misao: the daemon's own env) or a session env
-  // that already carries the hub webhook token would otherwise hand it to an isolated pane.
+});
+
+/**
+ * {@link ISOLATION_MASKED_ENV} plus the hub webhook token, for an ISOLATED server only. The webhook token is not in
+ * the shared mask on purpose: a non-isolated server under scoped auth also applies that mask to task panes, and
+ * there the hub-injected webhook token must stay (tui-supervisor reads it from the env). A driver that does not
+ * isolate a pane from its parent's env (misao: the daemon's own env) or a session env that already carries the
+ * token would otherwise hand it to an isolated pane.
+ */
+export const ISOLATION_HUB_SECRET_MASK: Readonly<Record<string, string>> = Object.freeze({
+  ...ISOLATION_MASKED_ENV,
   AZITO_WEBHOOK_TOKEN: '',
 });

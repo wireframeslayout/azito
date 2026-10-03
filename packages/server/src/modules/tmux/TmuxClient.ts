@@ -5,7 +5,7 @@ import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneWindowLabels } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
-import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
+import { composePaneEnv, withIsolationMask, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
@@ -131,6 +131,11 @@ export class TmuxClient implements IMuxClient {
   // Env args injected into every new-session / new-window via `-e` (the rule is shared with every mux driver: hubPaneEnv).
   private envArgs(server: ServerConfig, extraEnv: Record<string, string> | undefined): string[] {
     return Object.entries(composePaneEnv(this.hubEnvConfig, server, extraEnv)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  }
+
+  /** A split inherits the session env, so it gets only what the caller passes, plus the isolation mask on an isolated server. */
+  private splitEnv(server: ServerConfig, extraEnv: Record<string, string> | undefined): Record<string, string> {
+    return withIsolationMask(server, extraEnv ?? {});
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
@@ -463,17 +468,14 @@ export class TmuxClient implements IMuxClient {
    * AGENTS.md). Callers that (re)create panes for a task-owned window MUST
    * pass the same env `createRotatedWindow()` used for the window's first
    * pane so every pane in the window carries an identical, correctly-scoped
-   * environment; a plain (non-task) manual pane split passes nothing, same
-   * as before.
+   * environment; every caller passes the env that
+   * fits the window's kind (resolvePaneAddEnv), and on an isolated server the credential mask is laid over it last,
+   * as for a new window.
    */
   async splitPane(server: ServerConfig, target: string, direction: 'h' | 'v', extraEnv?: Record<string, string>): Promise<ExecResult> {
     const flag = direction === 'h' ? '-h' : '-v';
     const args = ['split-window', flag, '-t', target];
-    if (extraEnv) {
-      for (const [k, v] of Object.entries(extraEnv)) {
-        args.push('-e', `${k}=${v}`);
-      }
-    }
+    for (const [k, v] of Object.entries(this.splitEnv(server, extraEnv))) args.push('-e', `${k}=${v}`);
     return this.runTmuxCommand(server, args);
   }
 
@@ -700,7 +702,7 @@ export class TmuxClient implements IMuxClient {
   async splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }> {
     const flag = dir === 'h' ? '-h' : '-v';
     const args = ['split-window', flag, '-t', handle as string, '-P', '-F', '#{pane_id}'];
-    if (env) { for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`); }
+    for (const [k, v] of Object.entries(this.splitEnv(server, env))) args.push('-e', `${k}=${v}`);
     const result = await this.runTmuxCommand(server, args);
     return { handle: asPaneHandle(result.stdout.trim().split('\n')[0] || ''), result };
   }

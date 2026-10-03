@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
-import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
+import { ISOLATION_HUB_SECRET_MASK, ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
 import { uiTokenEnv, uiTokenEnvForServer } from '../../shared/auth/uiTokenEnv';
 
 const srv: ServerConfig = { name: 'local', type: 'local' } as ServerConfig;
@@ -196,9 +196,31 @@ describe('uiTokenEnvForServer (shared/auth/uiTokenEnv)', () => {
     expect(uiTokenEnvForServer('', isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
-  it('masks the exact same key set as ISOLATION_MASKED_ENV (single source shared with TaskPaneEnvironmentService)', () => {
+  it('masks the exact same key set as ISOLATION_HUB_SECRET_MASK (single source shared with TaskPaneEnvironmentService)', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(uiTokenEnvForServer(UI_TOKEN, isolatedSrv)).toEqual({ ...ISOLATION_MASKED_ENV });
+    expect(uiTokenEnvForServer(UI_TOKEN, isolatedSrv)).toEqual({ ...ISOLATION_HUB_SECRET_MASK });
+    // Spelled out so that a change to the shared constants is noticed here.
+    expect(ISOLATION_MASKED_ENV).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(ISOLATION_HUB_SECRET_MASK).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
+  });
+
+  it('keeps the hub webhook token on a non-isolated server even when the caller passes the scoped-auth mask', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.createWindow(srv, 'test-session', 'win', { extraEnv: { ...ISOLATION_MASKED_ENV } });
+    const args = calls.find((a) => a[0] === 'new-window')!;
+    expect(envValue(args, 'AZITO_WEBHOOK_TOKEN')).toBe(WEBHOOK_TOKEN);
+    expect(envValue(args, 'AZITO_UI_TOKEN')).toBe('');
+    expect(envValue(args, 'AZITO_AGENT_TOKEN')).toBe('');
+  });
+
+  it('lays the isolation mask over a tmux split on an isolated server only', async () => {
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    await client.splitPane({ ...srv, isolationIntent: true }, 's:1', 'v', { AZITO_UI_TOKEN: 'leak' });
+    for (const key of ['AZITO_UI_TOKEN', 'AZITO_AGENT_TOKEN', 'AZITO_WEBHOOK_TOKEN']) expect(envValue(calls[0], key)).toBe('');
+    await client.splitPane(srv, 's:1', 'v');
+    expect(calls[1]).toEqual(['split-window', '-v', '-t', 's:1']);
   });
   it('createWindow targets the session with a trailing colon so a window named like the session cannot capture the index', async () => {
     const calls: string[][] = [];

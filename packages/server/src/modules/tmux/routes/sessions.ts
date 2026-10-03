@@ -135,7 +135,7 @@ export interface SessionsRouteOptions {
    * non-null and `isPrimaryTaskWindow(win)` is false — buildServer.ts wires
    * this to look up the task and call `buildEnvForSecondaryWindow` on it.
    */
-  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
 
   /**
    * Issue #29 review (6th pass), Important finding 3: serializes the

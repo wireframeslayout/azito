@@ -35,7 +35,7 @@ describe('POST /api/windows/:id/panes', () => {
   const normal = { name: 'misao1', type: 'local', muxRuntime: 'misao', isolationIntent: false } as ServerConfig;
   const isolated = { ...normal, isolationIntent: true } as ServerConfig;
 
-  async function build(server: ServerConfig, window: Window, buildSecondaryWindowEnv?: (taskId: number, s: ServerConfig) => Record<string, string>): Promise<void> {
+  async function build(server: ServerConfig, window: Window, buildSecondaryWindowEnv: (taskId: number, s: ServerConfig) => Record<string, string> = () => ({})): Promise<void> {
     const mutex = new KeyedMutex();
     const withLock = mutex.withLock.bind(mutex);
     mutex.withLock = (async (key: string, fn: () => Promise<unknown>) => withLock(key, async () => { lockHeld = true; try { return await fn(); } finally { lockHeld = false; } })) as typeof mutex.withLock;

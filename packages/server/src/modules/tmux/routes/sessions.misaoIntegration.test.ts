@@ -56,7 +56,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
     await app.register(sessionsRoutes, {
       serverRepo: { findByName: (name: string) => (name === server.name ? server : undefined) } as unknown as IServerRepository,
       tmux: tmux as unknown as TmuxClient,
-      uiToken: 'test-token',
+      uiToken: 'test-token', buildSecondaryWindowEnv: () => ({}),
       muxDriverRegistry: registry,
       serverIsolationMutex: new KeyedMutex(),
     });

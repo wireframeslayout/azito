@@ -145,7 +145,7 @@ async function buildApp(opts: {
     windowRepo: opts.windowRepo,
     destroyPrimaryTaskWindow: opts.destroyPrimaryTaskWindow,
     destroySessionWindows: opts.destroySessionWindows,
-    buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined,
+    buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv as ((taskId: number, server: ServerConfig) => Record<string, string>) | undefined ?? (() => ({})),
     resourceGuard: opts.resourceGuard as unknown as SessionsRouteOptions['resourceGuard'],
     // Issue #29 review (6th pass), Important finding 3: a fresh instance per
     // app is fine for this file's route-level tests (none exercise
@@ -823,7 +823,7 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
       uiToken: 'test-token',
       windowRepo,
       muxDriverRegistry: registry,
-      serverIsolationMutex: new KeyedMutex(),
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
     return { tmux, windowRepo };
@@ -887,7 +887,7 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
       uiToken: 'test-token',
       windowRepo: makeWindowRepo(),
       muxDriverRegistry: registry,
-      serverIsolationMutex: new KeyedMutex(),
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
 
@@ -914,7 +914,7 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
       tmux: {} as unknown as TmuxClient,
       uiToken: 'test-token',
       muxDriverRegistry: registry,
-      serverIsolationMutex: new KeyedMutex(),
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
 
@@ -943,7 +943,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
       uiToken: 'test-token',
       muxDriverRegistry: registry,
       notificationBus: { emit } as never,
-      serverIsolationMutex: new KeyedMutex(),
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
       ...extra,
     });
     await app.ready();
@@ -1043,7 +1043,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
       tmux: {} as unknown as TmuxClient,
       uiToken: 'test-token',
       muxDriverRegistry: registry,
-      serverIsolationMutex: new KeyedMutex(),
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
     const tmuxRef = encodeURIComponent(JSON.stringify({ kind: 'tmux', workspace: 'main', window: 'w1' }));
@@ -1080,7 +1080,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     await app.register(sessionsRoutes, {
       serverRepo: makeServerRepo(server),
       tmux: {} as unknown as TmuxClient,
-      uiToken: 'test-token',
+      uiToken: 'test-token', buildSecondaryWindowEnv: () => ({}),
       muxDriverRegistry: registry,
       notificationBus: { emit: vi.fn() } as never,
       serverIsolationMutex: mutex,
@@ -1182,7 +1182,7 @@ describe('unreachable agent server', () => {
       tmux: tmux as TmuxClient,
       uiToken: 'test-token',
       windowRepo: makeWindowRepo(),
-      serverIsolationMutex: new KeyedMutex(),
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
     try {

@@ -123,7 +123,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
       windowActivityStatusService: makeWindowActivityStatusService(),
-      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
   });
@@ -263,7 +263,7 @@ describe('POST /api/windows/:id/launch-agent', () => {
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
       windowActivityStatusService: makeWindowActivityStatusService(),
-      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await codexApp.ready();
 
@@ -308,7 +308,7 @@ describe('GET /api/windows/pane-loading-state', () => {
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(supervisorEntries, exitedTargets),
       windowActivityStatusService: makeWindowActivityStatusService(),
-      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await instance.ready();
     return instance;
@@ -429,7 +429,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
       windowActivityStatusService: makeWindowActivityStatusService(),
-      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
       invalidateSessionCache,
     });
     await instance.ready();
@@ -510,7 +510,7 @@ describe('GET /api/windows/activity-status (Issue #338 フォロー: process-bas
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
       windowActivityStatusService: { list: async () => entries } as unknown as WindowActivityStatusService,
-      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     await app.ready();
 
@@ -544,7 +544,7 @@ describe('POST /api/windows/:id/sleep', () => {
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
       windowActivityStatusService: makeWindowActivityStatusService(),
-      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(),
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
     });
     return { app, canSleepFn, sleepFn };
   }

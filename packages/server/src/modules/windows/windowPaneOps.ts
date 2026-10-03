@@ -58,7 +58,7 @@ export async function resolvePaneHandle(
 export interface PaneAddEnvDeps {
   uiToken: string;
   /** Masked-only env of a secondary task-owned window (never a task token). */
-  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
 }
 
 export type PaneAddEnv =
@@ -87,7 +87,7 @@ export function resolvePaneAddEnv(window: Window | undefined, server: ServerConf
         },
       };
     }
-    return { ok: true, extraEnv: deps.buildSecondaryWindowEnv?.(window.taskId, server) ?? {} };
+    return { ok: true, extraEnv: deps.buildSecondaryWindowEnv(window.taskId, server) };
   }
   return { ok: true, extraEnv: uiTokenEnvForServer(deps.uiToken, server) };
 }

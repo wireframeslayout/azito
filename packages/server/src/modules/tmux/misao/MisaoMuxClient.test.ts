@@ -512,6 +512,12 @@ describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () =
     expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
+  it('keeps the hub webhook token on a non-isolated server when the caller passes the scoped-auth mask (UI and agent token only)', async () => {
+    const { daemon, client } = setup();
+    await client.openWorkspace(server, 'ws', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ ...HUB_PANE_ENV, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+  });
+
   it('blanks every hub credential on an isolated server even when no mask or a real token is passed', async () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');

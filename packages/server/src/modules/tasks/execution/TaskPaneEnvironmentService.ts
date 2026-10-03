@@ -4,7 +4,7 @@ import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { SqliteProjectSecretRepository } from '../../projects/SqliteProjectSecretRepository';
 import type { AuditLogService } from '../../../shared/audit/AuditLogService';
 import { recordAuditBestEffort } from '../../../shared/audit/recordAuditBestEffort';
-import { ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
+import { ISOLATION_HUB_SECRET_MASK, ISOLATION_MASKED_ENV } from '../../../shared/auth/isolationMaskedEnv';
 
 /**
  * Single builder for the env a task's tmux pane launches with (Issue #28
@@ -77,7 +77,7 @@ function applyTokenMaskingOrCompat(
     // doc comment above for why the previous nesting (compat-mode branch
     // gating isolation) let an isolated server receive full-power tokens
     // under the hub's default (scoped-auth-off) configuration.
-    Object.assign(env, ISOLATION_MASKED_ENV);
+    Object.assign(env, ISOLATION_HUB_SECRET_MASK);
     return;
   }
   if (!scopedAuthEnabled) {

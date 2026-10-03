@@ -1,5 +1,5 @@
 import type { ServerConfig } from '../servers/Server';
-import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
+import { ISOLATION_HUB_SECRET_MASK } from '../../shared/auth/isolationMaskedEnv';
 
 /** Hub endpoint and credential every new pane is given, resolved once at startup (the boundary). */
 export interface HubPaneEnvConfig {
@@ -46,5 +46,10 @@ export function composePaneEnv(
   server: Pick<ServerConfig, 'type' | 'isolationIntent'>,
   extra: Record<string, string> | undefined,
 ): Record<string, string> {
-  return { ...hubPaneEnv(config, server), ...extra, ...(server.isolationIntent ? ISOLATION_MASKED_ENV : {}) };
+  return withIsolationMask(server, { ...hubPaneEnv(config, server), ...extra });
+}
+
+/** `env` with, on an isolated server, the credential mask laid over it last (a no-op copy otherwise). */
+export function withIsolationMask(server: Pick<ServerConfig, 'isolationIntent'>, env: Record<string, string>): Record<string, string> {
+  return server.isolationIntent ? { ...env, ...ISOLATION_HUB_SECRET_MASK } : { ...env };
 }
