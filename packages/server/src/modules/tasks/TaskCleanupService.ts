@@ -8,6 +8,7 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
 import { resolveTaskServerName, resolveMuxWorkspace } from './execution/TaskExecutionEnv';
 import { isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { taskWindowRef } from '../tmux/windowIdentity';
@@ -43,19 +44,33 @@ export class TaskCleanupService {
   constructor(private deps: TaskCleanupDeps) {}
 
   /**
-   * Closes the task's window by its identity: the primary window row's mux_ref, otherwise task.tmuxWindow.
-   * A window that could not be confirmed closed is a warning — cleanup (worktree and temp files) continues.
-   * A mux daemon that is down propagates MuxDriverUnavailableError (503): the window cannot be closed, and
-   * deleting the task and its window rows would orphan it with no identity left to remove it by.
+   * First step of deleting / archiving a task, run BEFORE anything else is changed (approval consumption,
+   * stopping the execution, deleting rows): closes the task's window by its identity — the primary window
+   * row's mux_ref for misao, otherwise task.tmuxWindow.
+   * A window that could not be confirmed closed is a warning; the caller carries on.
+   * A mux daemon that is down throws MuxDriverUnavailableError (503) with nothing changed: deleting the task
+   * and its window rows would orphan the window with no identity left to remove it by. This covers a driver
+   * that is unavailable up front and one whose connection drops during the close. A connection loss the driver
+   * reports only as a failed result (not as an error) cannot be told apart from another failure and is a warning.
    */
-  private async closeTaskWindow(task: Task, serverName: string, server: ServerConfig, log: { warn: (msg: string) => void }): Promise<void> {
-    const { projectServerRepo, windowRepo } = this.deps;
+  async closeWindow(task: Task, log: { warn: (msg: string) => void }): Promise<void> {
+    const { serverRepo, projectServerRepo, windowRepo } = this.deps;
+    const serverName = resolveTaskServerName(task, projectServerRepo);
+    const server = serverName ? serverRepo.findByName(serverName) : null;
+    if (!task.tmuxWindow || !serverName || !server) return;
+
     const driver = this.deps.muxDriverRegistry.resolve(server);
     const muxWorkspace = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
     const primaryWin = windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
     const ref = taskWindowRef(task, primaryWin, muxWorkspace, driver.kind);
     if (!ref) return;
-    const outcome = await resolveKillOutcome(driver.closeWindow(server, ref));
+    const closing = driver.closeWindow(server, ref);
+    try {
+      await closing;
+    } catch (err) {
+      if (err instanceof MuxDriverUnavailableError) throw err;
+    }
+    const outcome = await resolveKillOutcome(closing);
     if (!outcome.success) {
       log.warn(`[task-cleanup] Failed to close window ${muxWindowTarget(ref)} of task ${task.id}: ${outcome.result.stderr || outcome.result.stdout}`);
     }
@@ -66,10 +81,6 @@ export class TaskCleanupService {
 
     const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
     const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
-
-    if (task.tmuxWindow && resolvedServerName && server) {
-      await this.closeTaskWindow(task, resolvedServerName, server, log);
-    }
 
     if (!server || !resolvedServerName) return;
 

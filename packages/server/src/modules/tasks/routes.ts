@@ -743,6 +743,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const task = taskRepo.findById(id);
       if (!task) return reply.status(404).send({ error: 'Task not found' });
 
+      // Window first, nothing else changed yet: a down mux daemon answers 503 and leaves the task alone.
+      await taskCleanupService.closeWindow(task, request.log);
       executeTaskUseCase.stopByTaskId(id);
       await taskCleanupService.cleanup(task, request.log);
       taskRepo.delete(id);
@@ -1164,6 +1166,10 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const task = taskRepo.findById(id);
       if (!task) return reply.status(404).send({ error: 'Task not found' });
       if (task.status === 'archived') return { ok: true };
+
+      // Window first, before the approval is consumed or the execution stopped: a down mux daemon
+      // answers 503 with nothing changed.
+      await taskCleanupService.closeWindow(task, request.log);
 
       // A `pending_approval` task carries an outstanding untrusted-input
       // execution gate (Issue #328) — this route used to overwrite `status`

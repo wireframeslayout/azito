@@ -212,9 +212,10 @@ async function main(): Promise<void> {
     wiring.unitTypeLoader,
     wiring.windowRepo,
   );
-  // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect.
+  // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect (only the tasks the first run skipped).
   void scheduleStartupRecovery(
     () => recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); }),
+    () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
     misao?.connection,
   );
 

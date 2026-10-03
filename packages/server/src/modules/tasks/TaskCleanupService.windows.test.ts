@@ -35,7 +35,7 @@ describe('TaskCleanupService window close', () => {
     const { service, closeWindow, log, task } = setup({ windows: [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: ref }] });
     task.tmuxWindow = 'task-1--ab12';
 
-    await service.cleanup(task, log);
+    await service.closeWindow(task, log);
 
     expect(closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
     expect(log.warn).not.toHaveBeenCalled();
@@ -44,7 +44,7 @@ describe('TaskCleanupService window close', () => {
   it('closes by task.tmuxWindow (a window id) when there is no row', async () => {
     const { service, closeWindow, log, task } = setup({});
 
-    await service.cleanup(task, log);
+    await service.closeWindow(task, log);
 
     expect(closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'misao', workspace: 'azito', window: WINDOW_ID });
   });
@@ -52,7 +52,7 @@ describe('TaskCleanupService window close', () => {
   it('warns when the close result is a failure (an RPC error is a non-zero result, not a rejection)', async () => {
     const { service, log, task } = setup({ closeWindow: vi.fn(async () => ({ stdout: '', stderr: 'pane busy', code: 1 })) });
 
-    await service.cleanup(task, log);
+    await service.closeWindow(task, log);
 
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('pane busy'));
   });
@@ -60,7 +60,7 @@ describe('TaskCleanupService window close', () => {
   it('does not warn when the window was already gone', async () => {
     const { service, log, task } = setup({ closeWindow: vi.fn(async () => ({ stdout: '', stderr: 'not found', code: 1, alreadyGone: true })) });
 
-    await service.cleanup(task, log);
+    await service.closeWindow(task, log);
 
     expect(log.warn).not.toHaveBeenCalled();
   });
@@ -68,7 +68,21 @@ describe('TaskCleanupService window close', () => {
   it('fails closed while the daemon is down: nothing is closed and the error propagates', async () => {
     const { service, closeWindow, log, task } = setup({ resolveThrows: true });
 
-    await expect(service.cleanup(task, log)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+    await expect(service.closeWindow(task, log)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+
+    expect(closeWindow).not.toHaveBeenCalled();
+  });
+
+  it('fails closed when the connection drops during the close', async () => {
+    const { service, log, task } = setup({ closeWindow: vi.fn(async () => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); }) });
+
+    await expect(service.closeWindow(task, log)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+  });
+
+  it('cleanup() itself no longer closes the window (closeWindow() is the explicit first step)', async () => {
+    const { service, closeWindow, log, task } = setup({});
+
+    await service.cleanup(task, log);
 
     expect(closeWindow).not.toHaveBeenCalled();
   });
@@ -78,7 +92,7 @@ describe('TaskCleanupService window close', () => {
     const { service, closeWindow, log, task } = setup({ kind: 'tmux', windows: [row] });
     task.tmuxWindow = 'task-1';
 
-    await service.cleanup(task, log);
+    await service.closeWindow(task, log);
 
     expect(closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1' });
   });

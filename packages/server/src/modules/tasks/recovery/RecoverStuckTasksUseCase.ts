@@ -55,6 +55,8 @@ export class RecoverStuckTasksUseCase {
   ) {}
 
   private isRunning = false;
+  /** Tasks the last full run skipped because their mux daemon was unreachable. */
+  private readonly skippedForDaemon = new Set<number>();
 
   async run(): Promise<void> {
     if (this.isRunning) return;
@@ -104,10 +106,32 @@ export class RecoverStuckTasksUseCase {
     this.logger.warn(`Periodic recovery: task ${task.id} (${task.status}) has no running execution -> failed`);
   }
 
-  private async doRun(): Promise<void> {
+  /**
+   * Recovers only the tasks the previous run skipped because their mux daemon was unreachable, once it is
+   * reachable. Tasks that run already resumed are not touched again.
+   */
+  async runSkippedForDaemon(): Promise<void> {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    try {
+      const ids = new Set(this.skippedForDaemon);
+      this.skippedForDaemon.clear();
+      await this.doRun(ids);
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  private async doRun(onlyTaskIds?: ReadonlySet<number>): Promise<void> {
+    if (!onlyTaskIds) this.skippedForDaemon.clear();
     const stuckTasks: Task[] = [];
     for (const status of RECOVERABLE_STATUSES) {
       stuckTasks.push(...this.taskRepo.findByStatus(status));
+    }
+    if (onlyTaskIds) {
+      const wanted = stuckTasks.filter((t) => onlyTaskIds.has(t.id));
+      stuckTasks.length = 0;
+      stuckTasks.push(...wanted);
     }
     if (stuckTasks.length === 0) return;
 
@@ -156,6 +180,7 @@ export class RecoverStuckTasksUseCase {
       driver = this.muxDriverRegistry.resolve(server);
     } catch (err) {
       if (!(err instanceof MuxDriverUnavailableError)) throw err;
+      if (err.reason === 'daemon_unreachable') this.skippedForDaemon.add(task.id);
       this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
       return;
     }

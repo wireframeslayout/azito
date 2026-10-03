@@ -12,47 +12,53 @@ function fakeConnection(connected: boolean) {
 }
 
 describe('scheduleStartupRecovery', () => {
-  it('without misao, recovers once', async () => {
+  it('without misao, recovers once and never runs the skipped-task pass', async () => {
     const recover = vi.fn(async () => {});
-    await scheduleStartupRecovery(recover, undefined);
+    const recoverSkipped = vi.fn(async () => {});
+    await scheduleStartupRecovery(recover, recoverSkipped, undefined);
     expect(recover).toHaveBeenCalledTimes(1);
+    expect(recoverSkipped).not.toHaveBeenCalled();
   });
 
   it('recovers once when the daemon is already connected', async () => {
     const recover = vi.fn(async () => {});
-    await scheduleStartupRecovery(recover, fakeConnection(true));
+    const recoverSkipped = vi.fn(async () => {});
+    await scheduleStartupRecovery(recover, recoverSkipped, fakeConnection(true));
     expect(recover).toHaveBeenCalledTimes(1);
+    expect(recoverSkipped).not.toHaveBeenCalled();
   });
 
-  it('recovers at once without waiting for the daemon, then once more on its first (late) connection', async () => {
+  it('recovers at once without waiting for the daemon, then only the skipped tasks on its first (late) connection', async () => {
     const recover = vi.fn(async () => {});
+    const recoverSkipped = vi.fn(async () => {});
     const connection = fakeConnection(false);
 
-    await scheduleStartupRecovery(recover, connection);
+    await scheduleStartupRecovery(recover, recoverSkipped, connection);
+    expect(recover).toHaveBeenCalledTimes(1);
+    expect(recoverSkipped).not.toHaveBeenCalled();
+
+    connection.connect();
+    await vi.waitFor(() => expect(recoverSkipped).toHaveBeenCalledTimes(1));
     expect(recover).toHaveBeenCalledTimes(1);
 
     connection.connect();
-    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
-
-    connection.connect();
     await Promise.resolve();
-    expect(recover).toHaveBeenCalledTimes(2);
+    expect(recoverSkipped).toHaveBeenCalledTimes(1);
   });
 
-  it('does not overlap the second pass with a first pass still running', async () => {
+  it('does not start the skipped-task pass while the first pass is still running', async () => {
     let release!: () => void;
-    const recover = vi.fn()
-      .mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }))
-      .mockResolvedValue(undefined);
+    const recover = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const recoverSkipped = vi.fn(async () => {});
     const connection = fakeConnection(false);
 
-    const first = scheduleStartupRecovery(recover, connection);
+    const first = scheduleStartupRecovery(recover, recoverSkipped, connection);
     connection.connect();
     await Promise.resolve();
-    expect(recover).toHaveBeenCalledTimes(1);
+    expect(recoverSkipped).not.toHaveBeenCalled();
 
     release();
     await first;
-    await vi.waitFor(() => expect(recover).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(recoverSkipped).toHaveBeenCalledTimes(1));
   });
 });

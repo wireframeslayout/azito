@@ -112,3 +112,62 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
     expect(resumeStateMachine).toHaveBeenCalledWith(1, 31);
   });
 });
+
+describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
+  const WINDOW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
+
+  it('after the daemon connects, recovers only the misao task the first run skipped and never resumes an already-resumed task again', async () => {
+    vi.mocked(fs.readdirSync).mockReturnValue([]);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    const servers: Record<string, ServerConfig> = {
+      'misao-server': { name: 'misao-server', type: 'local', muxRuntime: 'misao' } as ServerConfig,
+      'tmux-server': { name: 'tmux-server', type: 'local', muxRuntime: 'system' } as ServerConfig,
+    };
+    const driverOf = (kind: string) => ({
+      kind,
+      resolvePane: vi.fn().mockResolvedValue('%0'),
+      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
+    });
+    const tmuxDriver = driverOf('tmux');
+    const misaoDriver = driverOf('misao');
+    let daemonUp = false;
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('tmux', tmuxDriver as unknown as IMuxClient);
+    registry.register('misao', misaoDriver as unknown as IMuxClient, () => (daemonUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
+    const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
+    const tasks = [
+      { ...task(40, 'misao-server'), tmuxWindow: WINDOW_ID },
+      task(41, 'tmux-server'),
+    ];
+    const useCase = new RecoverStuckTasksUseCase(
+      { findByStatus: vi.fn((status: string) => (status === 'running' ? tasks : [])), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() } as never,
+      { findById: vi.fn().mockReturnValue({ id: 1, workerExecutionMode: 'tmux-pipe', unitType: 'devops' }) } as never,
+      { findByName: (name: string) => servers[name] ?? null } as never,
+      { findById: vi.fn().mockReturnValue({ id: 1, defaultUnitId: null }) } as never,
+      { find: vi.fn().mockReturnValue(null), findByProject: vi.fn().mockReturnValue([]) } as never,
+      { findByTask: vi.fn().mockReturnValue([]), append: vi.fn() } as never,
+      registry,
+      // resumeStateMachine registers the run only after it awaits, so a second full run would pick the tmux task again
+      { getRunning: vi.fn().mockReturnValue({}), resumeStateMachine, isPushCompleted: vi.fn().mockResolvedValue(false) } as never,
+      { findLatestByTaskPhase: vi.fn().mockReturnValue(null), supersedeRunning: vi.fn(), findLatestEventByType: vi.fn().mockReturnValue(null) } as never,
+      { info: vi.fn(), warn: vi.fn() },
+      { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
+      { findByTask: vi.fn().mockReturnValue([]) } as never,
+    );
+
+    await useCase.run();
+    expect(resumeStateMachine.mock.calls).toEqual([[1, 41]]);
+    expect(tmuxDriver.sendKeysToHandle).toHaveBeenCalledTimes(1);
+
+    daemonUp = true;
+    await useCase.runSkippedForDaemon();
+
+    expect(resumeStateMachine.mock.calls).toEqual([[1, 41], [1, 40]]);
+    expect(tmuxDriver.sendKeysToHandle).toHaveBeenCalledTimes(1);
+    expect(misaoDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'misao', window: WINDOW_ID }), 1);
+
+    await useCase.runSkippedForDaemon();
+    expect(resumeStateMachine).toHaveBeenCalledTimes(2);
+  });
+});

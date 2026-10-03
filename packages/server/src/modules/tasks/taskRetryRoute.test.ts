@@ -387,6 +387,37 @@ describe('tasks routes while the mux daemon is down', () => {
     return app;
   }
 
+  it('DELETE /api/tasks/:id does not stop the running execution before answering 503', async () => {
+    const opts = makeOpts({ status: 'running', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(503);
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+    expect(opts.taskRepo.delete).not.toHaveBeenCalled();
+  });
+
+  it('archiving a pending_approval task answers 503 without consuming the approval or changing the task', async () => {
+    const opts = makeOpts({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' } as Partial<Task>);
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(503);
+    expect(opts.taskRepo.consumePendingApproval).not.toHaveBeenCalled();
+    expect(opts.taskRepo.updateStatus).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+    expect(opts.windowRepo.remove).not.toHaveBeenCalled();
+  });
+
   it('DELETE /api/tasks/:id answers 503 and keeps the task and its window rows', async () => {
     const opts = makeOpts({ status: 'open', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
     opts.muxDriverRegistry = daemonDown();

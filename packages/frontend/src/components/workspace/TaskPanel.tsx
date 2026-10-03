@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '../../api/client';
+import { api, apiWithStatus } from '../../api/client';
+import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMutationResult';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { StatusDot } from '../StatusBadge';
@@ -693,21 +694,30 @@ export default function TaskPanel({
     return () => setFocusedTarget(null);
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocusedTarget]);
 
+  // Shows a failed delete / archive and tells the caller to stop (nothing changed on the hub).
+  const reportTaskMutationFailure = useCallback((failure: TaskMutationFailure | null): boolean => {
+    if (!failure) return false;
+    showToast(failure.kind === 'mux_driver_unavailable' ? t('tasks:actions.muxUnavailable') : t('tasks:actions.mutationFailed', { error: failure.message }));
+    return true;
+  }, [showToast, t]);
+
   const handleDelete = useCallback(async () => {
     const ok = await confirm({ title: t('actions.deleteTask'), message: t('actions.deleteConfirm'), danger: true });
     if (!ok) return;
-    await api(`/tasks/${taskId}`, { method: 'DELETE' });
+    const { status, body } = await apiWithStatus(`/tasks/${taskId}`, { method: 'DELETE' });
+    if (reportTaskMutationFailure(taskMutationFailure(status, body))) return;
     if (onDelete) onDelete(taskId);
     onRefresh();
-  }, [taskId, onDelete, onRefresh, confirm]);
+  }, [taskId, onDelete, onRefresh, confirm, reportTaskMutationFailure]);
 
   const handleArchive = useCallback(async () => {
     const ok = await confirm({ title: t('actions.archiveTask'), message: t('actions.archiveConfirm'), danger: true });
     if (!ok) return;
-    await api(`/tasks/${taskId}/archive`, { method: 'POST' });
+    const { status, body } = await apiWithStatus(`/tasks/${taskId}/archive`, { method: 'POST' });
+    if (reportTaskMutationFailure(taskMutationFailure(status, body))) return;
     onRefresh();
     fetchTaskData();
-  }, [taskId, onRefresh, fetchTaskData, confirm]);
+  }, [taskId, onRefresh, fetchTaskData, confirm, reportTaskMutationFailure]);
 
   const handleRestore = useCallback(async () => {
     await api(`/tasks/${taskId}/restore`, { method: 'POST' });
