@@ -404,6 +404,8 @@ interface ActivityDecision {
   state: ActivityDecidedState;
   /** See ActivityDiagnosticEntry.evidenceAt. */
   evidenceAt?: number;
+  /** See ActivityDiagnosticEntry.heldForStopHook. */
+  heldForStopHook?: boolean;
   /** See ActivityDiagnosticEntry.refinedBy. */
   refinedBy?: ActivityRefinedBy;
 }
@@ -433,6 +435,11 @@ export interface ActivityDiagnosticEntry {
    * deciding tier — see refineTier0IdleKeys().
    */
   refinedBy?: ActivityRefinedBy;
+  /**
+   * A misao `idle` is being held back (the key still reads as running) for up to
+   * MISAO_STOP_HOOK_GRACE_MS, waiting for the turn's Stop hook; see the Tier 0 mux rung of collect().
+   */
+  heldForStopHook?: boolean;
   hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
   /** The mux's last reported agent state; `decidedBy` is the mux's own rule name (e.g. misao's exit / title / bytes / a profile). */
   mux?: { status: MuxAgentStatus; decidedBy?: string; at: number };
@@ -711,6 +718,7 @@ export class AgentActivityMonitor {
         decidedBy: decision.decidedBy,
         evidenceAt: decision.evidenceAt,
         refinedBy: decision.refinedBy,
+        heldForStopHook: decision.heldForStopHook,
         hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const, matchedBy: this.hookMatchedBy.get(key) } : undefined,
         mux: mux ? { status: mux.status, decidedBy: mux.decidedBy, at: mux.at } : undefined,
         probe: probe
@@ -749,9 +757,7 @@ export class AgentActivityMonitor {
     if (signal.muxPaneRef && this.paneHandleResolver) {
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
-        // Only the window's first pane carries the agent state (see misaoActivityBridge); a hook from
-        // another pane must not stand in for it.
-        if (resolved.ordinal === 1) this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event);
+        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event);
         return;
       }
       if (resolved === undefined) {
@@ -1348,7 +1354,15 @@ export class AgentActivityMonitor {
             if (isMisaoMux && muxState.status === 'idle' && muxHook?.status === 'running'
               && Date.now() - muxState.at < MISAO_STOP_HOOK_GRACE_MS) {
               // The turn's Stop hook has not arrived yet: keep the key running (announce nothing) for the grace.
-              decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'working', w.taskId ?? undefined, muxState.at);
+              // The screen is still checked: a pane waiting on an answer shows the idle glyph and never fires Stop.
+              let heldBlocked = false;
+              if (w.workerType === 'claude' && muxServer) {
+                const heldWindow = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
+                heldBlocked = !!heldWindow && await this.isMisaoScreenBlocked(muxServer, w, heldWindow, key);
+              }
+              decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', heldBlocked ? 'blocked' : 'working', w.taskId ?? undefined, muxState.at,
+                heldBlocked ? 'tier2_title' : undefined);
+              if (!heldBlocked) decisions.set(key, { ...decisions.get(key)!, heldForStopHook: true });
               next.set(key, {
                 serverName: w.serverName,
                 target: w.tmuxTarget,
@@ -1358,6 +1372,7 @@ export class AgentActivityMonitor {
                 taskId: w.taskId ?? undefined,
                 label: w.label ?? undefined,
                 projectId: w.projectId ?? undefined,
+                status: heldBlocked ? 'blocked' : undefined,
                 windowId: w.id,
               });
               reasons.delete(key);

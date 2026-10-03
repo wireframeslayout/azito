@@ -29,6 +29,8 @@ export interface ActivityDiagnosticRow {
   decidedBy: ActivityDecidedBy;
   evidenceAt?: number;
   refinedBy?: ActivityRefinedBy;
+  /** misao の idle を Stop hook 待ちで保留中（行は稼働のまま見える）。 */
+  heldForStopHook?: boolean;
   supervisor?: {
     pid: number;
     ready: boolean;

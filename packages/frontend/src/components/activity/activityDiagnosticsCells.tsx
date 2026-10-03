@@ -84,6 +84,11 @@ export function TierCell({ row }: { row: ActivityDiagnosticRow }) {
         {row.decidedBy === 'tier0_mux' && row.mux?.decidedBy && <Chip tone="default">{row.mux.decidedBy}</Chip>}
       </span>
       {/* 判定 Tier は奪わずに状態を精緻化した下位 Tier（Tier0 idle + Tier2 blocked / Tier1 Stop hook 完了）。 */}
+      {row.heldForStopHook && (
+        <span style={{ ...DIM, fontSize: 'var(--font-2xs)', whiteSpace: 'nowrap' }}>
+          {t('activityDiagnostics.heldForStopHook')}
+        </span>
+      )}
       {row.refinedBy && (
         <span style={{ ...DIM, fontSize: 'var(--font-2xs)', whiteSpace: 'nowrap' }}>
           {row.refinedBy === 'tier1_hook_stop'

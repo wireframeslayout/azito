@@ -596,6 +596,28 @@ describe('AgentActivityMonitor', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
 
+    it('records a hook from a tmux pane other than the first through muxPaneRef (the right pane of a split)', async () => {
+      findAll.mockReturnValue([makeWindow({ tmuxTarget: 'azito:agent-1' })]);
+      const getCached = vi.fn().mockReturnValue({ windowId: 1, ref: { kind: 'tmux', session: 'azito', window: 'agent-1' }, ordinal: 2, tmuxTarget: 'azito:agent-1' });
+      monitor = new AgentActivityMonitor(
+        { getRunning } as unknown as ExecuteTaskUseCase,
+        { findAll } as unknown as IWindowRepository,
+        mockRegistry(listSessions, captureScreen),
+        { findByName } as unknown as IServerRepository,
+        { emit } as unknown as NotificationBus,
+        undefined,
+        undefined,
+        { getCached, warm: vi.fn() } as unknown as PaneHandleResolver,
+      );
+      listSessions.mockResolvedValue(makeSessions('azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 600));
+
+      monitor.recordHookSignal(baseSignal({ event: 'start', muxPaneRef: '%5' }));
+      await flush();
+
+      expect(getCached).toHaveBeenCalled();
+      expect(monitor.diagnostics().find((d) => d.target === 'azito:agent-1')?.hook).toEqual(expect.objectContaining({ lastEvent: 'start', matchedBy: 'muxPaneRef' }));
+    });
+
     it('flips a matching window to running immediately on a start signal, with zero activity advances and even with stale activity', async () => {
       findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
       // Stale by Tier 2's own threshold — must not matter once a hook signal exists.
@@ -2554,30 +2576,34 @@ describe('AgentActivityMonitor', () => {
         expect(stopPayloads()).toEqual([]);
       });
 
-      it('a hook from a pane other than the first is not recorded, so its Stop does not complete the first pane idle', async () => {
+      it('a blocked screen during the hold shows blocked at once, with no held marker', async () => {
         arrange();
-        const getCached = vi.fn().mockReturnValue({ windowId: 1, ref: MISAO_REF, ordinal: 2, tmuxTarget: 'azito:agent-1' });
-        monitor = new AgentActivityMonitor(
-          { getRunning } as unknown as ExecuteTaskUseCase,
-          { findAll } as unknown as IWindowRepository,
-          mockRegistry(listSessions, screenReads, resolvePane),
-          { findByName } as unknown as IServerRepository,
-          { emit } as unknown as NotificationBus,
-          undefined,
-          undefined,
-          { getCached, warm: vi.fn() } as unknown as PaneHandleResolver,
-        );
+        hook('start');
+        await drain();
         monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
         await drain();
-        monitor.recordHookSignal({ serverName: 'local', sessionName: '', windowIndex: 0, windowName: '', paneIndex: 1, event: 'stop', muxPaneRef: 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXB' });
-        await drain();
-        emit.mockClear();
+        drawScreen(BLOCKED_SCREEN);
         monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
         await drain();
 
-        expect(getCached).toHaveBeenCalled();
-        expect(diagnosticsRow()?.hook).toBeUndefined();
-        expect(completions()).toEqual([]);
+        expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, status: 'blocked' })]);
+        expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'blocked', refinedBy: 'tier2_title' }));
+        expect(diagnosticsRow()?.heldForStopHook).toBeUndefined();
+      });
+
+      it('marks a held idle in diagnostics, and clears the mark once the Stop arrives', async () => {
+        arrange();
+        hook('start');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+        await drain();
+        expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'working', decidedBy: 'tier0_mux', heldForStopHook: true }));
+
+        hook('stop');
+        await drain();
+        expect(diagnosticsRow()?.heldForStopHook).toBeUndefined();
       });
     });
 

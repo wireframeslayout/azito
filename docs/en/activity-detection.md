@@ -389,6 +389,7 @@ Settings → System → **Activity detection diagnostics** (3s refresh, read-onl
 | Supervisor column "no frame received" | The connection is alive but no activity frame has arrived yet (an old supervisor build, or right after a reconnect). A lower tier is deciding in the meantime |
 | `tier1_hook` … `tier4_probe` | That tier's fallback decided the state. A lot of `tier4_probe` rows means the supervisor / hook wiring is worth checking |
 | `none` (while running) | Running by execution-run registration (registered = running; not a detection tier's verdict) |
+| `heldForStopHook: true` | A misao idle held back while waiting for the Stop hook (§13): the mux says idle but the row still reads as working (up to 4s). The screen check still runs during the hold, so a blocked pane shows blocked at once |
 | `refinedBy: tier1_hook_stop` | A marker that a Claude Stop hook confirmed a misao `tier0_mux` `idle` as a completion (§13). `decidedBy` stays `tier0_mux` |
 | `refinedBy: tier2_title` | A marker that Tier 2's screen classification refined a Tier 0 `idle` row into `blocked` (on a misao window, a `tier0_mux` `working` row as well, §13). `decidedBy` deliberately stays at the deciding tier -- read the row as "Tier 0 idle + Tier 2 blocked" |
 | Last transition | The most recent transition and its reason (§7) -- the trail for "why did it disappear" |
@@ -585,8 +586,8 @@ tmux behavior above is unchanged.
   the idle is therefore held back for a short grace (`MISAO_STOP_HOOK_GRACE_MS`, 4s): the key stays
   running and nothing is announced; a Stop within the grace (after the blocked check) announces
   `completed` exactly once, and without one the idle is announced as a plain idle (a later Stop
-  does not rewrite it). With no hook, or a Stop already received, nothing is held. Only hooks from
-  the window's **first pane** are recorded (a split pane's Claude start / Stop is ignored), and a
+  does not rewrite it). With no hook, or a Stop already received, nothing is held. Only misao hooks from
+  the window's **first pane** are recorded (the `misaoPaneId` route; a split pane's Claude start / Stop is ignored, the tmux route is unchanged), and the screen check still runs during the hold, and a
   hook that lands while a tick is running is evaluated again right after it. Agents without hooks (codex etc.) still complete only on
   `exited`.
 - **Hooks.** With `$TMUX_PANE` absent and `$MISAO_PANE_ID` (`p_` + 26 ULID characters) set, the
