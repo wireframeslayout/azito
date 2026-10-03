@@ -310,7 +310,14 @@ export function resolveWindowRegistrationRef(opts: {
   if (muxKind === 'tmux') {
     try { return formatMuxRef(muxRefFromTmuxTarget(stripPaneSuffix(target))); } catch { return null; }
   }
-  if (terminalRef?.kind === 'ref') return terminalRef.ref;
+  // Unknown server kind: wait (null) rather than guess. A ref is adopted only when its kind matches the confirmed kind —
+  // a legacy / persisted tab synthesises a tmux ref from its target before sessions arrive, even on a misao server.
+  if (muxKind === undefined) return null;
+  if (terminalRef?.kind === 'ref') {
+    try {
+      if (parseMuxRef(terminalRef.ref).kind === muxKind) return terminalRef.ref;
+    } catch { /* unparseable: fall through to sessions */ }
+  }
   return sessions ? findSessionWindowRef(sessions, target) : null;
 }
 

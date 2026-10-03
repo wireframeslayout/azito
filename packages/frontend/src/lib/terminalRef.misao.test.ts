@@ -76,14 +76,33 @@ describe('resolveWindowRegistrationRef', () => {
   it('misao uses the ref the terminal was opened with', () => {
     expect(resolveWindowRegistrationRef({
       muxKind: 'misao', target: 'azito:unregistered',
-      terminalRef: { kind: 'ref', serverName: 'local-misao', ref: UNREGISTERED_REF, pane: 1 },
-    })).toBe(UNREGISTERED_REF);
+      terminalRef: { kind: 'ref', serverName: 'local-misao', ref: MISAO_REF, pane: 1 },
+    })).toBe(MISAO_REF);
   });
 
   it('misao falls back to the ref in sessions, and is null (never a tmux ref) when unresolved', () => {
     expect(resolveWindowRegistrationRef({ muxKind: 'misao', target: 'azito:unregistered', sessions })).toBe(UNREGISTERED_REF);
     expect(resolveWindowRegistrationRef({ muxKind: 'misao', target: 'azito:unregistered' })).toBeNull();
     expect(resolveWindowRegistrationRef({ muxKind: undefined, target: 'azito:unregistered' })).toBeNull();
+  });
+});
+
+describe('resolveWindowRegistrationRef before sessions arrive (legacy / persisted tab)', () => {
+  const target = 'azito:unregistered';
+  // What terminalRefFromTabTarget synthesises from the target while sessions are still missing.
+  const synthesised = terminalRefFromTabTarget('local-misao', target);
+
+  it('synthesises a tmux-kind ref, which a misao server must not adopt', () => {
+    expect(synthesised).toMatchObject({ kind: 'ref' });
+    expect(resolveWindowRegistrationRef({ muxKind: 'misao', target, terminalRef: synthesised ?? undefined })).toBeNull();
+  });
+
+  it('adopts the misao ref from sessions once they arrive, ignoring the synthesised tmux ref', () => {
+    expect(resolveWindowRegistrationRef({ muxKind: 'misao', target, terminalRef: synthesised ?? undefined, sessions })).toBe(UNREGISTERED_REF);
+  });
+
+  it('waits while the mux kind is unknown, even with a ref present', () => {
+    expect(resolveWindowRegistrationRef({ muxKind: undefined, target, terminalRef: synthesised ?? undefined, sessions })).toBeNull();
   });
 });
 
