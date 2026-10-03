@@ -23,7 +23,7 @@ import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveTerminalTarget, resolveTabTargetRef, type TerminalRef } from '../lib/terminalRef';
 import { PENDING_TERMINAL_OPEN_TTL_MS } from '../lib/terminalTargetOpen';
-import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
+import { resolveActivePane, checkWindowExists, resolveActivePaneByRef, findPaneHandle } from '../lib/tmuxPane';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
 import type { PaneUnavailableReason } from '../lib/paneState';
@@ -270,11 +270,16 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     return sessions?.flatMap((sess) => sess.windows).find((w) => w.windowId === terminalRef.windowId)?.ref ?? null;
   }, [terminalRef, sessions]);
 
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
+  const [unavailablePaneHandle, setUnavailablePaneHandle] = useState<string | undefined>(undefined);
   const handlePaneUnavailable = useCallback((reason: PaneUnavailableReason) => {
     // Without the window's ref nothing in the notice can act on it: treat the window as gone.
-    if (windowMuxRef === null) setWindowMissing(true);
-    else setPaneUnavailable(reason);
-  }, [windowMuxRef]);
+    if (windowMuxRef === null) { setWindowMissing(true); return; }
+    // Pinned now: a later delete targets this pane even if a sibling's removal shifts the ordinals.
+    setUnavailablePaneHandle(terminalRef ? findPaneHandle(sessionsRef.current, terminalRef) : undefined);
+    setPaneUnavailable(reason);
+  }, [windowMuxRef, terminalRef]);
 
   const handlePaneNoticeResolved = useCallback((outcome: PaneNoticeOutcome) => {
     setPaneUnavailable(null);
@@ -430,6 +435,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             reason={paneUnavailable}
             terminalRef={terminalRef}
             muxRef={windowMuxRef}
+            paneHandle={unavailablePaneHandle}
             onResolved={handlePaneNoticeResolved}
           />
         )}

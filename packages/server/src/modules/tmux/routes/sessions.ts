@@ -10,7 +10,7 @@ import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveRefForServer, resolvePaneHandle, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
+import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
@@ -989,7 +989,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   // ── DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal ──
-  fastify.delete<{ Params: { name: string; ref: string; ordinal: string } }>(
+  fastify.delete<{ Params: { name: string; ref: string; ordinal: string }; Querystring: { handle?: string } }>(
     '/api/servers/:name/mux/windows/:ref/panes/:ordinal',
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
@@ -997,8 +997,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
-      const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.closePane(srv, handle);
+      await closePaneInWindow(muxClient, srv, ref, { ordinal, handle: request.query.handle });
       notifySessionsChanged(request.params.name);
       return { ok: true };
     },

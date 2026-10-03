@@ -118,7 +118,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
   });
 
   describe('panes of a window', () => {
-    type ListedWindow = { ref: string; panes: Array<{ index: number; processState?: string }> };
+    type ListedWindow = { ref: string; panes: Array<{ index: number; handle?: string; processState?: string }> };
 
     async function listWindow(): Promise<ListedWindow> {
       const res = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions` });
@@ -148,6 +148,41 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
       const win = await listWindow();
       expect(win.panes).toHaveLength(1);
       expect(win.panes[0].processState).toBe('running');
+    });
+
+    it('deletes a pane by its handle: a repeated delete is a no-op and never takes a sibling that moved up', async () => {
+      const { ref } = await listWindow();
+      for (let i = 0; i < 2; i++) {
+        const opened = await app.inject({ method: 'POST', url: `${mux(ref)}/panes/open`, payload: {} });
+        expect(opened.statusCode).toBe(200);
+      }
+      const [first, second, third] = (await listWindow()).panes.map((p) => p.handle!);
+      expect(third).toBeDefined();
+
+      const url = `${mux(ref)}/panes/2?handle=${encodeURIComponent(second)}`;
+      expect((await app.inject({ method: 'DELETE', url })).statusCode).toBe(200);
+      expect((await app.inject({ method: 'DELETE', url })).statusCode).toBe(200);
+      expect((await listWindow()).panes.map((p) => p.handle)).toEqual([first, third]);
+
+      expect((await app.inject({ method: 'DELETE', url: `${mux(ref)}/panes/1?handle=not-a-handle` })).statusCode).toBe(400);
+      expect((await app.inject({ method: 'DELETE', url: `${mux(ref)}/panes/1?handle=${encodeURIComponent(third)}` })).statusCode).toBe(200);
+      expect((await listWindow()).panes.map((p) => p.handle)).toEqual([first]);
+    });
+
+    it('refuses a handle that belongs to another window and leaves that pane alone', async () => {
+      const { ref } = await listWindow();
+      const created = await app.inject({ method: 'POST', url: `/api/servers/${server.name}/mux/workspaces/${PANES_WS}/windows`, payload: { name: 'other' } });
+      expect(created.statusCode).toBe(200);
+      const otherRef = created.json().ref as string;
+      const res = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions` });
+      const windows = res.json().find((x: { name: string }) => x.name === PANES_WS).windows as ListedWindow[];
+      const otherHandle = windows.find((w) => w.ref === otherRef)!.panes[0].handle!;
+
+      const refused = await app.inject({ method: 'DELETE', url: `${mux(ref)}/panes/1?handle=${encodeURIComponent(otherHandle)}` });
+      expect(refused.statusCode).toBe(404);
+      const after = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions` });
+      const afterWindows = after.json().find((x: { name: string }) => x.name === PANES_WS).windows as ListedWindow[];
+      expect(afterWindows.find((w) => w.ref === otherRef)!.panes.map((p) => p.handle)).toEqual([otherHandle]);
     });
 
     it('shows a pane restored after a daemon restart as stopped and deletes it', async () => {

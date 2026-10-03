@@ -3,7 +3,7 @@ import type { ExecResult } from '../servers/transport/ServerTransport';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { Window, IWindowRepository } from './Window';
 import { isPrimaryTaskWindow } from './Window';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, muxKindForRuntime } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, muxKindForRuntime, isPaneHandleLike, asPaneHandle } from '@azito/shared';
 import { resolveKillOutcome, type KillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { uiTokenEnvForServer } from '../../shared/auth/uiTokenEnv';
@@ -51,6 +51,38 @@ export async function resolvePaneHandle(
     return await muxClient.resolvePane(server, ref, ordinal);
   } catch {
     throw Object.assign(new Error(`Pane ordinal ${ordinal} not found`), { statusCode: 404 });
+  }
+}
+
+/**
+ * Deletes one pane of the window `ref`. Addressed by the pane's stable handle (what the session listing reported)
+ * when given: ordinals shift when a sibling goes, so re-resolving an ordinal can delete a different pane. A handle
+ * that no longer exists is already deleted (success); one that lives in another window is refused. Without a handle
+ * the ordinal is resolved as before.
+ */
+export async function closePaneInWindow(
+  muxClient: IMuxClient,
+  server: ServerConfig,
+  ref: MuxRef,
+  target: { ordinal: PaneOrdinal; handle?: string },
+): Promise<void> {
+  let handle: PaneHandle;
+  if (target.handle === undefined) {
+    handle = await resolvePaneHandle(muxClient, server, ref, target.ordinal);
+  } else {
+    if (!isPaneHandleLike(target.handle, ref.kind)) {
+      throw Object.assign(new Error('Invalid pane handle'), { statusCode: 400 });
+    }
+    handle = asPaneHandle(target.handle);
+    const members = await muxClient.listPanesByRef(server, ref).catch(() => []);
+    if (!members.some((pane) => pane.handle === handle)) {
+      if ((await muxClient.refFromPaneHandle(server, handle)) === null) return;
+      throw Object.assign(new Error('Pane does not belong to this window'), { statusCode: 404 });
+    }
+  }
+  const outcome = await resolveKillOutcome(muxClient.closePane(server, handle));
+  if (!outcome.success) {
+    throw Object.assign(new Error(`kill-pane failed: ${outcome.result.stderr || outcome.result.stdout}`), { statusCode: 500 });
   }
 }
 

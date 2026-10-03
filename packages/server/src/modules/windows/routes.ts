@@ -23,7 +23,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -719,7 +719,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   );
 
   // ── DELETE /api/windows/:id/panes/:ordinal ──
-  fastify.delete<{ Params: { id: string; ordinal: string } }>(
+  fastify.delete<{ Params: { id: string; ordinal: string }; Querystring: { handle?: string } }>(
     '/api/windows/:id/panes/:ordinal',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
@@ -727,8 +727,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).closePane(srv, handle);
+      await closePaneInWindow(driverFor(srv), srv, ref, { ordinal, handle: request.query.handle });
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },

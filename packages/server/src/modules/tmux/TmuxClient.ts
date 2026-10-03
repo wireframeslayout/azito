@@ -31,7 +31,7 @@ export { windowSpecMatches } from './types';
 const TMUX_LIST_PANES_FORMAT = [
   '#{session_name}', '#{session_windows}', '#{session_attached}', '#{session_created}',
   '#{window_index}', '#{window_name}', '#{window_active}', '#{window_activity}',
-  '#{pane_index}', '#{pane_current_command}', '#{pane_width}', '#{pane_height}', '#{pane_active}', '#{pane_pid}', '#{pane_title}',
+  '#{pane_index}', '#{pane_current_command}', '#{pane_width}', '#{pane_height}', '#{pane_active}', '#{pane_pid}', '#{pane_title}', '#{pane_id}',
 ].join('|||');
 
 /** Parses `tmux list-panes -a -F <TMUX_LIST_PANES_FORMAT>` stdout into sessions (unfiltered). */
@@ -47,7 +47,7 @@ function parseSessionLines(stdout: string): TmuxSession[] {
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
     const parts = line.split('|||');
-    const [sName, sWindows, sAttached, sCreated, wIndex, wName, wActive, wActivity, pIndex, pCommand, pWidth, pHeight, pActive, pPid, pTitle] = parts;
+    const [sName, sWindows, sAttached, sCreated, wIndex, wName, wActive, wActivity, pIndex, pCommand, pWidth, pHeight, pActive, pPid, pTitle, pId] = parts;
 
     if (!sessionMap.has(sName)) {
       sessionMap.set(sName, {
@@ -79,6 +79,7 @@ function parseSessionLines(stdout: string): TmuxSession[] {
       height: parseInt(pHeight, 10),
       active: pActive === '1',
       pid: parseInt(pPid, 10),
+      handle: pId || undefined,
     });
   }
 

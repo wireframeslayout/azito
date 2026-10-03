@@ -19,7 +19,7 @@ interface WindowTreePopoverProps {
   onAddWindow: (sessionName: string) => void;
   onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
   /** Deletes one pane (a stopped or exited one, from its row). `label` names it in the confirmation. */
-  onDeletePane: (ref: TerminalRef, label: string) => void;
+  onDeletePane: (ref: TerminalRef, label: string, handle?: string) => void;
   /** Deletes a whole window (the way out of a window without panes). `label` names it in the confirmation. */
   onKillWindow: (ref: TerminalRef, label: string) => void;
   isMobile: boolean;
@@ -153,7 +153,7 @@ export default function WindowTreePopover({
                             title={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
                             aria-label={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
                             style={{ marginLeft: 'auto' }}
-                            onClick={(e) => { e.stopPropagation(); onDeletePane(paneRef, `${winLabel}.${pane.index}`); }}
+                            onClick={(e) => { e.stopPropagation(); onDeletePane(paneRef, `${winLabel}.${pane.index}`, pane.handle); }}
                           >
                             <Icon name="trash" size={14} />
                           </IconButton>

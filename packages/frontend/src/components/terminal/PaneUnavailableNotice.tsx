@@ -5,7 +5,7 @@ import { OpenPaneForm } from './OpenPaneForm';
 import { api } from '../../api/client';
 import { errorMessageOf } from '../../lib/apiResult';
 import type { PaneUnavailableReason } from '../../lib/paneState';
-import { paneApiPath, windowKillRequest, type TerminalRef } from '../../lib/terminalRef';
+import { paneDeletePath, windowKillRequest, type TerminalRef } from '../../lib/terminalRef';
 
 export type PaneNoticeOutcome = 'pane_deleted' | 'pane_opened' | 'window_deleted';
 
@@ -14,6 +14,8 @@ interface PaneUnavailableNoticeProps {
   terminalRef: TerminalRef;
   /** Formatted MuxRef of the window, needed to open a pane in it. */
   muxRef: string;
+  /** Handle of the unavailable pane, captured when it was reported: the delete targets it even if ordinals shift. */
+  paneHandle?: string;
   onResolved: (outcome: PaneNoticeOutcome) => void;
 }
 
@@ -23,7 +25,7 @@ type Busy = 'delete_pane' | 'kill_window' | null;
  * Overlay shown instead of a terminal when the hub refuses to attach: a stopped pane (restored by a restarted
  * misao daemon) or a window without panes. Offers the ways out: delete the pane, or open a pane / delete the window.
  */
-export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved }: PaneUnavailableNoticeProps) {
+export function PaneUnavailableNotice({ reason, terminalRef, muxRef, paneHandle, onResolved }: PaneUnavailableNoticeProps) {
   const { t } = useTranslation('common');
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
@@ -48,7 +50,7 @@ export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved 
   }
 
   function handleDeletePane(): void {
-    void run('delete_pane', 'pane_deleted', paneApiPath(terminalRef), 'DELETE');
+    void run('delete_pane', 'pane_deleted', paneDeletePath(terminalRef, paneHandle), 'DELETE');
   }
 
   function handleKillWindow(): void {

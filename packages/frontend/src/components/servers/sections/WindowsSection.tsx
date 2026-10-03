@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
-import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, paneApiPath, windowKillRequest, type TerminalRef } from '../../../lib/terminalRef';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, paneDeletePath, windowKillRequest, type TerminalRef } from '../../../lib/terminalRef';
 import { stripPaneSuffix, muxKindForRuntime } from '@azito/shared';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { preferredPaneOrdinal } from '../../../lib/paneState';
@@ -112,11 +112,11 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   }, [server.name, refresh, useMuxRoutes]);
 
   // Deleting what is on screen leaves `selectedRef` pointing at a pane ordinal / window that is gone: fall back to the first window.
-  const handleDeletePane = useCallback(async (ref: TerminalRef, label: string) => {
+  const handleDeletePane = useCallback(async (ref: TerminalRef, label: string, handle?: string) => {
     const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: label }), danger: true });
     if (!ok) return;
     try {
-      const failure = errorMessageOf(await api<unknown>(paneApiPath(ref), { method: 'DELETE' }));
+      const failure = errorMessageOf(await api<unknown>(paneDeletePath(ref, handle), { method: 'DELETE' }));
       if (failure) {
         showToast(failure);
         return;
