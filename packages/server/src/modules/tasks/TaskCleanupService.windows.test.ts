@@ -73,6 +73,16 @@ describe('TaskCleanupService window close', () => {
     expect(closeWindow).not.toHaveBeenCalled();
   });
 
+  it('assertWindowCloseable throws while the driver is unusable and is silent otherwise, without touching the window', () => {
+    const down = setup({ resolveThrows: true });
+    expect(() => down.service.assertWindowCloseable(down.task)).toThrow(MuxDriverUnavailableError);
+    expect(down.closeWindow).not.toHaveBeenCalled();
+
+    const up = setup({});
+    expect(() => up.service.assertWindowCloseable(up.task)).not.toThrow();
+    expect(up.closeWindow).not.toHaveBeenCalled();
+  });
+
   it('fails closed when the connection drops during the close', async () => {
     const { service, log, task } = setup({ closeWindow: vi.fn(async () => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); }) });
 

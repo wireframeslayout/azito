@@ -214,8 +214,11 @@ async function main(): Promise<void> {
   );
   // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect (only the tasks the first run skipped).
   void scheduleStartupRecovery(
-    () => recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); }),
-    () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
+    {
+      recover: () => recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); }),
+      recoverSkipped: () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
+      hasPending: () => recoverStuckTasks.hasPendingForDaemon(),
+    },
     misao?.connection,
   );
 

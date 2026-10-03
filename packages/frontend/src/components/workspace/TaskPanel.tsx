@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, apiWithStatus } from '../../api/client';
+import { reportIfOperatorRequired } from '../../api/operatorRequired';
 import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMutationResult';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
@@ -701,23 +702,34 @@ export default function TaskPanel({
     return true;
   }, [showToast, t]);
 
+  // Sends a delete / archive and reports whether the caller may carry on (false: it failed and was shown).
+  const requestTaskMutation = useCallback(async (path: string, method: 'DELETE' | 'POST'): Promise<boolean> => {
+    try {
+      const { status, body } = await apiWithStatus(path, { method });
+      reportIfOperatorRequired(status, body);
+      return !reportTaskMutationFailure(taskMutationFailure(status, body));
+    } catch (e) {
+      // Not JSON (a proxy's 502, say) or a network failure: the hub's answer is unknown, so nothing is assumed done.
+      showToast(t('tasks:actions.mutationFailed', { error: (e as Error).message }));
+      return false;
+    }
+  }, [reportTaskMutationFailure, showToast, t]);
+
   const handleDelete = useCallback(async () => {
     const ok = await confirm({ title: t('actions.deleteTask'), message: t('actions.deleteConfirm'), danger: true });
     if (!ok) return;
-    const { status, body } = await apiWithStatus(`/tasks/${taskId}`, { method: 'DELETE' });
-    if (reportTaskMutationFailure(taskMutationFailure(status, body))) return;
+    if (!(await requestTaskMutation(`/tasks/${taskId}`, 'DELETE'))) return;
     if (onDelete) onDelete(taskId);
     onRefresh();
-  }, [taskId, onDelete, onRefresh, confirm, reportTaskMutationFailure]);
+  }, [taskId, onDelete, onRefresh, confirm, requestTaskMutation]);
 
   const handleArchive = useCallback(async () => {
     const ok = await confirm({ title: t('actions.archiveTask'), message: t('actions.archiveConfirm'), danger: true });
     if (!ok) return;
-    const { status, body } = await apiWithStatus(`/tasks/${taskId}/archive`, { method: 'POST' });
-    if (reportTaskMutationFailure(taskMutationFailure(status, body))) return;
+    if (!(await requestTaskMutation(`/tasks/${taskId}/archive`, 'POST'))) return;
     onRefresh();
     fetchTaskData();
-  }, [taskId, onRefresh, fetchTaskData, confirm, reportTaskMutationFailure]);
+  }, [taskId, onRefresh, fetchTaskData, confirm, requestTaskMutation]);
 
   const handleRestore = useCallback(async () => {
     await api(`/tasks/${taskId}/restore`, { method: 'POST' });

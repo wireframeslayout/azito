@@ -401,6 +401,47 @@ describe('tasks routes while the mux daemon is down', () => {
     expect(opts.taskRepo.delete).not.toHaveBeenCalled();
   });
 
+  it('archiving a pending_approval task whose approval was already resolved answers 409 and does not close the window or stop anything', async () => {
+    const opts = makeOpts({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: 'task-1' } as Partial<Task>);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(409);
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+  });
+
+  it('tmux: DELETE stops the execution first, then closes the window, then deletes the task (original order)', async () => {
+    const opts = makeOpts({ status: 'running', tmuxWindow: 'task-1' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(200);
+    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(order(opts.executeTaskUseCase.stopByTaskId)).toBeLessThan(order((opts.muxDriverRegistry as any)._driver.closeWindow));
+    expect(order((opts.muxDriverRegistry as any)._driver.closeWindow)).toBeLessThan(order(opts.taskRepo.delete));
+  });
+
+  it('tmux: archive stops the execution first, then closes the window, then archives (original order)', async () => {
+    const opts = makeOpts({ status: 'running', tmuxWindow: 'task-1' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(200);
+    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(order(opts.executeTaskUseCase.stopByTaskId)).toBeLessThan(order((opts.muxDriverRegistry as any)._driver.closeWindow));
+    expect(order((opts.muxDriverRegistry as any)._driver.closeWindow)).toBeLessThan(order(opts.windowRepo.remove));
+  });
+
   it('archiving a pending_approval task answers 503 without consuming the approval or changing the task', async () => {
     const opts = makeOpts({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' } as Partial<Task>);
     opts.muxDriverRegistry = daemonDown();

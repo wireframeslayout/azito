@@ -44,14 +44,28 @@ export class TaskCleanupService {
   constructor(private deps: TaskCleanupDeps) {}
 
   /**
-   * First step of deleting / archiving a task, run BEFORE anything else is changed (approval consumption,
-   * stopping the execution, deleting rows): closes the task's window by its identity — the primary window
-   * row's mux_ref for misao, otherwise task.tmuxWindow.
+   * First step of deleting / archiving a task, before anything is changed (approval consumption, stopping
+   * the execution, closing the window, deleting rows): throws MuxDriverUnavailableError (503) when the mux
+   * driver of the task's window is not usable, so the request can be refused with nothing changed — deleting
+   * the task and its window rows would otherwise orphan a misao window with no identity left to remove it by.
+   */
+  assertWindowCloseable(task: Task): void {
+    const { serverRepo, projectServerRepo } = this.deps;
+    const serverName = resolveTaskServerName(task, projectServerRepo);
+    const server = serverName ? serverRepo.findByName(serverName) : null;
+    if (!task.tmuxWindow || !server) return;
+    this.deps.muxDriverRegistry.resolve(server);
+  }
+
+  /**
+   * Closes the task's window by its identity — the primary window row's mux_ref for misao, otherwise
+   * task.tmuxWindow. Run after the approval was handled and the execution stopped, so nothing keeps using the
+   * window while it closes, and an approval conflict (409) leaves the window alone.
    * A window that could not be confirmed closed is a warning; the caller carries on.
-   * A mux daemon that is down throws MuxDriverUnavailableError (503) with nothing changed: deleting the task
-   * and its window rows would orphan the window with no identity left to remove it by. This covers a driver
-   * that is unavailable up front and one whose connection drops during the close. A connection loss the driver
-   * reports only as a failed result (not as an error) cannot be told apart from another failure and is a warning.
+   * A connection that drops DURING the close throws MuxDriverUnavailableError (503) with the execution already
+   * stopped and the task and its rows kept — accepted: the request can simply be retried. A connection loss the
+   * driver reports only as a failed result (not as an error) cannot be told apart from another failure and is
+   * a warning.
    */
   async closeWindow(task: Task, log: { warn: (msg: string) => void }): Promise<void> {
     const { serverRepo, projectServerRepo, windowRepo } = this.deps;

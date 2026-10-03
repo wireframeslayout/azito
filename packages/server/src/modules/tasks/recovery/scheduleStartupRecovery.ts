@@ -8,20 +8,23 @@ export interface MisaoConnectionEvents {
 
 /**
  * Runs startup recovery without waiting for the misao daemon: tmux tasks are recovered at once, while a misao
- * task is skipped (`daemon_unreachable`) until the daemon connects. When it is not yet connected, only the
- * tasks that first run skipped are recovered on the first connection, however late that is — tasks the first
- * run already resumed are not resumed a second time.
+ * task is deferred (`daemon_unreachable`) until the daemon connects. When it is not yet connected, only the
+ * deferred tasks are recovered on each connection, however late — tasks the first run already resumed are not
+ * resumed a second time — until none is left waiting.
  */
 export function scheduleStartupRecovery(
-  recover: () => Promise<void>,
-  recoverSkipped: () => Promise<void>,
+  recovery: { recover: () => Promise<void>; recoverSkipped: () => Promise<void>; hasPending: () => boolean },
   misaoConnection: MisaoConnectionEvents | undefined,
 ): Promise<void> {
-  const first = recover();
+  const first = recovery.recover();
   if (!misaoConnection || misaoConnection.availability().available) return first;
+  let chain = first;
   const off = misaoConnection.onConnected(() => {
-    off();
-    void first.then(recoverSkipped);
+    chain = chain.then(async () => {
+      await recovery.recoverSkipped();
+      if (!recovery.hasPending()) off();
+    });
   });
+  void first.then(() => { if (!recovery.hasPending()) off(); });
   return first;
 }
