@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { stripDirty, normalizeLegacyTabs, migrateTerminalTabs, type PersistedTab } from './useTabPersistence';
+import { stripDirty, normalizeLegacyTabs, migrateTerminalTabs, nextActiveTabIdAfterDrop, type PersistedTab } from './useTabPersistence';
 import type { Session } from '../pages/workspace/types';
 
 // useTabPersistence itself can't be unit-tested here (it's a React hook, and this
@@ -182,5 +182,22 @@ describe('normalizeLegacyTabs — repaired pane ordinal', () => {
   it('takes the pane from the target suffix when the broken ref carries none', () => {
     const broken = makeTab({ id: 'terminal:local::w[object Object].1', type: 'terminal', serverName: 'local', target: 'azito:win.3' });
     expect(normalizeLegacyTabs([broken])[0].id).toBe('terminal:local/azito:win.3');
+  });
+});
+
+describe('nextActiveTabIdAfterDrop', () => {
+  it('resolves a neighbour renamed by the same migration to its new id', () => {
+    const dropped = makeTab({ id: 'terminal:local/s:w_1.1', type: 'terminal', serverName: 'local' });
+    const renamed = makeTab({ id: 'terminal:local/azito:win.1', type: 'terminal', serverName: 'local' });
+    const migrated = [makeTab({ id: 'terminal:local::w7.1', type: 'terminal', serverName: 'local' })];
+    const idMap = new Map([[renamed.id, 'terminal:local::w7.1']]);
+    expect(nextActiveTabIdAfterDrop([dropped, renamed], migrated, idMap, dropped.id)).toBe('terminal:local::w7.1');
+  });
+
+  it('falls back to the previous tab, then null', () => {
+    const a = makeTab({ id: 'a' });
+    const dropped = makeTab({ id: 'b' });
+    expect(nextActiveTabIdAfterDrop([a, dropped], [a], new Map(), 'b')).toBe('a');
+    expect(nextActiveTabIdAfterDrop([dropped], [], new Map(), 'b')).toBeNull();
   });
 });

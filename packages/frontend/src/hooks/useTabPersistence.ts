@@ -273,6 +273,24 @@ export function migrateTerminalTabs(
   return { tabs: final, changed: true, idMap, dropped };
 }
 
+/**
+ * The tab to activate once the active tab `activeId` was dropped by a migration: the next
+ * surviving tab, else the previous one, else null. Candidates are looked up by their
+ * post-migration id (`idMap`), since a neighbour may have been renamed by the same migration.
+ */
+export function nextActiveTabIdAfterDrop(
+  before: PersistedTab[],
+  migrated: PersistedTab[],
+  idMap: Map<string, string>,
+  activeId: string,
+): string | null {
+  const resolved = (t: PersistedTab): string => idMap.get(t.id) ?? t.id;
+  const survives = (t: PersistedTab): boolean => migrated.some((m) => m.id === resolved(t));
+  const from = before.findIndex((t) => t.id === activeId);
+  const next = before.slice(from + 1).find(survives) ?? before.slice(0, from).reverse().find(survives);
+  return next ? resolved(next) : null;
+}
+
 export function useTabPersistence(storageKey?: string) {
   const initialized = useRef(false);
 
@@ -374,12 +392,7 @@ export function useTabPersistence(storageKey?: string) {
     const active = activeTabIdRef.current;
     if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
     else if (active && dropped.has(active)) {
-      // The active tab was dropped: move to the next surviving tab, else the previous one, else none.
-      const survivors = (id: string) => migrated.some((t) => t.id === id);
-      const from = before.findIndex((t) => t.id === active);
-      const next = before.slice(from + 1).find((t) => survivors(t.id))
-        ?? [...before.slice(0, from)].reverse().find((t) => survivors(t.id));
-      setActiveTabId(next?.id ?? null);
+      setActiveTabId(nextActiveTabIdAfterDrop(before, migrated, idMap, active));
     }
     return idMap;
   }, []);
