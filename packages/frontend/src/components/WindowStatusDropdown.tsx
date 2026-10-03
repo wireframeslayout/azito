@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { Window, Task, Project } from '../pages/workspace/types';
-import type { TerminalRef } from '../lib/terminalRef';
+import { findSessionWindowRef, type TerminalRef } from '../lib/terminalRef';
+import type { Session } from '../pages/workspace/types';
 import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
@@ -12,6 +13,8 @@ import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDis
 interface WindowStatusDropdownProps {
   serverName: string;
   target: string;
+  /** Sessions of this server — the source of the window's ref when registering. */
+  sessions?: Session[];
   project: Project | null;
   allTasks: Task[];
   /** Owner context for registering an untracked window (task takes precedence). */
@@ -102,7 +105,7 @@ function ActionButton({ label, icon, onClick, loading }: { label: string; icon: 
   );
 }
 
-export function WindowStatusDropdown({ serverName, target, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
+export function WindowStatusDropdown({ serverName, target, sessions, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -207,7 +210,8 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
     try {
       const base = target.replace(/\.\d+$/, '');
       let refJson: string | undefined;
-      try { refJson = formatMuxRef(muxRefFromTmuxTarget(base)); } catch { /* fall back to tmux_target */ }
+      refJson = sessions ? findSessionWindowRef(sessions, base) ?? undefined : undefined;
+      if (!refJson) try { refJson = formatMuxRef(muxRefFromTmuxTarget(base)); } catch { /* fall back to tmux_target */ }
       const body: Record<string, unknown> = {
         server_name: serverName,
         ...(refJson ? { ref: refJson } : { tmux_target: base }),

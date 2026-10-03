@@ -19,8 +19,9 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
-import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
+import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -90,7 +91,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         try {
           givenRef = parseMuxRef(refJson);
           if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
-          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
+          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
@@ -223,7 +224,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         try {
           givenRef = parseMuxRef(refJson);
           if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
-          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
+          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }

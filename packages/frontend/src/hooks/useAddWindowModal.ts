@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
-import type { TerminalRef } from '../lib/terminalRef';
+import { findSessionWindowRef, type TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
 
@@ -264,7 +264,8 @@ export function useAddWindowModal(
         }
       } else if (awMode === 'existing') {
         let existingRef: string | undefined;
-        try { existingRef = formatMuxRef(muxRefFromTmuxTarget(awTarget)); } catch { /* keep undefined */ }
+        existingRef = findSessionWindowRef(awSessionData[awServer] ?? [], awTarget) ?? undefined;
+        if (!existingRef) try { existingRef = formatMuxRef(muxRefFromTmuxTarget(awTarget)); } catch { /* keep undefined */ }
         await api(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ...(existingRef ? { ref: existingRef } : {}), label: awLabel.trim() }) });
         if (awTaskId != null) {
           await onTaskWindowAdded?.(awTaskId, awServer, awTarget, awLabel.trim(), true);

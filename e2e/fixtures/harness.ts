@@ -279,18 +279,18 @@ export class Harness {
 
   /**
    * misao のウィンドウを agent ウィンドウとして登録する。misao の窓は MuxRef（kind: 'misao'）で
-   * 特定され、tmux_target は `<workspace>:<window 名>` の表示用ラベルとして一緒に送る。
+   * 特定される。UI と同じく ref だけを送り、tmux_target（`<workspace>:<window id>`）はサーバーが作る。
    */
   async registerMisaoWindow(
     projectId: number,
-    window: { ref: string; workspace: string; windowName: string },
+    window: { ref: string },
     options: { label: string },
   ): Promise<number> {
     const { id } = await this.api<{ ok: boolean; id: number }>(`/projects/${projectId}/windows`, {
       method: 'POST',
       body: JSON.stringify({
         server_name: 'local',
-        tmux_target: `${window.workspace}:${window.windowName}`,
+        // UI と同じ ref のみの登録（tmux_target はサーバーが ref から作る）。
         ref: window.ref,
         label: options.label,
         window_type: 'agent',

@@ -97,8 +97,8 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
   // sessions. Legacy callers (TaskPanel) pass a tmux target and no ref — derive the ref then.
   const terminalRef = useMemo<TerminalRef | undefined>(
-    () => terminalRefProp ?? terminalRefFromTabTarget(serverName, rawTarget) ?? undefined,
-    [terminalRefProp, serverName, rawTarget],
+    () => terminalRefProp ?? terminalRefFromTabTarget(serverName, rawTarget, sessions) ?? undefined,
+    [terminalRefProp, serverName, rawTarget, sessions],
   );
   const target = useMemo(() => {
     if (terminalRef) {
@@ -350,6 +350,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
           <WindowStatusDropdown
             serverName={serverName}
             target={target}
+            sessions={sessions}
             project={project ?? null}
             allTasks={allTasks ?? []}
             taskId={taskId}

@@ -79,7 +79,9 @@ export function terminalRefFromWindow(
  * without sessions data. Uses formatMuxRef(muxRefFromTmuxTarget(...)) to produce
  * a valid JSON ref string, and extracts the pane suffix.
  */
-export function terminalRefFromTarget(serverName: string, target: string): TerminalRef {
+export function terminalRefFromTarget(serverName: string, target: string, sessions?: Session[]): TerminalRef {
+  // With sessions the server-provided windowId / ref wins; a misao window must never be turned into a tmux-kind ref.
+  if (sessions) return terminalRefFromLegacyTarget(serverName, target, sessions);
   const stripped = stripPaneSuffix(target);
   let pane = 1;
   if (stripped !== target) {
@@ -95,6 +97,21 @@ export function terminalRefFromTarget(serverName: string, target: string): Termi
   } catch {
     return { kind: 'ref', serverName, ref: formatMuxRef({ kind: 'tmux', workspace: '', window: stripped }), pane };
   }
+}
+
+/** Find the window a `<session>:<window>[.<pane>]` target names and return the ref the server reported for it. */
+export function findSessionWindowRef(sessions: Session[], target: string): string | null {
+  const windowPart = stripPaneSuffix(target);
+  const colonIdx = windowPart.indexOf(':');
+  if (colonIdx < 0) return null;
+  const sessionName = windowPart.slice(0, colonIdx);
+  const winSpec = windowPart.slice(colonIdx + 1);
+  for (const sess of sessions) {
+    if (sess.name !== sessionName) continue;
+    const win = sess.windows.find((w) => w.name === winSpec || String(w.index) === winSpec);
+    if (win) return win.ref;
+  }
+  return null;
 }
 
 export function terminalRefFromLegacyTarget(
@@ -268,9 +285,9 @@ function findSessionWindow(sessions: Session[] | undefined, match: (w: Session['
  * `w<id>` (what connectPane stores for windowId tabs) → windowId form, a real tmux target →
  * ref form, anything else → null.
  */
-export function terminalRefFromTabTarget(serverName: string, target: string): TerminalRef | null {
+export function terminalRefFromTabTarget(serverName: string, target: string, sessions?: Session[]): TerminalRef | null {
   const m = /^w(\d+)(?:\.(\d+))?$/.exec(target);
   if (m) return { kind: 'windowId', serverName, windowId: parseInt(m[1], 10), pane: m[2] ? parseInt(m[2], 10) : 1 };
-  if (target.includes(':')) return terminalRefFromTarget(serverName, target);
+  if (target.includes(':')) return terminalRefFromTarget(serverName, target, sessions);
   return null;
 }
