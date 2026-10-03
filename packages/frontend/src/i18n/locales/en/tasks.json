@@ -9,6 +9,8 @@
     "deleteConfirm": "Delete this task?",
     "archiveTask": "Archive Task",
     "archiveConfirm": "Archive this task? Worktree and tmux window will be removed.",
+    "muxUnavailable": "Cannot connect to the terminal daemon (misao), so the task's window cannot be closed. Nothing was changed. Try again once it is running.",
+    "mutationFailed": "The request failed: {{error}}",
     "execute": "Execute",
     "stop": "Stop",
     "edit": "Edit",

@@ -2204,3 +2204,84 @@ describe('WindowRespawnService.respawn — duplicate session guard (Issue #274)'
     expect(sentCommands.length).toBeGreaterThanOrEqual(1);
   });
 });
+
+describe('WindowRespawnService — misao window identity', () => {
+  const OLD_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
+  const NEW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
+  const oldRef = { kind: 'misao' as const, workspace: 'azito', window: OLD_ID };
+  const newRef = { kind: 'misao' as const, workspace: 'azito', window: NEW_ID };
+
+  function misaoService(win: Window, task: Task | null) {
+    const built = buildService({ window: win, task, unit: task ? makeUnit({ id: 10 }) : null });
+    const driver = built.tmux as unknown as { kind: string; windowExists: ReturnType<typeof vi.fn> };
+    driver.kind = 'misao';
+    driver.windowExists = vi.fn(async () => true);
+    (built.tmux.openWindow as ReturnType<typeof vi.fn>).mockImplementation(async (_s: unknown, _w: string, baseName?: string) => ({
+      ref: newRef,
+      result: { stdout: '', stderr: '', code: 0 },
+      windowName: baseName,
+    }));
+    built.serverRepo.findByName.mockImplementation(() => makeServer({ muxRuntime: 'misao' }));
+    return { ...built, driver };
+  }
+
+  const server = makeServer({ muxRuntime: 'misao' });
+
+  it('kills the live old window by its id, re-opens it under its display name, and points the row and the task at the new id', async () => {
+    const win = makeWindow({ id: 7, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: 'task-5--ab12' });
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: OLD_ID });
+    const { service, tmux, windowRepo, taskRepo, driver } = misaoService(win, task);
+
+    const result = await service.respawn(7, server);
+
+    expect(driver.windowExists).toHaveBeenCalledWith(expect.anything(), oldRef);
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), oldRef);
+    expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5--ab12', expect.objectContaining({ exactName: true }));
+    expect(result.tmuxTarget).toBe(`azito:${NEW_ID}`);
+    expect(windowRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: newRef, label: 'task-5--ab12', sleeping: false }));
+    expect(taskRepo.update).toHaveBeenCalledWith(5, { tmuxWindow: NEW_ID });
+  });
+
+  it('does not kill anything when the old window is already gone (sleeping)', async () => {
+    const win = makeWindow({ id: 7, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: 'task-5--ab12', sleeping: true });
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: OLD_ID });
+    const { service, tmux, driver } = misaoService(win, task);
+    driver.windowExists.mockResolvedValue(false);
+
+    await service.respawn(7, server);
+
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not reuse a window id that a legacy row stored as its label', async () => {
+    const win = makeWindow({ id: 7, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: OLD_ID });
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: OLD_ID });
+    const { service, tmux } = misaoService(win, task);
+
+    await service.respawn(7, server);
+
+    expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5', expect.anything());
+  });
+
+  it('leaves a tmux window row and task untouched in name (tmux behaviour unchanged)', async () => {
+    const win = makeWindow({ id: 7, taskId: 5, tmuxTarget: 'azito:task-5', label: 'task-5' });
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: 'task-5' });
+    const { service, windowRepo, taskRepo } = buildService({ window: win, task, unit: makeUnit({ id: 10 }) });
+
+    await service.respawn(7, makeServer());
+
+    expect(windowRepo.update).toHaveBeenCalledWith(7, { tmuxTarget: 'azito:task-5', muxRef: expect.objectContaining({ kind: 'tmux', window: 'task-5' }), sleeping: false });
+    expect(taskRepo.update).not.toHaveBeenCalledWith(5, expect.objectContaining({ tmuxWindow: expect.anything() }));
+  });
+
+  it('resumeLegacySession on misao stores the window id, not the display name', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const { service, taskRepo } = misaoService(makeWindow({ taskId: 7 }), task);
+
+    const result = await service.resumeLegacySession(7, server);
+
+    expect(result.windowName).toBe(NEW_ID);
+    expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: NEW_ID });
+  });
+});

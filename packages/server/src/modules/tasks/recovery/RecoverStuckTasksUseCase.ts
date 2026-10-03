@@ -18,7 +18,10 @@ import { extractPhaseSummary } from '../extractPhaseSummary';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from '../execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
-import type { MuxRef, PaneHandle } from '@azito/shared';
+import type { PaneHandle } from '@azito/shared';
+import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Window';
+import { muxWindowTarget } from '../../tmux/muxWindowTarget';
+import { taskWindowRef } from '../../tmux/windowIdentity';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -35,6 +38,10 @@ function collectRunningTaskIds(running: RunningExecutions): Set<number> {
   return new Set(Object.values(running).flat().map((e) => e.taskId));
 }
 
+function isDaemonUnreachable(err: unknown): boolean {
+  return err instanceof MuxDriverUnavailableError && err.reason === 'daemon_unreachable';
+}
+
 export class RecoverStuckTasksUseCase {
   constructor(
     private taskRepo: ITaskRepository,
@@ -48,9 +55,12 @@ export class RecoverStuckTasksUseCase {
     private turnRepo: SqliteAgentTurnRepository,
     private logger: RecoveryLogger,
     private unitTypeLoader: UnitTypeLoader,
+    private windowRepo: IWindowRepository,
   ) {}
 
   private isRunning = false;
+  /** Tasks left undone because their mux daemon was unreachable; removed once handled or settled otherwise. */
+  private readonly pendingForDaemon = new Set<number>();
 
   async run(): Promise<void> {
     if (this.isRunning) return;
@@ -100,15 +110,42 @@ export class RecoverStuckTasksUseCase {
     this.logger.warn(`Periodic recovery: task ${task.id} (${task.status}) has no running execution -> failed`);
   }
 
-  private async doRun(): Promise<void> {
+  /** True while some task is waiting for its mux daemon to come back (see runSkippedForDaemon). */
+  hasPendingForDaemon(): boolean {
+    return this.pendingForDaemon.size > 0;
+  }
+
+  /**
+   * Recovers only the tasks that were left undone because their mux daemon was unreachable, now that it is
+   * reachable. Tasks a run already resumed are not touched again; a task that fails the same way again stays
+   * pending for the next connection.
+   */
+  async runSkippedForDaemon(): Promise<void> {
+    if (this.isRunning) return;
+    this.isRunning = true;
+    try {
+      await this.doRun(new Set(this.pendingForDaemon));
+    } finally {
+      this.isRunning = false;
+    }
+  }
+
+  private async doRun(onlyTaskIds?: ReadonlySet<number>): Promise<void> {
     const stuckTasks: Task[] = [];
     for (const status of RECOVERABLE_STATUSES) {
       stuckTasks.push(...this.taskRepo.findByStatus(status));
+    }
+    if (onlyTaskIds) {
+      const wanted = stuckTasks.filter((t) => onlyTaskIds.has(t.id));
+      stuckTasks.length = 0;
+      stuckTasks.push(...wanted);
     }
     if (stuckTasks.length === 0) return;
 
     const runningTaskIds = collectRunningTaskIds(this.executeTaskUseCase.getRunning());
     const candidates = stuckTasks.filter((t) => !runningTaskIds.has(t.id));
+    // A pending task that is no longer stuck (finished, running again) has nothing left to recover.
+    if (onlyTaskIds) for (const id of onlyTaskIds) if (!candidates.some((t) => t.id === id)) this.pendingForDaemon.delete(id);
     if (candidates.length === 0) return;
 
     this.logger.info(`Startup recovery: found ${candidates.length} stuck task(s)`);
@@ -117,7 +154,19 @@ export class RecoverStuckTasksUseCase {
     await throttled(tasks, MAX_CONCURRENT);
   }
 
+  /** Any mux operation during recovery can find the daemon down: the task is kept pending for its next connection. */
   private async recoverTask(task: Task): Promise<void> {
+    this.pendingForDaemon.delete(task.id);
+    try {
+      await this.recoverTaskNow(task);
+    } catch (err) {
+      if (!isDaemonUnreachable(err)) throw err;
+      this.pendingForDaemon.add(task.id);
+      this.logger.warn(`Recovery deferred: mux daemon unreachable for task ${task.id}`);
+    }
+  }
+
+  private async recoverTaskNow(task: Task): Promise<void> {
     const project = this.projectRepo.findById(task.projectId);
     const resolvedUnitId = resolveUnitId(task, project);
     if (resolvedUnitId === null) {
@@ -152,26 +201,30 @@ export class RecoverStuckTasksUseCase {
       driver = this.muxDriverRegistry.resolve(server);
     } catch (err) {
       if (!(err instanceof MuxDriverUnavailableError)) throw err;
+      if (err.reason === 'daemon_unreachable') this.pendingForDaemon.add(task.id);
       this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
       return;
     }
 
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
-    const windowName = task.tmuxWindow || `task-${task.id}`;
+    // The primary window row's mux_ref names the window (misao: its id); task.tmuxWindow is only the fallback.
+    const primaryWin = this.windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
+    const ref = taskWindowRef({ tmuxWindow: task.tmuxWindow || `task-${task.id}` }, primaryWin, muxWorkspace, driver.kind)!;
 
     let handle: PaneHandle;
     try {
-      const ref: MuxRef = { kind: driver.kind, workspace: muxWorkspace, window: windowName };
       handle = await driver.resolvePane(server, ref, 1);
-    } catch {
-      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWorkspace}:${windowName})`);
+    } catch (err) {
+      if (isDaemonUnreachable(err)) throw err;
+      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWindowTarget(ref)})`);
       return;
     }
 
     let probe: { alive: boolean; verified: boolean };
     try {
       probe = await driver.probePane(server, handle);
-    } catch {
+    } catch (err) {
+      if (isDaemonUnreachable(err)) throw err;
       this.logger.warn(`Recovery skip: probePane failed for task ${task.id} (${handle})`);
       return;
     }

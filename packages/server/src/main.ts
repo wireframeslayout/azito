@@ -11,6 +11,7 @@ import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
+import { scheduleStartupRecovery } from './modules/tasks/recovery/scheduleStartupRecovery';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
 import { reportMisaoServersWhenDisabled } from './modules/servers/misaoStartupCheck';
 import { partitionByTmuxRuntime } from './modules/servers/tmuxServers';
@@ -209,8 +210,17 @@ async function main(): Promise<void> {
     wiring.agentTurnRepo,
     app.log,
     wiring.unitTypeLoader,
+    wiring.windowRepo,
   );
-  recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+  // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect (only the tasks the first run skipped).
+  void scheduleStartupRecovery(
+    {
+      recover: () => recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); }),
+      recoverSkipped: () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
+      hasPending: () => recoverStuckTasks.hasPendingForDaemon(),
+    },
+    misao?.connection,
+  );
 
   setInterval(() => {
     recoverStuckTasks.runPeriodic(wiring.executeTaskUseCase.getRunning()).catch((err) => {

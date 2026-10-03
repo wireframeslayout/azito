@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '../../api/client';
+import { api, apiWithStatus } from '../../api/client';
+import { isOperatorRequiredError, reportIfOperatorRequired } from '../../api/operatorRequired';
+import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMutationResult';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { StatusDot } from '../StatusBadge';
@@ -693,21 +695,45 @@ export default function TaskPanel({
     return () => setFocusedTarget(null);
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocusedTarget]);
 
+  // Shows a failed delete / archive and tells the caller to stop (nothing changed on the hub).
+  const reportTaskMutationFailure = useCallback((failure: TaskMutationFailure | null): boolean => {
+    if (!failure) return false;
+    showToast(failure.kind === 'mux_driver_unavailable' ? t('tasks:actions.muxUnavailable') : t('tasks:actions.mutationFailed', { error: failure.message }));
+    return true;
+  }, [showToast, t]);
+
+  // Sends a delete / archive and reports whether the caller may carry on (false: it failed and was shown).
+  const requestTaskMutation = useCallback(async (path: string, method: 'DELETE' | 'POST'): Promise<boolean> => {
+    try {
+      const { status, body } = await apiWithStatus(path, { method });
+      if (isOperatorRequiredError(status, body)) {
+        // Its own notice is shown; no second "failed" toast.
+        reportIfOperatorRequired(status, body);
+        return false;
+      }
+      return !reportTaskMutationFailure(taskMutationFailure(status, body));
+    } catch (e) {
+      // Not JSON (a proxy's 502, say) or a network failure: the hub's answer is unknown, so nothing is assumed done.
+      showToast(t('tasks:actions.mutationFailed', { error: (e as Error).message }));
+      return false;
+    }
+  }, [reportTaskMutationFailure, showToast, t]);
+
   const handleDelete = useCallback(async () => {
     const ok = await confirm({ title: t('actions.deleteTask'), message: t('actions.deleteConfirm'), danger: true });
     if (!ok) return;
-    await api(`/tasks/${taskId}`, { method: 'DELETE' });
+    if (!(await requestTaskMutation(`/tasks/${taskId}`, 'DELETE'))) return;
     if (onDelete) onDelete(taskId);
     onRefresh();
-  }, [taskId, onDelete, onRefresh, confirm]);
+  }, [taskId, onDelete, onRefresh, confirm, requestTaskMutation]);
 
   const handleArchive = useCallback(async () => {
     const ok = await confirm({ title: t('actions.archiveTask'), message: t('actions.archiveConfirm'), danger: true });
     if (!ok) return;
-    await api(`/tasks/${taskId}/archive`, { method: 'POST' });
+    if (!(await requestTaskMutation(`/tasks/${taskId}/archive`, 'POST'))) return;
     onRefresh();
     fetchTaskData();
-  }, [taskId, onRefresh, fetchTaskData, confirm]);
+  }, [taskId, onRefresh, fetchTaskData, confirm, requestTaskMutation]);
 
   const handleRestore = useCallback(async () => {
     await api(`/tasks/${taskId}/restore`, { method: 'POST' });

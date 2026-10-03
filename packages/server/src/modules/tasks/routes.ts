@@ -35,7 +35,9 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
-import { type MuxRef, muxRefFromTmuxTarget, isValidModelId } from '@azito/shared';
+import { isValidModelId } from '@azito/shared';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
+import { taskWindowRef } from '../tmux/windowIdentity';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -214,7 +216,7 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, muxDriverRegistry, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled } = opts;
-  const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry });
+  const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry, windowRepo });
 
   // ── GET /api/tasks ──
   fastify.get<{
@@ -351,11 +353,16 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const resolvedServerName = resolveTaskServerName(t, projectServerRepo);
         const srv = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
         if (resolvedServerName && srv) {
-          const driver = muxDriverRegistry.resolve(srv);
-          const primaryWin = windows.find((w) => w.isPrimary);
-          const ref: MuxRef = primaryWin?.muxRef
-            ?? muxRefFromTmuxTarget(`${resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo)}:${t.tmuxWindow}`);
-          paneAlive = await driver.windowExists(srv, ref);
+          try {
+            const driver = muxDriverRegistry.resolve(srv);
+            const primaryWin = windows.find((w) => w.isPrimary);
+            const ref = taskWindowRef(t, primaryWin?.muxRef ? primaryWin : undefined, resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo), driver.kind, { tmuxPrefersPrimary: true });
+            if (ref) paneAlive = await driver.windowExists(srv, ref);
+          } catch (err) {
+            // The mux daemon being down makes liveness unknown, not the whole task unreadable.
+            if (!(err instanceof MuxDriverUnavailableError)) throw err;
+            request.log.warn(`paneAlive unknown for task ${t.id}: ${err.message}`);
+          }
         }
       }
 
@@ -736,7 +743,10 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const task = taskRepo.findById(id);
       if (!task) return reply.status(404).send({ error: 'Task not found' });
 
+      // A mux driver that is not usable answers 503 before anything is changed.
+      taskCleanupService.assertWindowCloseable(task);
       executeTaskUseCase.stopByTaskId(id);
+      await taskCleanupService.closeWindow(task, request.log);
       await taskCleanupService.cleanup(task, request.log);
       taskRepo.delete(id);
       return { ok: true };
@@ -953,8 +963,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const driver = muxDriverRegistry.resolve(srv);
         const retryWindows = windowRepo.findByTask(id);
         const retryPrimaryWin = retryWindows.find((w) => w.isPrimary);
-        const retryRef: MuxRef = retryPrimaryWin?.muxRef
-          ?? muxRefFromTmuxTarget(`${muxWorkspace}:${windowName}`);
+        const retryRef = taskWindowRef({ tmuxWindow: windowName }, retryPrimaryWin?.muxRef ? retryPrimaryWin : undefined, muxWorkspace, driver.kind, { tmuxPrefersPrimary: true });
+        if (!retryRef) throw new Error(`Task ${id} has no window to abandon`);
         const target = muxWindowTarget(retryRef);
         const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => driver.closeWindow(srv, retryRef), () => {});
         if (!outcome.success) {
@@ -1115,8 +1125,10 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           }
           throw err;
         }
-        const windowName = task.tmuxWindow || `task-${task.id}`;
-        taskRepo.update(id, { tmuxWindow: windowName } as Partial<Task>);
+        // respawn() has already pointed task.tmuxWindow at the new window; report that identity
+        // (misao: the new window id), not the pre-respawn value.
+        const windowName = result.tmuxTarget.split(':')[1]?.split('.')[0];
+        if (!windowName) throw new Error(`Invalid tmuxTarget after respawn: ${result.tmuxTarget}`);
 
         return { tmuxWindow: windowName, tmuxTarget: result.tmuxTarget };
       }
@@ -1156,6 +1168,9 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (!task) return reply.status(404).send({ error: 'Task not found' });
       if (task.status === 'archived') return { ok: true };
 
+      // A mux driver that is not usable answers 503 before the approval is consumed or anything else is changed.
+      taskCleanupService.assertWindowCloseable(task);
+
       // A `pending_approval` task carries an outstanding untrusted-input
       // execution gate (Issue #328) — this route used to overwrite `status`
       // to 'archived' directly while leaving `pendingOperation` set, the same
@@ -1191,6 +1206,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       }
 
       executeTaskUseCase.stopByTaskId(id);
+      await taskCleanupService.closeWindow(task, request.log);
       await taskCleanupService.cleanup(task, request.log);
       for (const win of windowRepo.findByTask(id)) {
         windowRepo.remove(win.id);

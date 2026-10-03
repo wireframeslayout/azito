@@ -300,6 +300,7 @@ export class TaskRestoreService {
     }
 
     let windowName: string | null = null;
+    let windowLabel: string | null = null;
     let worktreePath: string | null = null;
     let windowRowId: number | null = null;
     let repoDir: string | null = null;
@@ -347,7 +348,7 @@ export class TaskRestoreService {
       // roll back.
       const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', async (freshServer, env) => {
         const opened = await this.resolveDriver(freshServer).openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
-        return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
+        return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? opened.ref.window };
       },
         true,
         // Issue #29 Step 3a review, Important finding 2: re-verify the
@@ -382,6 +383,7 @@ export class TaskRestoreService {
         },
       );
       windowName = created.windowName;
+      windowLabel = created.label ?? created.windowName;
       tokenId = created.tokenId;
       // Issue #29 review (10th pass), Important finding 3: use the fresh
       // `server` row createRotatedWindow re-read and actually created the
@@ -654,7 +656,7 @@ export class TaskRestoreService {
         serverName,
         tmuxTarget: dbTarget,
         muxRef: ref,
-        label: windowName,
+        label: windowLabel,
         isPrimary: true,
         windowType: unit?.workerType ? 'agent' : 'terminal',
         workerType: unit?.workerType ?? null,
