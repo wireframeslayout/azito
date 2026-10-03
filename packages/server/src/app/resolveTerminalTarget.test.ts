@@ -14,7 +14,7 @@ const servers: Record<string, ServerConfig> = {
 const windows: Record<number, Window> = {
   7: { id: 7, serverName: 'tmuxsrv', tmuxTarget: 'sess:win', muxRef: TMUX_REF } as Window,
 };
-const resolveDriverRef = vi.fn(async (_server: ServerConfig, target: string): Promise<MuxRef | null> => (target === 'ws:win' ? MISAO_REF : null));
+const resolveDriverRef = vi.fn(async (_server: ServerConfig, target: string): Promise<MuxRef | null> => (target === 'ws:win' || target === `ws:${MISAO_REF.window}` ? MISAO_REF : null));
 const deps = {
   resolveDriverRef,
   serverRepo: { findByName: (name: string) => servers[name] ?? null },
@@ -53,7 +53,10 @@ describe('resolveTerminalTarget', () => {
   });
 
   it('resolves a target on a misao server through the driver, not as a tmux target', async () => {
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:win.1' }), deps)).toBeNull();
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:win.1' }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: `ws:${MISAO_REF.window}` }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: `ws:${MISAO_REF.window}.2` }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:other' }), deps)).toBeNull();
     expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:win' }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
     expect(resolveDriverRef).toHaveBeenCalledWith(servers.misaosrv, 'ws:win');
   });

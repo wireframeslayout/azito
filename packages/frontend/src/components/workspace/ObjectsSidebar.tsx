@@ -314,6 +314,7 @@ export default function ObjectsSidebar({
       } catch { /* best-effort */ }
     }
     if (windowId != null) connectPane({ kind: 'windowId', serverName, windowId, pane: paneOrdinal ?? 1 });
+    else if (muxRef) connectPane({ kind: 'ref', serverName, ref: muxRef, pane: paneOrdinal ?? 1 });
     else openTerminal({ serverName, target });
     if (windowId != null) onWindowFocus?.(windowId);
     if (mobile) onCloseMobileSidebar();

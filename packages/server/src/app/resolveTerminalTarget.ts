@@ -1,4 +1,4 @@
-import { muxKindForRuntime, muxRefFromTmuxTarget, parseMuxRef, type MuxRef } from '@azito/shared';
+import { muxKindForRuntime, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, type MuxRef } from '@azito/shared';
 import type { IServerRepository, ServerConfig } from '../modules/servers/Server';
 import type { IWindowRepository } from '../modules/windows/Window';
 import { isRefKindCompatible } from '../modules/windows/windowPaneOps';
@@ -39,7 +39,8 @@ export async function resolveTerminalTarget(params: TerminalTargetParams, deps: 
     } catch { /* invalid ref */ }
   } else if (params.target) {
     if (server && muxKindForRuntime(server.muxRuntime) !== 'tmux') {
-      ref = await deps.resolveDriverRef(server, params.target);
+      // The pane comes from the `pane` param, so a `.N` suffix on the target is not part of the window.
+      ref = await deps.resolveDriverRef(server, stripPaneSuffix(params.target));
     } else {
       ref = muxRefFromTmuxTarget(params.target);
     }

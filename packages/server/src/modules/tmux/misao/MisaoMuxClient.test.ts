@@ -224,6 +224,8 @@ describe('MisaoMuxClient reads', () => {
     expect(await client.windowExists(server, refOf('proj', 'w_0000000000000000000000000Z'))).toBe(false);
     expect(await client.resolveRef(server, w)).toEqual(refOf('proj', w));
     expect(await client.resolveRef(server, 'proj:main')).toEqual(refOf('proj', w));
+    expect(await client.resolveRef(server, `proj:${w}`)).toEqual(refOf('proj', w));
+    expect(await client.resolveRef(server, `nope:${w}`)).toBeNull();
     expect(await client.resolveRef(server, 'proj:dup')).toBeNull();
     expect(await client.resolveRef(server, 'proj:none')).toBeNull();
     expect(await client.resolveRef(server, 'nope:main')).toBeNull();

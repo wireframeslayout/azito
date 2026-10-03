@@ -12,6 +12,7 @@ import type { TabItem } from '../components/ui';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { useTabPersistence, type PersistedTab } from '../hooks/useTabPersistence';
 import { useTerminalTargetOpener } from '../hooks/useTerminalTargetOpener';
+import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 import { useBrowserKeepalive } from '../hooks/useBrowserKeepalive';
 import { useBrowserGroups } from '../hooks/useBrowserGroups';
 import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
@@ -99,7 +100,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -475,7 +476,11 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
   // A target string is resolved against the server's mux kind / sessions (and waits for them) — never into a tmux ref blindly.
-  const openTerminalTarget = useTerminalTargetOpener({ servers, sessionData, connect: connectRef });
+  const connectByTarget = useCallback((req: TerminalOpenTarget, projectId?: number) => {
+    connectTargetRaw(req.serverName, req.target, projectId ?? currentProjectId);
+    if (mobile) setSidebarOpen(false);
+  }, [connectTargetRaw, mobile, currentProjectId, setSidebarOpen]);
+  const openTerminalTarget = useTerminalTargetOpener({ servers, sessionData, connect: connectRef, connectByTarget });
   const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }) => {
     if (typeof serverNameOrRef === 'object') {
       connectRef(serverNameOrRef, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);

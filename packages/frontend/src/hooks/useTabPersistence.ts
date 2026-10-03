@@ -430,6 +430,11 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, [openTab]);
 
+  /** Opens a terminal tab by target string only; the server resolves the window when the tab connects. */
+  const connectTarget = useCallback((serverName: string, target: string, projectId?: number) => {
+    openTab({ id: `terminal:${serverName}/${target}`, type: 'terminal', label: target, serverName, target, projectId });
+  }, [openTab]);
+
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
     const tabId = `file:${serverName}:${filePath}`;
     const fileName = filePath.split('/').pop() || filePath;
@@ -670,5 +675,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

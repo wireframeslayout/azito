@@ -22,6 +22,7 @@ import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveTerminalTarget, resolveTabTargetRef, type TerminalRef } from '../lib/terminalRef';
+import { PENDING_TERMINAL_OPEN_TTL_MS } from '../lib/terminalTargetOpen';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
@@ -110,7 +111,17 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     [terminalRefProp, serverName, rawTarget, sessions, muxKind],
   );
   const terminalRef = tabRef.status === 'ready' ? tabRef.ref : undefined;
-  const refPending = tabRef.status === 'wait';
+  const refWaiting = tabRef.status === 'wait';
+  // Sessions that do not arrive (the fetch failed, or the server is not among those fetched) must not leave the tab
+  // on "connecting" for good: after the deadline the tab connects by target and the server resolves it.
+  const [refWaitExpired, setRefWaitExpired] = useState(false);
+  useEffect(() => {
+    setRefWaitExpired(false);
+    if (!refWaiting) return;
+    const timer = setTimeout(() => setRefWaitExpired(true), PENDING_TERMINAL_OPEN_TTL_MS);
+    return () => clearTimeout(timer);
+  }, [refWaiting, serverName, rawTarget]);
+  const refPending = refWaiting && !refWaitExpired;
   const refUnresolved = tabRef.status === 'unresolved';
   const target = useMemo(() => {
     if (terminalRef) {

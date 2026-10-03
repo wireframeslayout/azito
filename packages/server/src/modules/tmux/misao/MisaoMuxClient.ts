@@ -115,7 +115,7 @@ export class MisaoMuxClient implements IMuxClient {
     throw unsupported('focusWindow');
   }
 
-  /** `w_<ULID>` (window id) or `<workspace>:<window name>` when exactly one window has that name. */
+  /** `w_<ULID>` (window id), `<workspace>:w_<ULID>`, or `<workspace>:<window name>` when exactly one window has that name. */
   async resolveRef(_server: ServerConfig, target: string): Promise<MuxRef | null> {
     const workspaces = await this.rpc.request('workspace.list', {});
     if (isMisaoWindowId(target)) {
@@ -125,7 +125,9 @@ export class MisaoMuxClient implements IMuxClient {
     const sep = target.indexOf(':');
     if (sep === -1) return null;
     const ws = workspaces.find((w) => w.name === target.slice(0, sep));
-    const matches = ws?.windows.filter((win) => win.name === target.slice(sep + 1)) ?? [];
+    const windowPart = target.slice(sep + 1);
+    if (isMisaoWindowId(windowPart)) return ws?.windows.some((win) => win.windowId === windowPart) ? misaoRef(ws.name, windowPart) : null;
+    const matches = ws?.windows.filter((win) => win.name === windowPart) ?? [];
     return ws && matches.length === 1 ? misaoRef(ws.name, matches[0].windowId) : null;
   }
 
