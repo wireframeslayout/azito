@@ -544,7 +544,7 @@ function WorkspaceInner() {
 
   useEffect(() => {
     if (!focusedActiveTabId) {
-      setFocus({ serverName: null, tmuxTarget: null, taskId: null });
+      setFocus({ serverName: null, tmuxTarget: null, windowId: null, taskId: null });
       return;
     }
     if (focusedActiveTabId.startsWith('terminal:')) {
@@ -562,7 +562,7 @@ function WorkspaceInner() {
           tmuxTarget = parsed.ref;
         }
         const task = findTaskByTarget(tmuxTarget);
-        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId });
+        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId: windowId ?? null });
         return;
       }
     }
@@ -570,10 +570,10 @@ function WorkspaceInner() {
     if (activeTab?.type === 'task' && activeTab.entityId) {
       const task = tasks.find((t) => t.id === activeTab.entityId) ?? allTasks.find((t) => t.id === activeTab.entityId);
       const displayed = resolveDisplayedTaskTerminal(activeTab.entityId, task?.windows ?? []);
-      setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, taskId: activeTab.entityId });
+      setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, windowId: displayed?.windowId ?? null, taskId: activeTab.entityId });
       return;
     }
-    setFocus({ serverName: null, tmuxTarget: null, taskId: null });
+    setFocus({ serverName: null, tmuxTarget: null, windowId: null, taskId: null });
   }, [focusedActiveTabId, tabs, tasks, allTasks, setFocus, findTaskByTarget]);
 
   const openIssue = useCallback((repoId: number, owner: string, repo: string, issueNumber: number, title: string) => {
@@ -1142,6 +1142,7 @@ function WorkspaceInner() {
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
       respawningWindowIds={windowActions.respawningWindowIds}
+      onWindowsChanged={() => { void data.refreshSessions(); }}
       taskWindows={taskWindows}
       allProjects={allProjects}
       onAddWindowToProject={handleAddWindowToProject}

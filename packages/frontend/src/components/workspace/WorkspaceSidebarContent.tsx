@@ -67,6 +67,7 @@ interface WorkspaceSidebarContentProps {
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;
   respawningWindowIds?: Set<number>;
+  onWindowsChanged?: () => void;
   taskWindows?: Array<{ tmuxTarget: string; taskId: number; serverName: string }>;
   allProjects?: Array<{ id: number; name: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>;
   onAddWindowToProject?: (projectId: number, serverName: string, tmuxTarget: string) => void;
@@ -117,6 +118,7 @@ export default function WorkspaceSidebarContent({
   projectSettings,
   onOpenDiff,
   respawningWindowIds,
+  onWindowsChanged,
   taskWindows,
   onWindowFocus,
 }: WorkspaceSidebarContentProps) {
@@ -157,6 +159,7 @@ export default function WorkspaceSidebarContent({
           agentDefsError={agentDefsError}
           onCloseMobileSidebar={onCloseMobileSidebar}
           respawningWindowIds={respawningWindowIds}
+          onWindowsChanged={onWindowsChanged}
           taskWindows={taskWindows}
           tasks={tasks}
           browserGroups={browserGroups ?? {}}

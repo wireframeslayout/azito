@@ -7,10 +7,12 @@ import { WindowIdChip } from './WindowIdChip';
 import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
 import { isPaneLive } from '../../lib/paneState';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
+import { findSessionWindow } from '../../lib/windowMatch';
+import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
-import type { Session, Window } from '../../pages/workspace/types';
-import type { MuxRef } from '@azito/shared';
+import type { Session, TmuxWindow, Window } from '../../pages/workspace/types';
+import { stripPaneSuffix, type MuxRef } from '@azito/shared';
 
 export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: MuxRef };
 
@@ -19,7 +21,7 @@ type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: str
 interface WindowPaneTreeProps {
   windows: WindowItem[];
   sessionData: Record<string, Session[]>;
-  isActive?: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
+  isActive?: (serverName: string, target: string, level: 'window' | 'pane', windowId?: number) => boolean;
   /**
    * クリックされた行の `WindowItem` 自体を第3引数で渡す（同じ物理ウィンドウを別々のタスクが
    * 持つ場合、呼び出し元が物理ターゲットから Map で引き直して取り違えないようにするため）。
@@ -37,9 +39,11 @@ interface WindowPaneTreeProps {
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
   /** 行の主題（既定は w.label || tmux ウィンドウ名）を差し替える。null/undefined を返すと既定表示のまま */
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  /** 空の窓（ペインなし）で［ペインを開く］［窓を削除］が完了したときに呼ばれる。呼び出し元が窓一覧を再取得する */
+  onWindowsChanged?: () => void;
 }
 
-export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle, renderTitle }: WindowPaneTreeProps) {
+export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle, renderTitle, onWindowsChanged }: WindowPaneTreeProps) {
   const { t } = useTranslation('common');
   const [expandedWindows, setExpandedWindows] = useState<Set<string>>(() => new Set());
 
@@ -93,6 +97,7 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
           renderTaskBadge={renderTaskBadge}
           renderSubtitle={renderSubtitle}
           renderTitle={renderTitle}
+          onWindowsChanged={onWindowsChanged}
         />
       ))}
     </div>
@@ -102,7 +107,7 @@ export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, on
 interface WindowRowProps {
   w: WindowItem;
   sessionData: Record<string, Session[]>;
-  isActive?: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
+  isActive?: (serverName: string, target: string, level: 'window' | 'pane', windowId?: number) => boolean;
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
   onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => void;
@@ -115,6 +120,7 @@ interface WindowRowProps {
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
+  onWindowsChanged?: () => void;
 }
 
 const SPINNER_KEYFRAMES_ID = 'window-pane-tree-spinner-keyframes';
@@ -284,217 +290,276 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   );
 }
 
-function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle, renderTitle }: WindowRowProps) {
+function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, active, focused, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, renderTaskBadge, onWindowsChanged }: {
+  w: WindowItem;
+  sessionWindow: TmuxWindow;
+  title: React.ReactNode;
+  /** 削除確認に出す窓名（renderTitle で差し替えられていない表示名） */
+  plainTitle: string;
+  showIdChip: boolean;
+  active: boolean;
+  focused: boolean;
+  onPaneClick: () => void;
+  onContextMenu?: WindowRowProps['onContextMenu'];
+  onLongPress?: WindowRowProps['onLongPress'];
+  extra?: React.ReactNode;
+  activityClassName?: string;
+  renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
+  onWindowsChanged?: () => void;
+}) {
+  const { t } = useTranslation('servers');
+  const bindLongPress = useLongPress();
+  const hasLongPress = !!(onContextMenu || onLongPress);
+  const ctxExtra: ContextMenuExtra = { online: true, windowName: sessionWindow.name };
+  return (
+    <div>
+      <div
+        onClick={onPaneClick}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, ctxExtra) : undefined}
+        {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, ctxExtra)) : {})}
+        className={`row-hover${(active || focused) ? ' row-selected' : ''}${activityClassName ? ` ${activityClassName}` : ''}`}
+        style={{
+          ...(hasLongPress ? longPressStyle : {}),
+          padding: '6px 12px', fontSize: 'var(--font-md)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', margin: '1px 0',
+          display: 'flex', alignItems: 'center', gap: 8, minHeight: 44,
+          color: active ? 'var(--accent)' : 'inherit',
+        }}
+      >
+        <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
+          <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
+        </span>
+        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {showIdChip && <WindowIdChip id={w.id!} />}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+            {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+          </div>
+          <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 1 }}>
+            {t('windows.noPanes')}
+          </div>
+        </div>
+        {extra}
+      </div>
+      <EmptyWindowActions
+        serverName={w.serverName}
+        windowId={sessionWindow.windowId}
+        muxRef={sessionWindow.ref}
+        windowLabel={plainTitle}
+        onChanged={onWindowsChanged}
+      />
+    </div>
+  );
+}
+
+function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzoom, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, isRespawning, renderTaskBadge, renderSubtitle, renderTitle, onWindowsChanged }: WindowRowProps) {
   const { t } = useTranslation('common');
   const { isFocusedWindow, isFocusedPane } = useGlobalFocus();
   const bindLongPress = useLongPress();
   const sessions = sessionData[w.serverName] || [];
-  const parts = w.tmuxTarget.split(':');
-  const sessionName = parts[0];
-  const winPart = parts[1]?.split('.')[0] ?? null;
-  const session = sessions.find((s) => s.name === sessionName);
   const hasLongPress = !!(onContextMenu || onLongPress);
-  const offlineActive = isActive?.(w.serverName, w.tmuxTarget, 'window') ?? false;
+  const offlineActive = isActive?.(w.serverName, w.tmuxTarget, 'window', w.id) ?? false;
 
   if (w.sleeping) {
     return <SleepingRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
   }
 
-  if (!session) {
+  const match = findSessionWindow(w, sessions);
+  if (!match) {
     return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
   }
 
-  let matchedWindows = winPart != null
-    ? session.windows.filter((sw) => {
-        const idx = parseInt(winPart, 10);
-        return Number.isNaN(idx) ? sw.name === winPart : sw.index === idx;
-      })
-    : session.windows;
+  const { session, window: sw } = match;
+  const sessionName = session.name;
+  // 行のターゲットは DB の値（w.tmuxTarget）にペイン番号を付けたもの。セッション一覧の窓名から組み立てると、
+  // misao の表示名や改名後の窓で DB の値と食い違い、タブ ID・選択強調が外れる。
+  const baseTarget = stripPaneSuffix(w.tmuxTarget);
+  const paneTarget = (paneIndex: number): string => `${baseTarget}.${paneIndex}`;
+  const paneCount = sw.panes.length;
+  const expandKey = `${w.id}-${sw.index}`;
+  const isExpanded = expandedWindows.has(expandKey);
+  const isUniqueName = session.windows.filter((w2) => w2.name === sw.name).length === 1;
+  const windowSpec = isUniqueName ? sw.name : String(sw.index);
 
-  if (matchedWindows.length > 1 && winPart != null && Number.isNaN(parseInt(winPart, 10))) {
-    matchedWindows = [matchedWindows[0]];
+  // resolveWindowDisplay を先に計算し、idChip の重複を防ぐ
+  const winDisplay = resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
+  const winTitle = renderTitle?.(w) ?? winDisplay.title;
+  const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
+
+  if (paneCount === 0) {
+    // misao は最後のペインが閉じても窓を残す。tmux ではこの状態にならない
+    const target = paneTarget(1);
+    const active = isActive?.(w.serverName, target, 'window', w.id) ?? false;
+    const focused = !active && isFocusedWindow(w.serverName, target, w.id);
+    return (
+      <EmptyWindowRow
+        w={w}
+        sessionWindow={sw}
+        title={winTitle}
+        plainTitle={winDisplay.title}
+        showIdChip={winShowIdChip}
+        active={active}
+        focused={focused}
+        onPaneClick={() => onPaneClick(w.serverName, target, w)}
+        onContextMenu={onContextMenu}
+        onLongPress={onLongPress}
+        extra={extra}
+        activityClassName={activityClassName}
+        renderTaskBadge={renderTaskBadge}
+        onWindowsChanged={onWindowsChanged}
+      />
+    );
   }
 
-  if (matchedWindows.length === 0 && w.label) {
-    matchedWindows = session.windows.filter((sw) => sw.name === w.label);
+  if (paneCount === 1) {
+    const pane = sw.panes[0];
+    const target = paneTarget(pane.index);
+    const active = isActive?.(w.serverName, target, 'window', w.id) ?? false;
+    const focused = !active && isFocusedWindow(w.serverName, target, w.id);
+    const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
+    const ctxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: `${sessionName}:${windowSpec}.${pane.index}`, paneTitle: paneLabel };
+    const subtitle = renderSubtitle?.(w) ?? paneLabel;
+    return (
+      <div
+        key={`${w.id}-${sw.index}-${pane.index}`}
+        onClick={() => onPaneClick(w.serverName, target, w)}
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, ctxExtra) : undefined}
+        {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, ctxExtra)) : {})}
+        className={`row-hover${active ? ' row-selected' : focused ? ' row-selected' : ''}${activityClassName ? ` ${activityClassName}` : ''}`}
+        style={{
+          ...(hasLongPress ? longPressStyle : {}),
+          padding: '6px 12px', fontSize: 'var(--font-md)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', margin: '1px 0',
+          display: 'flex', alignItems: 'center', gap: 8, minHeight: 44,
+          color: active ? 'var(--accent)' : 'inherit',
+        }}
+      >
+        <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
+          <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
+        </span>
+        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {winShowIdChip && <WindowIdChip id={w.id!} />}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
+              {winTitle}
+            </span>
+            <PaneStateChip pane={pane} />
+            {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+          </div>
+          {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
+            <div style={{
+              fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+            }}>
+              {subtitle}
+            </div>
+          )}
+        </div>
+        {extra}
+      </div>
+    );
   }
 
-  if (matchedWindows.length === 0) {
-    return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
-  }
+  const windowLabel = winTitle;
+  const windowHasActive = sw.panes.some((pane) => isActive?.(w.serverName, paneTarget(pane.index), 'window', w.id) ?? false);
+  const windowHasFocus = !windowHasActive && isFocusedWindow(w.serverName, baseTarget, w.id);
+  const windowCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name };
+  const parentSubtitle = renderSubtitle?.(w) ?? null;
 
   return (
-    <>
-      {matchedWindows.map((sw) => {
-        const paneCount = sw.panes.length;
-        const expandKey = `${w.id}-${sw.index}`;
-        const isExpanded = expandedWindows.has(expandKey);
-        const isUniqueName = session.windows.filter((w2) => w2.name === sw.name).length === 1;
-        const windowId = isUniqueName ? sw.name : String(sw.index);
-
-        // resolveWindowDisplay を先に計算し、idChip の重複を防ぐ
-        const winDisplay = resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
-        const winTitle = renderTitle?.(w) ?? winDisplay.title;
-        const winShowIdChip = renderTitle?.(w) != null ? w.id != null : !!winDisplay.idLabel;
-
-        if (paneCount <= 1) {
-          const pane = sw.panes[0];
-          if (!pane) return null;
-          const target = `${sessionName}:${windowId}.${pane.index}`;
-          const active = isActive?.(w.serverName, target, 'window') ?? false;
-          const focused = !active && isFocusedWindow(w.serverName, target);
-          const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-          const ctxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: target, paneTitle: paneLabel };
-          const subtitle = renderSubtitle?.(w) ?? paneLabel;
-          return (
-            <div
-              key={`${w.id}-${sw.index}-${pane.index}`}
-              onClick={() => onPaneClick(w.serverName, target, w)}
-              onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, ctxExtra) : undefined}
-              {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, ctxExtra)) : {})}
-              className={`row-hover${active ? ' row-selected' : focused ? ' row-selected' : ''}${activityClassName ? ` ${activityClassName}` : ''}`}
-              style={{
-                ...(hasLongPress ? longPressStyle : {}),
-                padding: '6px 12px', fontSize: 'var(--font-md)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', margin: '1px 0',
-                display: 'flex', alignItems: 'center', gap: 8, minHeight: 44,
-                color: active ? 'var(--accent)' : 'inherit',
-              }}
-            >
-              <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
-                <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
-              </span>
-              <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {winShowIdChip && <WindowIdChip id={w.id!} />}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
-                    {winTitle}
-                  </span>
-                  <PaneStateChip pane={pane} />
-                  {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-                </div>
-                {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
-                  <div style={{
-                    fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
-                  }}>
-                    {subtitle}
-                  </div>
-                )}
-              </div>
-              {extra}
+    <div key={`${w.id}-${sw.index}`}>
+      <div
+        onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, windowCtxExtra) : undefined}
+        {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, windowCtxExtra)) : {})}
+        className={[(windowHasActive || windowHasFocus) ? 'row-selected' : null, activityClassName].filter(Boolean).join(' ') || undefined}
+        style={{
+          ...(hasLongPress ? longPressStyle : {}),
+          padding: '6px 12px', fontSize: 'var(--font-md)', borderRadius: 'var(--radius-sm)', margin: '1px 0',
+          display: 'flex', alignItems: 'center', gap: 8, minHeight: 44,
+          color: windowHasActive ? 'var(--accent)' : 'inherit',
+        }}
+      >
+        <span
+          onClick={() => onToggle(expandKey)}
+          role="button"
+          tabIndex={0}
+          aria-expanded={isExpanded}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(expandKey); } }}
+          className="icon-btn"
+          style={{
+            color: 'var(--text-dim)', width: 16,
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+          }}
+        ><Icon name="chevron-right" size={14} rotate={isExpanded ? 90 : 0} /></span>
+        <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
+          <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
+        </span>
+        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {winShowIdChip && <WindowIdChip id={w.id!} />}
+            <span
+              onClick={() => onToggle(expandKey)}
+              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+            >{windowLabel}</span>
+            {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
+          </div>
+          {parentSubtitle != null && (typeof parentSubtitle !== 'string' || parentSubtitle !== windowLabel) && (
+            <div style={{
+              fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
+              textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
+            }}>
+              {parentSubtitle}
             </div>
-          );
-        }
+          )}
+        </div>
+        <button
+          onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowSpec, sw.windowId ?? undefined, sw.ref); }}
+          title={t('windowPaneTree.showAllPanes')}
+          aria-label={t('windowPaneTree.showAllPanesLabel')}
+          style={{
+            background: 'none', border: 'none', color: 'var(--text-dim)',
+            cursor: 'pointer', padding: '2px 3px', borderRadius: 'var(--radius-sm)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            flexShrink: 0,
+          }}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
+            <rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="1" y="9" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
+            <rect x="9" y="9" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
+          </svg>
+        </button>
+        <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{paneCount}</span>
+        {extra}
+      </div>
 
-        const windowLabel = winTitle;
-        const windowHasActive = sw.panes.some((pane) => {
-          const target = `${sessionName}:${windowId}.${pane.index}`;
-          return isActive?.(w.serverName, target, 'window') ?? false;
-        });
-        const windowBaseTarget = `${sessionName}:${windowId}`;
-        const windowHasFocus = !windowHasActive && isFocusedWindow(w.serverName, windowBaseTarget);
-        const windowCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name };
-        const parentSubtitle = renderSubtitle?.(w) ?? null;
-
+      {isExpanded && sw.panes.map((pane) => {
+        const target = paneTarget(pane.index);
+        const active = isActive?.(w.serverName, target, 'pane', w.id) ?? false;
+        const focused = !active && isFocusedPane(w.serverName, target);
+        const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
+        const paneCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: `${sessionName}:${windowSpec}.${pane.index}`, paneTitle: paneLabel };
         return (
-          <div key={`${w.id}-${sw.index}`}>
-            <div
-              onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, windowCtxExtra) : undefined}
-              {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, windowCtxExtra)) : {})}
-              className={[(windowHasActive || windowHasFocus) ? 'row-selected' : null, activityClassName].filter(Boolean).join(' ') || undefined}
-              style={{
-                ...(hasLongPress ? longPressStyle : {}),
-                padding: '6px 12px', fontSize: 'var(--font-md)', borderRadius: 'var(--radius-sm)', margin: '1px 0',
-                display: 'flex', alignItems: 'center', gap: 8, minHeight: 44,
-                color: windowHasActive ? 'var(--accent)' : 'inherit',
-              }}
-            >
-              <span
-                onClick={() => onToggle(expandKey)}
-                role="button"
-                tabIndex={0}
-                aria-expanded={isExpanded}
-                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onToggle(expandKey); } }}
-                className="icon-btn"
-                style={{
-                  color: 'var(--text-dim)', width: 16,
-                  display: 'inline-flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                }}
-              ><Icon name="chevron-right" size={14} rotate={isExpanded ? 90 : 0} /></span>
-              <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
-                <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
-              </span>
-              <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {winShowIdChip && <WindowIdChip id={w.id!} />}
-                  <span
-                    onClick={() => onToggle(expandKey)}
-                    style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
-                  >{windowLabel}</span>
-                  {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
-                </div>
-                {parentSubtitle != null && (typeof parentSubtitle !== 'string' || parentSubtitle !== windowLabel) && (
-                  <div style={{
-                    fontSize: 'var(--font-xs)', color: 'var(--text-dim)', overflow: 'hidden',
-                    textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 1,
-                  }}>
-                    {parentSubtitle}
-                  </div>
-                )}
-              </div>
-              <button
-                onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowId, sw.windowId ?? undefined, sw.ref); }}
-                title={t('windowPaneTree.showAllPanes')}
-                aria-label={t('windowPaneTree.showAllPanesLabel')}
-                style={{
-                  background: 'none', border: 'none', color: 'var(--text-dim)',
-                  cursor: 'pointer', padding: '2px 3px', borderRadius: 'var(--radius-sm)',
-                  display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  flexShrink: 0,
-                }}
-              >
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ display: 'block' }}>
-                  <rect x="1" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                  <rect x="9" y="1" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                  <rect x="1" y="9" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                  <rect x="9" y="9" width="6" height="6" rx="1" stroke="currentColor" strokeWidth="1.3" />
-                </svg>
-              </button>
-              <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)', background: 'var(--bg)', padding: '1px 6px', borderRadius: 'var(--radius-md)' }}>{paneCount}</span>
-              {extra}
-            </div>
-
-            {isExpanded && sw.panes.map((pane) => {
-              const target = `${sessionName}:${windowId}.${pane.index}`;
-              const active = isActive?.(w.serverName, target, 'pane') ?? false;
-              const focused = !active && isFocusedPane(w.serverName, target);
-              const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-              const paneCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: target, paneTitle: paneLabel };
-              return (
-                <div
-                  key={`${w.id}-${sw.index}-${pane.index}`}
-                  onClick={() => onPaneClick(w.serverName, target, w)}
-                  onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, paneCtxExtra) : undefined}
-                  {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, paneCtxExtra)) : {})}
-                  className={`row-hover${(active || focused) ? ' row-selected' : ''}`}
-                  style={{
-                    ...(hasLongPress ? longPressStyle : {}),
-                    padding: '6px 12px 6px 44px', fontSize: 'var(--font-md)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', margin: '1px 0',
-                    display: 'flex', alignItems: 'center', gap: 8, minHeight: 32,
-                    color: active ? 'var(--accent)' : 'inherit',
-                  }}
-                >
-                  <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
-                    <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
-                    {paneLabel}
-                  </span>
-                  <PaneStateChip pane={pane} />
-                </div>
-              );
-            })}
+          <div
+            key={`${w.id}-${sw.index}-${pane.index}`}
+            onClick={() => onPaneClick(w.serverName, target, w)}
+            onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, paneCtxExtra) : undefined}
+            {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, paneCtxExtra)) : {})}
+            className={`row-hover${(active || focused) ? ' row-selected' : ''}`}
+            style={{
+              ...(hasLongPress ? longPressStyle : {}),
+              padding: '6px 12px 6px 44px', fontSize: 'var(--font-md)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', margin: '1px 0',
+              display: 'flex', alignItems: 'center', gap: 8, minHeight: 32,
+              color: active ? 'var(--accent)' : 'inherit',
+            }}
+          >
+            <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
+              <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
+              {paneLabel}
+            </span>
+            <PaneStateChip pane={pane} />
           </div>
         );
       })}
-    </>
+    </div>
   );
 }

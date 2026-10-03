@@ -36,13 +36,6 @@ function resolveTmuxWindowMatch(sessions: Session[], target: string): WindowMatc
   return strippedWin ? { window: strippedWin, matchedRaw: false } : null;
 }
 
-// Shared by resolveActivePane (below) and any caller that only needs the live tmux window
-// (e.g. its current pane count) rather than a specific pane — see TaskPanel's SP window bar
-// ("▣ win ▾ Nペイン", Issue #69 T5).
-export function resolveTmuxWindow(sessions: Session[], target: string): TmuxWindow | null {
-  return resolveTmuxWindowMatch(sessions, target)?.window ?? null;
-}
-
 export function resolveActivePane(
   sessions: Session[],
   target: string,

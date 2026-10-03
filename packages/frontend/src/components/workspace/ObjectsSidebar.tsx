@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
+import { isTerminalTabActive } from '../../lib/windowMatch';
 import { terminalRefFromTarget, muxRefJson, type TerminalRef } from '../../lib/terminalRef';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
@@ -81,6 +82,8 @@ interface ObjectsSidebarProps {
   agentDefsError: string | null;
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
+  /** 空の窓の［ペインを開く］［窓を削除］の後に窓一覧（セッション）を再取得する */
+  onWindowsChanged?: () => void;
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** オペレーションウィンドウ行の副題（サーバー · フェーズ · ブランチ）とタスクバッジのラベル解決に使う */
   tasks: Task[];
@@ -132,6 +135,7 @@ export default function ObjectsSidebar({
   agentDefsError,
   onCloseMobileSidebar,
   respawningWindowIds,
+  onWindowsChanged,
   taskWindows,
   tasks,
   browserGroups,
@@ -154,8 +158,8 @@ export default function ObjectsSidebar({
   const { showToast } = useToast();
   const { collapsed, toggle } = useObjectSectionCollapse();
 
-  const checkActive = useCallback((serverName: string, target: string) =>
-    activeTabId === `terminal:${serverName}/${target}`,
+  const checkActive = useCallback((serverName: string, target: string, level: 'window' | 'pane', windowId?: number) =>
+    isTerminalTabActive(activeTabId, serverName, target, level, windowId),
   [activeTabId]);
 
   // タスク所有ウィンドウ（ownerType='task'）の実体。project.windows には構造上入らない
@@ -688,6 +692,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.active.length > 0 && (
@@ -701,6 +706,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -734,6 +740,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.idle.length > 0 && (
@@ -747,6 +754,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -780,6 +788,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                 </ObjectSection>
@@ -810,6 +819,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.offline.length > 0 && (
@@ -823,6 +833,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -899,7 +910,7 @@ interface ServerGroupProps {
   serverName: string;
   windows: Window[];
   sessionData: Record<string, Session[]>;
-  isActive: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
+  isActive: (serverName: string, target: string, level: 'window' | 'pane', windowId?: number) => boolean;
   quickAddButtons: QuickAddButton[];
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
   agentDefsLoading?: boolean;
@@ -911,6 +922,7 @@ interface ServerGroupProps {
   extra?: (w: WindowItem) => React.ReactNode;
   activityClassName?: (w: WindowItem) => string | undefined;
   respawningWindowIds?: Set<number>;
+  onWindowsChanged?: () => void;
 }
 
 function ServerGroup({
@@ -919,6 +931,7 @@ function ServerGroup({
   onPaneClick, onContextMenu, onLongPress,
   onOpenQuickAdd, extra, activityClassName,
   respawningWindowIds,
+  onWindowsChanged,
 }: ServerGroupProps) {
   const { t } = useTranslation('workspace');
   return (
@@ -968,6 +981,7 @@ function ServerGroup({
         extra={extra}
         activityClassName={activityClassName}
         respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
       />
     </div>
   );
