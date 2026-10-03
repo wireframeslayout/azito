@@ -930,7 +930,7 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
   let app: FastifyInstance;
   const openPaneInWindow = vi.fn(async () => 'p_1');
 
-  async function build(emit = vi.fn()) {
+  async function build(emit = vi.fn(), extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string> } = {}) {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
     registry.register('misao', { openPaneInWindow } as unknown as IMuxClient);
     app = Fastify();
@@ -941,9 +941,18 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
       muxDriverRegistry: registry,
       notificationBus: { emit } as never,
       serverIsolationMutex: new KeyedMutex(),
+      ...extra,
     });
     await app.ready();
     return emit;
+  }
+
+  function taskWindowRepo(isPrimary: boolean): SqliteWindowRepository {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary,
+    });
+    return windowRepo;
   }
 
   const url = `/api/servers/misao1/mux/windows/${encodeURIComponent(JSON.stringify(misaoRef))}/panes/open`;
@@ -973,5 +982,30 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     const res = await app.inject({ method: 'POST', url, payload: { command: '  ' } });
     expect(res.statusCode).toBe(400);
     expect(openPaneInWindow).not.toHaveBeenCalled();
+  });
+
+  it('gives a non-task window the manual-window env (operator UI token on a non-isolated server)', async () => {
+    await build(vi.fn(), { windowRepo: makeWindowRepo() });
+    const res = await app.inject({ method: 'POST', url });
+    expect(res.statusCode).toBe(200);
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token' } });
+  });
+
+  it("rejects with 409 for a task's primary window", async () => {
+    await build(vi.fn(), { windowRepo: taskWindowRepo(true) });
+    const res = await app.inject({ method: 'POST', url });
+    expect(res.statusCode).toBe(409);
+    expect(res.json().error).toBe('primary_task_window_pane_add_unsupported');
+    expect(openPaneInWindow).not.toHaveBeenCalled();
+  });
+
+  it('gives a secondary task window the masked env, never the operator UI token', async () => {
+    const maskedEnv = { AZITO_TASK_ID: '42', AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+    const buildSecondaryWindowEnv = vi.fn(() => maskedEnv);
+    await build(vi.fn(), { windowRepo: taskWindowRepo(false), buildSecondaryWindowEnv });
+    const res = await app.inject({ method: 'POST', url });
+    expect(res.statusCode).toBe(200);
+    expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, misaoServer);
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: maskedEnv });
   });
 });

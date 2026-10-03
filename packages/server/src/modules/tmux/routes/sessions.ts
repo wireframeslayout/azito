@@ -897,21 +897,37 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   // ── POST /api/servers/:name/mux/windows/:ref/panes/open ──
-  // Opens a new shell pane in an existing window (misao: also the way back from an empty window). Like the split route it takes no server lock.
+  // Opens a new shell pane in an existing window (misao: also the way back from an empty window).
+  // It hands the pane a credential env, so — like the legacy add-pane route — the server row, the task-window
+  // classification and the env are resolved inside the per-server lock (see serverIsolationMutex's doc comment).
   fastify.post<{ Params: { name: string; ref: string }; Body: { command?: string } | undefined }>(
     '/api/servers/:name/mux/windows/:ref/panes/open',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefForServer(request.params.ref, srv);
       const command = request.body?.command;
       if (command !== undefined && (typeof command !== 'string' || command.trim() === '')) {
         return reply.status(400).send({ error: 'command must be a non-empty string' });
       }
-      const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
-      await muxClient.openPaneInWindow(srv, ref, { command, extraEnv: uiTokenEnvForServer(opts.uiToken, srv) });
-      notifySessionsChanged(request.params.name);
-      return { ok: true };
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, freshSrv);
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+        // A task's primary window: no env can give the new pane the live task-token generation (see the legacy add-pane route).
+        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
+          return reply.status(409).send({
+            error: 'primary_task_window_pane_add_unsupported',
+            message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+          });
+        }
+        // Secondary task window: masked env (never the operator UI token); non-task window: the manual-window env.
+        const extraEnv = windowRow && windowRow.taskId !== null
+          ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
+          : uiTokenEnvForServer(opts.uiToken, freshSrv);
+        const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv });
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      });
     },
   );
 
