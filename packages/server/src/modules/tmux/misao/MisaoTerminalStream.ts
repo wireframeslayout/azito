@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { StringDecoder } from 'node:string_decoder';
+import { TERMINAL_CLOSE } from '@azito/shared';
 import type { ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { MisaoAttachClient } from './MisaoConnection';
 import { MISAO_PANE_EXITED } from './misaoErrorCodes';
@@ -23,6 +24,9 @@ export interface MisaoTerminalStreamOptions {
 export class MisaoTerminalStream extends EventEmitter implements ITerminalStream {
   private readonly decoder = new StringDecoder('utf8');
   private finished = false;
+  /** Set when the pane itself closed, so the terminal socket tells the browser not to reconnect to that ordinal. */
+  closeCode: number | undefined;
+  closeReason: string | undefined;
   /** Output that arrived before anyone listened (the snapshot can land before open() resolves to its caller). */
   private pending: string[] = [];
   /** A close that happened before anyone listened (pane.closed can arrive in the same chunk as the attach reply). */
@@ -54,7 +58,7 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
     // at the cost of every event reaching every terminal (and pausing behind heavy raw output on the same connection).
     // Follow-up if that shows: route pane.closed from the shared connection's MisaoChangeEvents subscription instead.
     await client.subscribeEvents((event) => {
-      if (event.type === 'pane.closed' && event.paneId === paneId) stream.finish(true);
+      if (event.type === 'pane.closed' && event.paneId === paneId) stream.finishPaneClosed();
     });
     await client.request('pane.attach', { paneId, clientId, mode: 'raw', replay: 'snapshot', cols, rows });
     return stream;
@@ -99,6 +103,13 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
     if (!this.pendingClose) return;
     this.pendingClose = false;
     this.emit('close');
+  }
+
+  private finishPaneClosed(): void {
+    if (this.finished) return;
+    this.closeCode = TERMINAL_CLOSE.paneClosed.code;
+    this.closeReason = TERMINAL_CLOSE.paneClosed.reason;
+    this.finish(true);
   }
 
   private finish(emitClose: boolean): void {

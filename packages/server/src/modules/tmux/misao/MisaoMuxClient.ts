@@ -154,6 +154,8 @@ export class MisaoMuxClient implements IMuxClient {
     if (!workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window))) throw new Error('WINDOW_NOT_FOUND');
     const windowPanes = panesOfWindow(panes, ref.window);
     if (windowPanes.length === 0) throw new Error('WINDOW_EMPTY');
+    // The pane this ordinal named is gone (numbers shift when one closes): never attach whatever sits there now.
+    if (Number.isInteger(ordinal) && (ordinal < 1 || ordinal > windowPanes.length)) throw new Error('PANE_CLOSED');
     const pane = paneAtOrdinal(windowPanes, ordinal, ref);
     // A stopped pane (restored after a daemon restart) can never be attached: say so before opening a connection.
     if (pane.processState === 'stopped') throw new Error('PANE_STOPPED');

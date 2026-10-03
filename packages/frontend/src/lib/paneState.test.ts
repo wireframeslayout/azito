@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPaneLive, paneStateChip, preferredPaneOrdinal } from './paneState';
+import { isPaneLive, missingPaneOutcome, paneNoticeActions, paneStateChip, preferredPaneOrdinal, resumableWindowId } from './paneState';
 
 const pane = (index: number, processState?: 'running' | 'exited' | 'stopped' | 'unknown') => ({ index, processState });
 
@@ -41,5 +41,36 @@ describe('preferredPaneOrdinal', () => {
   });
   it('returns null for an empty window', () => {
     expect(preferredPaneOrdinal({ panes: [] })).toBeNull();
+  });
+});
+
+describe('paneNoticeActions', () => {
+  it('offers resuming a stopped pane only where there is an agent to resume', () => {
+    expect(paneNoticeActions('pane_stopped', true)).toEqual(['resume', 'delete_pane']);
+    expect(paneNoticeActions('pane_stopped', false)).toEqual(['delete_pane']);
+  });
+  it('offers opening a pane or deleting the window for an empty window', () => {
+    expect(paneNoticeActions('window_empty', true)).toEqual(['open_pane', 'kill_window']);
+  });
+  it('offers moving to the first pane or closing the tab for a closed pane, never reconnecting by itself', () => {
+    expect(paneNoticeActions('pane_closed', false)).toEqual(['open_first_pane', 'close_tab']);
+  });
+});
+
+describe('missingPaneOutcome', () => {
+  it('is a closed pane for misao and a missing target for tmux or an unknown runtime', () => {
+    expect(missingPaneOutcome('misao')).toBe('pane_closed');
+    expect(missingPaneOutcome('tmux')).toBe('window_missing');
+    expect(missingPaneOutcome(undefined)).toBe('window_missing');
+  });
+});
+
+describe('resumableWindowId', () => {
+  it('resumes only task windows', () => {
+    expect(resumableWindowId({ id: 7, taskId: 3 })).toBe(7);
+    expect(resumableWindowId({ id: 7, taskId: 3, ownerType: 'task' })).toBe(7);
+    expect(resumableWindowId({ id: 7, taskId: null })).toBeNull();
+    expect(resumableWindowId({ id: 7, taskId: 3, ownerType: 'project' })).toBeNull();
+    expect(resumableWindowId(undefined)).toBeNull();
   });
 });

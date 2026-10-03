@@ -8,8 +8,30 @@ interface WindowWithPanes {
   panes: readonly PaneWithState[];
 }
 
-/** Why the hub refused to attach a pane (terminal WS close codes 4410 / 4412). */
-export type PaneUnavailableReason = 'pane_stopped' | 'window_empty';
+/** Why the terminal cannot show a pane (terminal WS close codes 4410 / 4412 / 4413, or the pane vanishing from the window list). */
+export type PaneUnavailableReason = 'pane_stopped' | 'window_empty' | 'pane_closed';
+
+export type PaneNoticeAction = 'resume' | 'delete_pane' | 'open_pane' | 'kill_window' | 'open_first_pane' | 'close_tab';
+
+/**
+ * The ways out the notice offers, in display order. `canResume` is true for a task's window, whose agent can be
+ * brought back with its conversation; a hand-made window only offers deleting the stopped pane.
+ */
+export function paneNoticeActions(reason: PaneUnavailableReason, canResume: boolean): PaneNoticeAction[] {
+  switch (reason) {
+    case 'pane_stopped': return canResume ? ['resume', 'delete_pane'] : ['delete_pane'];
+    case 'window_empty': return ['open_pane', 'kill_window'];
+    case 'pane_closed': return ['open_first_pane', 'close_tab'];
+  }
+}
+
+/**
+ * What a window that is listed but lacks the terminal's pane means. A misao pane that is gone is a closed pane (its
+ * terminal must not silently move to whichever pane took its number); for tmux it stays a missing target.
+ */
+export function missingPaneOutcome(muxKind: string | undefined): 'pane_closed' | 'window_missing' {
+  return muxKind === 'misao' ? 'pane_closed' : 'window_missing';
+}
 
 export type PaneStateChip = 'stopped' | 'exited';
 
@@ -35,4 +57,19 @@ export function preferredPaneOrdinal(win: WindowWithPanes): number | null {
   if (win.panes.length === 0) return null;
   const running = win.panes.findIndex((p) => p.processState === 'running');
   return (running === -1 ? 0 : running) + 1;
+}
+
+interface RegisteredWindowRef {
+  id: number;
+  taskId?: number | null;
+  ownerType?: 'project' | 'task';
+}
+
+/**
+ * The registered window whose agent a stopped pane can be resumed through: the task's window (owner `task`, or a
+ * `taskId` where the owner is not carried). A hand-made window has no agent to resume, so it yields null.
+ */
+export function resumableWindowId(win: RegisteredWindowRef | null | undefined): number | null {
+  if (!win || win.taskId == null) return null;
+  return win.ownerType === undefined || win.ownerType === 'task' ? win.id : null;
 }

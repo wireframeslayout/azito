@@ -36,6 +36,7 @@ describe('describeMisaoItem', () => {
 
   it.each([
     ['daemon_unreachable', 'overview.misaoUnreachable'],
+    ['protocol_incompatible', 'overview.misaoIncompatible'],
     ['misao_disabled', 'overview.misaoDisabled'],
     ['driver_not_registered', 'overview.misaoDriverNotRegistered'],
   ])('translates the %s detail', (detail, key) => {
