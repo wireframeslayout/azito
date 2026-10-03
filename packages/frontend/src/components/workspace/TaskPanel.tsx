@@ -521,7 +521,7 @@ export default function TaskPanel({
       openTask: onOpenTask ?? (() => {}),
       tabs: tabs ?? [],
       closeTab: closeTab ?? (() => {}),
-      connectPane: handlePaneClick,
+      reconnectWindow: (win) => handlePaneClick(win.serverName, win.tmuxTarget, undefined, { reconnect: true }),
     },
   );
 

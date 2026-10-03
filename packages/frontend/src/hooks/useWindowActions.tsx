@@ -28,7 +28,8 @@ interface WindowActionDeps {
   closeTab: (tabId: string) => void;
   refreshSessions?: () => Promise<void>;
   togglePin?: (tabId: string) => void;
-  connectPane?: (serverName: string, target: string, projectId?: number, opts?: { reconnect?: boolean }) => void;
+  /** Shows a respawned window again, forcing its terminal to reconnect. */
+  reconnectWindow?: (win: { serverName: string; windowId: number; tmuxTarget: string }) => void | Promise<void>;
   servers?: Server[];
 }
 
@@ -44,7 +45,7 @@ export function useWindowActions(
   const [respawnResourceWarning, setRespawnResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
   const { showToast } = useToast();
 
-  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, connectPane, servers } = deps;
+  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, reconnectWindow, servers } = deps;
 
   const handleDetachWindow = useCallback(async (windowId: number) => {
     setConfirmDialog({
@@ -184,7 +185,7 @@ export function useWindowActions(
       refreshWorkspace();
       await refreshSessions?.();
       if (serverName) {
-        connectPane?.(serverName, result.tmuxTarget, undefined, { reconnect: true });
+        await reconnectWindow?.({ serverName, windowId, tmuxTarget: result.tmuxTarget });
       }
     } finally {
       setRespawningWindowIds((prev) => {
@@ -193,7 +194,7 @@ export function useWindowActions(
         return next;
       });
     }
-  }, [refreshWorkspace, refreshSessions, connectPane, showToast]);
+  }, [refreshWorkspace, refreshSessions, reconnectWindow, showToast]);
 
   const handleSleepWindow = useCallback(async (windowId: number) => {
     try {

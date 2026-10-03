@@ -230,6 +230,27 @@ export function terminalRefDisplayLabel(r: TerminalRef): string {
   }
 }
 
+/**
+ * Pane to show after a window was respawned: the old pane when `sessions` (which must be fetched
+ * after the respawn) lists the window with that many panes, otherwise pane 1 - a respawned window can come back with fewer panes, and an
+ * ordinal that no longer exists would surface as a generic "window gone" error.
+ */
+export function resolveRespawnedPane(oldPane: number, sessions: Session[] | undefined, windowId: number): number {
+  const win = sessions?.flatMap((s) => s.windows).find((w) => w.windowId === windowId);
+  return win && oldPane <= win.panes.length ? oldPane : 1;
+}
+
+/**
+ * The ref a terminal tab is re-pointed at after its window was respawned. Always windowId form:
+ * a window's tmux_target / misao handle is not a MuxRef, so a `ref` tab built from it can never
+ * connect. The old tab's pane ordinal is kept only when post-respawn `sessions` list it for the window (else 1).
+ */
+export function retargetedTerminalRef(oldTabId: string, serverName: string, windowId: number, sessions?: Session[]): TerminalRef {
+  const old = parseTerminalTabId(oldTabId);
+  const pane = old && old.kind !== 'legacy' ? resolveRespawnedPane(old.pane, sessions, windowId) : 1;
+  return { kind: 'windowId', serverName, windowId, pane };
+}
+
 export function terminalRefMatchesWindow(r: TerminalRef, windowId: number): boolean {
   return r.kind === 'windowId' && r.windowId === windowId;
 }
@@ -240,13 +261,22 @@ export function terminalRefMatchesWindow(r: TerminalRef, windowId: number): bool
  * hand an object (or nothing) where a windows.id was expected — such a ref would
  * otherwise become the tab id `…::w[object Object].1` and loop on /ws forever.
  */
+function isParsableMuxRef(ref: string): boolean {
+  try {
+    parseMuxRef(ref);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isValidTerminalRef(r: unknown): r is TerminalRef {
   if (!r || typeof r !== 'object') return false;
   const x = r as Partial<TerminalRef> & { windowId?: unknown; ref?: unknown };
   if (typeof x.serverName !== 'string' || !x.serverName) return false;
   if (typeof x.pane !== 'number' || !Number.isInteger(x.pane) || x.pane < 1) return false;
   if (x.kind === 'windowId') return typeof x.windowId === 'number' && Number.isInteger(x.windowId) && x.windowId > 0;
-  if (x.kind === 'ref') return typeof x.ref === 'string' && x.ref.length > 0 && !x.ref.includes('[object ');
+  if (x.kind === 'ref') return typeof x.ref === 'string' && x.ref.length > 0 && !x.ref.includes('[object ') && isParsableMuxRef(x.ref);
   return false;
 }
 
