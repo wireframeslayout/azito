@@ -1,4 +1,4 @@
-import { muxKindForRuntime, type MuxDriverKind, type MuxRuntime } from '@azito/shared';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 import { resolveTerminalRefFromTarget, type ConnectPaneFn, type TargetResolution, type TerminalRef } from './terminalRef';
 
@@ -11,7 +11,7 @@ export interface TerminalOpenTarget {
 
 export interface ServerMuxInfo {
   name: string;
-  muxRuntime?: MuxRuntime;
+  defaultMux: MuxDriverKind;
 }
 
 interface TerminalOpenContext {
@@ -22,7 +22,7 @@ interface TerminalOpenContext {
 /** The mux kind of a server, undefined while the server list has not reported it. */
 export function muxKindOfServer(servers: readonly ServerMuxInfo[], serverName: string): MuxDriverKind | undefined {
   const server = servers.find((s) => s.name === serverName);
-  return server ? muxKindForRuntime(server.muxRuntime ?? 'system') : undefined;
+  return server?.defaultMux;
 }
 
 /** windowId wins; otherwise the target string is resolved (never into a tmux ref on a non-tmux server). */

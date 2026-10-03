@@ -15,7 +15,7 @@ import { TerminalChatToggle } from './ui/TerminalChatToggle';
 import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
 import { PaneUnavailableNotice, type PaneNoticeOutcome } from './terminal/PaneUnavailableNotice';
 import { api } from '../api/client';
-import { formatWindowId, muxKindForRuntime } from '@azito/shared';
+import { formatWindowId } from '@azito/shared';
 import { useServerStatuses } from '../hooks/useServerStatuses';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
@@ -104,9 +104,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
   // sessions. Legacy callers (TaskPanel) pass a tmux target and no ref — derive the ref then.
   const { servers } = useServerStatuses();
-  const serverRuntime = servers.find((s) => s.name === serverName)?.muxRuntime;
+  const muxKind = servers.find((s) => s.name === serverName)?.defaultMux;
   // Unknown until the server list arrives: registration then waits instead of guessing a mux kind.
-  const muxKind = serverRuntime ? muxKindForRuntime(serverRuntime) : undefined;
   // A tab with a ref connects by it. Without one (a legacy tab not migrated yet, a task terminal before its window
   // is known) the target is resolved against sessions: until it can be, nothing connects — a tmux-kind ref guessed
   // for a misao window would be refused — and when it cannot be on a non-tmux server the window is missing.

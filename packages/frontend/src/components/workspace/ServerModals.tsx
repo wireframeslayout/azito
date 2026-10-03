@@ -6,19 +6,22 @@ import FormField from '../FormField';
 import type { InstallStep } from '../ui';
 import type { Server } from '../../hooks/useServerManagement';
 import { useHealth } from '../../hooks/useHealth';
-import type { MuxRuntime } from '@azito/shared';
-import { muxRuntimeNotice, muxRuntimeOptions, type MuxRuntimeNotice } from '../../lib/muxRuntimeForm';
+import type { MuxDriverKind, MuxRuntime } from '@azito/shared';
+import { defaultMuxNotice, defaultMuxOptions, tmuxRuntimeNotice, TMUX_RUNTIME_OPTIONS, type DefaultMuxNotice } from '../../lib/muxRuntimeForm';
 
 interface ServerFormFieldsProps {
   mode: 'add' | 'edit';
   autoInstall: boolean;
   type: 'agent';
-  /** The edited server's type; decides which runtimes are offered and whether connection fields apply. Add mode is always an agent. */
+  /** The edited server's type; decides whether the default mux is offered and whether connection fields apply. Add mode is always an agent. */
   serverType: string;
   host: string;
   port: string;
   token: string;
   muxRuntime: MuxRuntime;
+  /** Default mux kind; only edited for a local server (the field is hidden when the server type offers no choice). */
+  defaultMux?: MuxDriverKind;
+  onDefaultMuxChange?: (v: MuxDriverKind) => void;
   onAutoInstallChange: (v: boolean) => void;
   onTypeChange: (v: 'agent') => void;
   onHostChange: (v: string) => void;
@@ -29,6 +32,7 @@ interface ServerFormFieldsProps {
   tokenPlaceholder?: string;
   installSteps?: InstallStep[];
   originalMuxRuntime?: MuxRuntime;
+  originalDefaultMux?: MuxDriverKind;
   // Issue #29 review (3rd pass), Important finding 4: only meaningful — and
   // only rendered — in edit mode for an agent-type server (mirrors the
   // server-side gate in servers/routes.ts: isolationIntent is rejected
@@ -50,55 +54,84 @@ interface ServerFormFieldsProps {
   persistedIsolationIntent?: boolean;
 }
 
-interface MuxRuntimeFieldProps {
-  value: MuxRuntime;
-  options: readonly MuxRuntime[];
-  onChange: (v: MuxRuntime) => void;
-  /** Persisted runtime; when it differs from `value` a note is shown (socket migration, or leaving misao). Omitted in add mode. */
-  originalValue?: MuxRuntime;
+interface MuxFieldsProps {
+  serverType: string;
+  defaultMux?: MuxDriverKind;
+  onDefaultMuxChange?: (v: MuxDriverKind) => void;
+  /** Persisted default mux; when it differs from `defaultMux` a note is shown (entering or leaving misao). Omitted in add mode. */
+  originalDefaultMux?: MuxDriverKind;
+  muxRuntime: MuxRuntime;
+  onMuxRuntimeChange: (v: MuxRuntime) => void;
+  /** Persisted tmux runtime; when it differs from `muxRuntime` a socket migration note is shown. Omitted in add mode. */
+  originalMuxRuntime?: MuxRuntime;
 }
 
-const MUX_LABEL_KEY: Record<MuxRuntime, string> = {
+const DEFAULT_MUX_LABEL_KEY: Record<MuxDriverKind, string> = {
+  misao: 'serverModals.defaultMuxMisao',
+  tmux: 'serverModals.defaultMuxTmux',
+};
+
+const MUX_RUNTIME_LABEL_KEY: Record<MuxRuntime, string> = {
   system: 'serverModals.muxSystem',
   managed: 'serverModals.muxManaged',
-  misao: 'serverModals.muxMisao',
 };
 
-const MUX_NOTICE_KEY: Record<MuxRuntimeNotice, string> = {
+const DEFAULT_MUX_NOTICE_KEY: Record<DefaultMuxNotice, string> = {
   enterMisao: 'serverModals.misaoHint',
   leaveMisao: 'serverModals.misaoLeaveNote',
-  tmuxMigration: 'serverModals.muxMigrationWarning',
 };
 
-function MuxRuntimeField({ value, options, onChange, originalValue }: MuxRuntimeFieldProps) {
+function MuxNotice({ id, tone, children }: { id: string; tone: 'info' | 'warning'; children: React.ReactNode }) {
+  return (
+    <div
+      id={id}
+      role="status"
+      style={{ fontSize: 'var(--font-sm)', color: tone === 'info' ? 'var(--text-dim)' : 'var(--warning, #f0ad4e)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Two independent fields: which mux a (local) server uses by default, and which tmux binary it runs. */
+function MuxFields({ serverType, defaultMux, onDefaultMuxChange, originalDefaultMux, muxRuntime, onMuxRuntimeChange, originalMuxRuntime }: MuxFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
-  const noticeId = useId();
-  const notice = muxRuntimeNotice(originalValue, value);
+  const defaultMuxNoticeId = useId();
+  const runtimeNoticeId = useId();
+  const kindOptions = defaultMuxOptions(serverType);
+  const kindNotice = defaultMux ? defaultMuxNotice(originalDefaultMux, defaultMux) : null;
+  const runtimeNotice = tmuxRuntimeNotice(originalMuxRuntime, muxRuntime);
   return (
     <>
+      {defaultMux && onDefaultMuxChange && kindOptions.length > 1 && (
+        <>
+          <FormField label={t('serverModals.defaultMux')}>
+            <FormSelect
+              value={defaultMux}
+              onChange={(e) => onDefaultMuxChange(e.target.value as MuxDriverKind)}
+              aria-describedby={kindNotice ? defaultMuxNoticeId : undefined}
+            >
+              {kindOptions.map((option) => <option key={option} value={option}>{t(DEFAULT_MUX_LABEL_KEY[option])}</option>)}
+            </FormSelect>
+          </FormField>
+          {kindNotice && <MuxNotice id={defaultMuxNoticeId} tone={kindNotice === 'enterMisao' ? 'info' : 'warning'}>{t(DEFAULT_MUX_NOTICE_KEY[kindNotice])}</MuxNotice>}
+        </>
+      )}
       <FormField label={t('serverModals.muxRuntime')}>
         <FormSelect
-          value={value}
-          onChange={(e) => onChange(e.target.value as MuxRuntime)}
-          aria-describedby={notice ? noticeId : undefined}
+          value={muxRuntime}
+          onChange={(e) => onMuxRuntimeChange(e.target.value as MuxRuntime)}
+          aria-describedby={runtimeNotice ? runtimeNoticeId : undefined}
         >
-          {options.map((option) => <option key={option} value={option}>{t(MUX_LABEL_KEY[option])}</option>)}
+          {TMUX_RUNTIME_OPTIONS.map((option) => <option key={option} value={option}>{t(MUX_RUNTIME_LABEL_KEY[option])}</option>)}
         </FormSelect>
       </FormField>
-      {notice && (
-        <div
-          id={noticeId}
-          role="status"
-          style={{ fontSize: 'var(--font-sm)', color: notice === 'enterMisao' ? 'var(--text-dim)' : 'var(--warning, #f0ad4e)', lineHeight: 1.6, padding: '8px 10px', background: 'var(--bg)', borderRadius: 'var(--radius-sm)', marginBottom: 14 }}
-        >
-          {t(MUX_NOTICE_KEY[notice])}
-        </div>
-      )}
+      {runtimeNotice && <MuxNotice id={runtimeNoticeId} tone="warning">{t('serverModals.muxMigrationWarning')}</MuxNotice>}
     </>
   );
 }
 
-function ServerFormFields({ mode, autoInstall, type, serverType, host, port, token, muxRuntime, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, isolationIntent, onIsolationIntentChange, persistedIsolationIntent }: ServerFormFieldsProps) {
+function ServerFormFields({ mode, autoInstall, type, serverType, host, port, token, muxRuntime, defaultMux, onDefaultMuxChange, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, originalDefaultMux, isolationIntent, onIsolationIntentChange, persistedIsolationIntent }: ServerFormFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [showToken, setShowToken] = useState(false);
   // Issue #29 Step 2 C-1 (client-side courtesy — the real enforcement is the
@@ -118,16 +151,19 @@ function ServerFormFields({ mode, autoInstall, type, serverType, host, port, tok
   // already-isolated server doesn't strand the toggle in a disabled state
   // before the edit is saved — see persistedIsolationIntent's doc comment
   // above.
-  const { scopedAuthEnabled, misaoEnabled } = useHealth();
+  const { scopedAuthEnabled } = useHealth();
   const muxField = (
-    <MuxRuntimeField
-      value={muxRuntime}
-      options={muxRuntimeOptions(serverType, misaoEnabled, originalMuxRuntime)}
-      onChange={onMuxRuntimeChange}
-      originalValue={mode === 'edit' ? originalMuxRuntime : undefined}
+    <MuxFields
+      serverType={serverType}
+      defaultMux={defaultMux}
+      onDefaultMuxChange={onDefaultMuxChange}
+      originalDefaultMux={mode === 'edit' ? originalDefaultMux : undefined}
+      muxRuntime={muxRuntime}
+      onMuxRuntimeChange={onMuxRuntimeChange}
+      originalMuxRuntime={mode === 'edit' ? originalMuxRuntime : undefined}
     />
   );
-  // A local server has no connection settings: the only editable thing is its mux runtime.
+  // A local server has no connection settings: the only editable things are its mux settings.
   if (mode === 'edit' && serverType === 'local') return muxField;
   const isolationCurrentlyOn = isolationIntent ?? false;
   const isolationPersistedOn = persistedIsolationIntent ?? false;
@@ -318,6 +354,8 @@ interface EditServerModalProps {
   onTokenChange: (v: string) => void;
   muxRuntime: MuxRuntime;
   onMuxRuntimeChange: (v: MuxRuntime) => void;
+  defaultMux: MuxDriverKind;
+  onDefaultMuxChange: (v: MuxDriverKind) => void;
   isolationIntent: boolean;
   onIsolationIntentChange: (v: boolean) => void;
 }
@@ -329,6 +367,7 @@ export function EditServerModal({
   port, onPortChange,
   token, onTokenChange,
   muxRuntime, onMuxRuntimeChange,
+  defaultMux, onDefaultMuxChange,
   isolationIntent, onIsolationIntentChange,
 }: EditServerModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
@@ -337,11 +376,12 @@ export function EditServerModal({
       <ServerFormFields
         mode="edit"
         autoInstall={false}
-        type={type} serverType={server?.type ?? 'agent'} host={host} port={port} token={token} muxRuntime={muxRuntime}
+        type={type} serverType={server?.type ?? 'agent'} host={host} port={port} token={token} muxRuntime={muxRuntime} defaultMux={defaultMux} onDefaultMuxChange={onDefaultMuxChange}
         onAutoInstallChange={() => {}}
         onTypeChange={onTypeChange} onHostChange={onHostChange} onPortChange={onPortChange} onTokenChange={onTokenChange} onMuxRuntimeChange={onMuxRuntimeChange}
         tokenPlaceholder={server?.hasAgentToken ? t('serverModals.tokenUnchanged') : t('serverModals.tokenPlaceholder')}
         originalMuxRuntime={server?.muxRuntime}
+        originalDefaultMux={server?.defaultMux}
         isolationIntent={isolationIntent}
         onIsolationIntentChange={onIsolationIntentChange}
         persistedIsolationIntent={server?.isolationIntent}

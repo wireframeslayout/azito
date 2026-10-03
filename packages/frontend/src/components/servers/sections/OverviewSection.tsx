@@ -61,8 +61,6 @@ interface OverviewSectionProps {
   isolationCleanupReportUnavailable: boolean;
   /** Mux driver state from the detail API; only meaningful for a misao server. */
   muxDriverStatus: MuxDriverStatus;
-  /** Whether the hub runs with AZITO_EXPERIMENTAL_MISAO=1; a local server is editable only then, or to move an existing misao server back (its only editable setting is the mux runtime). */
-  misaoEnabled: boolean;
   refresh: () => void;
   onEdit: () => void;
 }
@@ -71,7 +69,7 @@ export default function OverviewSection({
   server, status, installStatus, sessions,
   isolationReport, isolationReportUnavailable,
   isolationCleanupReport, isolationCleanupReportUnavailable,
-  muxDriverStatus, misaoEnabled,
+  muxDriverStatus,
   refresh, onEdit,
 }: OverviewSectionProps) {
   const { t } = useTranslation('servers');
@@ -255,11 +253,11 @@ export default function OverviewSection({
 
         <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
           <Button size="sm" onClick={refresh}>{t('overview.reconnect')}</Button>
-          {(server.type !== 'local' || misaoEnabled || server.muxRuntime === 'misao') && <Button size="sm" onClick={onEdit}>{t('overview.edit')}</Button>}
+          <Button size="sm" onClick={onEdit}>{t('overview.edit')}</Button>
         </div>
       </div>
 
-      {server.muxRuntime === 'misao' && (
+      {server.defaultMux === 'misao' && (
         <div style={{ marginBottom: 'var(--space-4)' }}>
           <MuxDriverNotice status={muxDriverStatus} />
         </div>
@@ -447,14 +445,19 @@ export default function OverviewSection({
         </KvCard>
 
         <KvCard title={t('overview.runtimeTitle')}>
-          <KvRow label={t('overview.muxRuntimeLabel')}>
+          <KvRow label={t('overview.defaultMuxLabel')}>
             <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
-              {server.muxRuntime === 'misao' ? t('overview.muxMisao')
-                : server.muxRuntime === 'managed' ? t('overview.muxManaged')
+              {server.defaultMux === 'misao' ? t('overview.defaultMuxMisao') : t('overview.defaultMuxTmux')}
+              {server.defaultMux === 'misao' && muxDriverStatus === 'ok' && <Chip tone="green">{t('overview.misaoConnected')}</Chip>}
+              {server.defaultMux === 'misao' && muxDriverStatus === 'unreachable' && <Chip tone="orange">{t('overview.misaoUnreachableChip')}</Chip>}
+              {server.defaultMux === 'misao' && muxDriverStatus === 'incompatible' && <Chip tone="orange">{t('overview.misaoIncompatibleChip')}</Chip>}
+            </span>
+          </KvRow>
+          <KvRow label={t('overview.muxRuntimeLabel')}>
+            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+              {server.muxRuntime === 'managed'
+                ? t('overview.muxManaged')
                 : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
-              {server.muxRuntime === 'misao' && muxDriverStatus === 'ok' && <Chip tone="green">{t('overview.misaoConnected')}</Chip>}
-              {server.muxRuntime === 'misao' && muxDriverStatus === 'unreachable' && <Chip tone="orange">{t('overview.misaoUnreachableChip')}</Chip>}
-              {server.muxRuntime === 'misao' && muxDriverStatus === 'incompatible' && <Chip tone="orange">{t('overview.misaoIncompatibleChip')}</Chip>}
             </span>
           </KvRow>
           {isAgent && (

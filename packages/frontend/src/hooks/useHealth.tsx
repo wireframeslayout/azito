@@ -5,8 +5,6 @@ import { api } from '../api/client';
 interface HealthResponse {
   status: string;
   scopedAuthEnabled: boolean;
-  /** Present (true) only when the hub runs with AZITO_EXPERIMENTAL_MISAO=1. */
-  experimentalMisao?: boolean;
 }
 
 interface HealthContextValue {
@@ -21,11 +19,9 @@ interface HealthContextValue {
    * actually in effect).
    */
   scopedAuthEnabled: boolean | null;
-  /** Whether the hub runs with AZITO_EXPERIMENTAL_MISAO=1. `false` until /api/health resolves or when it fails. */
-  misaoEnabled: boolean;
 }
 
-const HealthContext = createContext<HealthContextValue>({ scopedAuthEnabled: null, misaoEnabled: false });
+const HealthContext = createContext<HealthContextValue>({ scopedAuthEnabled: null });
 
 export function useHealth(): HealthContextValue {
   return useContext(HealthContext);
@@ -40,7 +36,6 @@ export function useHealth(): HealthContextValue {
  */
 export function HealthProvider({ children }: { children: ReactNode }) {
   const [scopedAuthEnabled, setScopedAuthEnabled] = useState<boolean | null>(null);
-  const [misaoEnabled, setMisaoEnabled] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,7 +43,6 @@ export function HealthProvider({ children }: { children: ReactNode }) {
       .then((res) => {
         if (cancelled) return;
         setScopedAuthEnabled(res.scopedAuthEnabled);
-        setMisaoEnabled(res.experimentalMisao === true);
       })
       .catch(() => {
         // Fail closed for the badge's purposes: an unknown state must never
@@ -60,5 +54,5 @@ export function HealthProvider({ children }: { children: ReactNode }) {
     };
   }, []);
 
-  return <HealthContext.Provider value={{ scopedAuthEnabled, misaoEnabled }}>{children}</HealthContext.Provider>;
+  return <HealthContext.Provider value={{ scopedAuthEnabled }}>{children}</HealthContext.Provider>;
 }

@@ -4,14 +4,13 @@ import { connectResolvedTerminal, muxKindOfServer, resolveTerminalOpen, PendingO
 
 const MISAO_REF = '{"kind":"misao","workspace":"azito","window":"w_01M40229BC46M2RPATEBX4JN25"}';
 const sessions: Session[] = [{ name: 'azito', windows: [{ index: 0, name: 'win', panes: [], ref: MISAO_REF, windowId: 843 }] }];
-const servers = [{ name: 'tmuxsrv', muxRuntime: 'system' as const }, { name: 'misaosrv', muxRuntime: 'misao' as const }];
+const servers = [{ name: 'tmuxsrv', defaultMux: 'tmux' as const }, { name: 'misaosrv', defaultMux: 'misao' as const }];
 
 describe('muxKindOfServer', () => {
-  it('maps the runtime to a kind and is undefined for an unknown server', () => {
+  it('returns the default mux of a server and is undefined for an unknown server', () => {
     expect(muxKindOfServer(servers, 'tmuxsrv')).toBe('tmux');
     expect(muxKindOfServer(servers, 'misaosrv')).toBe('misao');
     expect(muxKindOfServer(servers, 'nope')).toBeUndefined();
-    expect(muxKindOfServer([{ name: 'legacy' }], 'legacy')).toBe('tmux');
   });
 });
 

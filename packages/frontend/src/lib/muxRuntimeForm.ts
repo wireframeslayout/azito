@@ -1,28 +1,38 @@
-import type { MuxRuntime } from '@azito/shared';
+import type { MuxDriverKind, MuxRuntime } from '@azito/shared';
+
+/** The tmux binaries a server can run (every server, whatever its default mux). */
+export const TMUX_RUNTIME_OPTIONS: readonly MuxRuntime[] = ['system', 'managed'];
 
 /**
- * Runtimes the server form offers. misao is experimental: only local servers (agent/ssh stay on tmux), and only
- * when the hub reports AZITO_EXPERIMENTAL_MISAO (GET /api/health `experimentalMisao`). A server already stored on
- * misao keeps the option even while the flag is unknown (health not loaded / failed) or off, so that opening its
- * edit form never silently turns the selection into system.
+ * Default mux kinds the server form offers. misao is local-only (agent/ssh servers stay on tmux), so only a
+ * local server gets a choice; for the others the field is not shown.
  */
-export function muxRuntimeOptions(serverType: string, misaoEnabled: boolean, storedRuntime?: string): MuxRuntime[] {
-  const offersMisao = serverType === 'local' && (misaoEnabled || storedRuntime === 'misao');
-  return offersMisao ? ['system', 'managed', 'misao'] : ['system', 'managed'];
+export function defaultMuxOptions(serverType: string): MuxDriverKind[] {
+  return serverType === 'local' ? ['misao', 'tmux'] : ['tmux'];
 }
 
-/** What the runtime field tells the user about the selection: entering misao, leaving it, or moving between tmux sockets. */
-export type MuxRuntimeNotice = 'enterMisao' | 'leaveMisao' | 'tmuxMigration';
+/** What the default-mux field tells the user about the selection: entering misao or leaving it. */
+export type DefaultMuxNotice = 'enterMisao' | 'leaveMisao';
 
-/** `original` is the persisted runtime (undefined while adding a server). */
-export function muxRuntimeNotice(original: MuxRuntime | undefined, value: MuxRuntime): MuxRuntimeNotice | null {
+/** `original` is the persisted default mux (undefined while adding a server). */
+export function defaultMuxNotice(original: MuxDriverKind | undefined, value: MuxDriverKind): DefaultMuxNotice | null {
+  if (value === original) return null;
   if (value === 'misao') return 'enterMisao';
   if (original === 'misao') return 'leaveMisao';
-  if (original && original !== value) return 'tmuxMigration';
   return null;
 }
 
-/** A stored runtime the form does not offer (e.g. misao on a non-local server) starts as system. */
-export function editableMuxRuntime(runtime: string | undefined, options: readonly MuxRuntime[]): MuxRuntime {
-  return options.find((option) => option === runtime) ?? 'system';
+/** Moving between tmux binaries leaves the sessions on the previous socket behind. `original` is undefined while adding. */
+export function tmuxRuntimeNotice(original: MuxRuntime | undefined, value: MuxRuntime): 'tmuxMigration' | null {
+  return original && original !== value ? 'tmuxMigration' : null;
+}
+
+/** A stored default mux the form does not offer (e.g. misao on a non-local server) starts as tmux. */
+export function editableDefaultMux(stored: MuxDriverKind, options: readonly MuxDriverKind[]): MuxDriverKind {
+  return options.find((option) => option === stored) ?? 'tmux';
+}
+
+/** A stored tmux runtime the form does not offer starts as system. */
+export function editableMuxRuntime(runtime: string | undefined): MuxRuntime {
+  return TMUX_RUNTIME_OPTIONS.find((option) => option === runtime) ?? 'system';
 }

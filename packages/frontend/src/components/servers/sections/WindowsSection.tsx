@@ -4,7 +4,7 @@ import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
 import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, paneDeletePath, windowKillRequest, type TerminalRef } from '../../../lib/terminalRef';
-import { stripPaneSuffix, muxKindForRuntime } from '@azito/shared';
+import { stripPaneSuffix } from '@azito/shared';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { preferredPaneOrdinal } from '../../../lib/paneState';
 import { errorMessageOf } from '../../../lib/apiResult';
@@ -75,7 +75,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     setShowTree(false);
   }, []);
 
-  const useMuxRoutes = useMemo(() => muxKindForRuntime(server.muxRuntime ?? 'system') !== 'tmux', [server.muxRuntime]);
+  const useMuxRoutes = useMemo(() => server.defaultMux !== 'tmux', [server.defaultMux]);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('New session name:');
