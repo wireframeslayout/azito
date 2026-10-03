@@ -889,11 +889,11 @@ export class ExecuteTaskUseCase {
             const killDriver = this.resolveDriver(freshServer);
             const preWorkspaces = await killDriver.listWorkspaces(freshServer);
             const preWs = preWorkspaces.find((ws) => ws.name === muxWorkspace);
-            const oldWin = preWs?.windows.find((w) => w.name === currentTask.tmuxWindow);
+            const oldWin = preWs?.windows.find((w) => w.name === currentTask.tmuxWindow || w.ref?.window === currentTask.tmuxWindow);
             await confirmOldWindowGone(
               killDriver,
               freshServer,
-              oldWin ? { kind: 'window' as const, ref: { kind: killDriver.kind, workspace: muxWorkspace, window: String(oldWin.index) } } : null,
+              oldWin ? { kind: 'window' as const, ref: oldWin.ref ?? { kind: killDriver.kind, workspace: muxWorkspace, window: String(oldWin.index) } } : null,
               task.id,
             );
             if (oldWin) await sleep(300);

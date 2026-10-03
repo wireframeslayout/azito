@@ -1924,6 +1924,26 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     expect(windowRepo.add).toHaveBeenCalled();
   });
 
+  it('execute(): finds a misao leftover window by its windowId (tmuxWindow) and closes it with the driver ref, not the list index', async () => {
+    const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01OLD' });
+    const { useCase, tmux, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+      projectServer: null,
+    });
+    const misaoRef = { kind: 'misao', workspace: 'azito', window: 'w_01OLD' };
+    (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { name: 'azito', windowCount: 1, attached: true, created: 0, windows: [{ index: 1, name: 'task-46', active: false, panes: [], activity: 0, ref: misaoRef }] },
+    ]);
+
+    await useCase.execute(36, 46);
+
+    expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), misaoRef);
+    expect(windowRepo.add).toHaveBeenCalled();
+  });
+
   it('execute(): revokes the new token generation and does not persist the window when createWindow resolves with a non-zero exit code', async () => {
     const unit = makeUnit({ id: 31, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 41, serverName: 'local-server', unitId: 31, tmuxWindow: null });

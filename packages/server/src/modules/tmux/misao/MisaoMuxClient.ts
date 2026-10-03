@@ -28,9 +28,6 @@ export interface MisaoMuxClientOptions {
   connectAttachClient: () => Promise<MisaoAttachClient>;
 }
 
-/** RPC codes meaning the target is already gone (a close of it has nothing left to do). */
-const NOT_FOUND_CODES: ReadonlySet<number> = new Set([MISAO_PANE_NOT_FOUND, MISAO_WORKSPACE_NOT_FOUND, MISAO_WINDOW_NOT_FOUND]);
-
 const OK: ExecResult = { stdout: '', stderr: '', code: 0 };
 
 const unsupported = (operation: string): MuxOperationUnsupportedError => new MuxOperationUnsupportedError('misao', operation);
@@ -86,11 +83,19 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   async closeWindow(_server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
-    return this.execResult(() => this.rpc.request('window.close', { windowId: ref.window }));
+    return this.closeResult(
+      () => this.rpc.request('window.close', { windowId: ref.window }),
+      MISAO_WINDOW_NOT_FOUND,
+      async () => !(await this.windowExists(_server, ref)),
+    );
   }
 
   async closeWorkspace(_server: ServerConfig, workspace: string): Promise<ExecResult> {
-    return this.execResult(() => this.rpc.request('workspace.close', { name: workspace }));
+    return this.closeResult(
+      () => this.rpc.request('workspace.close', { name: workspace }),
+      MISAO_WORKSPACE_NOT_FOUND,
+      async () => !(await this.rpc.request('workspace.list', {})).some((ws) => ws.name === workspace),
+    );
   }
 
   async renameWindowByRef(_server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult> {
@@ -229,7 +234,11 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   async closePane(_server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {
-    return this.execResult(() => this.rpc.request('pane.close', { paneId: handle }));
+    return this.closeResult(
+      () => this.rpc.request('pane.close', { paneId: handle }),
+      MISAO_PANE_NOT_FOUND,
+      async () => (await this.paneInfo(handle)) === null,
+    );
   }
 
   /** Visible screen only: `start`/`end` are visible-row numbers (0 = top) and scrollback (negative start) is clamped to the top. */
@@ -354,10 +363,33 @@ export class MisaoMuxClient implements IMuxClient {
       await op();
       return OK;
     } catch (err) {
-      const rpcCode = this.rpc.rpcErrorCode(err);
-      if (rpcCode === undefined) throw err;
-      const result: ExecResult = { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
-      return NOT_FOUND_CODES.has(rpcCode) ? { ...result, alreadyGone: true } : result;
+      if (this.rpc.rpcErrorCode(err) === undefined) throw err;
+      return { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
+    }
+  }
+
+  /**
+   * A close that failed with the NotFound code of the very thing being closed is "already gone" only once
+   * the daemon confirms the target is absent: the same code is returned for a target that is mid-close
+   * (still listed), and a window/workspace close can abort with a child's PaneNotFound (a different code,
+   * so never flagged) and leave the target alive.
+   */
+  private async closeResult(op: () => Promise<unknown>, notFoundCode: number, isAbsent: () => Promise<boolean>): Promise<ExecResult> {
+    let failedWith: unknown;
+    try {
+      await op();
+      return OK;
+    } catch (err) {
+      if (this.rpc.rpcErrorCode(err) === undefined) throw err;
+      failedWith = err;
+    }
+    const result: ExecResult = { stdout: '', stderr: failedWith instanceof Error ? failedWith.message : String(failedWith), code: 1 };
+    if (this.rpc.rpcErrorCode(failedWith) !== notFoundCode) return result;
+    try {
+      return (await isAbsent()) ? { ...result, alreadyGone: true } : result;
+    } catch {
+      // Could not verify absence (e.g. connection loss): report the plain failure rather than guessing.
+      return result;
     }
   }
 }

@@ -1179,9 +1179,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         handledTargets = result.handledTargets;
       } else {
         resolvePrimaryTaskWindows();
-        const result = await driver.closeWorkspace(srv, workspace);
-        if (result.code !== 0) {
-          return reply.status(500).send({ error: `close-workspace failed: ${result.stderr || result.stdout}` });
+        const outcome = await resolveKillOutcome(driver.closeWorkspace(srv, workspace));
+        if (!outcome.success) {
+          return reply.status(500).send({ error: `close-workspace failed: ${outcome.result.stderr || outcome.result.stdout}` });
         }
       }
 
