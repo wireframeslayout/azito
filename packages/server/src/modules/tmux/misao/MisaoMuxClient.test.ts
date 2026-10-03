@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MuxRef, PaneHandle, PaneOrdinal } from '@azito/shared';
+import { asPaneHandle, type MuxRef, type PaneHandle, type PaneOrdinal } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import { MisaoMuxClient } from './MisaoMuxClient';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
@@ -375,6 +375,21 @@ describe('MisaoMuxClient writes', () => {
     await expect(client.openWindow(server, 'proj')).rejects.toThrow('cannot spawn');
     expect(daemon.workspaces.get('proj')).toEqual([]);
     await expect(client.openWindow(server, 'missing')).rejects.toThrow('workspace not found');
+  });
+
+  it('flags NotFound-coded close failures as alreadyGone and leaves other RPC errors unflagged', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    daemon.failures.set('window.close', new FakeRpcError(1007, 'window not found: w_x'));
+    expect(await client.closeWindow(server, refOf('proj', w))).toMatchObject({ code: 1, alreadyGone: true });
+    daemon.failures.set('workspace.close', new FakeRpcError(1006, 'workspace not found'));
+    expect(await client.closeWorkspace(server, 'proj')).toMatchObject({ code: 1, alreadyGone: true });
+    daemon.failures.set('pane.close', new FakeRpcError(1001, 'pane not found'));
+    expect(await client.closePane(server, asPaneHandle('p_missing'))).toMatchObject({ code: 1, alreadyGone: true });
+    daemon.failures.set('window.close', new FakeRpcError(1005, 'internal'));
+    const failed = await client.closeWindow(server, refOf('proj', w));
+    expect(failed.code).toBe(1);
+    expect(failed.alreadyGone).toBeUndefined();
   });
 
   it('close and rename report RPC errors as a failed ExecResult and rethrow connection errors', async () => {

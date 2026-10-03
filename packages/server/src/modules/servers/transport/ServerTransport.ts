@@ -6,6 +6,8 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number;
+  /** The driver itself reported the target as nonexistent (misao RPC NotFound); tmux relies on stderr wording instead. */
+  alreadyGone?: boolean;
 }
 
 /** 対話ターミナル1本を表す。'data'(string) / 'close' を emit する */

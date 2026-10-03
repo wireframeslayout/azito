@@ -8,7 +8,7 @@ import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
-import { MISAO_PANE_EXITED, MISAO_PANE_NOT_FOUND } from './misaoErrorCodes';
+import { MISAO_PANE_EXITED, MISAO_PANE_NOT_FOUND, MISAO_WINDOW_NOT_FOUND, MISAO_WORKSPACE_NOT_FOUND } from './misaoErrorCodes';
 import { MisaoTerminalStream } from './MisaoTerminalStream';
 import { encodeMisaoKey } from './misaoKeys';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
@@ -27,6 +27,9 @@ export interface MisaoMuxClientOptions {
   /** Opens a daemon connection owned by one terminal (attach is per connection). */
   connectAttachClient: () => Promise<MisaoAttachClient>;
 }
+
+/** RPC codes meaning the target is already gone (a close of it has nothing left to do). */
+const NOT_FOUND_CODES: ReadonlySet<number> = new Set([MISAO_PANE_NOT_FOUND, MISAO_WORKSPACE_NOT_FOUND, MISAO_WINDOW_NOT_FOUND]);
 
 const OK: ExecResult = { stdout: '', stderr: '', code: 0 };
 
@@ -351,8 +354,10 @@ export class MisaoMuxClient implements IMuxClient {
       await op();
       return OK;
     } catch (err) {
-      if (this.rpc.rpcErrorCode(err) === undefined) throw err;
-      return { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
+      const rpcCode = this.rpc.rpcErrorCode(err);
+      if (rpcCode === undefined) throw err;
+      const result: ExecResult = { stdout: '', stderr: err instanceof Error ? err.message : String(err), code: 1 };
+      return NOT_FOUND_CODES.has(rpcCode) ? { ...result, alreadyGone: true } : result;
     }
   }
 }
