@@ -128,6 +128,7 @@ class FakeDaemon implements MisaoRpc, MisaoEventSource {
   subscribeEvents = vi.fn(async () => ({ unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } }));
   onGap = vi.fn(() => () => {});
   onConnected = vi.fn(() => () => {});
+  onEventsRecovered = vi.fn(() => () => {});
 
   callsTo(method: string): Array<Record<string, unknown>> { return this.calls.filter((c) => c.method === method).map((c) => c.params); }
   writes(): string[] { return this.callsTo('pane.write').map((p) => p.data as string); }

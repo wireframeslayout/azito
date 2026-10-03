@@ -18,6 +18,7 @@ function setup(panes: unknown[] = []) {
   let gapListener: ((gap: GapInfo) => void) | undefined;
   let connectedListener: (() => void) | undefined;
   let disconnectedListener: (() => void) | undefined;
+  let recoveredListener: (() => void) | undefined;
   const unsubscribe = vi.fn();
   const subscribeEvents = vi.fn(async (h: EventHandler) => {
     handler = h;
@@ -29,6 +30,7 @@ function setup(panes: unknown[] = []) {
     request,
     onGap: (l: (gap: GapInfo) => void) => { gapListener = l; return () => {}; },
     onConnected: (l: () => void) => { connectedListener = l; return () => {}; },
+    onEventsRecovered: (l: () => void) => { recoveredListener = l; return () => {}; },
     onDisconnected: (l: () => void) => { disconnectedListener = l; return () => {}; },
   } as unknown as MisaoPaneStateSource;
   const onState = vi.fn();
@@ -42,6 +44,7 @@ function setup(panes: unknown[] = []) {
     gap: () => gapListener!({ stream: { kind: 'events' }, reason: 'epoch' } as GapInfo),
     connected: () => connectedListener!(),
     disconnected: () => disconnectedListener!(),
+    recovered: () => recoveredListener!(),
   };
 }
 
@@ -99,6 +102,17 @@ describe('MisaoPaneStateEvents', () => {
     expect(onSnapshot).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenCalledWith('pane.list', {});
+  });
+
+  it('re-syncs the panes when the events subscription is recovered (events in between were missed)', async () => {
+    const { events, onSnapshot, request, recovered } = setup([pane(PANE_A, 'w_1', 'working', 'exit')]);
+    await events.start();
+    onSnapshot.mockClear();
+    request.mockClear();
+    recovered();
+    await flush();
+    expect(request).toHaveBeenCalledWith('pane.list', {});
+    expect(onSnapshot).toHaveBeenCalledTimes(1);
   });
 
   it('forwards a disconnect', async () => {

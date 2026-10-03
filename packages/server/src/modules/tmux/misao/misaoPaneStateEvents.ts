@@ -75,6 +75,7 @@ export class MisaoPaneStateEvents {
     this.stopListening = [
       this.source.onConnected(() => { this.syncAll(true); }),
       this.source.onGap(() => { this.syncAll(false); }),
+      this.source.onEventsRecovered(() => { this.syncAll(false); }),
       this.source.onDisconnected(() => this.receiver.handleDisconnected()),
     ];
     await this.ensureSubscribed();

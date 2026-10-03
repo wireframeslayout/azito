@@ -12,6 +12,7 @@ function runtime(connect: () => Promise<void>): MisaoRuntime {
       return {
         onStateChange: (cb: (s: { status: 'connected' }) => void) => { listeners.push(cb); },
         onGap: () => {},
+        onEventsRecovered: () => () => {},
         onSubscriptionError: () => {},
         onError: () => {},
         connect: async () => { await connect(); for (const l of listeners) l({ status: 'connected' }); },

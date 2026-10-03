@@ -13,7 +13,7 @@ function isChangeEvent(type: string): boolean {
 /**
  * The misao counterpart of tmux change hooks: one `events.subscribe` stream shared by every installed server,
  * reported as "something changed" (the daemon is global, so every installed server is notified).
- * Subscribing waits for the connection when the daemon is not up yet, and a gap counts as a change.
+ * Subscribing waits for the connection when the daemon is not up yet, and a gap or a recovered subscription counts as a change.
  */
 export class MisaoChangeEvents {
   private readonly servers = new Set<string>();
@@ -30,6 +30,7 @@ export class MisaoChangeEvents {
       this.ensureSubscribed().catch((err: unknown) => this.log.warn(`[misao] change event subscription failed: ${err instanceof Error ? err.message : String(err)}`));
     });
     source.onGap(() => this.scheduleNotify());
+    source.onEventsRecovered(() => this.scheduleNotify());
   }
 
   /** Rejects when the daemon is unreachable; the subscription is then made as soon as the connection comes up. */

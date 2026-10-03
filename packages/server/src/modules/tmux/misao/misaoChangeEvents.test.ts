@@ -10,6 +10,7 @@ function setup() {
   let handler: EventHandler | undefined;
   let gapListener: ((gap: GapInfo) => void) | undefined;
   let connectedListener: (() => void) | undefined;
+  let recoveredListener: (() => void) | undefined;
   const unsubscribe = vi.fn();
   const subscribeEvents = vi.fn(async (h: EventHandler) => {
     handler = h;
@@ -19,11 +20,12 @@ function setup() {
     subscribeEvents,
     onGap: (l) => { gapListener = l; return () => {}; },
     onConnected: (l) => { connectedListener = l; return () => {}; },
+    onEventsRecovered: (l) => { recoveredListener = l; return () => {}; },
   };
   const onChange = vi.fn();
   const warn = vi.fn();
   const events = new MisaoChangeEvents(source, onChange, { warn });
-  return { events, subscribeEvents, unsubscribe, onChange, warn, emit: (type: string) => handler!(event(type)), gap: () => gapListener!({ stream: { kind: 'events' }, reason: 'epoch' }), connected: () => connectedListener!() };
+  return { events, subscribeEvents, unsubscribe, onChange, warn, emit: (type: string) => handler!(event(type)), gap: () => gapListener!({ stream: { kind: 'events' }, reason: 'epoch' }), connected: () => connectedListener!(), recovered: () => recoveredListener!() };
 }
 
 beforeEach(() => { vi.useFakeTimers(); });
@@ -63,6 +65,14 @@ describe('MisaoChangeEvents', () => {
     const { events, gap, onChange } = setup();
     await events.install('local');
     gap();
+    await vi.advanceTimersByTimeAsync(CHANGE_COALESCE_MS);
+    expect(onChange).toHaveBeenCalledWith('local');
+  });
+
+  it('treats a recovered events subscription as a change', async () => {
+    const { events, recovered, onChange } = setup();
+    await events.install('local');
+    recovered();
     await vi.advanceTimersByTimeAsync(CHANGE_COALESCE_MS);
     expect(onChange).toHaveBeenCalledWith('local');
   });
