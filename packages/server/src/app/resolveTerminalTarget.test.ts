@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { formatMuxRef, type MuxRef } from '@azito/shared';
-import { resolveTerminalTarget, type TerminalTargetParams } from './resolveTerminalTarget';
+import { resolveTerminalTarget, terminalPaneOrdinal, type TerminalTargetParams } from './resolveTerminalTarget';
 import type { ServerConfig } from '../modules/servers/Server';
 import type { Window } from '../modules/windows/Window';
 
@@ -65,5 +65,14 @@ describe('resolveTerminalTarget', () => {
     resolveDriverRef.mockClear();
     await resolveTerminalTarget(params({ serverName: 'tmuxsrv', target: 'sess:win' }), deps);
     expect(resolveDriverRef).not.toHaveBeenCalled();
+  });
+});
+
+describe('terminalPaneOrdinal', () => {
+  it('prefers the pane param, then the target suffix, then 1', () => {
+    expect(terminalPaneOrdinal('3', 'ws:win.2')).toBe(3);
+    expect(terminalPaneOrdinal(null, 'ws:win.2')).toBe(2);
+    expect(terminalPaneOrdinal(null, 'ws:win')).toBe(1);
+    expect(terminalPaneOrdinal(null, null)).toBe(1);
   });
 });

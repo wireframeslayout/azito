@@ -34,7 +34,7 @@ import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
 import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
-import { resolveTerminalTarget } from './resolveTerminalTarget';
+import { resolveTerminalTarget, terminalPaneOrdinal } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
 import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
@@ -726,7 +726,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const refParam = wsUrl.searchParams.get('ref');
       const paneParam = wsUrl.searchParams.get('pane');
 
-      const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
+      const resolvedOrdinal = terminalPaneOrdinal(paneParam, target) as PaneOrdinal;
       const resolved = await resolveTerminalTarget(
         { serverName, windowId: windowIdParam, ref: refParam, target },
         {

@@ -48,3 +48,10 @@ export async function resolveTerminalTarget(params: TerminalTargetParams, deps: 
 
   return server && ref ? { server, ref } : null;
 }
+
+/** The pane of a terminal WS: the `pane` param, else the `.N` suffix of a `target`, else 1. */
+export function terminalPaneOrdinal(paneParam: string | null, target: string | null): number {
+  if (paneParam) return Number(paneParam);
+  const suffix = target ? /\.(\d+)$/.exec(target) : null;
+  return suffix ? Number(suffix[1]) : 1;
+}

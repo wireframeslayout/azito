@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, resolveTabTargetRef, findSessionWindowRef } from './terminalRef';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, resolveTabTargetRef, findSessionWindowRef, resolveTerminalRefFromTarget, legacyTargetWsParams } from './terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 const MISAO_REF = '{"kind":"misao","workspace":"azito","window":"w_01M40229BC46M2RPATEBX4JN25"}';
@@ -123,5 +123,40 @@ describe('muxRefJson', () => {
   it('normalises the MuxRef object a window row carries to the string sessions report', () => {
     expect(muxRefJson({ kind: 'misao', workspace: 'azito', window: 'w_01M40229BC46M2RPATEBX4JN25' })).toBe(MISAO_REF);
     expect(muxRefJson(undefined)).toBeUndefined();
+  });
+});
+
+describe('target resolution against sessions on a misao server', () => {
+  const W1 = '{"kind":"misao","workspace":"ws","window":"w_01M40229BC46M2RPATEBX4JN25"}';
+  const W2 = '{"kind":"misao","workspace":"ws","window":"w_01M40229BC46M2RPATEBX4JN26"}';
+  const W3 = '{"kind":"misao","workspace":"ws","window":"w_01M40229BC46M2RPATEBX4JN27"}';
+  const dup: Session[] = [{ name: 'ws', windows: [
+    { index: 0, name: 'dup', panes: [], ref: W1, windowId: 1 },
+    { index: 1, name: 'dup', panes: [], ref: W2, windowId: 2 },
+    { index: 2, name: 'solo', panes: [], ref: W3, windowId: 3 },
+  ] }];
+  const ctx = { sessions: dup, muxKind: 'misao' as const };
+  const ref = (windowId: number, pane = 1) => ({ status: 'ready', ref: { kind: 'windowId', serverName: 's', windowId, pane } });
+
+  it('resolves an id target, an index, and a unique name', () => {
+    expect(resolveTerminalRefFromTarget('s', 'ws:w_01M40229BC46M2RPATEBX4JN26', ctx)).toEqual(ref(2));
+    expect(resolveTerminalRefFromTarget('s', 'ws:w_01M40229BC46M2RPATEBX4JN27.2', ctx)).toEqual(ref(3, 2));
+    expect(resolveTerminalRefFromTarget('s', 'ws:1', ctx)).toEqual(ref(2));
+    expect(resolveTerminalRefFromTarget('s', 'ws:solo', ctx)).toEqual(ref(3));
+  });
+
+  it('never connects to an arbitrary one of several windows sharing a name', () => {
+    expect(resolveTerminalRefFromTarget('s', 'ws:dup', ctx)).toEqual({ status: 'unresolved' });
+  });
+
+  it('a tmux server keeps its first-match naming', () => {
+    expect(resolveTerminalRefFromTarget('s', 'ws:dup', { sessions: dup, muxKind: 'tmux' })).toEqual(ref(1));
+  });
+});
+
+describe('legacyTargetWsParams', () => {
+  it('sends the window part and the pane apart', () => {
+    expect(legacyTargetWsParams('s', 'ws:win.2', 80, 24)).toEqual({ server: 's', target: 'ws:win', pane: '2', cols: '80', rows: '24' });
+    expect(legacyTargetWsParams('s', 'ws:win', 80, 24).pane).toBe('1');
   });
 });

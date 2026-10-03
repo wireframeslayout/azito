@@ -48,6 +48,8 @@ interface TerminalContainerProps {
   serverName: string;
   target: string;
   terminalRef?: TerminalRef;
+  /** The tab was opened by target string only: connect with `target=` and let the server resolve the window. */
+  resolveOnServer?: boolean;
   projectId?: number;
   taskId?: number;
   project?: Project | null;
@@ -94,7 +96,7 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -121,8 +123,8 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     const timer = setTimeout(() => setRefWaitExpired(true), PENDING_TERMINAL_OPEN_TTL_MS);
     return () => clearTimeout(timer);
   }, [refWaiting, serverName, rawTarget]);
-  const refPending = refWaiting && !refWaitExpired;
-  const refUnresolved = tabRef.status === 'unresolved';
+  const refPending = refWaiting && !refWaitExpired && !resolveOnServer;
+  const refUnresolved = tabRef.status === 'unresolved' && !resolveOnServer;
   const target = useMemo(() => {
     if (terminalRef) {
       return resolveTerminalTarget(terminalRef, sessions) ?? rawTarget;

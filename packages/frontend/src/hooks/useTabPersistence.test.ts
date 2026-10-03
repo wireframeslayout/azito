@@ -95,6 +95,15 @@ describe('migrateTerminalTabs — legacy terminal tab ids (stage 5-B)', () => {
     expect(tabs[0]).toBe(tab);
   });
 
+  it('keeps a server-resolved tab whose window the sessions do not list, instead of dropping it', () => {
+    const tab = makeTab({ id: 'terminal:misao/ws:ghost.1', type: 'terminal', serverName: 'misao', target: 'ws:ghost', resolveOnServer: true });
+    const plain = makeTab({ id: 'terminal:misao/ws:ghost2.1', type: 'terminal', serverName: 'misao', target: 'ws:ghost2' });
+    const { tabs, dropped } = migrateTerminalTabs([tab, plain], new Map([['misao', []]]), () => false);
+    expect(dropped.has(tab.id)).toBe(false);
+    expect(dropped.has(plain.id)).toBe(true);
+    expect(tabs).toContain(tab);
+  });
+
   it('is a no-op for tabs that already carry a TerminalRef or are not terminals', () => {
     const done = makeTab({ id: 'terminal:local::w695.1', type: 'terminal', serverName: 'local', terminalRef: { kind: 'windowId', serverName: 'local', windowId: 695, pane: 1 } });
     const file = makeTab();

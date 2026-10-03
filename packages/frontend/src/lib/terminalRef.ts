@@ -88,7 +88,7 @@ export type TargetResolution =
   /** The server's sessions are loaded and the target names no window on a non-tmux server. */
   | { status: 'unresolved' };
 
-function splitPaneSuffix(target: string): { windowPart: string; pane: number } {
+export function splitPaneSuffix(target: string): { windowPart: string; pane: number } {
   const dotIdx = target.lastIndexOf('.');
   if (dotIdx >= 0 && /^\d+$/.test(target.slice(dotIdx + 1))) {
     return { windowPart: target.slice(0, dotIdx), pane: parseInt(target.slice(dotIdx + 1), 10) };
@@ -103,7 +103,10 @@ function splitPaneSuffix(target: string): { windowPart: string; pane: number } {
  */
 export function resolveTerminalRefFromTarget(serverName: string, target: string, ctx: TerminalTargetContext = {}): TargetResolution {
   const { windowPart, pane } = splitPaneSuffix(target);
-  const win = ctx.sessions ? findSessionWindowByTarget(ctx.sessions, windowPart) : null;
+  // A tmux server keeps its first-match naming; any other mux must name one window, or the server decides.
+  const found = ctx.sessions ? findSessionWindowByTarget(ctx.sessions, windowPart, ctx.muxKind !== 'tmux') : null;
+  if (found === 'ambiguous') return { status: 'unresolved' };
+  const win = found;
   if (win) {
     return {
       status: 'ready',
@@ -130,23 +133,41 @@ export function terminalRefFromTarget(serverName: string, target: string, ctx: T
   return r.status === 'ready' ? r.ref : null;
 }
 
-/** The session window a `<session>:<window name or index>` target (no pane suffix) names, as reported by the server. */
-function findSessionWindowByTarget(sessions: Session[], windowPart: string): TmuxWindow | null {
+/**
+ * The session window a `<session>:<window id | index | name>` target (no pane suffix) names, as reported by the server.
+ * An id or index matches exactly; a name must match one window when `strictNames` ('ambiguous' otherwise), so a
+ * duplicated name never connects to an arbitrary one of them.
+ */
+function findSessionWindowByTarget(sessions: Session[], windowPart: string, strictNames = false): TmuxWindow | 'ambiguous' | null {
   const colonIdx = windowPart.indexOf(':');
   if (colonIdx < 0) return null;
   const sessionName = windowPart.slice(0, colonIdx);
   const winSpec = windowPart.slice(colonIdx + 1);
   for (const sess of sessions) {
     if (sess.name !== sessionName) continue;
-    const win = sess.windows.find((w) => w.name === winSpec || String(w.index) === winSpec);
-    if (win) return win;
+    const byId = sess.windows.find((w) => refWindowId(w.ref) === winSpec);
+    if (byId) return byId;
+    const byIndex = sess.windows.find((w) => String(w.index) === winSpec);
+    if (byIndex) return byIndex;
+    const byName = sess.windows.filter((w) => w.name === winSpec);
+    if (byName.length === 1 || (byName.length > 1 && !strictNames)) return byName[0];
+    if (byName.length > 1) return 'ambiguous';
   }
   return null;
 }
 
+function refWindowId(ref: string): string | null {
+  try {
+    return parseMuxRef(ref).window;
+  } catch {
+    return null;
+  }
+}
+
 /** The ref the server reported for the window a `<session>:<window>[.<pane>]` target names. */
 export function findSessionWindowRef(sessions: Session[], target: string): string | null {
-  return findSessionWindowByTarget(sessions, stripPaneSuffix(target))?.ref ?? null;
+  const found = findSessionWindowByTarget(sessions, stripPaneSuffix(target));
+  return found === null || found === 'ambiguous' ? null : found.ref;
 }
 
 /**
@@ -156,6 +177,12 @@ export function findSessionWindowRef(sessions: Session[], target: string): strin
  */
 export function terminalConnectionKey(serverName: string, target: string, ref: TerminalRef | undefined): string {
   return `${serverName}|${target}|${ref ? terminalTabId(ref) : ''}`;
+}
+
+/** WS params for a target-only connection: the window part and the pane are sent apart, so `ws:win.2` is pane 2. */
+export function legacyTargetWsParams(serverName: string, target: string, cols: number, rows: number): Record<string, string> {
+  const { windowPart, pane } = splitPaneSuffix(target);
+  return { server: serverName, target: windowPart, pane: String(pane), cols: String(cols), rows: String(rows) };
 }
 
 export function terminalWsParams(r: TerminalRef, cols: number, rows: number): Record<string, string> {

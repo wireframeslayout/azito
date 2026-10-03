@@ -8,6 +8,7 @@ import {
   terminalTabId,
   parseTerminalTabId,
   resolveTerminalRefFromTarget,
+  splitPaneSuffix,
   terminalRefDisplayLabel,
   isValidTerminalRef,
   } from '../lib/terminalRef';
@@ -34,6 +35,8 @@ export interface PersistedTab {
   /** @deprecated Use terminalRef instead. Kept for 1-release backward compat. */
   target?: string;
   terminalRef?: TerminalRef;
+  /** Opened by target string only: the tab connects with `target=` and the server resolves the window. */
+  resolveOnServer?: boolean;
   // File-specific
   filePath?: string;
   line?: number;
@@ -245,12 +248,12 @@ export function migrateTerminalTabs(
     });
     if (resolution.status === 'wait') continue; // the server's runtime is not known yet
     if (resolution.status === 'unresolved') {
-      dropped.add(tab.id);
+      if (!tab.resolveOnServer) dropped.add(tab.id); // a server-resolved tab stays: the server decides
       continue;
     }
     const terminalRef: TerminalRef = { ...resolution.ref, pane: parsed.pane };
     const newId = terminalTabId(terminalRef);
-    migrated.set(tab.id, { ...tab, id: newId, terminalRef });
+    migrated.set(tab.id, { ...tab, id: newId, terminalRef, resolveOnServer: undefined });
     migratedIds.add(tab.id);
   }
   if (migrated.size === 0 && dropped.size === 0) return { tabs, changed: false, idMap, dropped };
@@ -432,7 +435,8 @@ export function useTabPersistence(storageKey?: string) {
 
   /** Opens a terminal tab by target string only; the server resolves the window when the tab connects. */
   const connectTarget = useCallback((serverName: string, target: string, projectId?: number) => {
-    openTab({ id: `terminal:${serverName}/${target}`, type: 'terminal', label: target, serverName, target, projectId });
+    const { windowPart, pane } = splitPaneSuffix(target);
+    openTab({ id: `terminal:${serverName}/${windowPart}.${pane}`, type: 'terminal', label: windowPart, serverName, target: windowPart, projectId, resolveOnServer: true });
   }, [openTab]);
 
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
