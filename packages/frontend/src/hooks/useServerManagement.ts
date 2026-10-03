@@ -7,7 +7,7 @@ import type { InstallStep } from '../components/ui';
 import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
-import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import { muxKindForRuntime, type MuxPaneProcessState, type MuxRuntime } from '@azito/shared';
 import { editableMuxRuntime, muxRuntimeOptions } from '../lib/muxRuntimeForm';
 
 export interface Server {
@@ -33,6 +33,8 @@ export interface Pane {
   width: number;
   height: number;
   active: boolean;
+  /** Reported by the misao driver only; absent for tmux panes. */
+  processState?: MuxPaneProcessState;
 }
 
 export interface TmuxWindow {

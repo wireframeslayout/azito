@@ -1,4 +1,4 @@
-import type { MuxRuntime } from '@azito/shared';
+import type { MuxPaneProcessState, MuxRuntime } from '@azito/shared';
 import type { PhaseConfigEntryLike } from '../../lib/taskPhases';
 
 export type SidebarMode = 'windows' | 'tasks' | 'files' | 'repos' | 'storage' | 'settings';
@@ -161,7 +161,7 @@ export interface Server {
   /** ISO timestamp of the isolation doctor's last passing verification, or null. Used together with `isolationIntent` for the same UI hint. */
   isolationVerifiedAt?: string | null;
 }
-export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; }
+export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; /** Reported by the misao driver only; absent for tmux panes. */ processState?: MuxPaneProcessState; }
 export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; ref: string; windowId: number | null; }
 export interface Session { name: string; windows: TmuxWindow[]; }
 export interface LogEntry { type: string; content: string; createdAt: string; unitId?: number; }
