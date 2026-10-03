@@ -15,7 +15,7 @@ export interface TerminalTargetDeps {
   windowRepo: Pick<IWindowRepository, 'findById'>;
 }
 
-/** Terminal WS: windowId → ref → target (fallback). A ref whose kind does not match the server's mux is rejected. */
+/** Terminal WS: windowId → ref → target (fallback). A ref (given, or stored on the window row) whose kind does not match the server's mux is rejected. */
 export function resolveTerminalTarget(params: TerminalTargetParams, deps: TerminalTargetDeps): { server: ServerConfig; ref: MuxRef } | null {
   let server = params.serverName ? deps.serverRepo.findByName(params.serverName) : null;
   let ref: MuxRef | null = null;
@@ -23,8 +23,11 @@ export function resolveTerminalTarget(params: TerminalTargetParams, deps: Termin
   if (params.windowId) {
     const win = deps.windowRepo.findById(Number(params.windowId));
     if (win) {
-      ref = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
-      server = deps.serverRepo.findByName(win.serverName);
+      const winServer = deps.serverRepo.findByName(win.serverName);
+      const winRef = win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget);
+      // A row registered with a ref of another kind (e.g. a tmux ref on a misao server) cannot be attached by that server's driver.
+      if (isRefKindCompatible(winRef, winServer)) ref = winRef;
+      server = winServer;
     }
   } else if (params.ref) {
     try {
