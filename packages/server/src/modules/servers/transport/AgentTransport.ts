@@ -171,16 +171,6 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return new AgentPaneStream(handle as string, this, this.wsBaseUrl, this.authHeader);
   }
 
-  markReachable(): void {
-    this.appliedSeq = this.nextSeq;
-    this.unreachableUntil = 0;
-  }
-
-  markUnreachable(): void {
-    this.appliedSeq = this.nextSeq;
-    this.unreachableUntil = Date.now() + CIRCUIT_OPEN_MS;
-  }
-
   /** True while the breaker is open (fail-fast window), so callers can skip the network entirely. */
   isCircuitOpen(): boolean {
     return Date.now() < this.unreachableUntil;
