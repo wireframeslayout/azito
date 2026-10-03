@@ -441,9 +441,10 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectId?: number) => {
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }) => {
+    const projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
     if (typeof serverNameOrRef === 'object') {
-      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId);
+      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
     } else {
       connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId));
     }
@@ -735,7 +736,8 @@ function WorkspaceInner() {
     // the pane TabBar via buildPaneTabMenuItems' base and mobile's single
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
-    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane, servers,
+    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, servers,
+    reconnectWindow: (win) => connectPane({ kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 }, undefined, { reconnect: true }),
   });
 
   const handleWindowAddedToTask = useCallback(async (

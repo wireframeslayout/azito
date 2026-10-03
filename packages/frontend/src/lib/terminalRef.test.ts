@@ -13,6 +13,7 @@ import {
   terminalRefFromTabTarget,
   migrateLegacyTerminalTabs,
   terminalRefDisplayLabel,
+  retargetedTerminalRef,
   type TerminalRef,
 } from './terminalRef';
 import { parseMuxRef } from '@azito/shared';
@@ -247,5 +248,29 @@ describe('windowKillRequest', () => {
   it('uses POST on the mux route for a ref', () => {
     const ref = '{"kind":"misao","workspace":"d","window":"w_x"}';
     expect(windowKillRequest({ kind: 'ref', serverName: 's', ref, pane: 1 })).toEqual({ path: `/servers/s/mux/windows/${encodeURIComponent(ref)}/kill`, method: 'POST' });
+  });
+});
+
+describe('retargetedTerminalRef', () => {
+  it('always yields a windowId ref, keeping the pane of a windowId tab', () => {
+    expect(retargetedTerminalRef('terminal:local::w7.3', 'local', 9)).toEqual({ kind: 'windowId', serverName: 'local', windowId: 9, pane: 3 });
+  });
+
+  it('keeps the pane of a ref-form tab (tmux and misao refs alike)', () => {
+    const tmux = terminalTabId({ kind: 'ref', serverName: 'local', ref: '{"kind":"tmux","workspace":"azito","window":"w"}', pane: 2 });
+    const misao = terminalTabId({ kind: 'ref', serverName: 'local', ref: '{"kind":"misao","workspace":"a","window":"b"}', pane: 2 });
+    expect(retargetedTerminalRef(tmux, 'local', 5)).toEqual({ kind: 'windowId', serverName: 'local', windowId: 5, pane: 2 });
+    expect(retargetedTerminalRef(misao, 'local', 5)).toEqual({ kind: 'windowId', serverName: 'local', windowId: 5, pane: 2 });
+  });
+
+  it('falls back to pane 1 for a legacy or unparsable tab id', () => {
+    expect(retargetedTerminalRef('terminal:local/azito:win.4', 'local', 5).pane).toBe(1);
+    expect(retargetedTerminalRef('nonsense', 'local', 5).pane).toBe(1);
+  });
+
+  it('produces a tab id that round-trips and never carries a raw tmux target', () => {
+    const ref = retargetedTerminalRef('terminal:local::w7.1', 'local', 9);
+    expect(isValidTerminalRef(ref)).toBe(true);
+    expect(parseTerminalTabId(terminalTabId(ref))).toEqual(ref);
   });
 });

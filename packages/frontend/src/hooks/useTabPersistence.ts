@@ -9,6 +9,7 @@ import {
   terminalRefDisplayLabel,
   terminalRefFromTarget,
   isValidTerminalRef,
+  retargetedTerminalRef,
 } from '../lib/terminalRef';
 import type { Session } from '../pages/workspace/types';
 
@@ -469,18 +470,11 @@ export function useTabPersistence(storageKey?: string) {
     return tab ? tab.label : null;
   }, []);
 
-  const retargetTab = useCallback((oldTabId: string, serverName: string, newTarget: string, windowId?: number) => {
-    let newRef: TerminalRef;
-    if (windowId !== undefined) {
-      const oldParsed = parseTerminalTabId(oldTabId);
-      const pane = oldParsed && oldParsed.kind !== 'legacy' ? oldParsed.pane : 1;
-      newRef = { kind: 'windowId', serverName, windowId, pane };
-    } else {
-      newRef = { kind: 'ref', serverName, ref: newTarget, pane: 1 };
-    }
+  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number) => {
+    const newRef = retargetedTerminalRef(oldTabId, serverName, windowId);
     const newTabId = terminalTabId(newRef);
     setTabs((prev) => prev.map((t) =>
-      t.id === oldTabId ? { ...t, id: newTabId, target: newTarget, label: newTarget, terminalRef: newRef } : t,
+      t.id === oldTabId ? { ...t, id: newTabId, target: `w${windowId}`, label: terminalRefDisplayLabel(newRef), terminalRef: newRef } : t,
     ));
     setActiveTabId((prev) => prev === oldTabId ? newTabId : prev);
   }, []);

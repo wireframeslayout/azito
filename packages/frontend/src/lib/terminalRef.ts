@@ -230,6 +230,17 @@ export function terminalRefDisplayLabel(r: TerminalRef): string {
   }
 }
 
+/**
+ * The ref a terminal tab is re-pointed at after its window was respawned. Always windowId form:
+ * a window's tmux_target / misao handle is not a MuxRef, so a `ref` tab built from it can never
+ * connect. The pane ordinal of the old tab id is kept (1 when the old id was legacy / unparsable).
+ */
+export function retargetedTerminalRef(oldTabId: string, serverName: string, windowId: number): TerminalRef {
+  const old = parseTerminalTabId(oldTabId);
+  const pane = old && old.kind !== 'legacy' ? old.pane : 1;
+  return { kind: 'windowId', serverName, windowId, pane };
+}
+
 export function terminalRefMatchesWindow(r: TerminalRef, windowId: number): boolean {
   return r.kind === 'windowId' && r.windowId === windowId;
 }

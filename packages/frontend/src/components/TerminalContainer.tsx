@@ -60,7 +60,7 @@ interface TerminalContainerProps {
   onTargetRemoved?: () => void;
   /** Re-points this terminal at another pane of its window (a pane opened in an empty window is pane 1). */
   onRetargetPane?: (pane: number) => void;
-  onRetargetTab?: (serverName: string, newTarget: string) => void;
+  onRetargetTab?: (serverName: string, windowId: number) => void;
   reconnectKey?: number;
   /**
    * SP タスク画面の「ウィンドウ」セグメント（Issue #69 修正3）向け: ウィンドウ選択
@@ -233,7 +233,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
       setConnectFailed(false);
       setRespawnError(null);
       setXtermKey((k) => k + 1);
-      onRetargetTab?.(serverName, res.tmuxTarget);
+      onRetargetTab?.(serverName, dbWindow.id);
       onWindowChanged?.();
     } catch (err) {
       setRespawnError(err instanceof Error ? err.message : 'Respawn failed');
