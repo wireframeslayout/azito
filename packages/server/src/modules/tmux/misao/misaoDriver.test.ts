@@ -30,7 +30,7 @@ function runtime(connect: () => Promise<void>): MisaoRuntime {
 describe('registerMisaoDriver', () => {
   it('registers a misao driver whose availability follows the daemon connection', async () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
-    const { connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() });
+    const { connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
     const local = { muxRuntime: 'misao' as const, type: 'local' as const };
 
     expect(registry.availability(local)).toEqual({ available: false, reason: 'daemon_unreachable' });
@@ -44,7 +44,7 @@ describe('registerMisaoDriver', () => {
 
   it('reports remote_unsupported for non-local servers regardless of the daemon', async () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
-    const { connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() });
+    const { connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
     await connection.start();
     expect(registry.availability({ muxRuntime: 'misao', type: 'agent' })).toEqual({ available: false, reason: 'remote_unsupported' });
     connection.close();
@@ -52,13 +52,13 @@ describe('registerMisaoDriver', () => {
 
   it('stays disabled when the registry flag is off, whatever is registered', () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: false });
-    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() });
+    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
     expect(registry.availability({ muxRuntime: 'misao', type: 'local' })).toEqual({ available: false, reason: 'misao_disabled' });
   });
 
   it('does not touch tmux servers', () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
-    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() });
+    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
     expect(registry.availability({ muxRuntime: 'system', type: 'local' })).toEqual({ available: false, reason: 'driver_not_registered' });
   });
 });

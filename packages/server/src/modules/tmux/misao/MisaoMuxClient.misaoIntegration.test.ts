@@ -49,7 +49,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
-    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
+    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
     await connection.start();
     expect(connection.availability()).toEqual({ available: true });
   });
@@ -175,6 +175,21 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     const persisted = fs.readFileSync(path.join(dir, 'persistence.json'), 'utf8');
     expect(persisted).toContain(ref.window);
     for (const leaked of [secretKey, secret, splitKey, splitSecret]) expect(persisted).not.toContain(leaked);
+    await client.closeWindow(server, ref);
+  });
+
+  it('gives every pane the hub env (AZITO_URL, webhook token) without exposing or persisting the token', async () => {
+    const { ref } = await client.openWindow(server, 'azm-ws2', 'hubenv', { exactName: true });
+    const pane = await client.resolvePane(server, ref, 1);
+    const split = await client.splitPaneByHandle(server, pane, 'h');
+    for (const handle of [pane, split.handle]) {
+      await client.sendTextToHandle(server, handle, 'echo url-[$AZITO_URL] tok-len-${#AZITO_WEBHOOK_TOKEN}');
+      await client.sendKeysToHandle(server, handle, ['Enter']);
+      await waitForScreen(handle, 'url-[http://127.0.0.1:3001] tok-len-8');
+    }
+    const exposed = JSON.stringify([await connection.request('pane.info', { paneId: pane }), await connection.request('pane.list', {})]);
+    expect(exposed).not.toContain('wh-token');
+    expect(fs.readFileSync(path.join(dir, 'persistence.json'), 'utf8')).not.toContain('wh-token');
     await client.closeWindow(server, ref);
   });
 

@@ -6,6 +6,7 @@ import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
+import { hubPaneEnv, type HubPaneEnvConfig } from '../hubPaneEnv';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
 import { MISAO_PANE_EXITED, MISAO_PANE_NOT_FOUND, MISAO_WINDOW_NOT_FOUND, MISAO_WORKSPACE_NOT_FOUND } from './misaoErrorCodes';
@@ -24,6 +25,8 @@ export interface MisaoMuxClientOptions {
   /** Called (with the server name) when the daemon reports a workspace/window/pane change. */
   onChange: (serverName: string) => void;
   log: { warn(message: string): void };
+  /** Hub URL and webhook token every pane gets: misao panes do not inherit the hub's env. */
+  hubEnv: HubPaneEnvConfig;
   /** Opens a daemon connection owned by one terminal (attach is per connection). */
   connectAttachClient: () => Promise<MisaoAttachClient>;
 }
@@ -63,11 +66,11 @@ export class MisaoMuxClient implements IMuxClient {
     return this.listWorkspaces(server);
   }
 
-  async openWorkspace(_server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult }> {
+  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult }> {
     await this.rpc.request('workspace.create', { name });
     const windowName = opts?.exactName && opts.windowName ? opts.windowName : generateWindowName(opts?.windowName || 'win');
     try {
-      const windowId = await this.createWindowWithPane(name, windowName, opts?.command, opts?.extraEnv);
+      const windowId = await this.createWindowWithPane(server, name, windowName, opts?.command, opts?.extraEnv);
       return { ref: misaoRef(name, windowId), result: OK };
     } catch (err) {
       // Best-effort rollback of the workspace this call created; the original failure is what the caller sees.
@@ -76,9 +79,9 @@ export class MisaoMuxClient implements IMuxClient {
     }
   }
 
-  async openWindow(_server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
+  async openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     const windowName = opts?.exactName && baseName ? baseName : generateWindowName(baseName || 'win');
-    const windowId = await this.createWindowWithPane(workspace, windowName, undefined, opts?.extraEnv);
+    const windowId = await this.createWindowWithPane(server, workspace, windowName, undefined, opts?.extraEnv);
     return { ref: misaoRef(workspace, windowId), result: OK, windowName };
   }
 
@@ -204,14 +207,14 @@ export class MisaoMuxClient implements IMuxClient {
     return { alive: false, verified: info.processState !== 'unknown' };
   }
 
-  async splitPaneByHandle(_server: ServerConfig, handle: PaneHandle, _dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }> {
+  async splitPaneByHandle(server: ServerConfig, handle: PaneHandle, _dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }> {
     const source = await this.rpc.request('pane.info', { paneId: handle });
     const { paneId } = await this.rpc.request('pane.open', {
       cmd: [this.options.shell],
       cwd: source.cwd,
       windowId: source.window.id,
       labels: inheritedLabels(source),
-      ...paneEnvParams(env),
+      ...this.paneEnvParams(server, env),
     });
     return { handle: asPaneHandle(paneId), result: { stdout: paneId, stderr: '', code: 0 } };
   }
@@ -226,7 +229,7 @@ export class MisaoMuxClient implements IMuxClient {
       cmd: [this.options.shell],
       windowId: ref.window,
       labels: { origin: 'hub', name: windowName, ...(opts?.labels ? paneLabelsOf(opts.labels) : {}) },
-      ...paneEnvParams(opts?.extraEnv),
+      ...this.paneEnvParams(server, opts?.extraEnv),
     });
     const handle = asPaneHandle(paneId);
     if (opts?.command) await this.sendKeysToHandle(server, handle, [opts.command, 'Enter']);
@@ -341,20 +344,32 @@ export class MisaoMuxClient implements IMuxClient {
     await this.rpc.request('pane.write', { paneId: handle, data, source: 'hub' });
   }
 
-  private async createWindowWithPane(workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined): Promise<string> {
+  private async createWindowWithPane(server: ServerConfig, workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined): Promise<string> {
     const { windowId } = await this.rpc.request('window.create', { workspace, name: windowName });
     try {
       await this.rpc.request('pane.open', {
         cmd: command ? [this.options.shell, '-lc', command] : [this.options.shell],
         windowId,
         labels: { origin: 'hub', name: windowName },
-        ...paneEnvParams(extraEnv),
+        ...this.paneEnvParams(server, extraEnv),
       });
     } catch (err) {
       await this.rpc.request('window.close', { windowId }).catch(() => undefined);
       throw err;
     }
     return windowId;
+  }
+
+  /**
+   * The pane's env: the hub env every driver gives (hubPaneEnv) with the caller's env on top.
+   * Secrets go in ephemeralEnv: env is persisted by the daemon and shown by pane.info/pane.list.
+   */
+  private paneEnvParams(server: ServerConfig, extra: Record<string, string> | undefined): { env?: Record<string, string>; ephemeralEnv?: Record<string, string> } {
+    const { env, ephemeralEnv } = splitPaneEnv({ ...hubPaneEnv(this.options.hubEnv, server), ...extra });
+    return {
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+      ...(Object.keys(ephemeralEnv).length > 0 ? { ephemeralEnv } : {}),
+    };
   }
 
   /** RPC error responses become a non-zero ExecResult (like a failed tmux command); connection failures still throw. */
@@ -392,16 +407,6 @@ export class MisaoMuxClient implements IMuxClient {
       return result;
     }
   }
-}
-
-/** Secrets go in ephemeralEnv: env is persisted by the daemon and shown by pane.info/pane.list. */
-function paneEnvParams(input: Record<string, string> | undefined): { env?: Record<string, string>; ephemeralEnv?: Record<string, string> } {
-  if (!input) return {};
-  const { env, ephemeralEnv } = splitPaneEnv(input);
-  return {
-    ...(Object.keys(env).length > 0 ? { env } : {}),
-    ...(Object.keys(ephemeralEnv).length > 0 ? { ephemeralEnv } : {}),
-  };
 }
 
 /** `ordinal` is 1-based; non-integers (a malformed `pane=` query) are rejected like out-of-range values. */

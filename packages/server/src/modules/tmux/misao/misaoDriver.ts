@@ -4,6 +4,7 @@ import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegis
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
+import type { HubPaneEnvConfig } from '../hubPaneEnv';
 
 /** Everything the misao driver needs from its environment, resolved once at the composition root. */
 export interface MisaoRuntime {
@@ -65,9 +66,10 @@ export function registerMisaoDriver(
   runtime: MisaoRuntime,
   onChange: (serverName: string) => void,
   log: { warn(message: string): void },
+  hubEnv: HubPaneEnvConfig,
 ): MisaoHandle {
   const connection = new MisaoConnection({ socketPath: runtime.socketPath, sdk: runtime.sdk, log });
-  const driver = new MisaoMuxClient(connection, { shell: runtime.shell, onChange, log, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, runtime.socketPath) });
+  const driver = new MisaoMuxClient(connection, { shell: runtime.shell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, runtime.socketPath) });
   registry.register('misao', driver, (server): MuxDriverAvailability => {
     if (server.type !== undefined && server.type !== 'local') return { available: false, reason: 'remote_unsupported' };
     return connection.availability();

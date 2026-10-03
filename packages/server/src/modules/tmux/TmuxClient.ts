@@ -5,6 +5,7 @@ import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneWindowLabels } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
+import { hubPaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
@@ -114,39 +115,22 @@ export class TmuxClient implements IMuxClient {
     independentClients: true, copyMode: true,
   };
   readonly supportsPaneLabels = false;
+  private readonly hubEnvConfig: HubPaneEnvConfig;
 
   constructor(
     private transportFactory: TransportFactory,
-    private publicUrl: string,
+    publicUrl: string,
     private uiToken: string,
     /** Loopback URL of this hub (`http://127.0.0.1:<port>`). */
     private localUrl: string,
     private webhookToken: string,
-  ) {}
-
-  /**
-   * URL that panes on `server` should use to reach the hub.
-   *
-   * Panes on the hub's own machine get the loopback URL: a host does not
-   * necessarily reach itself through its public address. With `tailscale serve`
-   * on WSL2, for instance, the MagicDNS name resolves but the connection to the
-   * host's own Tailscale IP never completes, so supervisors launched there could
-   * never register and every supervised window timed out. Remote servers keep
-   * the public URL, which is the only address that works for them.
-   */
-  private hubUrlFor(server: ServerConfig): string {
-    return server.type === 'local' ? this.localUrl : this.publicUrl;
+  ) {
+    this.hubEnvConfig = { publicUrl, localUrl, webhookToken };
   }
 
-  // Env args injected into every new-session / new-window via `-e`.
-  // Isolated servers must NOT receive hub secrets (isolationDoctor checks for
-  // their absence), so AZITO_WEBHOOK_TOKEN is only passed to non-isolated ones.
+  // Env args injected into every new-session / new-window via `-e` (the rule is shared with every mux driver: hubPaneEnv).
   private baseEnvArgs(server: ServerConfig): string[] {
-    const args = ['-e', `AZITO_URL=${this.hubUrlFor(server)}`];
-    if (!server.isolationIntent) {
-      args.push('-e', `AZITO_WEBHOOK_TOKEN=${this.webhookToken}`);
-    }
-    return args;
+    return Object.entries(hubPaneEnv(this.hubEnvConfig, server)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
