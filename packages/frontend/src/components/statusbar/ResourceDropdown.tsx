@@ -3,7 +3,7 @@ import type { TFunction } from 'i18next';
 import { HealthDot } from './HealthDot';
 import { ResourceMeter } from './ResourceMeter';
 import { useServerResourceDetail } from '../../hooks/useServerResources';
-import type { HealthLevel, ServerResourceDetail } from '../../hooks/useServerResources';
+import type { HealthLevel, ServerResourceDetail, ServerResourceWindow } from '../../hooks/useServerResources';
 import { Icon } from '../ui/Icon';
 
 export function formatBytes(bytes: number): string {
@@ -68,7 +68,7 @@ export function ResourceDropdownContent({ serverName, health, meterWidth = 110 }
 interface ServerHealthDetailBodyProps {
   detail: ServerResourceDetail | null;
   meterWidth: number;
-  onDeleteWindow: (target: string) => void;
+  onDeleteWindow: (window: ServerResourceWindow) => void;
   deleteLoading: string | null;
 }
 
@@ -148,7 +148,7 @@ export function ServerHealthDetailBody({ detail, meterWidth, onDeleteWindow, del
                 {formatBytes(w.rssBytes)}
               </span>
               <button
-                onClick={() => onDeleteWindow(w.target)}
+                onClick={() => onDeleteWindow(w)}
                 disabled={deleteLoading === w.target}
                 style={{
                   color: 'var(--danger)',

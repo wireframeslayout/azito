@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { measureWindowResources } from './windowResources';
 import type { ServerConfig } from '../Server';
-import type { MuxRef } from '@azito/shared';
+import { formatMuxRef, type MuxRef } from '@azito/shared';
 
 const server = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
 
@@ -87,5 +87,15 @@ describe('measureWindowResources', () => {
     const result = await measureWindowResources(t, m, server);
 
     expect(result[0].target).toBe('sess:app.v2');
+  });
+
+  it('measures misao windows (no tmux target) and reports their ref for the ref-based routes', async () => {
+    const misaoRef: MuxRef = { kind: 'misao', workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    const t = makeTransport({ stdout: '100 1 1024\n200 100 1024', code: 0 });
+    const m = makeMux([{ ref: misaoRef, pid: 100 }]);
+
+    const result = await measureWindowResources(t, m, { ...server, muxRuntime: 'misao' } as ServerConfig);
+
+    expect(result).toEqual([{ target: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', ref: formatMuxRef(misaoRef), rssBytes: 2048 * 1024 }]);
   });
 });

@@ -3,8 +3,9 @@ import type { ExecResult } from '../servers/transport/ServerTransport';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { Window, IWindowRepository } from './Window';
 import { isPrimaryTaskWindow } from './Window';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, muxKindForRuntime } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, muxKindForRuntime } from '@azito/shared';
 import { resolveKillOutcome, type KillOutcome } from '../tmux/killOutcome';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
 
 // ─── Resolution helpers ───
 
@@ -89,12 +90,13 @@ export async function killWindowCore(
     if (dbWindow) {
       windowRepo.remove(dbWindow.id);
     } else {
-      const target = tmuxTargetFromMuxRef(ref);
+      const target = muxWindowTarget(ref);
       windowRepo.removeByServerAndTarget(server.name, target);
     }
   };
 
-  const windowName = dbWindow ? windowNameFromTarget(dbWindow.tmuxTarget) : ref.window;
+  // task.tmuxWindow holds the window's identity (mux_ref.window), which tmux_target may not carry in the same form.
+  const windowName = dbWindow ? (dbWindow.muxRef?.window ?? windowNameFromTarget(dbWindow.tmuxTarget)) : ref.window;
   let outcome: KillOutcome;
 
   if (dbWindow && dbWindow.taskId !== null && isPrimaryTaskWindow(dbWindow) && windowName && deps.destroyPrimaryTaskWindow) {

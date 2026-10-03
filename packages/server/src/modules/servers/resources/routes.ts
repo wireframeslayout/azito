@@ -3,19 +3,19 @@ import type { IServerRepository } from '../Server';
 import type { ResourceGuard } from './ResourceGuard';
 import type { IResourceGuardSettingsRepository } from './SqliteResourceGuardSettingsRepository';
 import type { TransportFactory } from '../transport/TransportFactory';
-import type { IMuxClient } from '../../tmux/IMuxClient';
-import { measureWindowResources } from './windowResources';
+import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
+import { measureWindowResources, type WindowResource } from './windowResources';
 
 export interface ResourceGuardRouteOptions {
   settingsRepo: IResourceGuardSettingsRepository;
   resourceGuard: ResourceGuard;
   serverRepo: IServerRepository;
   transportFactory: TransportFactory;
-  tmuxClient: IMuxClient;
+  muxDriverRegistry: MuxDriverRegistry;
 }
 
 const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (fastify, opts, done) => {
-  const { settingsRepo, resourceGuard, serverRepo, transportFactory, tmuxClient } = opts;
+  const { settingsRepo, resourceGuard, serverRepo, transportFactory, muxDriverRegistry } = opts;
 
   // ── GET /api/settings/resource-guard ──
   fastify.get('/api/settings/resource-guard', async () => {
@@ -48,11 +48,11 @@ const resourceGuardRoutes: FastifyPluginCallback<ResourceGuardRouteOptions> = (f
     const measurement = await resourceGuard.measure(server);
     const settings = settingsRepo.get();
 
-    let windows: { target: string; rssBytes: number }[] | undefined;
+    let windows: WindowResource[] | undefined;
     if (request.query.detail === '1') {
       try {
         const transport = transportFactory.getTransport(server);
-        windows = await measureWindowResources(transport, tmuxClient, server);
+        windows = await measureWindowResources(transport, muxDriverRegistry.resolve(server), server);
       } catch {
         windows = [];
       }
