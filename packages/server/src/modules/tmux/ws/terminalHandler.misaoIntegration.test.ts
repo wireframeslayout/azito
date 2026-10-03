@@ -162,6 +162,23 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
     const ws = attach(extra, 80, 24);
     await vi.waitFor(() => expect(output(ws)).toContain('\x1b[2J'), { timeout: 10000, interval: 50 });
     await driver.closeWindow(server, extra);
-    await vi.waitFor(() => expect(ws.close).toHaveBeenCalled(), { timeout: 10000, interval: 50 });
+    await vi.waitFor(() => expect(ws.close).toHaveBeenCalledWith(4413, 'pane closed'), { timeout: 10000, interval: 50 });
+  });
+
+  it('closes with 4413 when the watched pane is closed, and a later attach to its old ordinal does not land on the pane that took its place', async () => {
+    const twoPanes = (await driver.openWindow(server, 'azm-term', 'two', { exactName: true })).ref;
+    const second = await driver.openPaneInWindow(server, twoPanes);
+    const ws = attach(twoPanes, 80, 24);
+    await vi.waitFor(() => expect(output(ws)).toContain('\x1b[2J'), { timeout: 10000, interval: 50 });
+    // Pane 1 is watched; closing it shifts the other pane into ordinal 1.
+    const [first] = await driver.listPanesByRef(server, twoPanes);
+    await driver.closePane(server, first.handle);
+    await vi.waitFor(() => expect(ws.close).toHaveBeenCalledWith(4413, 'pane closed'), { timeout: 10000, interval: 50 });
+    expect((await driver.listPanesByRef(server, twoPanes)).map((p) => p.handle)).toEqual([second]);
+    // Ordinal 2 no longer names a pane: the hub says so instead of failing generically.
+    const stale = fakeWs();
+    open.push(stale);
+    handleTerminalConnection(stale as unknown as WebSocket, server, twoPanes, 2 as PaneOrdinal, 80, 24, transportFactory, registry);
+    await vi.waitFor(() => expect(stale.close).toHaveBeenCalledWith(4413, 'pane closed'), { timeout: 10000, interval: 50 });
   });
 });

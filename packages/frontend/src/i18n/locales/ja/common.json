@@ -193,7 +193,12 @@
       "opening": "開いています…",
       "killWindow": "ウィンドウを削除",
       "killWindowConfirmTitle": "ウィンドウを削除",
-      "killWindowConfirmMessage": "ウィンドウ \"{{name}}\" を削除しますか？"
+      "killWindowConfirmMessage": "ウィンドウ \"{{name}}\" を削除しますか？",
+      "closed": "このペインは閉じられました。ペイン番号が詰まるため、別のペインへは自動でつなぎ直しません",
+      "resume": "会話を再開",
+      "resuming": "再開中…",
+      "openFirstPane": "ウィンドウの先頭のペインを開く",
+      "closeTab": "このタブを閉じる"
     }
   },
   "resourceWarning": {

@@ -13,6 +13,7 @@ const OPEN_FAILURE_CLOSE = {
   WINDOW_NOT_FOUND: TERMINAL_CLOSE.windowNotFound,
   PANE_STOPPED: TERMINAL_CLOSE.paneStopped,
   WINDOW_EMPTY: TERMINAL_CLOSE.windowEmpty,
+  PANE_CLOSED: TERMINAL_CLOSE.paneClosed,
 } as const;
 
 function isOpenFailureKey(message: string): message is keyof typeof OPEN_FAILURE_CLOSE {

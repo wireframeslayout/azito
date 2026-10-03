@@ -26,7 +26,7 @@ import { PENDING_TERMINAL_OPEN_TTL_MS } from '../lib/terminalTargetOpen';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
-import type { PaneUnavailableReason } from '../lib/paneState';
+import { missingPaneOutcome, type PaneUnavailableReason } from '../lib/paneState';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -250,6 +250,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
         return;
       }
       setWindowMissing(false);
+      setPaneUnavailable(null);
       setDisconnected(false);
       setConnectFailed(false);
       setRespawnError(null);
@@ -278,7 +279,13 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
 
   const handlePaneNoticeResolved = useCallback((outcome: PaneNoticeOutcome) => {
     setPaneUnavailable(null);
+    if (outcome === 'close_tab') { (onTargetRemoved ?? onCloseTab)?.(); return; }
     setXtermKey((k) => k + 1);
+    if (outcome === 'switch_first_pane') {
+      // The user chose to look at whatever pane is first now; the closed pane's number is not reused implicitly.
+      if (terminalRef && terminalRef.pane !== 1) onRetargetPane?.(1);
+      return;
+    }
     onWindowChanged?.();
     // A deleted pane shifts the ordinals after it and a deleted window is gone: this terminal's target no longer exists.
     if (outcome !== 'pane_opened') { (onTargetRemoved ?? onCloseTab)?.(); return; }
@@ -297,7 +304,10 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     const result = checkWindowExists(sessions, terminalRef, target);
 
     if (!result.found || !result.paneFound) {
-      if (everSeen.current || sessionsUpdateCount.current > 1) setWindowMissing(true);
+      if (everSeen.current || sessionsUpdateCount.current > 1) {
+        if (result.found && missingPaneOutcome(muxKind) === 'pane_closed') setPaneUnavailable('pane_closed');
+        else setWindowMissing(true);
+      }
       return;
     }
 
@@ -305,7 +315,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     setWindowMissing(false);
     setDisconnected(false);
     setConnectFailed(false);
-  }, [sessions, target, terminalRef, resolveOnServer]);
+  }, [sessions, target, terminalRef, resolveOnServer, muxKind]);
 
   const activePane = useMemo(
     () => {
@@ -431,6 +441,9 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             terminalRef={terminalRef}
             muxRef={windowMuxRef}
             onResolved={handlePaneNoticeResolved}
+            onResume={isTaskOwnedPane && dbWindow ? () => { void handleRespawn(); } : undefined}
+            resuming={respawning}
+            resumeError={respawnError}
           />
         )}
         {connectFailed && !windowMissing && !disconnected && !paneUnavailable && (
