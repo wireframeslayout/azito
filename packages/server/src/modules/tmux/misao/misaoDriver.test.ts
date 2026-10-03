@@ -154,4 +154,9 @@ describe('describeMisaoDaemon', () => {
     const status = await describeMisaoDaemon(connection({ available: true }, async () => { throw new Error('socket closed'); }));
     expect(status).toEqual({ installed: false, detail: 'socket closed' });
   });
+
+  it('puts the reason, not the English message, in detail when the driver becomes unavailable mid-request', async () => {
+    const status = await describeMisaoDaemon(connection({ available: true }, async () => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); }));
+    expect(status).toEqual({ installed: false, detail: 'daemon_unreachable' });
+  });
 });

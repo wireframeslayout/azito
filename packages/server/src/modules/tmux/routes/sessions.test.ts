@@ -868,6 +868,35 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
     expect(res.json()).toEqual({ error: 'daemon unreachable' });
   });
 
+  it('answers 503 for a cached list once the driver is no longer available', async () => {
+    let available = true;
+    const listWorkspaces = vi.fn(async () => workspaces);
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', { listWorkspaces } as unknown as IMuxClient, () => (available ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
+    app = Fastify();
+    app.setErrorHandler((err, _request, reply) => {
+      if (err instanceof MuxDriverUnavailableError) return reply.status(503).send({ reason: err.reason });
+      return reply.status(500).send({ error: 'unexpected' });
+    });
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(misaoServer),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo: makeWindowRepo(),
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    await app.ready();
+
+    expect((await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' })).statusCode).toBe(200);
+    available = false;
+    const res = await app.inject({ method: 'GET', url: '/api/servers/misao1/sessions' });
+
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ reason: 'daemon_unreachable' });
+    expect(listWorkspaces).toHaveBeenCalledTimes(1);
+  });
+
   it('lets an unavailable driver reach the app error handler instead of the route 500', async () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
     const listWorkspaces = vi.fn();
@@ -891,5 +920,58 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
     expect(res.statusCode).toBe(503);
     expect(res.json()).toEqual({ reason: 'daemon_unreachable' });
     expect(listWorkspaces).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
+  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const windowId = 'w_0123456789ABCDEFGHJKMNPQRS';
+  const misaoRef = { kind: 'misao', workspace: 'ws-a', window: windowId } as const;
+  let app: FastifyInstance;
+  const openPaneInWindow = vi.fn(async () => 'p_1');
+
+  async function build(emit = vi.fn()) {
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', { openPaneInWindow } as unknown as IMuxClient);
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(misaoServer),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      muxDriverRegistry: registry,
+      notificationBus: { emit } as never,
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    await app.ready();
+    return emit;
+  }
+
+  const url = `/api/servers/misao1/mux/windows/${encodeURIComponent(JSON.stringify(misaoRef))}/panes/open`;
+
+  afterEach(async () => {
+    openPaneInWindow.mockClear();
+    await app.close();
+  });
+
+  it('opens a pane with the command and notifies sessions changed', async () => {
+    const emit = await build();
+    const res = await app.inject({ method: 'POST', url, payload: { command: 'claude' } });
+    expect(res.statusCode).toBe(200);
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, expect.objectContaining({ command: 'claude' }));
+    expect(emit).toHaveBeenCalledWith({ type: 'sessions:updated', payload: { serverName: 'misao1' } });
+  });
+
+  it('opens a shell-only pane without a body', async () => {
+    await build();
+    const res = await app.inject({ method: 'POST', url });
+    expect(res.statusCode).toBe(200);
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, expect.objectContaining({ command: undefined }));
+  });
+
+  it('rejects a blank command', async () => {
+    await build();
+    const res = await app.inject({ method: 'POST', url, payload: { command: '  ' } });
+    expect(res.statusCode).toBe(400);
+    expect(openPaneInWindow).not.toHaveBeenCalled();
   });
 });

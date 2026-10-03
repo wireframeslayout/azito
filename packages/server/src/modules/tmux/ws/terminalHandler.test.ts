@@ -81,6 +81,17 @@ describe('handleTerminalConnection driver selection', () => {
     await vi.waitFor(() => expect(ws.close).toHaveBeenCalledWith(4404, 'window not found'));
   });
 
+  it.each([
+    ['PANE_STOPPED', 4410, 'pane stopped'],
+    ['WINDOW_EMPTY', 4412, 'window empty'],
+  ])('maps %s to close code %i', async (message, code, reason) => {
+    const f = fixtures();
+    f.misaoOpen.mockRejectedValueOnce(new Error(message));
+    const ws = fakeWs();
+    connect(ws, misaoServer, f);
+    await vi.waitFor(() => expect(ws.close).toHaveBeenCalledWith(code, reason));
+  });
+
   it('sends the message and closes when the misao driver is unavailable', async () => {
     const f = fixtures();
     f.resolve.mockImplementation(() => { throw new MuxDriverUnavailableError('misao', 'misao_disabled'); });
