@@ -5,6 +5,7 @@ import {
   terminalWsParams,
   windowApiPath,
   paneApiPath,
+  paneDeletePath,
   terminalRefFromWindow,
   terminalRefFromTarget,
   resolveTerminalRefFromTarget,
@@ -102,6 +103,13 @@ describe('windowApiPath / paneApiPath', () => {
   it('paneApiPath for mux ref', () => {
     const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: 'ABC', pane: 3 };
     expect(paneApiPath(ref, 'send-keys')).toBe('/servers/srv/mux/windows/ABC/panes/3/send-keys');
+  });
+
+  it('paneDeletePath carries the pane handle when known, else only the ordinal', () => {
+    const ref: TerminalRef = { kind: 'windowId', serverName: 'local', windowId: 7, pane: 2 };
+    expect(paneDeletePath(ref, 'p_01ABC')).toBe('/windows/7/panes/2?handle=p_01ABC');
+    expect(paneDeletePath(ref, '%12')).toBe('/windows/7/panes/2?handle=%2512');
+    expect(paneDeletePath(ref)).toBe('/windows/7/panes/2');
   });
 });
 

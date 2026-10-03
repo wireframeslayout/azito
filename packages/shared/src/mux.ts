@@ -45,6 +45,8 @@ export const TERMINAL_CLOSE = {
 
 export interface MuxPane {
   index: number;
+  /** The pane's stable handle (tmux `%<n>`, misao `p_<ULID>`): unlike `index` it does not shift when a sibling is deleted. */
+  handle?: string;
   command: string;
   title: string;
   width: number;

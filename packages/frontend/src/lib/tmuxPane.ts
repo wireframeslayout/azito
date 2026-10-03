@@ -122,6 +122,12 @@ export function checkWindowExists(
   return checkWindowExistsByTarget(sessions, target);
 }
 
+/** Handle of the pane `ref` points at, or undefined when the sessions do not list it (or the driver reports no handles). */
+export function findPaneHandle(sessions: Session[] | undefined, ref: TerminalRef): string | undefined {
+  if (!sessions) return undefined;
+  return findWindowByRef(sessions, ref)?.panes.find((p) => p.index === ref.pane)?.handle;
+}
+
 export function resolveActivePaneByRef(
   sessions: Session[],
   ref: TerminalRef,

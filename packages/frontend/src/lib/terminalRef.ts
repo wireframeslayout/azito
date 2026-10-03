@@ -229,6 +229,12 @@ export function paneApiPath(r: TerminalRef, action?: string): string {
     : `/servers/${r.serverName}/mux/windows/${encodeURIComponent(r.ref)}/panes/${r.pane}`;
 }
 
+/** The request that deletes a pane. With a `handle` the server deletes exactly that pane (a repeat is a no-op) instead of re-resolving the ordinal. */
+export function paneDeletePath(r: TerminalRef, handle?: string): string {
+  const path = paneApiPath(r);
+  return handle ? `${path}?handle=${encodeURIComponent(handle)}` : path;
+}
+
 export function terminalRefDisplayLabel(r: TerminalRef): string {
   if (r.kind === 'windowId') return formatWindowId(r.windowId);
   try {

@@ -3,7 +3,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 export { ServerConfig } from '../servers/Server';
 import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
-import type { IMuxClient, PaneWindowLabels } from './IMuxClient';
+import type { IMuxClient, PaneLocation, PaneWindowLabels } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
 import { composePaneEnv, withIsolationMask, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
@@ -31,7 +31,7 @@ export { windowSpecMatches } from './types';
 const TMUX_LIST_PANES_FORMAT = [
   '#{session_name}', '#{session_windows}', '#{session_attached}', '#{session_created}',
   '#{window_index}', '#{window_name}', '#{window_active}', '#{window_activity}',
-  '#{pane_index}', '#{pane_current_command}', '#{pane_width}', '#{pane_height}', '#{pane_active}', '#{pane_pid}', '#{pane_title}',
+  '#{pane_index}', '#{pane_current_command}', '#{pane_width}', '#{pane_height}', '#{pane_active}', '#{pane_pid}', '#{pane_id}', '#{pane_title}',
 ].join('|||');
 
 /** Parses `tmux list-panes -a -F <TMUX_LIST_PANES_FORMAT>` stdout into sessions (unfiltered). */
@@ -47,7 +47,7 @@ function parseSessionLines(stdout: string): TmuxSession[] {
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
     const parts = line.split('|||');
-    const [sName, sWindows, sAttached, sCreated, wIndex, wName, wActive, wActivity, pIndex, pCommand, pWidth, pHeight, pActive, pPid, pTitle] = parts;
+    const [sName, sWindows, sAttached, sCreated, wIndex, wName, wActive, wActivity, pIndex, pCommand, pWidth, pHeight, pActive, pPid, pId] = parts;
 
     if (!sessionMap.has(sName)) {
       sessionMap.set(sName, {
@@ -74,11 +74,12 @@ function parseSessionLines(stdout: string): TmuxSession[] {
     session.windows.get(wIdx)!.panes.push({
       index: parseInt(pIndex, 10),
       command: pCommand,
-      title: pTitle || '',
+      title: parts.slice(15).join('|||'),
       width: parseInt(pWidth, 10),
       height: parseInt(pHeight, 10),
       active: pActive === '1',
       pid: parseInt(pPid, 10),
+      handle: pId || undefined,
     });
   }
 
@@ -674,19 +675,34 @@ export class TmuxClient implements IMuxClient {
   }
 
   async refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null> {
+    const location = await this.locatePane(server, handle);
+    return location.status === 'found' ? { ref: location.ref, ordinal: location.ordinal } : null;
+  }
+
+  async locatePane(server: ServerConfig, handle: PaneHandle): Promise<PaneLocation> {
     const format = ['#{pane_id}', '#{session_name}', '#{window_name}', '#{pane_index}', '#{?session_grouped,#{session_group},#{session_name}}'].join('\t');
     let result: ExecResult;
-    try { result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]); } catch { return null; }
-    if (result.code !== 0) return null;
+    try {
+      result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
+    } catch (err) {
+      // LocalTransport rejects on a non-zero tmux exit: only "no tmux server" says the pane is not there.
+      const e = err as { message?: string; stderr?: string };
+      return isTmuxNoServerRunning(`${e.stderr ?? ''}${e.message ?? ''}`) ? { status: 'absent' } : { status: 'unknown' };
+    }
+    if (result.code !== 0) {
+      // No tmux server means no panes; any other failure says nothing about the pane.
+      return isTmuxNoServerRunning(`${result.stderr || ''}${result.stdout || ''}`) ? { status: 'absent' } : { status: 'unknown' };
+    }
 
     const lines = result.stdout.trim().split('\n').filter(Boolean);
     const parsed = lines.map(line => {
-      const [paneId, _sessionName, windowName, paneIndex, resolvedSession] = line.split('\t');
-      return { paneId, windowName, paneIndex: parseInt(paneIndex, 10), resolvedSession };
+      const [paneId, sessionName, windowName, paneIndex, resolvedSession] = line.split('\t');
+      return { paneId, sessionName, windowName, paneIndex: parseInt(paneIndex, 10), resolvedSession };
     });
 
     const target = parsed.find(p => p.paneId === (handle as string));
-    if (!target) return null;
+    if (!target) return { status: 'absent' };
+    const workspaces = [...new Set(parsed.filter(p => p.paneId === (handle as string)).flatMap(p => [p.sessionName, p.resolvedSession]))];
 
     const windowKey = `${target.resolvedSession}\t${target.windowName}`;
     const siblings = parsed
@@ -694,7 +710,7 @@ export class TmuxClient implements IMuxClient {
       .sort((a, b) => a.paneIndex - b.paneIndex);
     const ordinal = siblings.findIndex(p => p.paneId === (handle as string)) + 1;
 
-    return { ref: { kind: 'tmux', workspace: target.resolvedSession, window: target.windowName }, ordinal };
+    return { status: 'found', ref: { kind: 'tmux', workspace: target.resolvedSession, window: target.windowName }, ordinal, workspaces };
   }
 
   async probePane(server: ServerConfig, handle: PaneHandle) { return this.checkPaneLiveness(server, handle as string); }

@@ -3,7 +3,7 @@ import type { ExecResult } from '../servers/transport/ServerTransport';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { Window, IWindowRepository } from './Window';
 import { isPrimaryTaskWindow } from './Window';
-import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, muxKindForRuntime } from '@azito/shared';
+import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, muxKindForRuntime, isPaneHandleLike, asPaneHandle } from '@azito/shared';
 import { resolveKillOutcome, type KillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { uiTokenEnvForServer } from '../../shared/auth/uiTokenEnv';
@@ -51,6 +51,46 @@ export async function resolvePaneHandle(
     return await muxClient.resolvePane(server, ref, ordinal);
   } catch {
     throw Object.assign(new Error(`Pane ordinal ${ordinal} not found`), { statusCode: 404 });
+  }
+}
+
+/**
+ * Deletes one pane of the window `ref`. Addressed by the pane's stable handle (what the session listing reported)
+ * when given: ordinals shift when a sibling goes, so re-resolving an ordinal can delete a different pane. A handle
+ * that no longer exists is already deleted (success); one that lives in another window is refused. Without a handle
+ * the ordinal is resolved as before.
+ */
+export async function closePaneInWindow(
+  muxClient: IMuxClient,
+  server: ServerConfig,
+  ref: MuxRef,
+  target: { ordinal: PaneOrdinal; handle?: string },
+): Promise<void> {
+  let handle: PaneHandle;
+  if (target.handle === undefined) {
+    handle = await resolvePaneHandle(muxClient, server, ref, target.ordinal);
+  } else {
+    if (!isPaneHandleLike(target.handle, ref.kind)) {
+      throw Object.assign(new Error('Invalid pane handle'), { statusCode: 400 });
+    }
+    handle = asPaneHandle(target.handle);
+    const location = await muxClient.locatePane(server, handle);
+    // Not being able to find out is not "already gone": the pane may well still be there.
+    if (location.status === 'unknown') {
+      throw Object.assign(new Error('Could not verify the pane'), { statusCode: 503 });
+    }
+    if (location.status === 'absent') return;
+    // tmux: the window name alone is not unique, so the requested session must be one the pane is listed under
+    // (any session of its group). misao: the window id is globally unique, the workspace must match too.
+    const sameWindow = location.ref.window === ref.window
+      && (location.workspaces ? location.workspaces.includes(ref.workspace) : location.ref.workspace === ref.workspace);
+    if (!sameWindow) {
+      throw Object.assign(new Error('Pane does not belong to this window'), { statusCode: 404 });
+    }
+  }
+  const outcome = await resolveKillOutcome(muxClient.closePane(server, handle));
+  if (!outcome.success) {
+    throw Object.assign(new Error(`kill-pane failed: ${outcome.result.stderr || outcome.result.stdout}`), { statusCode: 500 });
   }
 }
 

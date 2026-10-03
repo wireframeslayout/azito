@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import windowsRoutes from './routes';
 import { KeyedMutex } from '../../shared/keyedMutex';
@@ -96,5 +96,56 @@ describe('POST /api/windows/:id/panes', () => {
     expect(res.statusCode).toBe(409);
     expect(res.json().error).toBe('primary_task_window_pane_add_unsupported');
     expect(splitPaneByHandle).not.toHaveBeenCalled();
+  });
+});
+
+describe('DELETE /api/windows/:id/panes/:ordinal', () => {
+  const HANDLE = 'p_00000000000000000000000001';
+  const server = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  let app: FastifyInstance;
+  const closePane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+  const resolvePane = vi.fn(async () => 'p_ordinal');
+  const locatePane = vi.fn();
+  const driver = { closePane, resolvePane, locatePane };
+
+  beforeEach(async () => {
+    app = Fastify();
+    await app.register(windowsRoutes, {
+      windowRepo: { findById: (id: number) => (id === 5 ? makeWindow() : undefined) } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository, taskRepo: {} as ITaskRepository, tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => driver } as never,
+      serverRepo: { findByName: () => server } as unknown as IServerRepository,
+      respawnService: {} as WindowRespawnService, sleepService: {} as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory, sessionCaptureService: {} as SessionCaptureService,
+      supervisorRegistry: {} as SupervisorRegistry, windowActivityStatusService: {} as WindowActivityStatusService,
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('closes exactly the handle in the query, without re-resolving the ordinal', async () => {
+    locatePane.mockResolvedValue({ status: 'found', ref, ordinal: 1 });
+    const res = await app.inject({ method: 'DELETE', url: `/api/windows/5/panes/1?handle=${HANDLE}` });
+    expect(res.statusCode).toBe(200);
+    expect(closePane).toHaveBeenCalledWith(server, HANDLE);
+    expect(resolvePane).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op success when the handle is already gone', async () => {
+    locatePane.mockResolvedValue({ status: 'absent' });
+    const res = await app.inject({ method: 'DELETE', url: `/api/windows/5/panes/1?handle=${HANDLE}` });
+    expect(res.statusCode).toBe(200);
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
+  it('keeps resolving the ordinal when no handle is given', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/api/windows/5/panes/1' });
+    expect(res.statusCode).toBe(200);
+    expect(closePane).toHaveBeenCalledWith(server, 'p_ordinal');
   });
 });

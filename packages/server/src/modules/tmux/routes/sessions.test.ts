@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import sessionsRoutes, { invalidateSessionCache, type SessionsRouteOptions } from './sessions';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
@@ -1226,5 +1226,55 @@ describe('POST /api/servers/:name/mux/workspaces (and /windows) response identit
     const win = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: {} });
     expect(ws.json()).toMatchObject({ target: `ws-a:${misaoRef.window}`, windowName: 'main--abcd' });
     expect(win.json()).toMatchObject({ target: `ws-a:${misaoRef.window}`, windowName: 'extra--efgh' });
+  });
+});
+
+describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
+  const HANDLE = 'p_00000000000000000000000001';
+  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoRef = { kind: 'misao', workspace: 'ws-a', window: 'w_0123456789ABCDEFGHJKMNPQRS' } as const;
+  const url = `/api/servers/misao1/mux/windows/${encodeURIComponent(JSON.stringify(misaoRef))}/panes/1`;
+  let app: FastifyInstance;
+  const closePane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+  const resolvePane = vi.fn(async () => 'p_ordinal');
+  const locatePane = vi.fn();
+
+  beforeEach(async () => {
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', { closePane, resolvePane, locatePane } as unknown as IMuxClient);
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(misaoServer), tmux: {} as unknown as TmuxClient, uiToken: 'test-token',
+      muxDriverRegistry: registry, notificationBus: { emit: vi.fn() } as never,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    vi.clearAllMocks();
+    await app.close();
+  });
+
+  it('closes the pane named by the handle when it belongs to the window', async () => {
+    locatePane.mockResolvedValue({ status: 'found', ref: misaoRef, ordinal: 1 });
+    const res = await app.inject({ method: 'DELETE', url: `${url}?handle=${HANDLE}` });
+    expect(res.statusCode).toBe(200);
+    expect(closePane).toHaveBeenCalledWith(misaoServer, HANDLE);
+    expect(resolvePane).not.toHaveBeenCalled();
+  });
+
+  it('refuses a handle of another window', async () => {
+    locatePane.mockResolvedValue({ status: 'found', ref: { ...misaoRef, window: 'w_OTHER' }, ordinal: 1 });
+    const res = await app.inject({ method: 'DELETE', url: `${url}?handle=${HANDLE}` });
+    expect(res.statusCode).toBe(404);
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
+  it('answers 503 when the pane cannot be verified', async () => {
+    locatePane.mockResolvedValue({ status: 'unknown' });
+    const res = await app.inject({ method: 'DELETE', url: `${url}?handle=${HANDLE}` });
+    expect(res.statusCode).toBe(503);
+    expect(closePane).not.toHaveBeenCalled();
   });
 });

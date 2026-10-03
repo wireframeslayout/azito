@@ -10,6 +10,8 @@ export interface TmuxPane {
   height: number;
   active: boolean;
   pid: number;
+  /** tmux `%<n>` pane id: stable across sibling deletion, unlike `index`. */
+  handle?: string;
 }
 
 export interface TmuxWindow {

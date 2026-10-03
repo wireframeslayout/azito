@@ -171,8 +171,8 @@ describe('MisaoMuxClient reads', () => {
     expect(ws).toMatchObject({ name: 'proj', windowCount: 2, attached: false });
     expect(ws.windows[0]).toMatchObject({ index: 1, name: 'main', ref: refOf('proj', w1), activity: Math.floor(Date.parse('2026-10-02T00:00:10.500Z') / 1000) });
     expect(ws.windows[0].panes).toEqual([
-      { index: 1, command: 'claude', title: 'T', width: 80, height: 24, active: false, pid: 99, processState: 'running' },
-      { index: 2, command: '/bin/bash', title: '', width: 80, height: 24, active: false, pid: 0, processState: 'stopped' },
+      { index: 1, handle: expect.stringMatching(/^p_/), command: 'claude', title: 'T', width: 80, height: 24, active: false, pid: 99, processState: 'running' },
+      { index: 2, handle: expect.stringMatching(/^p_/), command: '/bin/bash', title: '', width: 80, height: 24, active: false, pid: 0, processState: 'stopped' },
     ]);
     expect(ws.windows[1]).toMatchObject({ index: 2, name: 'second', ref: refOf('proj', w2), panes: [], activity: 0 });
   });

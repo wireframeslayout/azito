@@ -28,6 +28,8 @@ export interface Server {
 
 export interface Pane {
   index: number;
+  /** Stable pane handle; unlike `index` it does not shift when a sibling pane is deleted. */
+  handle?: string;
   title: string;
   command: string;
   width: number;
