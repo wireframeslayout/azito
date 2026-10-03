@@ -20,16 +20,19 @@ export function windowRefOf(win: Pick<WindowRowIdentity, 'muxRef' | 'tmuxTarget'
 }
 
 /**
- * The ref of a task's current window: the primary window row's ref, otherwise built from `task.tmuxWindow`
- * in `workspace`. Null when the task has no window at all.
+ * The ref of a task's current window. misao: the primary window row's ref (its `mux_ref` is the identity, and
+ * `task.tmuxWindow` can lag behind or hold a display name). tmux: built from `task.tmuxWindow` in `workspace`,
+ * as before — unless `tmuxPrefersPrimary` is set for a caller that already read the primary row first. Null
+ * when the task has no window at all.
  */
 export function taskWindowRef(
   task: { tmuxWindow?: string | null },
   primaryWindow: Pick<WindowRowIdentity, 'muxRef' | 'tmuxTarget'> | undefined,
   workspace: string,
   kind: MuxDriverKind,
+  opts?: { tmuxPrefersPrimary?: boolean },
 ): MuxRef | null {
-  if (primaryWindow) return windowRefOf(primaryWindow, kind);
+  if (primaryWindow && (kind === 'misao' || opts?.tmuxPrefersPrimary)) return windowRefOf(primaryWindow, kind);
   return task.tmuxWindow ? { kind, workspace, window: task.tmuxWindow } : null;
 }
 

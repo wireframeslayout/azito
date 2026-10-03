@@ -2028,6 +2028,18 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
       expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: misaoRef(NEW_ID), label: 'task-4--new' }));
     });
 
+    it('followUp(): when the window vanishes between the liveness check and creation, the reused primary row gets the new window and its display name (not a legacy w_<id> label)', async () => {
+      const { useCase, tmux, windowRepo, primaryWindowWaker } = followUpFixture([primaryRow({ label: OLD_ID })], OLD_ID);
+      // alive at the pre-lock check, gone by the time the lock phase asks again; the wake finds nothing to reuse
+      tmux.windowExists.mockResolvedValueOnce(true).mockResolvedValue(false);
+      primaryWindowWaker.wake.mockResolvedValue({ tmuxTarget: `azito:${OLD_ID}` });
+      (windowRepo.findById as ReturnType<typeof vi.fn>).mockReturnValue(primaryRow({ sleeping: true }));
+
+      await useCase.followUp(49, 4, 'please continue');
+
+      expect(windowRepo.update).toHaveBeenCalledWith(10, expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: misaoRef(NEW_ID), sleeping: false, label: 'task-4--new' }));
+    });
+
     it('followUp(): a failure to ask the daemon about the window is not read as "absent"', async () => {
       const { useCase, tmux } = followUpFixture([primaryRow()], OLD_ID);
       tmux.windowExists.mockRejectedValue(new Error('daemon down'));

@@ -28,6 +28,12 @@ describe('taskWindowRef', () => {
     expect(taskWindowRef({ tmuxWindow: 'task-1' }, undefined, 'azito', 'tmux')).toEqual(tmux('azito', 'task-1'));
   });
 
+  it('tmux ignores the primary row (behaviour unchanged) unless the caller reads it first', () => {
+    const row = { muxRef: tmux('other', 'stale'), tmuxTarget: 'other:stale' };
+    expect(taskWindowRef({ tmuxWindow: 'task-1' }, row, 'azito', 'tmux')).toEqual(tmux('azito', 'task-1'));
+    expect(taskWindowRef({ tmuxWindow: 'task-1' }, row, 'azito', 'tmux', { tmuxPrefersPrimary: true })).toEqual(tmux('other', 'stale'));
+  });
+
   it('is null for a task with no window', () => {
     expect(taskWindowRef({ tmuxWindow: null }, undefined, 'azito', 'misao')).toBeNull();
   });

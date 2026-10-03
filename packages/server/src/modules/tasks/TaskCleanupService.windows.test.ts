@@ -8,12 +8,13 @@ import type { Task } from './Task';
 const WINDOW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ok = { stdout: '', stderr: '', code: 0 };
 
-function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.fn>; resolveThrows?: boolean }) {
+function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.fn>; resolveThrows?: boolean; kind?: 'misao' | 'tmux' }) {
+  const kind = opts.kind ?? 'misao';
   const closeWindow = opts.closeWindow ?? vi.fn(async () => ok);
-  const driver = { kind: 'misao', closeWindow } as unknown as IMuxClient;
+  const driver = { kind, closeWindow } as unknown as IMuxClient;
   const registry = new MuxDriverRegistry({ misaoEnabled: true });
-  registry.register('misao', driver, opts.resolveThrows ? () => ({ available: false, reason: 'daemon_unreachable' }) : undefined);
-  const server = { name: 'local', type: 'local', muxRuntime: 'misao' };
+  registry.register(kind, driver, opts.resolveThrows ? () => ({ available: false, reason: 'daemon_unreachable' }) : undefined);
+  const server = { name: 'local', type: 'local', muxRuntime: kind === 'misao' ? 'misao' : 'system' };
   const service = new TaskCleanupService({
     serverRepo: { findByName: () => server } as never,
     worktreeServiceFactory: {} as never,
@@ -64,12 +65,21 @@ describe('TaskCleanupService window close', () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it('skips the close with a warning while the daemon is down and still finishes cleanup', async () => {
+  it('fails closed while the daemon is down: nothing is closed and the error propagates', async () => {
     const { service, closeWindow, log, task } = setup({ resolveThrows: true });
 
-    await expect(service.cleanup(task, log)).resolves.toBeUndefined();
+    await expect(service.cleanup(task, log)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
 
     expect(closeWindow).not.toHaveBeenCalled();
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining(new MuxDriverUnavailableError('misao', 'daemon_unreachable').message));
+  });
+
+  it('tmux: closes task.tmuxWindow in the project workspace even when the window row disagrees (behaviour unchanged)', async () => {
+    const row = { isPrimary: true, ownerType: 'task', tmuxTarget: 'other:stale-window', muxRef: { kind: 'tmux', workspace: 'other', window: 'stale-window' } };
+    const { service, closeWindow, log, task } = setup({ kind: 'tmux', windows: [row] });
+    task.tmuxWindow = 'task-1';
+
+    await service.cleanup(task, log);
+
+    expect(closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1' });
   });
 });

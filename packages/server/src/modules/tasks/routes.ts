@@ -356,7 +356,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           try {
             const driver = muxDriverRegistry.resolve(srv);
             const primaryWin = windows.find((w) => w.isPrimary);
-            const ref = taskWindowRef(t, primaryWin, resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo), driver.kind);
+            const ref = taskWindowRef(t, primaryWin?.muxRef ? primaryWin : undefined, resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo), driver.kind, { tmuxPrefersPrimary: true });
             if (ref) paneAlive = await driver.windowExists(srv, ref);
           } catch (err) {
             // The mux daemon being down makes liveness unknown, not the whole task unreadable.
@@ -960,7 +960,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const driver = muxDriverRegistry.resolve(srv);
         const retryWindows = windowRepo.findByTask(id);
         const retryPrimaryWin = retryWindows.find((w) => w.isPrimary);
-        const retryRef = taskWindowRef({ tmuxWindow: windowName }, retryPrimaryWin, muxWorkspace, driver.kind);
+        const retryRef = taskWindowRef({ tmuxWindow: windowName }, retryPrimaryWin?.muxRef ? retryPrimaryWin : undefined, muxWorkspace, driver.kind, { tmuxPrefersPrimary: true });
         if (!retryRef) throw new Error(`Task ${id} has no window to abandon`);
         const target = muxWindowTarget(retryRef);
         const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => driver.closeWindow(srv, retryRef), () => {});

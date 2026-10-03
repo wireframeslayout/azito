@@ -8,7 +8,6 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
 import { resolveTaskServerName, resolveMuxWorkspace } from './execution/TaskExecutionEnv';
 import { isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
-import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { taskWindowRef } from '../tmux/windowIdentity';
@@ -45,27 +44,20 @@ export class TaskCleanupService {
 
   /**
    * Closes the task's window by its identity: the primary window row's mux_ref, otherwise task.tmuxWindow.
-   * A mux daemon that is down, or a window that could not be confirmed closed, is a warning — cleanup
-   * (worktree and temp files) continues.
+   * A window that could not be confirmed closed is a warning — cleanup (worktree and temp files) continues.
+   * A mux daemon that is down propagates MuxDriverUnavailableError (503): the window cannot be closed, and
+   * deleting the task and its window rows would orphan it with no identity left to remove it by.
    */
   private async closeTaskWindow(task: Task, serverName: string, server: ServerConfig, log: { warn: (msg: string) => void }): Promise<void> {
     const { projectServerRepo, windowRepo } = this.deps;
-    try {
-      const driver = this.deps.muxDriverRegistry.resolve(server);
-      const muxWorkspace = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
-      const primaryWin = windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
-      const ref = taskWindowRef(task, primaryWin, muxWorkspace, driver.kind);
-      if (!ref) return;
-      const outcome = await resolveKillOutcome(driver.closeWindow(server, ref));
-      if (!outcome.success) {
-        log.warn(`[task-cleanup] Failed to close window ${muxWindowTarget(ref)} of task ${task.id}: ${outcome.result.stderr || outcome.result.stdout}`);
-      }
-    } catch (e) {
-      if (e instanceof MuxDriverUnavailableError) {
-        log.warn(`[task-cleanup] Skipped closing the window of task ${task.id}: ${e.message}`);
-        return;
-      }
-      throw e;
+    const driver = this.deps.muxDriverRegistry.resolve(server);
+    const muxWorkspace = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
+    const primaryWin = windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
+    const ref = taskWindowRef(task, primaryWin, muxWorkspace, driver.kind);
+    if (!ref) return;
+    const outcome = await resolveKillOutcome(driver.closeWindow(server, ref));
+    if (!outcome.success) {
+      log.warn(`[task-cleanup] Failed to close window ${muxWindowTarget(ref)} of task ${task.id}: ${outcome.result.stderr || outcome.result.stdout}`);
     }
   }
 

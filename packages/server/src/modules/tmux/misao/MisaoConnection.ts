@@ -88,26 +88,6 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     await this.connectAttempt(client, 1);
   }
 
-  /**
-   * Resolves true once the daemon connection is up, or false when it is still not after `timeoutMs`
-   * (or the connection was closed). For startup work that needs the daemon but must not wait for it forever.
-   */
-  waitUntilConnected(opts: { timeoutMs: number }): Promise<boolean> {
-    if (this.status === 'connected') return Promise.resolve(true);
-    if (this.status === 'closed') return Promise.resolve(false);
-    return new Promise<boolean>((resolve) => {
-      const finish = (connected: boolean): void => {
-        clearTimeout(timer);
-        this.connectedListeners.delete(onConnected);
-        resolve(connected);
-      };
-      const onConnected = (): void => finish(true);
-      const timer = setTimeout(() => finish(false), opts.timeoutMs);
-      timer.unref();
-      this.connectedListeners.add(onConnected);
-    });
-  }
-
   availability(): MuxDriverAvailability {
     return this.status === 'connected' ? { available: true } : { available: false, reason: 'daemon_unreachable' };
   }

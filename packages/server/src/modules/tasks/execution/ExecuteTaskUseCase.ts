@@ -893,10 +893,13 @@ export class ExecuteTaskUseCase {
             // misao stores the window id in tmuxWindow (and the primary row's mux_ref) and windows
             // can be renamed across workspaces: match the id exactly, in every workspace. tmux
             // matches the window name inside the task's workspace only.
-            const primaryRow = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
-            const oldRef = taskWindowRef(currentTask, primaryRow, muxWorkspace, killDriver.kind);
+            const findMisaoOldWindow = () => {
+              const primaryRow = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
+              const oldRef = taskWindowRef(currentTask, primaryRow, muxWorkspace, killDriver.kind);
+              return preWorkspaces.flatMap((ws) => ws.windows).find((w) => oldRef !== null && w.ref !== undefined && isSameWindow(w.ref, oldRef));
+            };
             const oldWin = killDriver.kind === 'misao'
-              ? preWorkspaces.flatMap((ws) => ws.windows).find((w) => oldRef !== null && w.ref !== undefined && isSameWindow(w.ref, oldRef))
+              ? findMisaoOldWindow()
               : preWorkspaces.find((ws) => ws.name === muxWorkspace)?.windows.find((w) => w.name === currentTask.tmuxWindow);
             await confirmOldWindowGone(
               killDriver,
@@ -1728,7 +1731,7 @@ export class ExecuteTaskUseCase {
         // is respawned or renamed independently.
         const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
         const fuDriver = this.resolveDriver(server);
-        const candidateRef = taskWindowRef(currentTask, freshPrimary, muxWorkspace, fuDriver.kind)
+        const candidateRef = taskWindowRef(currentTask, freshPrimary, muxWorkspace, fuDriver.kind, { tmuxPrefersPrimary: true })
           ?? { kind: fuDriver.kind, workspace: muxWorkspace, window: `task-${task.id}` };
         const candidateWindowName = candidateRef.window;
         let exists = false;
@@ -1781,6 +1784,8 @@ export class ExecuteTaskUseCase {
             tmuxTarget: newTmuxTarget,
             muxRef: created.ref,
             sleeping: false,
+            // misao: the label is the display name, never the window id an older row may carry.
+            ...(created.ref?.kind === 'misao' ? { label: created.label ?? created.windowName } : {}),
           });
           if (created.ref) await labelRegisteredWindow(this.resolveDriver(created.server), created.server, created.ref, { windowId: freshPrimary.id, taskId });
         } else {

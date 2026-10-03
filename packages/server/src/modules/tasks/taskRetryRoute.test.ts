@@ -7,6 +7,7 @@ import type { TaskStatus } from './TaskStatus';
 import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
+import { mapAppError } from '../../app/mapAppError';
 
 /**
  * Wires `destroyPrimaryTaskWindow` (kill → reread-gated revoke → cleanup,
@@ -374,17 +375,45 @@ describe('tasks routes while the mux daemon is down', () => {
     expect(JSON.parse(res.payload)).toMatchObject({ id: 1, paneAlive: null });
   });
 
-  it('DELETE /api/tasks/:id skips closing the window and deletes the task', async () => {
+  // Fail closed: the window cannot be closed, and deleting the task and its window rows would
+  // leave the misao window with no identity to remove it by once the daemon is back.
+  function appWithErrorMapping() {
+    const app = Fastify();
+    app.setErrorHandler((err, _req, reply) => {
+      const mapped = mapAppError(err);
+      if (!mapped) throw err;
+      return reply.status(mapped.status).send(mapped.body);
+    });
+    return app;
+  }
+
+  it('DELETE /api/tasks/:id answers 503 and keeps the task and its window rows', async () => {
     const opts = makeOpts({ status: 'open', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
     opts.muxDriverRegistry = daemonDown();
-    const app = Fastify();
+    const app = appWithErrorMapping();
     await app.register(tasksRoutes, opts);
     await app.ready();
 
     const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
 
-    expect(res.statusCode).toBe(200);
-    expect(opts.taskRepo.delete).toHaveBeenCalledWith(1);
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.payload)).toMatchObject({ error: 'mux_driver_unavailable', reason: 'daemon_unreachable' });
+    expect(opts.taskRepo.delete).not.toHaveBeenCalled();
+    expect(opts.windowRepo.remove).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/tasks/:id/archive answers 503 and leaves the task and its window rows as they were', async () => {
+    const opts = makeOpts({ status: 'open', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(503);
+    expect(opts.windowRepo.remove).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'archived' }));
   });
 
   it('POST /api/tasks/:id/recover-session reports the new window id the respawn moved the task to', async () => {
