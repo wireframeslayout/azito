@@ -37,6 +37,19 @@ const frame = () => {
   process.stdout.write('\\x1b[2J\\x1b[H' + '\\x1b[0m'.repeat(24) + text.replace(/\\n/g, '\\r\\n'));
 };
 frame();
+// 'quiet' redraws until the test asks it to stop, then stays alive without output (idle).
+// 'spinner' is claude's title behaviour: a spinner title while working, then the idle glyph the moment it is quiet
+// (misao's title rule judges idle at once, with no silence to wait out).
+if (mode === 'spinner') {
+  let idle = false;
+  setInterval(() => {
+    if (idle) return;
+    if (fs.existsSync(screenFile + '.quiet')) { idle = true; process.stdout.write('\x1b]0;\u2733 idle\x07'); return; }
+    process.stdout.write('\x1b]0;\u273b working\x07');
+    frame();
+  }, 500);
+}
+if (mode === 'quiet') setInterval(() => { if (!fs.existsSync(screenFile + '.quiet')) frame(); }, 500);
 if (mode === 'redraw' || mode === 'finish') setInterval(frame, 500);
 else setInterval(() => {}, 1000);
 // 'finish' exits only once the test asks for it, so the daemon is always given time to report \`working\` first.
@@ -61,7 +74,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
   }
 
   /** Opens a window running the fake agent and registers its `windows` row, as the hub does for an agent window. */
-  async function launchAgent(name: string, text: string, mode: 'redraw' | 'once' | 'finish'): Promise<{ target: string; screen: string }> {
+  async function launchAgent(name: string, text: string, mode: 'redraw' | 'once' | 'finish' | 'quiet' | 'spinner'): Promise<{ target: string; screen: string }> {
     const screen = screenFile(name, text);
     const { windowId } = await connection.request('window.create', { workspace: 'azact', name });
     const ref: MuxRef = { kind: 'misao', workspace: 'azact', window: windowId };
@@ -198,4 +211,36 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux', refinedBy: 'tier2_title' }));
     expect(stopPayloads(target)).toEqual([]);
   });
+
+  it('a pane that goes idle after its Stop hook arrived is a completion marked tier1_hook_stop (the hook alone is not)', async () => {
+    const { target, screen } = await launchAgent('stophook', PLAIN_OUTPUT, 'quiet');
+    const completions = () => stopPayloads(target).filter((p) => p.reason === 'completed');
+
+    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'working' && diagnosticsOf(target)?.decidedBy === 'tier0_mux');
+    // Claude fires Stop when its turn ends; the daemon judges the pane idle some seconds of silence later.
+    monitor.recordResolvedHookSignal(SERVER.name, target, 'stop');
+    await monitor.tick();
+    expect(completions()).toEqual([]);
+
+    fs.writeFileSync(`${screen}.quiet`, '');
+    await waitFor(() => completions().length > 0);
+    expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux', state: 'idle', refinedBy: 'tier1_hook_stop' }));
+  }, 60000);
+
+  it('a pane judged idle by its title before the Stop hook arrives is held, then completed once by the late Stop', async () => {
+    const { target, screen } = await launchAgent('titleidle', PLAIN_OUTPUT, 'spinner');
+    const completions = () => stopPayloads(target).filter((p) => p.reason === 'completed');
+
+    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'working' && diagnosticsOf(target)?.decidedBy === 'tier0_mux');
+    monitor.recordResolvedHookSignal(SERVER.name, target, 'start');
+    fs.writeFileSync(`${screen}.quiet`, '');
+    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'idle' && diagnosticsOf(target)?.mux?.decidedBy === 'title');
+    // Idle has been reported but the Stop has not arrived: nothing is announced yet.
+    expect(stopPayloads(target)).toEqual([]);
+
+    monitor.recordResolvedHookSignal(SERVER.name, target, 'stop');
+    await waitFor(() => completions().length > 0);
+    expect(stopPayloads(target)).toHaveLength(1);
+    expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux', state: 'idle', refinedBy: 'tier1_hook_stop' }));
+  }, 60000);
 });

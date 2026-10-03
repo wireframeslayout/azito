@@ -166,7 +166,8 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
         return reply.status(400).send({ error: 'event must be "start" or "stop"' });
       }
       const resolved = await misao.resolvePane(body.serverName, misaoPaneId);
-      if (resolved) misao.recordAgentActivity(body.serverName, resolved.tmuxTarget, body.event);
+      // Only the first pane carries the window's agent state; a split pane's hook must not stand in for it.
+      if (resolved && resolved.ordinal === 1) misao.recordAgentActivity(body.serverName, resolved.tmuxTarget, body.event);
       return { ok: true };
     }
 

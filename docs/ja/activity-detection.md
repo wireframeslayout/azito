@@ -362,6 +362,8 @@ Settings → System → **稼働検知診断**（3秒更新・読み取り専用
 | `tier1_hook` 〜 `tier4_probe` | その層のフォールバックが判定した状態。`tier4_probe` 表示が多い場合は supervisor / hook の配線を確認 |
 | `none`（稼働中） | 実行ラン登録による稼働（登録 = 稼働。検知層の判定ではない） |
 | `tier0_mux` | マルチプレクサ自身（misao、§13）が報告した状態で判定された行。行の `mux` 材料にある misao 側の判定ルール名（`exit` / プロファイル名 / `title` / `bytes`）が Tier チップの横に出る |
+| `heldForStopHook: true` | misao の idle を Stop hook 待ちで保留している行（§13）。mux は idle だが行はまだ稼働として見える（最長 4 秒）。保留中も画面確認は行い、blocked ならその場で blocked になる |
+| `refinedBy: tier1_hook_stop` | misao 窓で `tier0_mux` の idle を Claude の Stop hook が完了と確認した印（§13）。`decidedBy` は `tier0_mux` のまま |
 | `refinedBy: tier2_title` | Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した印（misao 窓では `tier0_mux` の working 行も対象、§13）。`decidedBy` は判定した層のまま残る（「Tier 0 idle ＋ Tier 2 blocked」と読む） |
 | 最終遷移 | 直近の遷移とその reason（§7）-- 「なぜ消えたか」の証跡 |
 
@@ -542,6 +544,19 @@ request`）を返します。
   blocked となって完了を出さない。向きは一方向のみで、画面を読めないときは直前の状態を保持する
   （`heldStatusOnUnknown`）。`mux_ref` を持たない misao 窓は tmux ターゲットから推測せず、画面確認は
   `unknown` になる。
+- **Stop hook による完了。** misao の `idle` 単体は完了の証拠にしない。ただし Claude の Stop hook が届いていれば
+  完了とする: 窓の最新の hook が `stop` で、その時刻が直近の `working` 報告より後のとき、`tier0_mux` の
+  idle 行は `completed` で停止し、`refinedBy: tier1_hook_stop` が付く（`decidedBy` は `tier0_mux` のまま）。
+  hook の `start` 以降に idle になっても Stop が来ていなければ、Stop の後に再び working になっていれば、
+  完了にならない通常の idle。blocked の画面補正が優先で、blocked なら完了は出ない。misao は Claude の窓ではタイトルが
+  スピナーから `✳` に変わった瞬間に idle を出す一方、Stop hook は切り離した curl で届くため、idle が Stop より
+  先に届くことがよくある。そこで窓の最新の hook がまだ `start`（Stop 未着）のときは、idle を受けてから短い猶予
+  （`MISAO_STOP_HOOK_GRACE_MS`、4 秒）だけキーを稼働のまま保留して何も announce せず、猶予内に Stop が来れば
+  （blocked 確認の後）`completed` を 1 回だけ announce、猶予切れなら通常の idle として announce する（その後の
+  Stop は完了へ書き換えない）。hook が無い、または既に Stop 済みなら保留せず即時。misao の hook は窓の**第1ペインのもの
+  だけ**を記録する（`misaoPaneId` 経路。分割ペインの Claude の start / Stop は無視。tmux の経路は従来どおり）。保留中も画面確認は行う。tick 実行中に届いた hook は、その tick の後に
+  もう一度評価される。hook の無いエージェント（codex 等）は
+  従来どおり `exited` だけが完了。
 - **hook。** `$TMUX_PANE` が無く `$MISAO_PANE_ID`（`p_` + ULID 26文字）がある場合、3つの hook は
   tmux のフィールドの代わりに `misaoPaneId` を送る。ハブは `PaneHandleResolver` で窓を解決し、
   Tier 1 の hook 状態の記録・保留中質問の記録をその窓に対して行う。解決できないペイン（デーモンに

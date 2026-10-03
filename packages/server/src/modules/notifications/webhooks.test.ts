@@ -453,6 +453,16 @@ describe('hook webhooks from a misao pane (misaoPaneId)', () => {
     expect(options.recordAgentActivity).not.toHaveBeenCalled();
   });
 
+  it('agent-activity records nothing for a pane other than the first of its window', async () => {
+    const { misao, options } = misaoOptions({ ...resolvedWindow, ordinal: 2 });
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId: PANE_ID, event: 'stop' });
+
+    expect(res.statusCode).toBe(200);
+    expect(misao.recordAgentActivity).not.toHaveBeenCalled();
+  });
+
   it('agent-activity answers 200 and records nothing when no window owns the pane', async () => {
     const { misao, options } = misaoOptions(null);
     app = await buildApp(options);

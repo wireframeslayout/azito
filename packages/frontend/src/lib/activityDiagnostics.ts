@@ -15,8 +15,8 @@ export type ActivityDecidedState = 'working' | 'blocked' | 'error' | 'idle' | 'o
 
 export type ActivityStopReason = 'completed' | 'interrupted' | 'deleted' | 'offline' | 'unknown';
 
-/** 判定 Tier を奪わずに状態だけを精緻化した下位 Tier（現状は Tier 0 idle → blocked のみ）。 */
-export type ActivityRefinedBy = 'tier2_title';
+/** 判定 Tier を奪わずに状態を精緻化した下位 Tier（Tier 0 idle → blocked、misao idle → Stop hook による完了）。 */
+export type ActivityRefinedBy = 'tier2_title' | 'tier1_hook_stop';
 
 export interface ActivityDiagnosticRow {
   serverName: string;
@@ -29,6 +29,8 @@ export interface ActivityDiagnosticRow {
   decidedBy: ActivityDecidedBy;
   evidenceAt?: number;
   refinedBy?: ActivityRefinedBy;
+  /** misao の idle を Stop hook 待ちで保留中（行は稼働のまま見える）。 */
+  heldForStopHook?: boolean;
   supervisor?: {
     pid: number;
     ready: boolean;

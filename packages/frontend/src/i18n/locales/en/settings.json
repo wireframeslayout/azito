@@ -224,6 +224,8 @@
     "notDeciding": "a lower tier is deciding",
     "unbound": "unbound (display only)",
     "refinedBlocked": "+ {{tier}} refined it to blocked",
+    "refinedCompleted": "+ {{tier}} (Stop) confirmed completion",
+    "heldForStopHook": "mux reported idle, waiting for the Stop hook",
     "transitionStarted": "Detected",
     "reason": {
       "completed": "Completed",

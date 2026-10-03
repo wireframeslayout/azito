@@ -91,8 +91,9 @@ misao のサーバーを開いています。フラグを有効にするか、�
 - ブラウザ端末の attach、ウィンドウ・ペインの作成と操作、タスク実行（worktree 上のウィンドウでエージェントを駆動）、
   稼働検知に対応します。
 - 稼働検知はデーモンの `pane.state` イベントを使います（`GET /api/debug/activity` では `tier0_mux`）。
-  tui-supervisor は使いません。misao の `idle` は完了の証拠として扱わないため、完了行（「完了 ·」）が出るのは
-  エージェントのプロセスが終了したときです。詳細は [稼働検知 Tier 判定リファレンス](./activity-detection.md) の「misao 窓」を参照してください。
+  tui-supervisor は使いません。misao の `idle` 単体は完了の証拠として扱いませんが、Claude の Stop hook が
+  届いていれば完了行（「完了 ·」）が出ます（`refinedBy: tier1_hook_stop`）。hook の無いエージェント（codex 等）では
+  プロセスが終了したときだけ出ます。詳細は [稼働検知 Tier 判定リファレンス](./activity-detection.md) の「misao 窓」を参照してください。
 - ペインのズーム、レイアウトの保存・適用、ペインタイトルの設定などの tmux 固有の操作は未対応です。
 - デーモンを再起動するとペインのプロセスは失われます（メタデータだけが残り、`stopped` になります）。
 - agent / SSH サーバーでの misao、Add Server 画面での選択、managed tmux の導入導線は対象外です。
