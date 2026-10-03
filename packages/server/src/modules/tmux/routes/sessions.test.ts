@@ -1238,11 +1238,10 @@ describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
   const closePane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const resolvePane = vi.fn(async () => 'p_ordinal');
   const locatePane = vi.fn();
-  const listPanesByRef = vi.fn();
 
   beforeEach(async () => {
     const registry = new MuxDriverRegistry({ misaoEnabled: true });
-    registry.register('misao', { closePane, resolvePane, locatePane, listPanesByRef } as unknown as IMuxClient);
+    registry.register('misao', { closePane, resolvePane, locatePane } as unknown as IMuxClient);
     app = Fastify();
     await app.register(sessionsRoutes, {
       serverRepo: makeServerRepo(misaoServer), tmux: {} as unknown as TmuxClient, uiToken: 'test-token',
@@ -1259,7 +1258,6 @@ describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
 
   it('closes the pane named by the handle when it belongs to the window', async () => {
     locatePane.mockResolvedValue({ status: 'found', ref: misaoRef, ordinal: 1 });
-    listPanesByRef.mockResolvedValue([{ ordinal: 1, handle: HANDLE }]);
     const res = await app.inject({ method: 'DELETE', url: `${url}?handle=${HANDLE}` });
     expect(res.statusCode).toBe(200);
     expect(closePane).toHaveBeenCalledWith(misaoServer, HANDLE);
@@ -1267,8 +1265,7 @@ describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
   });
 
   it('refuses a handle of another window', async () => {
-    locatePane.mockResolvedValue({ status: 'found', ref: misaoRef, ordinal: 1 });
-    listPanesByRef.mockResolvedValue([]);
+    locatePane.mockResolvedValue({ status: 'found', ref: { ...misaoRef, window: 'w_OTHER' }, ordinal: 1 });
     const res = await app.inject({ method: 'DELETE', url: `${url}?handle=${HANDLE}` });
     expect(res.statusCode).toBe(404);
     expect(closePane).not.toHaveBeenCalled();

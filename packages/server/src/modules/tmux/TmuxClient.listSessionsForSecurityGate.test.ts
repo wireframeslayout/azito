@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { TmuxClient } from './TmuxClient';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import type { PaneHandle } from '@azito/shared';
 
 const srv: ServerConfig = { name: 'agent-srv', type: 'agent' } as ServerConfig;
 
@@ -75,5 +76,48 @@ describe('session listing pane fields', () => {
     const client = makeClient(async () => ({ stdout: line, stderr: '', code: 0 }));
     const [session] = await client.listSessionsForSecurityGate(srv);
     expect(session.windows[0].panes[0]).toMatchObject({ handle: '%7', title: 'a|||%9|||b', pid: 1234 });
+  });
+});
+
+describe('TmuxClient.locatePane', () => {
+  const handle = '%7' as PaneHandle;
+  const found = ['%7', 's', 'win', '1', 's'].join('\t');
+
+  it('finds the pane and reports its window', async () => {
+    const result = await makeClient(async () => ({ stdout: `${found}\n`, stderr: '', code: 0 })).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'found', ref: { kind: 'tmux', workspace: 's', window: 'win' }, ordinal: 1 });
+  });
+
+  it('is absent when the listing does not contain the pane', async () => {
+    const result = await makeClient(async () => ({ stdout: '%1\ts\twin\t1\ts\n', stderr: '', code: 0 })).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'absent' });
+  });
+
+  it.each([
+    ['no server running on /tmp/tmux-1000/default'],
+    ['error connecting to /tmp/tmux-1000/default (No such file or directory)'],
+  ])('is absent when the transport rejects with "%s" (local transport)', async (message) => {
+    const result = await makeClient(async () => { throw new Error(message); }).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'absent' });
+  });
+
+  it('is absent when the rejection carries the wording on stderr', async () => {
+    const result = await makeClient(async () => { throw Object.assign(new Error('Command failed'), { stderr: 'no server running on /x' }); }).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'absent' });
+  });
+
+  it('is unknown when the transport fails for any other reason', async () => {
+    const result = await makeClient(async () => { throw new Error('ssh: connection refused'); }).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'unknown' });
+  });
+
+  it('is absent on a non-zero ExecResult saying there is no server (agent transport)', async () => {
+    const result = await makeClient(async () => ({ stdout: '', stderr: 'no server running on /x', code: 1 })).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'absent' });
+  });
+
+  it('is unknown on any other non-zero ExecResult (agent transport)', async () => {
+    const result = await makeClient(async () => ({ stdout: '', stderr: 'permission denied', code: 1 })).locatePane(srv, handle);
+    expect(result).toEqual({ status: 'unknown' });
   });
 });

@@ -76,12 +76,11 @@ describe('closePaneInWindow with a handle', () => {
   const HANDLE = 'p_00000000000000000000000001';
   const OK = { stdout: '', stderr: '', code: 0 };
 
-  function driver(location: PaneLocation | Error, members: string[] | Error = [HANDLE]): { client: IMuxClient; closePane: ReturnType<typeof vi.fn> } {
+  function driver(location: PaneLocation | Error): { client: IMuxClient; closePane: ReturnType<typeof vi.fn> } {
     const closePane = vi.fn(async () => OK);
     const client = {
       closePane,
       locatePane: vi.fn(async () => { if (location instanceof Error) throw location; return location; }),
-      listPanesByRef: vi.fn(async () => { if (members instanceof Error) throw members; return members.map((h, i) => ({ ordinal: i + 1, handle: h })); }),
       resolvePane: vi.fn(async () => HANDLE),
     } as unknown as IMuxClient;
     return { client, closePane };
@@ -101,7 +100,7 @@ describe('closePaneInWindow with a handle', () => {
   });
 
   it('refuses a pane of another window with 404', async () => {
-    const { client, closePane } = driver(found, ['p_00000000000000000000000002']);
+    const { client, closePane } = driver({ status: 'found', ref: { ...ref, window: 'w_B' }, ordinal: 1 });
     await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE })).rejects.toMatchObject({ statusCode: 404 });
     expect(closePane).not.toHaveBeenCalled();
   });
@@ -114,12 +113,6 @@ describe('closePaneInWindow with a handle', () => {
   it('answers 503 when the pane cannot be verified, never "already gone"', async () => {
     const { client, closePane } = driver({ status: 'unknown' });
     await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE })).rejects.toMatchObject({ statusCode: 503 });
-    expect(closePane).not.toHaveBeenCalled();
-  });
-
-  it('propagates a failure to list the window panes', async () => {
-    const { client, closePane } = driver(found, new Error('ssh down'));
-    await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE })).rejects.toThrow('ssh down');
     expect(closePane).not.toHaveBeenCalled();
   });
 

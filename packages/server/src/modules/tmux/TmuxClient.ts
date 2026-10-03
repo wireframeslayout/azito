@@ -682,7 +682,13 @@ export class TmuxClient implements IMuxClient {
   async locatePane(server: ServerConfig, handle: PaneHandle): Promise<PaneLocation> {
     const format = ['#{pane_id}', '#{session_name}', '#{window_name}', '#{pane_index}', '#{?session_grouped,#{session_group},#{session_name}}'].join('\t');
     let result: ExecResult;
-    try { result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]); } catch { return { status: 'unknown' }; }
+    try {
+      result = await this.runTmuxCommand(server, ['list-panes', '-a', '-F', format]);
+    } catch (err) {
+      // LocalTransport rejects on a non-zero tmux exit: only "no tmux server" says the pane is not there.
+      const e = err as { message?: string; stderr?: string };
+      return isTmuxNoServerRunning(`${e.stderr ?? ''}${e.message ?? ''}`) ? { status: 'absent' } : { status: 'unknown' };
+    }
     if (result.code !== 0) {
       // No tmux server means no panes; any other failure says nothing about the pane.
       return isTmuxNoServerRunning(`${result.stderr || ''}${result.stdout || ''}`) ? { status: 'absent' } : { status: 'unknown' };

@@ -106,7 +106,7 @@ describe('DELETE /api/windows/:id/panes/:ordinal', () => {
   const closePane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const resolvePane = vi.fn(async () => 'p_ordinal');
   const locatePane = vi.fn();
-  const driver = { closePane, resolvePane, locatePane, listPanesByRef: vi.fn(async () => [{ ordinal: 1, handle: HANDLE }]) };
+  const driver = { closePane, resolvePane, locatePane };
 
   beforeEach(async () => {
     app = Fastify();
