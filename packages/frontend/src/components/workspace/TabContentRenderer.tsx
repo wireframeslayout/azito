@@ -45,6 +45,7 @@ interface TabContentRendererProps {
   handleOpenTask: (t: Task, from?: 'global' | 'workspace') => void;
   closeTab: (tabId: string) => void;
   retargetTab?: (oldTabId: string, serverName: string, newTarget: string) => void;
+  retargetTabPane?: (oldTabId: string, pane: number) => void;
   executeTask: (taskId: number, unitId: number | null) => void;
   stopTask: (unitId: number | null, taskId: number) => void;
   refreshWorkspace: () => void;
@@ -86,6 +87,7 @@ export default function TabContentRenderer({
   handleOpenTask,
   closeTab,
   retargetTab,
+  retargetTabPane,
   executeTask,
   stopTask,
   refreshWorkspace,
@@ -161,6 +163,7 @@ export default function TabContentRenderer({
               onDisconnect={onPaneDisconnect}
               onCloseTab={() => closeTab(tab.id)}
               onRetargetTab={retargetTab ? (sn, nt) => retargetTab(tab.id, sn, nt) : undefined}
+              onRetargetPane={retargetTabPane ? (pane) => retargetTabPane(tab.id, pane) : undefined}
               reconnectKey={tab.reconnectKey}
             />
       )}

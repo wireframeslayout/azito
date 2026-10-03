@@ -22,6 +22,8 @@ export {
   type PaneOrdinal,
   type MuxCapabilities,
   type MuxPane,
+  type MuxPaneProcessState,
+  TERMINAL_CLOSE,
   type MuxWindowInfo,
   type MuxWorkspace,
   type MuxPaneInfo,

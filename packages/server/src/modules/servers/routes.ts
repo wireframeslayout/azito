@@ -1146,6 +1146,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const transport = transportFactory.getTransport(srv);
 
+      // misaoDaemonStatus is wired exactly when the misao driver is: a missing one with the flag on is a wiring gap, not "disabled".
+      const checkMisao = async () => {
+        if (misaoDaemonStatus) return misaoDaemonStatus();
+        return { installed: false, detail: misaoEnabled ? 'driver_not_registered' : 'misao_disabled' };
+      };
+
       const checkTmux = async () => {
         try {
           const cmd = srv.muxRuntime === 'managed'
@@ -1214,7 +1220,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const isMisao = muxKindForRuntime(srv.muxRuntime) === 'misao';
       const [muxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
-        isMisao ? (misaoDaemonStatus?.() ?? { installed: false, detail: 'misao_disabled' }) : checkTmux(),
+        isMisao ? checkMisao() : checkTmux(),
         checkNode(),
         checkHarness(),
         isRemote ? checkTailscale() : null,

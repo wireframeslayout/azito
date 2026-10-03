@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { api } from '../../../api/client';
 import { InstallSteps, FormSelect, FormInput, Chip, Button } from '../../ui';
 import type { InstallStep, ChipTone } from '../../ui';
 import { Icon } from '../../ui/Icon';
 import type { Server } from '../../../hooks/useServerManagement';
-import type { InstallStatusResponse, InstallStatusItem } from '../serverSections';
+import { describeMisaoItem, type InstallStatusResponse, type InstallStatusItem } from '../serverSections';
 import { useToast } from '../../../hooks/useToast';
 import { useConfirm } from '../../../hooks/useConfirm';
 
@@ -338,21 +337,6 @@ export default function SetupSection({ server, installStatus, refresh }: SetupSe
       )}
     </div>
   );
-}
-
-const MISAO_DETAIL_KEYS: Record<string, string> = {
-  daemon_unreachable: 'overview.misaoUnreachable',
-  misao_disabled: 'overview.misaoDisabled',
-};
-
-/** Turns the server's machine-readable misao status into what StepRow prints (protocol label, readable detail). */
-function describeMisaoItem(item: InstallStatusItem, t: TFunction): InstallStatusItem {
-  const detailKey = item.detail ? MISAO_DETAIL_KEYS[item.detail] : undefined;
-  return {
-    ...item,
-    version: item.version ? t('setup.misaoProtocol', { version: item.version }) : undefined,
-    detail: detailKey ? t(detailKey) : item.detail,
-  };
 }
 
 function TmuxSetupCards({ server, refresh }: { server: Server; refresh: () => void }) {

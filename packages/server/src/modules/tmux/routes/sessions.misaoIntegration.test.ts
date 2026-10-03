@@ -11,7 +11,7 @@ import type { TmuxClient } from '../TmuxClient';
 import { MisaoConnection, connectDedicatedMisaoClient } from '../misao/MisaoConnection';
 import { MisaoMuxClient } from '../misao/MisaoMuxClient';
 import { describeMisaoDaemon } from '../misao/misaoDriver';
-import sessionsRoutes from './sessions';
+import sessionsRoutes, { invalidateSessionCache } from './sessions';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
@@ -19,11 +19,13 @@ const server = { name: 'misao-it', type: 'local', muxRuntime: 'misao' } as Serve
 const SOCKET_BYTES_MAX = 107;
 const WORKSPACE = 'azs-ws';
 const RENAMED = 'azs-renamed';
+const PANES_WS = 'azs-panes';
 
 describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao daemon', () => {
   let dir: string;
   let daemon: ChildProcess;
   let daemonPid: number;
+  let socketPath: string;
   let connection: MisaoConnection;
   let app: FastifyInstance;
   const tmux = { listSessions: vi.fn(), killSession: vi.fn(), renameSession: vi.fn() };
@@ -37,7 +39,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
 
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azs-'));
-    const socketPath = path.join(dir, 'm.sock');
+    socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
     daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
@@ -113,5 +115,60 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
     const res = await app.inject({ method: 'DELETE', url: `/api/servers/${server.name}/mux/workspaces/${RENAMED}` });
     expect(res.statusCode).toBe(200);
     expect(await listNames()).toEqual([]);
+  });
+
+  describe('panes of a window', () => {
+    type ListedWindow = { ref: string; panes: Array<{ index: number; processState?: string }> };
+
+    async function listWindow(): Promise<ListedWindow> {
+      const res = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions` });
+      expect(res.statusCode).toBe(200);
+      const session = res.json().find((x: { name: string }) => x.name === PANES_WS);
+      return session.windows[0];
+    }
+
+    const mux = (ref: string): string => `/api/servers/${server.name}/mux/windows/${encodeURIComponent(ref)}`;
+
+    it('reports a freshly opened pane as running', async () => {
+      const created = await app.inject({ method: 'POST', url: `/api/servers/${server.name}/mux/workspaces`, payload: { name: PANES_WS, windowName: 'main' } });
+      expect(created.statusCode).toBe(200);
+      const win = await listWindow();
+      expect(win.panes).toHaveLength(1);
+      expect(win.panes[0].processState).toBe('running');
+    });
+
+    it('keeps an empty window after its last pane is closed and opens a new pane in it', async () => {
+      const { ref } = await listWindow();
+      const closed = await app.inject({ method: 'DELETE', url: `${mux(ref)}/panes/1` });
+      expect(closed.statusCode).toBe(200);
+      expect((await listWindow()).panes).toEqual([]);
+
+      const opened = await app.inject({ method: 'POST', url: `${mux(ref)}/panes/open`, payload: {} });
+      expect(opened.statusCode).toBe(200);
+      const win = await listWindow();
+      expect(win.panes).toHaveLength(1);
+      expect(win.panes[0].processState).toBe('running');
+    });
+
+    it('shows a pane restored after a daemon restart as stopped and deletes it', async () => {
+      const { ref } = await listWindow();
+      const exited = new Promise<void>((resolve) => daemon.once('exit', () => resolve()));
+      process.kill(daemonPid, 'SIGTERM');
+      await exited;
+      daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+      daemonPid = daemon.pid!;
+
+      await vi.waitFor(async () => {
+        invalidateSessionCache(server.name);
+        const res = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions` });
+        expect(res.statusCode).toBe(200);
+        const win = res.json().find((x: { name: string }) => x.name === PANES_WS).windows[0] as ListedWindow;
+        expect(win.panes.map((p) => p.processState)).toEqual(['stopped']);
+      }, { timeout: 15000, interval: 200 });
+
+      const deleted = await app.inject({ method: 'DELETE', url: `${mux(ref)}/panes/1` });
+      expect(deleted.statusCode).toBe(200);
+      expect((await listWindow()).panes).toEqual([]);
+    }, 30000);
   });
 });

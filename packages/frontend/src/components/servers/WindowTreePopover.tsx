@@ -2,8 +2,12 @@ import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { Session } from '../../hooks/useServerManagement';
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
+import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
 import { Icon } from '../ui/Icon';
+import { IconButton } from '../ui/IconButton';
+import { Button } from '../ui/Button';
+import { PaneStateChip, DIMMED_PANE_OPACITY } from '../ui/PaneStateChip';
 
 interface WindowTreePopoverProps {
   sessions: Session[];
@@ -14,6 +18,10 @@ interface WindowTreePopoverProps {
   onCreateSession: () => void;
   onAddWindow: (sessionName: string) => void;
   onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
+  /** Deletes one pane (a stopped or exited one, from its row). `label` names it in the confirmation. */
+  onDeletePane: (ref: TerminalRef, label: string) => void;
+  /** Deletes a whole window (the way out of a window without panes). `label` names it in the confirmation. */
+  onKillWindow: (ref: TerminalRef, label: string) => void;
   isMobile: boolean;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
@@ -21,7 +29,7 @@ interface WindowTreePopoverProps {
 
 export default function WindowTreePopover({
   sessions, serverName, selectedRef,
-  onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, isMobile,
+  onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, onDeletePane, onKillWindow, isMobile,
   windowById, taskById,
 }: WindowTreePopoverProps) {
   const { t } = useTranslation('servers');
@@ -74,8 +82,11 @@ export default function WindowTreePopover({
               </span>
             </TreeRow>
             {expanded && sess.windows.map((win) => {
-              const winRef = terminalRefFromWindow(serverName, win.windowId, win.ref, 1);
+              // A window opens on a live pane when it has one (a restarted misao daemon leaves stopped panes first).
+              const winRef = terminalRefFromWindow(serverName, win.windowId, win.ref, preferredPaneOrdinal(win) ?? 1);
               const winRefId = terminalTabId(winRef);
+              const winLabel = sessionWindowLabel(sess.name, win);
+              const isEmptyWindow = win.panes.length === 0;
               return (
                 <div key={win.index}>
                   <TreeRow
@@ -97,24 +108,33 @@ export default function WindowTreePopover({
                           workerType: regWin?.workerType,
                           windowType: regWin?.windowType,
                           taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
-                          tmuxTarget: `${sess.name}:${win.name}`,
+                          tmuxTarget: winLabel,
                         });
                         return formatWindowDisplayLabel(display);
                       })()
                     }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
-                      {win.panes.length} pane{win.panes.length > 1 ? 's' : ''}
+                      {isEmptyWindow ? t('windows.noPanes') : `${win.panes.length} pane${win.panes.length > 1 ? 's' : ''}`}
                     </span>
-                    <span
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
-                      }}
-                    >
-                      <Icon name="split-h" size={14} /> {t('windows.split')}
-                    </span>
+                    {!isEmptyWindow && (
+                      <span
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
+                        }}
+                      >
+                        <Icon name="split-h" size={14} /> {t('windows.split')}
+                      </span>
+                    )}
                   </TreeRow>
+                  {isEmptyWindow && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `4px 9px 6px ${9 + 2 * 20}px` }}>
+                      {/* Opening the window shows the pane-unavailable notice, which carries the open-pane form. */}
+                      <Button size="sm" variant="primary" onClick={() => onSelect(winRef)}>{t('windows.openPane')}</Button>
+                      <Button size="sm" onClick={() => onKillWindow(winRef, winLabel)}>{t('windows.killWindow')}</Button>
+                    </div>
+                  )}
                   {win.panes.map((pane) => {
                     const paneRef = terminalRefFromWindow(serverName, win.windowId, win.ref, pane.index);
                     return (
@@ -125,7 +145,19 @@ export default function WindowTreePopover({
                         selected={selectedId === terminalTabId(paneRef)}
                       >
                         <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.{pane.index}</span>
-                        <span style={{ fontFamily: 'var(--mono)' }}>{pane.title || pane.command}</span>
+                        <span style={{ fontFamily: 'var(--mono)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>{pane.title || pane.command}</span>
+                        <PaneStateChip pane={pane} />
+                        {!isPaneLive(pane) && (
+                          <IconButton
+                            size="sm"
+                            title={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
+                            aria-label={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
+                            style={{ marginLeft: 'auto' }}
+                            onClick={(e) => { e.stopPropagation(); onDeletePane(paneRef, `${winLabel}.${pane.index}`); }}
+                          >
+                            <Icon name="trash" size={14} />
+                          </IconButton>
+                        )}
                       </TreeRow>
                     );
                   })}

@@ -197,6 +197,15 @@ describe('GET /api/servers/:name/install-status', () => {
     expect(res.json().misao).toEqual({ installed: false, detail: 'misao_disabled' });
   });
 
+  it('reports driver_not_registered when the flag is on but the driver is not wired', async () => {
+    const stored = makeServer({ muxRuntime: 'misao' });
+    const { opts } = withTransport(makeOpts(true, stored));
+
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+
+    expect(res.json().misao).toEqual({ installed: false, detail: 'driver_not_registered' });
+  });
+
   it('keeps the tmux check for a tmux server', async () => {
     const stored = makeServer({ muxRuntime: 'system' });
     const misaoDaemonStatus = vi.fn();

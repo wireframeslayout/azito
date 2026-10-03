@@ -184,6 +184,11 @@ export function windowApiPath(r: TerminalRef, action?: string): string {
     : `/servers/${r.serverName}/mux/windows/${encodeURIComponent(r.ref)}`;
 }
 
+/** The request that kills the window of a ref: registered windows (windowId form) use DELETE, unregistered ones the mux POST route. */
+export function windowKillRequest(r: TerminalRef): { path: string; method: 'DELETE' | 'POST' } {
+  return { path: windowApiPath(r, 'kill'), method: r.kind === 'windowId' ? 'DELETE' : 'POST' };
+}
+
 export function paneApiPath(r: TerminalRef, action?: string): string {
   if (r.kind === 'windowId') {
     return action
@@ -234,14 +239,26 @@ export function isValidTerminalRef(r: unknown): r is TerminalRef {
 export function resolveTerminalTarget(r: TerminalRef, sessions: Session[] | undefined): string | null {
   if (r.kind === 'ref') {
     try {
-      return `${tmuxTargetFromMuxRef(parseMuxRef(r.ref))}.${r.pane}`;
+      const muxRef = parseMuxRef(r.ref);
+      // A misao ref carries a window id, not a name: take the name from sessions (null until the window is listed).
+      if (muxRef.kind === 'misao') return findSessionWindow(sessions, (w) => sameMisaoWindow(w.ref, muxRef.window), r.pane);
+      return `${tmuxTargetFromMuxRef(muxRef)}.${r.pane}`;
     } catch {
       return null;
     }
   }
+  return findSessionWindow(sessions, (w) => w.windowId === r.windowId, r.pane);
+}
+
+function sameMisaoWindow(ref: string, windowId: string): boolean {
+  const parsed = parseMuxRef(ref);
+  return parsed.kind === 'misao' && parsed.window === windowId;
+}
+
+function findSessionWindow(sessions: Session[] | undefined, match: (w: Session['windows'][number]) => boolean, pane: number): string | null {
   for (const sess of sessions ?? []) {
-    const win = sess.windows.find((w) => w.windowId === r.windowId);
-    if (win) return `${sess.name}:${win.name}.${r.pane}`;
+    const win = sess.windows.find(match);
+    if (win) return `${sess.name}:${win.name}.${pane}`;
   }
   return null;
 }

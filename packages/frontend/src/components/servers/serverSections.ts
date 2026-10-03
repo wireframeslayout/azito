@@ -1,4 +1,5 @@
 import { paths } from '../../paths';
+import type { TFunction } from 'i18next';
 import type { ServerStatus } from '../../hooks/useServerManagement';
 
 export type { ServerStatus } from '../../hooks/useServerManagement';
@@ -40,6 +41,22 @@ export interface InstallStatusResponse {
   tailscale?: InstallStatusItem;
   agent?: InstallStatusItem & { versionMatch?: boolean };
   chromium?: InstallStatusItem;
+}
+
+const MISAO_DETAIL_KEYS: Record<string, string> = {
+  daemon_unreachable: 'overview.misaoUnreachable',
+  misao_disabled: 'overview.misaoDisabled',
+  driver_not_registered: 'overview.misaoDriverNotRegistered',
+};
+
+/** Turns the server's machine-readable misao status into what StepRow prints (protocol label, readable detail). */
+export function describeMisaoItem(item: InstallStatusItem, t: TFunction): InstallStatusItem {
+  const detailKey = item.detail ? MISAO_DETAIL_KEYS[item.detail] : undefined;
+  return {
+    ...item,
+    version: item.version ? t('setup.misaoProtocol', { version: item.version }) : undefined,
+    detail: detailKey ? t(detailKey) : item.detail,
+  };
 }
 
 export interface SectionSummary {

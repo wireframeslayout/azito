@@ -216,16 +216,16 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
+      // Resolved before the cache is read so a lost daemon is a 503 (global handler), not a stale 200 list.
+      const driver = opts.muxDriverRegistry && muxKindForRuntime(srv.muxRuntime ?? 'system') !== 'tmux'
+        ? opts.muxDriverRegistry.resolve(srv)
+        : undefined;
+
       // Cache is shared by all mux kinds; linked-session GC below is tmux-only
       const cached = sessionCache.get(request.params.name);
       if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) {
         return enrichSessions(cached.data, request.params.name, opts.windowRepo);
       }
-
-      // Resolved outside the try so an unavailable driver reaches the global 503 handler like the other mux routes.
-      const driver = opts.muxDriverRegistry && muxKindForRuntime(srv.muxRuntime ?? 'system') !== 'tmux'
-        ? opts.muxDriverRegistry.resolve(srv)
-        : undefined;
 
       try {
         if (driver) {
@@ -893,6 +893,43 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       await muxClient.splitPaneByHandle(srv, handle, direction);
       notifySessionsChanged(request.params.name);
       return { ok: true };
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/windows/:ref/panes/open ──
+  // Opens a new shell pane in an existing window (misao: also the way back from an empty window).
+  // It hands the pane a credential env, so — like the legacy add-pane route — the server row, the task-window
+  // classification and the env are resolved inside the per-server lock (see serverIsolationMutex's doc comment).
+  fastify.post<{ Params: { name: string; ref: string }; Body: { command?: string } | undefined }>(
+    '/api/servers/:name/mux/windows/:ref/panes/open',
+    async (request, reply) => {
+      const command = request.body?.command;
+      if (command !== undefined && (typeof command !== 'string' || command.trim() === '')) {
+        return reply.status(400).send({ error: 'command must be a non-empty string' });
+      }
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, freshSrv);
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+        // A task's primary window: no env can give the new pane the live task-token generation (see the legacy add-pane route).
+        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
+          return reply.status(409).send({
+            error: 'primary_task_window_pane_add_unsupported',
+            message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+          });
+        }
+        // Secondary task window: masked env (never the operator UI token); non-task window: the manual-window env.
+        const extraEnv = windowRow && windowRow.taskId !== null
+          ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
+          : uiTokenEnvForServer(opts.uiToken, freshSrv);
+        // A registered window's panes carry its windowId / task labels (labelWindowPanes); a new pane must too.
+        const labels = windowRow ? { windowId: windowRow.id, ...(windowRow.taskId !== null ? { taskId: windowRow.taskId } : {}) } : undefined;
+        const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv, labels });
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      });
     },
   );
 

@@ -69,6 +69,24 @@ If it shows "This runtime is only available with AZITO_EXPERIMENTAL_MISAO=1", yo
 server on a hub where the flag is off. Enable the flag, or switch the runtime back to system or
 managed from Edit.
 
+## Stopped panes and empty windows
+
+- After the daemon restarts, existing panes are restored as `stopped` (no process). In the server's window list
+  such a pane is dimmed and carries a "Stopped" chip; a pane whose process merely ended carries an "Exited" chip.
+  tmux panes, whose driver does not report a process state, get neither.
+- Opening a window attaches to a live pane (the first `running` one), or to the first pane when none is running.
+- A `stopped` pane cannot be attached. When you open one explicitly the terminal WebSocket closes with code **4410**
+  (reason `pane stopped`) and does not reconnect; the screen says the pane is stopped and offers "Delete pane".
+  The delete button on the pane's row in the list does the same (`DELETE .../panes/:ordinal`, the daemon's `pane.close`).
+  An `exited` pane is still attachable, as before (you see its last screen).
+- Closing the last pane does not remove the window: it stays as an "empty window" with no panes. The list shows
+  "No panes" with "Open a pane" and "Delete window". Connecting to an empty window closes the WebSocket with code **4412**
+  (reason `window empty`) and the screen shows the same choices. "Open a pane" lets you pick the launch command (shell only /
+  an agent / custom): it calls `POST /api/servers/:name/mux/windows/:ref/panes/open` (body `{ "command"?: string }`), which opens a shell
+  pane and then types the command into it.
+- A window that does not exist still closes with code **4404** (`window not found`), handled separately from the two above.
+- A misao window's label is the window name alone (tmux keeps `session:window`).
+
 ## What works, and limits
 
 - Browser terminal attach, creating and operating windows and panes, task execution (the agent

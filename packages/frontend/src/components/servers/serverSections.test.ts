@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { getSetupSummary, type InstallStatusResponse } from './serverSections';
+import type { TFunction } from 'i18next';
+import { describeMisaoItem, getSetupSummary, type InstallStatusResponse } from './serverSections';
 
 const base = { node: { installed: true }, aztHarness: { installed: true } };
 
@@ -17,5 +18,25 @@ describe('getSetupSummary', () => {
   it('still counts tmux for a tmux server', () => {
     const status: InstallStatusResponse = { ...base, tmux: { installed: false } };
     expect(getSetupSummary(status).textParams).toEqual({ count: 1 });
+  });
+});
+
+describe('describeMisaoItem', () => {
+  const t = ((key: string, params?: { version?: string }) => (params?.version ? `${key}:${params.version}` : key)) as unknown as TFunction;
+
+  it('labels the protocol version', () => {
+    expect(describeMisaoItem({ installed: true, version: '0.2.0' }, t)).toEqual({ installed: true, version: 'setup.misaoProtocol:0.2.0', detail: undefined });
+  });
+
+  it.each([
+    ['daemon_unreachable', 'overview.misaoUnreachable'],
+    ['misao_disabled', 'overview.misaoDisabled'],
+    ['driver_not_registered', 'overview.misaoDriverNotRegistered'],
+  ])('translates the %s detail', (detail, key) => {
+    expect(describeMisaoItem({ installed: false, detail }, t).detail).toBe(key);
+  });
+
+  it('keeps a detail it has no translation for', () => {
+    expect(describeMisaoItem({ installed: false, detail: 'socket closed' }, t).detail).toBe('socket closed');
   });
 });

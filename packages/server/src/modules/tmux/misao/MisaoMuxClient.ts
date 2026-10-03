@@ -122,8 +122,7 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   async labelWindowPanes(_server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void> {
-    const set: Record<string, string> = { windowId: String(labels.windowId) };
-    if (labels.taskId !== undefined) set.task = String(labels.taskId);
+    const set = paneLabelsOf(labels);
     for (const pane of await this.windowPanes(ref)) {
       await this.rpc.request('pane.set_label', { paneId: pane.paneId, set });
     }
@@ -140,7 +139,11 @@ export class MisaoMuxClient implements IMuxClient {
   async openTerminal(_server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     const { workspaces, panes } = await this.snapshot();
     if (!workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window))) throw new Error('WINDOW_NOT_FOUND');
-    const pane = paneAtOrdinal(panesOfWindow(panes, ref.window), ordinal, ref);
+    const windowPanes = panesOfWindow(panes, ref.window);
+    if (windowPanes.length === 0) throw new Error('WINDOW_EMPTY');
+    const pane = paneAtOrdinal(windowPanes, ordinal, ref);
+    // A stopped pane (restored after a daemon restart) can never be attached: say so before opening a connection.
+    if (pane.processState === 'stopped') throw new Error('PANE_STOPPED');
     const client = await this.options.connectAttachClient();
     try {
       return await MisaoTerminalStream.open({
@@ -157,7 +160,8 @@ export class MisaoMuxClient implements IMuxClient {
       if (this.rpc.isConnectionError(err)) throw new MuxDriverUnavailableError('misao', 'daemon_unreachable');
       // A stopped pane can never be attached, so it must not look retryable: the browser reconnects on any other close.
       const code = this.rpc.rpcErrorCode(err);
-      throw code === MISAO_PANE_NOT_FOUND || code === MISAO_PANE_EXITED ? new Error('WINDOW_NOT_FOUND') : err;
+      if (code === MISAO_PANE_EXITED) throw new Error('PANE_STOPPED');
+      throw code === MISAO_PANE_NOT_FOUND ? new Error('WINDOW_NOT_FOUND') : err;
     }
   }
 
@@ -202,6 +206,23 @@ export class MisaoMuxClient implements IMuxClient {
       ...paneEnvParams(env),
     });
     return { handle: asPaneHandle(paneId), result: { stdout: paneId, stderr: '', code: 0 } };
+  }
+
+  /**
+   * Opens a shell pane in an existing window and, when given, types `command` into it (like a new window's launch command).
+   * `labels` carries a registered window's `windowId` / `task` labels, which a split inherits from its source pane.
+   */
+  async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
+    const windowName = await this.windowName(ref);
+    const { paneId } = await this.rpc.request('pane.open', {
+      cmd: [this.options.shell],
+      windowId: ref.window,
+      labels: { origin: 'hub', name: windowName, ...(opts?.labels ? paneLabelsOf(opts.labels) : {}) },
+      ...paneEnvParams(opts?.extraEnv),
+    });
+    const handle = asPaneHandle(paneId);
+    if (opts?.command) await this.sendKeysToHandle(server, handle, [opts.command, 'Enter']);
+    return handle;
   }
 
   async closePane(_server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {
@@ -284,6 +305,16 @@ export class MisaoMuxClient implements IMuxClient {
     return panesOfWindow(panes, ref.window);
   }
 
+  /** Name of the window. Throws when the window does not exist. */
+  private async windowName(ref: MuxRef): Promise<string> {
+    const workspaces = await this.rpc.request('workspace.list', {});
+    for (const ws of workspaces) {
+      const win = ws.windows.find((w) => w.windowId === ref.window);
+      if (win) return win.name;
+    }
+    throw new Error(`misao window ${ref.window} not found`);
+  }
+
   /** null when the daemon has no such pane. */
   private async paneInfo(handle: PaneHandle): Promise<MisaoPane | null> {
     try {
@@ -340,6 +371,13 @@ function paneEnvParams(input: Record<string, string> | undefined): { env?: Recor
 function paneAtOrdinal(panes: MisaoPane[], ordinal: PaneOrdinal, ref: MuxRef): MisaoPane {
   if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > panes.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${panes.length}) for ${ref.window}`);
   return panes[ordinal - 1];
+}
+
+/** misao pane labels for a registered window (`windowId`, and `task` for a task's window). */
+function paneLabelsOf(labels: PaneWindowLabels): Record<string, string> {
+  const set: Record<string, string> = { windowId: String(labels.windowId) };
+  if (labels.taskId !== undefined) set.task = String(labels.taskId);
+  return set;
 }
 
 function inheritedLabels(source: MisaoPane): Record<string, string> {

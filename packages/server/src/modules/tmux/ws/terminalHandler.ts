@@ -2,11 +2,22 @@ import type { WebSocket } from 'ws';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ITerminalStream, OpenTerminalOpts } from '../../servers/transport/ServerTransport';
-import { muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { muxKindForRuntime, TERMINAL_CLOSE, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 
 const PING_INTERVAL_MS = 15_000;
 const OPEN_TERMINAL_TIMEOUT_MS = 30_000;
+
+/** Errors a driver throws from openTerminal to say the pane cannot be attached, mapped to the close code the browser reacts to. */
+const OPEN_FAILURE_CLOSE = {
+  WINDOW_NOT_FOUND: TERMINAL_CLOSE.windowNotFound,
+  PANE_STOPPED: TERMINAL_CLOSE.paneStopped,
+  WINDOW_EMPTY: TERMINAL_CLOSE.windowEmpty,
+} as const;
+
+function isOpenFailureKey(message: string): message is keyof typeof OPEN_FAILURE_CLOSE {
+  return Object.hasOwn(OPEN_FAILURE_CLOSE, message);
+}
 
 export function handleTerminalConnection(
   ws: WebSocket,
@@ -91,8 +102,9 @@ export function handleTerminalConnection(
       });
     })
     .catch((err: Error) => {
-      if (err.message === 'WINDOW_NOT_FOUND') {
-        ws.close(4404, 'window not found');
+      if (isOpenFailureKey(err.message)) {
+        const { code, reason } = OPEN_FAILURE_CLOSE[err.message];
+        ws.close(code, reason);
       } else {
         ws.send(`\r\n${err.message}\r\n`);
         ws.close();

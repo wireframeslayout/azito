@@ -164,8 +164,8 @@ describe('MisaoMuxClient reads', () => {
     expect(ws).toMatchObject({ name: 'proj', windowCount: 2, attached: false });
     expect(ws.windows[0]).toMatchObject({ index: 1, name: 'main', ref: refOf('proj', w1), activity: Math.floor(Date.parse('2026-10-02T00:00:10.500Z') / 1000) });
     expect(ws.windows[0].panes).toEqual([
-      { index: 1, command: 'claude', title: 'T', width: 80, height: 24, active: false, pid: 99 },
-      { index: 2, command: '/bin/bash', title: '', width: 80, height: 24, active: false, pid: 0 },
+      { index: 1, command: 'claude', title: 'T', width: 80, height: 24, active: false, pid: 99, processState: 'running' },
+      { index: 2, command: '/bin/bash', title: '', width: 80, height: 24, active: false, pid: 0, processState: 'stopped' },
     ]);
     expect(ws.windows[1]).toMatchObject({ index: 2, name: 'second', ref: refOf('proj', w2), panes: [], activity: 0 });
   });
@@ -324,6 +324,35 @@ describe('MisaoMuxClient writes', () => {
     await expect(client.openWorkspace(server, 'proj')).rejects.toThrow('already exists');
     expect(daemon.workspaces.get('proj')).toHaveLength(1);
     expect(daemon.callsTo('workspace.close')).toEqual([]);
+  });
+
+  it('openPaneInWindow opens a hub-labelled shell pane in the window and types the command into it', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    const opened = await client.openPaneInWindow(server, refOf('proj', w), { command: 'claude', extraEnv: { FOO: 'bar' } });
+    expect(daemon.callsTo('pane.open')).toEqual([{ cmd: ['/bin/zsh'], windowId: w, labels: { origin: 'hub', name: 'main' }, ephemeralEnv: { FOO: 'bar' } }]);
+    expect(opened).toBe(daemon.panes[0].paneId);
+    expect(daemon.callsTo('pane.write')).toEqual([{ paneId: opened, data: 'claude', source: 'hub' }, { paneId: opened, data: '\r', source: 'hub' }]);
+  });
+
+  it("openPaneInWindow labels the pane with a registered window's windowId and task", async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    await client.openPaneInWindow(server, refOf('proj', w), { labels: { windowId: 5, taskId: 42 } });
+    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: 'main', windowId: '5', task: '42' } });
+  });
+
+  it('openPaneInWindow without a command only opens the shell', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    await client.openPaneInWindow(server, refOf('proj', w));
+    expect(daemon.callsTo('pane.write')).toEqual([]);
+  });
+
+  it('openPaneInWindow fails before pane.open when the window does not exist', async () => {
+    const { daemon, client } = setup();
+    await expect(client.openPaneInWindow(server, refOf('proj', 'w_missing'))).rejects.toThrow('not found');
+    expect(daemon.callsTo('pane.open')).toEqual([]);
   });
 
   it('openWindow adds a window with a pane to an existing workspace', async () => {
@@ -589,13 +618,40 @@ describe('MisaoMuxClient openTerminal', () => {
     expect(attach.close).toHaveBeenCalled();
   });
 
-  it('maps an attach on a stopped pane (daemon restarted) to WINDOW_NOT_FOUND so the browser stops reconnecting', async () => {
+  it('maps an attach the daemon refuses with pane-exited to PANE_STOPPED so the browser stops reconnecting', async () => {
     const attach = fakeAttachClient(async () => { throw new FakeRpcError(1002, 'pane is stopped'); });
     const { daemon, client } = setup({ connectAttachClient: async () => attach as unknown as MisaoAttachClient });
     const w = daemon.addWindow('proj', 'main');
     daemon.addPane(w);
-    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_NOT_FOUND');
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('PANE_STOPPED');
     expect(attach.close).toHaveBeenCalled();
+  });
+
+  it('throws PANE_STOPPED for a stopped pane without opening a connection', async () => {
+    const connectAttachClient = vi.fn();
+    const { daemon, client } = setup({ connectAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w, { processState: 'stopped', pid: null });
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('PANE_STOPPED');
+    expect(connectAttachClient).not.toHaveBeenCalled();
+  });
+
+  it('attaches an exited pane as before (the daemon still holds its screen)', async () => {
+    const attach = fakeAttachClient();
+    const connectAttachClient = vi.fn(async () => attach as unknown as MisaoAttachClient);
+    const { daemon, client } = setup({ connectAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    daemon.addPane(w, { processState: 'exited', pid: null });
+    await client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24);
+    expect(connectAttachClient).toHaveBeenCalled();
+  });
+
+  it('throws WINDOW_EMPTY for a window without panes, without opening a connection', async () => {
+    const connectAttachClient = vi.fn();
+    const { daemon, client } = setup({ connectAttachClient });
+    const w = daemon.addWindow('proj', 'main');
+    await expect(client.openTerminal(server, refOf('proj', w), 1 as PaneOrdinal, 80, 24)).rejects.toThrow('WINDOW_EMPTY');
+    expect(connectAttachClient).not.toHaveBeenCalled();
   });
 
   it('closes the connection and rethrows other attach failures unchanged', async () => {

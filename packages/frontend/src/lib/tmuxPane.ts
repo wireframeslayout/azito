@@ -93,7 +93,8 @@ function findWindowByRef(sessions: Session[], ref: TerminalRef): TmuxWindow | un
 function checkWindowExistsByRef(sessions: Session[], ref: TerminalRef): WindowExistsResult {
   const win = findWindowByRef(sessions, ref);
   if (!win) return { found: false, paneFound: false };
-  const paneFound = win.panes.some(p => p.index === ref.pane);
+  // A window without panes (misao) is not a missing pane: the terminal socket answers it with its own close code (4412).
+  const paneFound = win.panes.length === 0 || win.panes.some(p => p.index === ref.pane);
   return { found: true, paneFound };
 }
 

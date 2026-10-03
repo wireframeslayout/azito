@@ -1,11 +1,12 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api } from '../api/client';
 import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import type { TerminalRef } from '../lib/terminalRef';
-import { useAgentDefinitions } from './useAgentDefinitions';
+import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
@@ -21,6 +22,20 @@ export function isWindowExists(res: unknown): res is { error: string; windowName
 }
 
 export type AgentPreset = { command: string; label: string };
+
+/** 起動コマンド選択肢（シェルのみ / 起動可能な各エージェント / カスタム）。ウィンドウ追加とペイン追加で共通。 */
+export function buildAgentPresets(agentDefs: AgentDefinition[], t: TFunction<'workspace'>): Record<string, AgentPreset> {
+  const map: Record<string, AgentPreset> = {
+    none: { command: '', label: t('addWindow.noneShellOnly') },
+  };
+  for (const def of agentDefs) {
+    if (def.launchable) {
+      map[def.type] = { command: def.launchCommand ?? '', label: def.label };
+    }
+  }
+  map.custom = { command: '', label: t('addWindow.customCommand') };
+  return map;
+}
 
 /**
  * agent の起動コマンドを組み立てる。`baseCommand` はサーバー(AgentRegistry)由来の
@@ -84,18 +99,7 @@ export function useAddWindowModal(
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { showToast } = useToast();
 
-  const agentPresets = useMemo<Record<string, AgentPreset>>(() => {
-    const map: Record<string, AgentPreset> = {
-      none: { command: '', label: t('addWindow.noneShellOnly') },
-    };
-    for (const def of agentDefs) {
-      if (def.launchable) {
-        map[def.type] = { command: def.launchCommand ?? '', label: def.label };
-      }
-    }
-    map.custom = { command: '', label: t('addWindow.customCommand') };
-    return map;
-  }, [agentDefs, t]);
+  const agentPresets = useMemo(() => buildAgentPresets(agentDefs, t), [agentDefs, t]);
 
   const handleAgentChange = useCallback(async (agent: string) => {
     setAwAgent(agent);
