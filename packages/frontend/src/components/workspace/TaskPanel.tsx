@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, apiWithStatus } from '../../api/client';
-import { reportIfOperatorRequired } from '../../api/operatorRequired';
+import { isOperatorRequiredError, reportIfOperatorRequired } from '../../api/operatorRequired';
 import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMutationResult';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
@@ -706,7 +706,11 @@ export default function TaskPanel({
   const requestTaskMutation = useCallback(async (path: string, method: 'DELETE' | 'POST'): Promise<boolean> => {
     try {
       const { status, body } = await apiWithStatus(path, { method });
-      reportIfOperatorRequired(status, body);
+      if (isOperatorRequiredError(status, body)) {
+        // Its own notice is shown; no second "failed" toast.
+        reportIfOperatorRequired(status, body);
+        return false;
+      }
       return !reportTaskMutationFailure(taskMutationFailure(status, body));
     } catch (e) {
       // Not JSON (a proxy's 502, say) or a network failure: the hub's answer is unknown, so nothing is assumed done.

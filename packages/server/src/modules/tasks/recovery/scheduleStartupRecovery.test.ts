@@ -38,6 +38,21 @@ describe('scheduleStartupRecovery', () => {
     expect(recovery.recoverSkipped).not.toHaveBeenCalled();
   });
 
+  it('starting connected, a drop and reconnect during the first pass still retries what it left pending', async () => {
+    const recovery = fakeRecovery([0]);
+    const connection = fakeConnection(true);
+    let release!: () => void;
+    recovery.recover.mockImplementation(() => new Promise<void>((resolve) => { release = resolve; }));
+
+    const first = scheduleStartupRecovery(recovery, connection);
+    connection.connect(); // reconnect while the first pass is still running
+    release();
+    await first;
+
+    await vi.waitFor(() => expect(recovery.recoverSkipped).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(connection.listenerCount()).toBe(0));
+  });
+
   it('recovers at once without waiting for the daemon, then only the deferred tasks on its connection', async () => {
     const recovery = fakeRecovery([0]);
     const connection = fakeConnection(false);
