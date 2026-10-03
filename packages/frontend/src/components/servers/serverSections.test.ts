@@ -22,6 +22,7 @@ describe('getSetupSummary', () => {
 
   it('reports offline when install-status failed because the agent is unreachable', () => {
     expect(getSetupSummary(null, 'offline')).toEqual({ text: 'servers:setup.offline', tone: 'orange' });
+    expect(getSetupSummary(null, 'failed')).toEqual({ text: 'servers:setup.checkFailed', tone: 'red' });
     expect(getSetupSummary(null, null).text).toBe('servers:status.checking');
   });
 });

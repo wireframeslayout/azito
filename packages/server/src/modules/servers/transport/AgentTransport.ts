@@ -94,9 +94,10 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
 
   // Circuit breaker: epoch ms until which calls fail fast; 0 = closed.
   private unreachableUntil = 0;
-  private probe: Promise<void> | null = null;
-  // Bumped on every breaker state change; see send().
-  private epoch = 0;
+  private probe: Promise<unknown> | null = null;
+  // Request sequencing (see send()): the last handed-out sequence and the newest sequence whose outcome was applied.
+  private nextSeq = 0;
+  private appliedSeq = 0;
 
   constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string) {
     this.token = token;
@@ -171,13 +172,12 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   }
 
   markReachable(): void {
-    if (this.unreachableUntil === 0) return;
-    this.epoch++;
+    this.appliedSeq = this.nextSeq;
     this.unreachableUntil = 0;
   }
 
   markUnreachable(): void {
-    this.epoch++;
+    this.appliedSeq = this.nextSeq;
     this.unreachableUntil = Date.now() + CIRCUIT_OPEN_MS;
   }
 
@@ -187,12 +187,13 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   }
 
   /**
-   * GET /health with a short deadline, sharing the breaker (and its single half-open probe). While the breaker is
-   * open or half-open it throws `circuit_open` without fetching. Non-2xx responses mean the agent is reachable but
-   * unhealthy and throw a plain Error.
+   * GET /health with a short deadline, sharing the breaker. Open: throws `circuit_open` without fetching.
+   * Half-open: starts (or joins) the single shared probe and returns its outcome, so a recovered agent is reported
+   * online right away. Non-2xx responses mean the agent is reachable but unhealthy and throw a plain Error.
    */
   async fetchHealth(): Promise<unknown> {
-    this.assertCircuitClosed();
+    if (this.isCircuitOpen()) throw new AgentUnreachableError(this.serverName, 'circuit_open');
+    if (this.unreachableUntil !== 0) return this.ensureProbe();
     return this.requestHealth();
   }
 
@@ -204,32 +205,43 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
 
   /**
    * One HTTP round trip including the body read, so a drop or deadline during body transfer is classified like any
-   * other network failure. The outcome updates the breaker only if nothing else changed it since this request
-   * started (a stale result must not reopen a breaker a newer success closed, or vice versa).
+   * other network failure. Each round trip takes a monotonically increasing sequence at start; its outcome (success
+   * or failure, whatever the breaker state) updates the breaker only if it is newer than the last applied outcome,
+   * so a late result of an older request never overrides a newer one.
    */
   private async send(path: string, init: RequestInit, deadlineMs: number): Promise<{ status: number; text: string }> {
-    const startEpoch = this.epoch;
+    const seq = ++this.nextSeq;
     try {
       const res = await fetch(`${this.baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(deadlineMs) });
       const text = await res.text();
-      if (startEpoch === this.epoch) this.markReachable();
+      if (seq > this.appliedSeq) {
+        this.appliedSeq = seq;
+        this.unreachableUntil = 0;
+      }
       return { status: res.status, text };
     } catch (err) {
       const reason = classifyFetchError(err);
       if (!reason) throw err;
-      if (startEpoch === this.epoch) this.markUnreachable();
+      if (seq > this.appliedSeq) {
+        this.appliedSeq = seq;
+        this.unreachableUntil = Date.now() + CIRCUIT_OPEN_MS;
+      }
       throw new AgentUnreachableError(this.serverName, reason);
     }
   }
 
-  /** Fails fast while the breaker is open; once it expires, a single shared background /health probe decides whether to close it. */
+  /** The single shared half-open /health probe (started on demand, joined by concurrent callers). */
+  private ensureProbe(): Promise<unknown> {
+    if (!this.probe) {
+      this.probe = this.requestHealth().finally(() => { this.probe = null; });
+    }
+    return this.probe;
+  }
+
+  /** Fails fast while the breaker is open; once it expires, the shared probe runs in the background and calls keep failing fast until it closes the breaker. */
   private assertCircuitClosed(): void {
     if (this.unreachableUntil === 0) return;
-    if (!this.isCircuitOpen() && !this.probe) {
-      this.probe = this.requestHealth()
-        .then(() => undefined, () => undefined)
-        .finally(() => { this.probe = null; });
-    }
+    if (!this.isCircuitOpen()) this.ensureProbe().catch(() => undefined);
     throw new AgentUnreachableError(this.serverName, 'circuit_open');
   }
 

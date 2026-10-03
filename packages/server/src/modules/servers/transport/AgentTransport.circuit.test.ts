@@ -103,7 +103,7 @@ describe('AgentTransport circuit breaker', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('shares one half-open /health probe between fetchHealth() and exec()', async () => {
+  it('shares one half-open /health probe between fetchHealth() and exec(), and fetchHealth() reports the recovery', async () => {
     const t = make();
     fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
     await expect(t.exec('a')).rejects.toBeInstanceOf(AgentUnreachableError);
@@ -111,14 +111,60 @@ describe('AgentTransport circuit breaker', () => {
 
     let release: (r: Response) => void = () => {};
     fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { release = r; }));
-    await expect(Promise.allSettled([t.fetchHealth(), t.exec('b'), t.fetchHealth(), t.exec('c')])).resolves.toSatisfy(
-      (rs: PromiseSettledResult<unknown>[]) => rs.every((r) => r.status === 'rejected'),
-    );
+    const h1 = t.fetchHealth();
+    const h2 = t.fetchHealth();
+    await expect(t.exec('b')).rejects.toMatchObject({ reason: 'circuit_open' });
+    await expect(t.exec('c')).rejects.toMatchObject({ reason: 'circuit_open' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(String(fetchMock.mock.calls[1][0])).toBe('http://10.0.0.1:4021/health');
 
     release(jsonResponse({ version: 'v' }));
-    await vi.advanceTimersByTimeAsync(0);
+    await expect(h1).resolves.toEqual({ version: 'v' });
+    await expect(h2).resolves.toEqual({ version: 'v' });
+    expect(t.isCircuitOpen()).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('fetchHealth() in half-open rethrows the probe failure and keeps the breaker open', async () => {
+    const t = make();
+    fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
+    await expect(t.exec('a')).rejects.toBeInstanceOf(AgentUnreachableError);
+    vi.advanceTimersByTime(15_001);
+    fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
+    await expect(t.fetchHealth()).rejects.toMatchObject({ reason: 'refused' });
+    expect(t.isCircuitOpen()).toBe(true);
+  });
+
+  it('A fails then B succeeds (started concurrently while closed): the newer success wins', async () => {
+    const t = make();
+    let failA: (e: unknown) => void = () => {};
+    let okB: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((_, rej) => { failA = rej; }));
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { okB = r; }));
+    const a = t.exec('a').catch((e: unknown) => e);
+    const b = t.exec('b');
+
+    failA(fetchFailure('ECONNREFUSED'));
+    expect(await a).toBeInstanceOf(AgentUnreachableError);
+    expect(t.isCircuitOpen()).toBe(true);
+    okB(jsonResponse({ stdout: 'ok', stderr: '', code: 0 }));
+    await expect(b).resolves.toMatchObject({ stdout: 'ok' });
+    expect(t.isCircuitOpen()).toBe(false);
+  });
+
+  it('B succeeds then the older A fails (concurrent while closed): the stale failure is ignored', async () => {
+    const t = make();
+    let failA: (e: unknown) => void = () => {};
+    let okB: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((_, rej) => { failA = rej; }));
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { okB = r; }));
+    const a = t.exec('a').catch((e: unknown) => e);
+    const b = t.exec('b');
+
+    okB(jsonResponse({ stdout: 'ok', stderr: '', code: 0 }));
+    await expect(b).resolves.toMatchObject({ stdout: 'ok' });
+    failA(fetchFailure('ECONNREFUSED'));
+    expect(await a).toBeInstanceOf(AgentUnreachableError);
     expect(t.isCircuitOpen()).toBe(false);
   });
 

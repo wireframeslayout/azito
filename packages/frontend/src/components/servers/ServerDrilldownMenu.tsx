@@ -91,7 +91,7 @@ export default function ServerDrilldownMenu({
               <span style={{
                 marginLeft: 'auto',
                 fontSize: 'var(--font-xs)',
-                color: summary.tone === 'green' ? 'var(--success)' : summary.tone === 'orange' ? 'var(--warning)' : 'var(--text-dim)',
+                color: summary.tone === 'green' ? 'var(--success)' : summary.tone === 'orange' ? 'var(--warning)' : summary.tone === 'red' ? 'var(--danger)' : 'var(--text-dim)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,

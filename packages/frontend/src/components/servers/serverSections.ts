@@ -62,7 +62,7 @@ export function describeMisaoItem(item: InstallStatusItem, t: TFunction): Instal
 export interface SectionSummary {
   text: string;
   textParams?: Record<string, string | number>;
-  tone: 'green' | 'dim' | 'orange';
+  tone: 'green' | 'dim' | 'orange' | 'red';
 }
 
 export function getOverviewSummary(status: ServerStatus | null): SectionSummary {
@@ -74,6 +74,7 @@ export function getOverviewSummary(status: ServerStatus | null): SectionSummary 
 
 export function getSetupSummary(installStatus: InstallStatusResponse | null, installStatusError: 'offline' | 'failed' | null = null): SectionSummary {
   if (!installStatus && installStatusError === 'offline') return { text: 'servers:setup.offline', tone: 'orange' };
+  if (!installStatus && installStatusError === 'failed') return { text: 'servers:setup.checkFailed', tone: 'red' };
   if (!installStatus) return { text: 'servers:status.checking', tone: 'dim' };
   const items = [
     installStatus.tmux,
