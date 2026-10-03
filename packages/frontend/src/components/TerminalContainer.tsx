@@ -13,6 +13,7 @@ import ResourceWarningDialog, { type ResourceStatus } from './ResourceWarningDia
 import { TerminalQuickKeyBar } from './workspace/TerminalQuickKeyBar';
 import { TerminalChatToggle } from './ui/TerminalChatToggle';
 import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
+import { PaneUnavailableNotice, type PaneNoticeOutcome } from './terminal/PaneUnavailableNotice';
 import { api } from '../api/client';
 import { formatWindowId } from '@azito/shared';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
@@ -22,6 +23,7 @@ import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveTerminalTarget, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
 import { paneDisplayName } from '../lib/paneDisplay';
+import type { PaneUnavailableReason } from '../lib/paneState';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -53,6 +55,8 @@ interface TerminalContainerProps {
   onDisconnect?: () => void;
   onWindowChanged?: () => void;
   onCloseTab?: () => void;
+  /** Called when the pane or window this terminal shows was deleted from the pane-unavailable notice (its ordinal is gone). Falls back to onCloseTab. */
+  onTargetRemoved?: () => void;
   onRetargetTab?: (serverName: string, newTarget: string) => void;
   reconnectKey?: number;
   /**
@@ -85,7 +89,7 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -103,6 +107,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
 
   const { t } = useTranslation('common');
   const [windowMissing, setWindowMissing] = useState(false);
+  const [paneUnavailable, setPaneUnavailable] = useState<PaneUnavailableReason | null>(null);
   const [disconnected, setDisconnected] = useState(false);
   const [connectFailed, setConnectFailed] = useState(false);
   const [xtermKey, setXtermKey] = useState(0);
@@ -111,6 +116,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   useEffect(() => {
     if (reconnectKey !== undefined && reconnectKey !== prevReconnectKey.current) {
       setWindowMissing(false);
+      setPaneUnavailable(null);
       setDisconnected(false);
       setConnectFailed(false);
       setRespawnError(null);
@@ -228,6 +234,27 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
       setRespawning(false);
     }
   }, [dbWindow, serverName, onRetargetTab, onWindowChanged]);
+
+  // The pane-unavailable notice can open a pane in the window, which needs the window's MuxRef.
+  const windowMuxRef = useMemo<string | null>(() => {
+    if (!terminalRef) return null;
+    if (terminalRef.kind === 'ref') return terminalRef.ref;
+    return sessions?.flatMap((sess) => sess.windows).find((w) => w.windowId === terminalRef.windowId)?.ref ?? null;
+  }, [terminalRef, sessions]);
+
+  const handlePaneUnavailable = useCallback((reason: PaneUnavailableReason) => {
+    // Without the window's ref nothing in the notice can act on it: treat the window as gone.
+    if (windowMuxRef === null) setWindowMissing(true);
+    else setPaneUnavailable(reason);
+  }, [windowMuxRef]);
+
+  const handlePaneNoticeResolved = useCallback((outcome: PaneNoticeOutcome) => {
+    setPaneUnavailable(null);
+    setXtermKey((k) => k + 1);
+    onWindowChanged?.();
+    // A deleted pane shifts the ordinals after it and a deleted window is gone: this terminal's target no longer exists.
+    if (outcome !== 'pane_opened') (onTargetRemoved ?? onCloseTab)?.();
+  }, [onWindowChanged, onTargetRemoved, onCloseTab]);
 
   const sessionsUpdateCount = useRef(0);
   const everSeen = useRef(false);
@@ -349,11 +376,20 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             terminalRef={terminalRef}
             onDisconnect={onDisconnect}
             onWindowNotFound={() => setWindowMissing(true)}
+            onPaneUnavailable={handlePaneUnavailable}
             onMaxRetriesReached={() => setDisconnected(true)}
             onConnectTimeout={() => setConnectFailed(true)}
           />
         )}
-        {connectFailed && !windowMissing && !disconnected && (
+        {paneUnavailable && terminalRef && windowMuxRef && !windowMissing && (
+          <PaneUnavailableNotice
+            reason={paneUnavailable}
+            terminalRef={terminalRef}
+            muxRef={windowMuxRef}
+            onResolved={handlePaneNoticeResolved}
+          />
+        )}
+        {connectFailed && !windowMissing && !disconnected && !paneUnavailable && (
           <div
             role="status"
             aria-live="polite"
@@ -398,7 +434,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             </div>
           </div>
         )}
-        {disconnected && !windowMissing && (
+        {disconnected && !windowMissing && !paneUnavailable && (
           <div
             role="status"
             aria-live="polite"

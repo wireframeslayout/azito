@@ -190,6 +190,15 @@ describe('checkWindowExists', () => {
     });
   });
 
+  describe('window without panes (misao)', () => {
+    const empty: Session[] = [{ name: 'default', windows: [{ index: 1, name: 'main', ref: '{"kind":"misao","workspace":"default","window":"w_x"}', windowId: null, panes: [] }] }];
+
+    it('is not a missing pane: the terminal socket reports an empty window itself', () => {
+      const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: empty[0].windows[0].ref, pane: 1 };
+      expect(checkWindowExists(empty, ref, '')).toEqual({ found: true, paneFound: true });
+    });
+  });
+
   describe('ref (mux)', () => {
     it('finds window by ref string', () => {
       const ref: TerminalRef = { kind: 'ref', serverName: 'srv', ref: '{"kind":"tmux","workspace":"azito","window":"main"}', pane: 0 };

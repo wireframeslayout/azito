@@ -11,6 +11,8 @@ import { createOsc52Extractor } from '../utils/osc52';
 import { buildWsUrl } from '../api/wsUrl';
 import { terminalWsParams, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
 import TerminalBackdrop from './TerminalBackdrop';
+import { TERMINAL_CLOSE } from '@azito/shared';
+import type { PaneUnavailableReason } from '../lib/paneState';
 
 // SP端末クイックキーフッター（TerminalQuickKeyBar）と⌨透過パッド（MobileKeyboardOverlay）が
 // 送出しうるキー全種を網羅する。両者ともこのマップ経由でアクティブなWS接続へ直接キーを流す
@@ -67,11 +69,13 @@ interface XTermViewProps {
   terminalRef?: TerminalRef;
   onDisconnect?: () => void;
   onWindowNotFound?: () => void;
+  /** The hub closed the socket because the pane cannot be attached (stopped pane, empty window); no reconnect is tried. */
+  onPaneUnavailable?: (reason: PaneUnavailableReason) => void;
   onMaxRetriesReached?: () => void;
   onConnectTimeout?: () => void;
 }
 
-const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView({ serverName, target, terminalRef, onDisconnect, onWindowNotFound, onMaxRetriesReached, onConnectTimeout }, ref) {
+const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView({ serverName, target, terminalRef, onDisconnect, onWindowNotFound, onPaneUnavailable, onMaxRetriesReached, onConnectTimeout }, ref) {
   const { t } = useTranslation('common');
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -362,6 +366,8 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
             if (disposed) return;
             if (connectTimedOut && reconnectAttempts === 0) return;
             if (e.code === 4404) { onWindowNotFound?.(); return; }
+            if (e.code === TERMINAL_CLOSE.paneStopped.code) { onPaneUnavailable?.('pane_stopped'); return; }
+            if (e.code === TERMINAL_CLOSE.windowEmpty.code) { onPaneUnavailable?.('window_empty'); return; }
             if (firstDisconnect) {
               firstDisconnect = false;
               onDisconnect?.();

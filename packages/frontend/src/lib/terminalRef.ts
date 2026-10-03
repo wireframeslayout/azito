@@ -184,6 +184,11 @@ export function windowApiPath(r: TerminalRef, action?: string): string {
     : `/servers/${r.serverName}/mux/windows/${encodeURIComponent(r.ref)}`;
 }
 
+/** The request that kills the window of a ref: registered windows (windowId form) use DELETE, unregistered ones the mux POST route. */
+export function windowKillRequest(r: TerminalRef): { path: string; method: 'DELETE' | 'POST' } {
+  return { path: windowApiPath(r, 'kill'), method: r.kind === 'windowId' ? 'DELETE' : 'POST' };
+}
+
 export function paneApiPath(r: TerminalRef, action?: string): string {
   if (r.kind === 'windowId') {
     return action

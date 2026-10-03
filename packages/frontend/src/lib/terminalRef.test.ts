@@ -9,6 +9,7 @@ import {
   terminalRefFromTarget,
   isValidTerminalRef,
   resolveTerminalTarget,
+  windowKillRequest,
   terminalRefFromTabTarget,
   migrateLegacyTerminalTabs,
   terminalRefDisplayLabel,
@@ -236,5 +237,15 @@ describe('resolveTerminalTarget / terminalRefFromTabTarget (rc.7 follow-up)', ()
     expect(terminalRefFromTabTarget('server007', 'w729.2')).toEqual({ kind: 'windowId', serverName: 'server007', windowId: 729, pane: 2 });
     expect(terminalRefFromTabTarget('server007', 'azito:win--qvp6.1')?.kind).toBe('ref');
     expect(terminalRefFromTabTarget('server007', 'w[object Object]')).toBeNull();
+  });
+});
+
+describe('windowKillRequest', () => {
+  it('uses DELETE /windows/:id/kill for a registered window', () => {
+    expect(windowKillRequest({ kind: 'windowId', serverName: 's', windowId: 7, pane: 1 })).toEqual({ path: '/windows/7/kill', method: 'DELETE' });
+  });
+  it('uses POST on the mux route for a ref', () => {
+    const ref = '{"kind":"misao","workspace":"d","window":"w_x"}';
+    expect(windowKillRequest({ kind: 'ref', serverName: 's', ref, pane: 1 })).toEqual({ path: `/servers/s/mux/windows/${encodeURIComponent(ref)}/kill`, method: 'POST' });
   });
 });

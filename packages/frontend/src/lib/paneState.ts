@@ -8,6 +8,9 @@ interface WindowWithPanes<P extends PaneWithState> {
   panes: Array<P & { index: number }>;
 }
 
+/** Why the hub refused to attach a pane (terminal WS close codes 4410 / 4412). */
+export type PaneUnavailableReason = 'pane_stopped' | 'window_empty';
+
 export type PaneStateChip = 'stopped' | 'exited';
 
 /**
