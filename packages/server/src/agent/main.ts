@@ -201,12 +201,10 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    if (hookRt) {
-      for (const event of hookEvents) {
-        await new Promise<void>((resolve) => {
-          execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
-        });
-      }
+    for (const event of hookEvents) {
+      await new Promise<void>((resolve) => {
+        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
+      });
     }
   });
 
@@ -234,28 +232,26 @@ async function main(): Promise<void> {
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
   // the initial install fails because tmux isn't up yet, and the next periodic pass installs it).
-  if (hookRt) {
-    let lastInstallFailed: boolean | null = null;
-    const installTmuxHooks = (): void => {
-      let pending = hookEvents.length;
-      let anyFailed = false;
-      for (const event of hookEvents) {
-        const hookValue = buildHookValue(hookBase, event);
-        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
-          if (err) anyFailed = true;
-          pending--;
-          if (pending === 0 && anyFailed !== lastInstallFailed) {
-            if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
-            else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
-            lastInstallFailed = anyFailed;
-          }
-        });
-      }
-    };
+  let lastInstallFailed: boolean | null = null;
+  const installTmuxHooks = (): void => {
+    let pending = hookEvents.length;
+    let anyFailed = false;
+    for (const event of hookEvents) {
+      const hookValue = buildHookValue(hookBase, event);
+      execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
+        if (err) anyFailed = true;
+        pending--;
+        if (pending === 0 && anyFailed !== lastInstallFailed) {
+          if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
+          else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
+          lastInstallFailed = anyFailed;
+        }
+      });
+    }
+  };
 
-    installTmuxHooks();
-    hookInstallInterval = setInterval(installTmuxHooks, 60000);
-  }
+  installTmuxHooks();
+  hookInstallInterval = setInterval(installTmuxHooks, 60000);
 }
 
 main().catch((err) => {

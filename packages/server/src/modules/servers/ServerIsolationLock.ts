@@ -91,7 +91,7 @@ export interface ServerIsolationLock {
  * isolationVerifiedAt/Report, sshHostFingerprint, createdAt, ...) is fine to
  * silently pick up fresh, same as before.
  */
-const SECURITY_SNAPSHOT_FIELDS = ['isolationIntent', 'type', 'host', 'sshHost', 'agentPort', 'agentToken', 'muxRuntime'] as const satisfies readonly (keyof ServerConfig)[];
+const SECURITY_SNAPSHOT_FIELDS = ['isolationIntent', 'type', 'host', 'sshHost', 'agentPort', 'agentToken', 'muxRuntime', 'defaultMux'] as const satisfies readonly (keyof ServerConfig)[];
 
 /** Thrown by {@link refetchServer} when `enforceSnapshot` is true and the row that committed while the caller was queued for the lock differs from the one its pre-lock checks ran against. */
 export class ServerSnapshotMismatchError extends Error {

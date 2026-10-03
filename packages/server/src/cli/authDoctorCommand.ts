@@ -409,7 +409,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
     }
 
     const serverRowStmt = db.prepare(
-      'SELECT name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, created_at FROM servers WHERE name = ?',
+      'SELECT name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux, ssh_host_fingerprint, created_at FROM servers WHERE name = ?',
     );
     // Fix 1 (Issue #28 third-party review, Important): `open()` throws both
     // when SecretBox hasn't been initialized at all AND when a given
@@ -444,7 +444,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
         agentVersion: (row.agent_version as string) ?? null,
         sshHost: (row.ssh_host as string) ?? null,
         muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
-        defaultMux: (row.default_mux as ServerConfig['defaultMux']) ?? 'tmux',
+        defaultMux: row.default_mux as ServerConfig['defaultMux'],
         sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
         isolationIntent: false,
         isolationVerifiedAt: null,
@@ -473,6 +473,12 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
             ? `${descriptor}（サーバー設定の復号に失敗: ${decryptError}）`
             : `${descriptor}（サーバー未登録）`,
         );
+        continue;
+      }
+      // Only tmux panes can be probed here; a window of another mux must never be judged by `tmux list-panes`
+      // ("can't find" there says nothing about it). Checking it through IMuxClient is future work.
+      if (config.defaultMux !== 'tmux') {
+        unverifiable.push(`${descriptor}（${config.defaultMux} 窓は未検査）`);
         continue;
       }
       const { alive: isAlive, verified } = await tmux.checkPaneLiveness(config, w.tmuxTarget);

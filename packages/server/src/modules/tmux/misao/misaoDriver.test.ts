@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
-import { describeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntime, selectLocalMisaoServers, syncMisaoChangeHooks, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
+import { describeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntime, resolveMisaoRuntimeForHub, selectLocalMisaoServers, syncMisaoChangeHooks, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
 
 function runtime(connect: () => Promise<void>): MisaoRuntime {
   class FakeConnectionError extends Error {}
@@ -72,6 +72,31 @@ describe('selectLocalMisaoServers', () => {
       { name: 'd', type: 'agent', defaultMux: 'misao' as const, muxRuntime: 'system' },
     ] as const;
     expect(selectLocalMisaoServers([...servers]).map((s) => s.name)).toEqual(['a']);
+  });
+});
+
+describe('resolveMisaoRuntimeForHub', () => {
+  const input = { env: { MISAO_SOCKET: `/tmp/${'a'.repeat(120)}.sock` }, homeDir: '/home/x', shell: '/bin/bash' };
+
+  it('keeps a usable socket as is', async () => {
+    const warn = vi.fn();
+    const resolved = await resolveMisaoRuntimeForHub({ ...input, env: { MISAO_SOCKET: '/tmp/ok.sock' } }, true, { warn });
+    expect(resolved.socketPath).toBe('/tmp/ok.sock');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('warns and leaves the driver unreachable when no misao server needs it', async () => {
+    const warn = vi.fn();
+    const resolved = await resolveMisaoRuntimeForHub(input, false, { warn });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const registry = new MuxDriverRegistry();
+    const { connection } = registerMisaoDriver(registry, resolved, vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://h', localUrl: 'http://l', webhookToken: 'w' });
+    expect(registry.availability({ defaultMux: 'misao', type: 'local' })).toEqual({ available: false, reason: 'daemon_unreachable' });
+    connection.close();
+  });
+
+  it('fails fast when a misao server exists', async () => {
+    await expect(resolveMisaoRuntimeForHub(input, true, { warn: vi.fn() })).rejects.toThrow();
   });
 });
 

@@ -11,9 +11,8 @@ export interface MisaoConnectionEvents {
  */
 export function scheduleStartupRecovery(
   recovery: { recover: () => Promise<void>; recoverSkipped: () => Promise<void>; hasPending: () => boolean },
-  misaoConnection: MisaoConnectionEvents | undefined,
+  misaoConnection: MisaoConnectionEvents,
 ): Promise<void> {
-  if (!misaoConnection) return recovery.recover();
   // Registered before the first pass starts, whatever the initial state: a connection that drops and comes back
   // during the first pass must still lead to a retry of what it left pending.
   let chain: Promise<void> = Promise.resolve();

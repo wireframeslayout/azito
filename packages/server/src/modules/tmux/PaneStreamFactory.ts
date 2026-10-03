@@ -12,11 +12,11 @@ export class PaneStreamFactory implements IPaneStreamFactory {
   /** `misaoLines` reads the misao daemon's line stream for local misao servers. */
   constructor(
     private transportFactory: TransportFactory,
-    private misaoLines?: MisaoLineSource,
+    private misaoLines: MisaoLineSource,
   ) {}
 
   create(handle: PaneHandle | string, server: StreamServer, pane?: PaneHandle): IPaneStream {
-    if (this.misaoLines && server.type === 'local' && server.defaultMux === 'misao') {
+    if (server.type === 'local' && server.defaultMux === 'misao') {
       // A pane's output comes from the daemon's line stream; without a pane the stream is a plain file the agent writes (signal file).
       return pane ? new MisaoPaneStream(pane, this.misaoLines) : new PaneOutputStream(handle);
     }

@@ -24,7 +24,7 @@ import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClie
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
-import { registerMisaoDriver, resolveMisaoRuntime, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
+import { registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
 import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
@@ -556,8 +556,12 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     console.error('[startup] Agent bundle build failed (non-fatal):', (err as Error).message);
   }
 
-  const misaoRuntime = await resolveMisaoRuntime({ env: process.env, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' });
   const repos = buildRepositories(db);
+  const misaoRuntime = await resolveMisaoRuntimeForHub(
+    { env: process.env, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' },
+    repos.serverRepo.findAll().some((s) => s.defaultMux === 'misao'),
+    console,
+  );
   const extractHost = (sshHostStr: string): { host: string; port: number } => {
     const atIdx = sshHostStr.indexOf('@');
     let rest = atIdx !== -1 ? sshHostStr.substring(atIdx + 1) : sshHostStr;

@@ -82,7 +82,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
 
   const isTmux = useCallback((serverName: string): boolean => {
     const srv = servers.find((s) => s.name === serverName);
-    return srv?.defaultMux === 'tmux';
+    return srv ? srv.defaultMux === 'tmux' : true;
   }, [servers]);
   const { showToast } = useToast();
   const confirm = useConfirm();

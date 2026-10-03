@@ -9,7 +9,7 @@ describe('PaneStreamFactory', () => {
   const server = { name: 's7', type: 'agent' as const, host: 'h', agentPort: 3002, agentToken: 't', defaultMux: 'tmux' as const, muxRuntime: 'system' as const };
   const fileStream = { kind: 'file' };
   const transportFactory = { getTransport: () => ({ createPaneStream: () => fileStream }) } as never;
-  const factory = new PaneStreamFactory(transportFactory);
+  const factory = new PaneStreamFactory(transportFactory, {} as MisaoLineSource);
 
   it('creates a pane stream via transport for agent servers', () => {
     expect(factory.create('%82', server)).toBe(fileStream);
@@ -30,10 +30,6 @@ describe('PaneStreamFactory', () => {
       const stream = misaoFactory.create('t1-sig', misaoServer);
       expect(stream).toBeInstanceOf(PaneOutputStream);
       expect(stream.getFilePath()).toContain('azito-pipe-t1-sig-');
-    });
-
-    it('keeps the transport path when the misao line source is not wired', () => {
-      expect(factory.create('t1-123', misaoServer, pane)).toBe(fileStream);
     });
 
     it('keeps the transport path for tmux servers', () => {
