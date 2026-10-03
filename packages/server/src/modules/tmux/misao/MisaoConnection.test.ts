@@ -47,8 +47,15 @@ class FakeClient {
     this.requests.push({ method, params });
     return this.requestHandler(method, params);
   }
-  async subscribeEvents(): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> {
-    return { unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } };
+  eventHandler: ((event: unknown) => void) | undefined;
+  eventSubscribeCalls = 0;
+  eventUnsubscribeCalls = 0;
+  /** Like the SDK: one events subscription per connection. */
+  async subscribeEvents(handler: (event: unknown) => void): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> {
+    this.eventSubscribeCalls += 1;
+    if (this.eventHandler) throw new Error('stream already registered: events');
+    this.eventHandler = handler;
+    return { unsubscribe: () => { this.eventHandler = undefined; this.eventUnsubscribeCalls += 1; }, cursor: { seq: 0, epoch: 'e' } };
   }
   close(): void { this.closed = true; }
 }
@@ -180,6 +187,64 @@ describe('MisaoConnection', () => {
     off();
     for (const cb of control.clients[0].gapListeners) cb(gap);
     expect(late).toHaveBeenCalledTimes(1);
+  });
+
+  describe('events', () => {
+    it('shares one SDK subscription between concurrent handlers and delivers to both', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const a = vi.fn();
+      const b = vi.fn();
+      await Promise.all([connection.subscribeEvents(a), connection.subscribeEvents(b)]);
+      expect(control.clients[0].eventSubscribeCalls).toBe(1);
+      control.clients[0].eventHandler?.({ type: 'pane.state' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the other handler running when one unsubscribes, and releases the SDK subscription after the last', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const a = vi.fn();
+      const b = vi.fn();
+      const subA = await connection.subscribeEvents(a);
+      const subB = await connection.subscribeEvents(b);
+      subA.unsubscribe();
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(a).not.toHaveBeenCalled();
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(0);
+      subB.unsubscribe();
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(1);
+      const c = vi.fn();
+      await connection.subscribeEvents(c);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+    });
+
+    it('keeps delivering to every handler after the SDK reconnects, and a throwing handler does not starve the others', async () => {
+      const { connection, control, warn } = setup();
+      await connection.start();
+      const a = vi.fn(() => { throw new Error('boom'); });
+      const b = vi.fn();
+      await connection.subscribeEvents(a);
+      await connection.subscribeEvents(b);
+      for (const cb of control.clients[0].stateListeners) cb({ status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('lost') });
+      for (const cb of control.clients[0].stateListeners) cb({ status: 'connected' });
+      control.clients[0].eventHandler?.({ type: 'pane.state' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    });
+
+    it('rejects every waiting handler when the subscription fails, and a later attempt can succeed', async () => {
+      const { connection, control } = setup();
+      await expect(connection.subscribeEvents(vi.fn())).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+      await connection.start();
+      const ok = vi.fn();
+      await connection.subscribeEvents(ok);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(ok).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('lines', () => {

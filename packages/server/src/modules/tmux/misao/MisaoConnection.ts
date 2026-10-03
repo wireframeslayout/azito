@@ -52,6 +52,9 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   private client: MisaoClient | undefined;
   private status: Status = 'idle';
   private retryTimer: NodeJS.Timeout | undefined;
+  private readonly eventHandlers = new Set<EventHandler>();
+  private eventSubscription: Subscription | undefined;
+  private eventSubscribing: Promise<Subscription> | undefined;
   private readonly connectedListeners = new Set<() => void>();
   private readonly disconnectedListeners = new Set<() => void>();
   private readonly gapListeners = new Set<(gap: GapInfo) => void>();
@@ -84,11 +87,50 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     }
   }
 
+  /**
+   * The SDK holds one events subscription per connection, so it is made once and fanned out to every handler:
+   * the first handler subscribes, the last unsubscribe releases it. The SDK re-subscribes across reconnects.
+   */
   async subscribeEvents(handler: EventHandler): Promise<Subscription> {
+    this.eventHandlers.add(handler);
+    this.eventSubscribing ??= this.openEventSubscription().finally(() => { this.eventSubscribing = undefined; });
+    let shared: Subscription;
     try {
-      return await this.requireClient().subscribeEvents(handler);
+      shared = await this.eventSubscribing;
     } catch (err) {
+      this.eventHandlers.delete(handler);
       throw this.translate(err);
+    }
+    return {
+      get cursor() { return shared.cursor; },
+      unsubscribe: () => {
+        this.eventHandlers.delete(handler);
+        this.releaseEventSubscriptionIfUnused();
+      },
+    };
+  }
+
+  private async openEventSubscription(): Promise<Subscription> {
+    if (this.eventSubscription) return this.eventSubscription;
+    const subscription = await this.requireClient().subscribeEvents((event) => this.dispatchEvent(event));
+    this.eventSubscription = subscription;
+    this.releaseEventSubscriptionIfUnused();
+    return subscription;
+  }
+
+  private releaseEventSubscriptionIfUnused(): void {
+    if (this.eventHandlers.size > 0 || !this.eventSubscription) return;
+    this.eventSubscription.unsubscribe();
+    this.eventSubscription = undefined;
+  }
+
+  private dispatchEvent(event: Parameters<EventHandler>[0]): void {
+    for (const handler of [...this.eventHandlers]) {
+      try {
+        handler(event);
+      } catch (err) {
+        this.options.log.warn(`[misao] event handler failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
