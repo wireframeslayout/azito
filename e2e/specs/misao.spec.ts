@@ -224,7 +224,7 @@ async function createRegisteredWindow(
   });
   const windowId = await harness.registerMisaoWindow(
     projectId,
-    { ref: created.ref, workspace: label, windowName: created.windowName },
+    { ref: created.ref },
     { label },
   );
   return { windowId, label };

@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
-import type { TerminalRef } from '../lib/terminalRef';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, type TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
 import { useServerStatuses } from './useServerStatuses';
@@ -272,17 +272,27 @@ export function useAddWindowModal(
           } else {
             const firstWin = sess.windows[0];
             const firstPane = firstWin.panes[0];
-            if (firstPane) onConnect?.(awServer, `${awSelectedSession}:${firstWin.name}.${firstPane.index}`, numericProjectId);
+            if (firstPane) {
+              // The server-reported windowId / ref identifies the window for every mux kind; no tmux ref is synthesised from the target.
+              const termRef: TerminalRef = firstWin.windowId !== null
+                ? { kind: 'windowId', serverName: awServer, windowId: firstWin.windowId, pane: firstPane.index }
+                : { kind: 'ref', serverName: awServer, ref: firstWin.ref, pane: firstPane.index };
+              onConnect?.(termRef, numericProjectId);
+            }
           }
         }
       } else if (awMode === 'existing') {
-        let existingRef: string | undefined;
-        try { existingRef = formatMuxRef(muxRefFromTmuxTarget(awTarget)); } catch { /* keep undefined */ }
-        await api(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ...(existingRef ? { ref: existingRef } : {}), label: awLabel.trim() }) });
+        const existingRef = resolveWindowRegistrationRef({
+          muxKind: muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime),
+          target: awTarget,
+          sessions: awSessionData[awServer],
+        });
+        if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
+        const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
           await onTaskWindowAdded?.(awTaskId, awServer, awTarget, awLabel.trim(), true);
         } else {
-          onConnect?.(awServer, awTarget, numericProjectId);
+          onConnect?.(registeredWindowTerminalRef(awServer, registered.id), numericProjectId);
         }
       } else {
         if (awAgent !== 'none') {

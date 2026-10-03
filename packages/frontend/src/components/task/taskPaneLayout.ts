@@ -23,6 +23,7 @@
 import type { PaneLayoutStorage } from '../../hooks/usePaneLayout';
 import { findPane, listPanes, openTab, createPane, normalizeLayout, type LayoutNode } from '../../hooks/paneLayoutTree';
 import type { Window, Session, TmuxWindow } from '../../pages/workspace/types';
+import { muxRefJson } from '../../lib/terminalRef';
 import { isSameWindowTarget, windowKey } from '@azito/shared';
 
 // Legacy (pre-Issue #397) sub-tab model: one selected view + optional terminal ref.
@@ -445,7 +446,7 @@ export function resolveWindowContextExtra(
   let matchedSession: Session | undefined;
   for (const s of sessions) {
     const found = s.windows.find((win) =>
-      (w.id != null && win.windowId === w.id) || (w.muxRef && win.ref === w.muxRef),
+      (w.id != null && win.windowId === w.id) || (w.muxRef && win.ref === muxRefJson(w.muxRef)),
     );
     if (found) { sw = found; matchedSession = s; break; }
   }

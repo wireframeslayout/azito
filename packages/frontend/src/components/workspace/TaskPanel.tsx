@@ -42,6 +42,7 @@ import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/window
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';
+import type { TerminalRef as LibTerminalRef } from '../../lib/terminalRef';
 import { useConfirm } from '../../hooks/useConfirm';
 import {
   SUB_TAB_KEY, viewTabId, parseViewTabId, windowTabId, parseWindowTabId,
@@ -616,9 +617,9 @@ export default function TaskPanel({
   // suffix) — resolve it from `windows` via isSameWindowTarget, the same match
   // resolveWindowContextExtra/buildMiniTab use. Falls back to the encoded (stripped)
   // target when the window isn't found (e.g. briefly, before the first windows fetch).
-  const resolveWindowTabTarget = useCallback((win: TerminalRef): TerminalRef => {
+  const resolveWindowTabTarget = useCallback((win: TerminalRef): { serverName: string; target: string; windowId?: number } => {
     const w = windows.find((x) => x.serverName === win.serverName && isSameWindowTarget(x.tmuxTarget, win.target));
-    return w ? { serverName: w.serverName, target: w.tmuxTarget } : win;
+    return w ? { serverName: w.serverName, target: w.tmuxTarget, windowId: w.id } : win;
   }, [windows]);
 
   const { setFocusedTarget } = useWorkspaceTargets();
@@ -1409,12 +1410,13 @@ export default function TaskPanel({
     }
     const win = parseWindowTabId(tabId);
     if (win) {
-      const { serverName, target } = resolveWindowTabTarget(win);
+      const { serverName, target, windowId } = resolveWindowTabTarget(win);
       return (
         <TerminalContainer
           key={`terminal-${serverName}-${target}`}
           serverName={serverName}
           target={target}
+          terminalRef={windowId !== undefined ? { kind: 'windowId', serverName, windowId, pane: 1 } satisfies LibTerminalRef : undefined}
           taskId={taskData.id}
           allTasks={allTasks}
           sessions={sessionData[serverName]}

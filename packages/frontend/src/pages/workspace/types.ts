@@ -1,4 +1,4 @@
-import type { MuxPaneProcessState, MuxRuntime } from '@azito/shared';
+import type { MuxPaneProcessState, MuxRef, MuxRuntime } from '@azito/shared';
 import type { PhaseConfigEntryLike } from '../../lib/taskPhases';
 
 export type SidebarMode = 'windows' | 'tasks' | 'files' | 'repos' | 'storage' | 'settings';
@@ -24,7 +24,7 @@ export interface Window {
   taskId?: number;
   serverName: string;
   tmuxTarget: string;
-  muxRef?: string;
+  muxRef?: MuxRef;
   label?: string;
   isPrimary: boolean;
   windowType: 'terminal' | 'agent';

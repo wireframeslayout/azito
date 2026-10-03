@@ -9,7 +9,7 @@ import { Spinner } from './ui/Spinner';
 import { useTerminalTheme } from '../hooks/useTerminalTheme';
 import { createOsc52Extractor } from '../utils/osc52';
 import { buildWsUrl } from '../api/wsUrl';
-import { terminalWsParams, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
+import { terminalWsParams, terminalRefFromTabTarget, terminalConnectionKey, type TerminalRef } from '../lib/terminalRef';
 import TerminalBackdrop from './TerminalBackdrop';
 import { TERMINAL_CLOSE } from '@azito/shared';
 import type { PaneUnavailableReason } from '../lib/paneState';
@@ -76,6 +76,9 @@ interface XTermViewProps {
 }
 
 const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView({ serverName, target, terminalRef, onDisconnect, onWindowNotFound, onPaneUnavailable, onMaxRetriesReached, onConnectTimeout }, ref) {
+  // The connect effect must re-run when the ref the connection is built from changes (e.g. a tmux-kind ref used before
+  // sessions arrived becomes a windowId), even when `target` stays the same. A stable string key avoids object identity churn.
+  const connectionKey = terminalConnectionKey(serverName, target, terminalRef);
   const { t } = useTranslation('common');
   const wrapperRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -422,7 +425,7 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
       wsRef.current?.close();
       termRef.current?.dispose();
     };
-  }, [serverName, target]);
+  }, [connectionKey]);
   return (
     <div
       ref={wrapperRef}

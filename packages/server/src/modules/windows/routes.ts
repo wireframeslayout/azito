@@ -1,6 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import type { IWindowRepository } from './Window';
+import type { IWindowRepository, Window } from './Window';
 import { isPrimaryTaskWindow } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
@@ -19,8 +19,9 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
-import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
+import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -57,6 +58,14 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   const labelOrRemoveWindow = (srv: ServerConfig, ref: MuxRef, windowId: number, taskId?: number): Promise<void> =>
     labelAddedWindowOrRemove(driverFor(srv), srv, ref, { windowId, ...(taskId !== undefined ? { taskId } : {}) }, windowRepo);
 
+  // One physical window = one row. The ref is the window's identity (a unique index covers it), the tmux_target is
+  // only a display/legacy key that differs between `ws:w_<id>` (ref-only registration) and `ws:<name>`; so a given
+  // ref decides first and the target is consulted only when no ref was sent or no row carries it.
+  function findExistingWindow(serverName: string, tmuxTarget: string, givenRef: MuxRef | undefined): Window | undefined {
+    return (givenRef ? windowRepo.findByServerAndRef(serverName, givenRef) : undefined)
+      ?? windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+  }
+
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
   }
@@ -90,7 +99,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         try {
           givenRef = parseMuxRef(refJson);
           if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
-          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
+          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
@@ -100,7 +109,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
-      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
       if (existing) {
         if (existing.projectId !== id) {
           windowRepo.update(existing.id, { projectId: id });
@@ -163,7 +172,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const addedIds: number[] = [];
       for (const win of targetSession.windows) {
         const winTarget = `${session}:${win.name}`;
-        const existing = windowRepo.findByServerAndTarget(serverName, winTarget);
+        const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
           if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
           addedIds.push(existing.id);
@@ -223,7 +232,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         try {
           givenRef = parseMuxRef(refJson);
           if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
-          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
+          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
@@ -233,7 +242,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
-      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
       if (existing) {
         // One physical window = one row (migration 068). The Add Window flow registers the
         // window as a project window first and then attaches it here; returning the row

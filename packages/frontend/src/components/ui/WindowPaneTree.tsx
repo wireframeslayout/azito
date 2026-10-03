@@ -10,8 +10,9 @@ import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, Window } from '../../pages/workspace/types';
+import type { MuxRef } from '@azito/shared';
 
-export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: string };
+export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: MuxRef };
 
 type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
 

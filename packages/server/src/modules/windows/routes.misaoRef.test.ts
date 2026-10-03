@@ -12,10 +12,11 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 const MISAO_REF = formatMuxRef({ kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
 const URLS = ['/api/projects/1/windows', '/api/tasks/1/windows'];
 
-async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = false) {
-  const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), create: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
+async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = false, registerMisao = false) {
+  const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined), add: vi.fn(() => 7), create: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
   const muxDriverRegistry = new MuxDriverRegistry({ misaoEnabled });
   muxDriverRegistry.register('tmux', { kind: 'tmux' } as unknown as IMuxClient);
+  if (registerMisao) muxDriverRegistry.register('misao', { kind: 'misao', supportsPaneLabels: false } as unknown as IMuxClient);
   const app = Fastify();
   await app.register(windowsRoutes, {
     windowRepo: windowRepo as unknown as IWindowRepository,
@@ -23,6 +24,7 @@ async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = f
     taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
     serverRepo: { findByName: () => ({ name: 's', muxRuntime }) } as unknown as IServerRepository,
     muxDriverRegistry,
+    sessionCaptureService: { scheduleInitialScan: vi.fn() },
   } as any);
   await app.ready();
   return { app, windowRepo };
@@ -35,6 +37,15 @@ describe('window registration with a misao ref', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'Invalid ref' });
     expect(windowRepo.findByServerAndTarget).not.toHaveBeenCalled();
+  });
+});
+
+describe('window registration with only a misao ref', () => {
+  it.each(URLS)('%s derives tmux_target as <workspace>:<window id> from the ref', async (url) => {
+    const { app, windowRepo } = await buildApp('misao', true, true);
+    const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', ref: MISAO_REF } });
+    expect(res.statusCode).toBe(200);
+    expect(windowRepo.findByServerAndTarget).toHaveBeenCalledWith('s', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
   });
 });
 
