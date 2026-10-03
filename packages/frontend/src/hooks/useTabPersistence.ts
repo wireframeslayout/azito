@@ -1,18 +1,18 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { stripPaneSuffix } from '@azito/shared';
 import { api } from '../api/client';
-import { applyRetargetTab } from '../lib/retargetTab';
+import { applyRetargetTabs } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
 import {
   type TerminalRef,
   terminalTabId,
   parseTerminalTabId,
   terminalRefFromLegacyTarget,
+  findSessionWindowRef,
   terminalRefDisplayLabel,
   terminalRefFromTarget,
   isValidTerminalRef,
-  retargetedTerminalRef,
-} from '../lib/terminalRef';
+  } from '../lib/terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 export type TabType = 'terminal' | 'file' | 'unit' | 'task' | 'task-form' | 'unit-form' | 'sidekick-form' | 'issue' | 'issue-list' | 'server' | 'settings' | 'project-tasks' | 'storage-file' | 'diff' | 'browser';
@@ -192,7 +192,7 @@ export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
       // Rebuilt as a legacy-form tab so migrateTerminalTabs resolves it against the server's
       // sessions (windowId / the driver's own ref) instead of guessing a tmux ref here — a
       // misao window's target has the same `<session>:<window>` shape.
-      const pane = tab.terminalRef?.pane ?? 1;
+      const pane = tab.terminalRef?.pane ?? Number(/\.(\d+)$/.exec(target)?.[1] ?? 1);
       const { terminalRef: _broken, ...rest } = tab;
       const repairedTab: PersistedTab = { ...rest, id: `terminal:${tab.serverName}/${stripPaneSuffix(target)}.${pane}`, label: stripPaneSuffix(target) };
       if (seenIds.has(repairedTab.id)) continue;
@@ -224,23 +224,49 @@ export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
 export function migrateTerminalTabs(
   tabs: PersistedTab[],
   sessionsByServer: Map<string, Session[]>,
-): { tabs: PersistedTab[]; changed: boolean } {
-  let changed = false;
-  const next = tabs.map((tab) => {
-    if (tab.type !== 'terminal' || tab.terminalRef) return tab;
+  isTmuxServer: (serverName: string) => boolean,
+): { tabs: PersistedTab[]; changed: boolean; idMap: Map<string, string> } {
+  const idMap = new Map<string, string>();
+  const migratedIds = new Set<string>();
+  const dropped = new Set<string>();
+  const migrated = new Map<string, PersistedTab>();
+  for (const tab of tabs) {
+    if (tab.type !== 'terminal' || tab.terminalRef) continue;
     const parsed = parseTerminalTabId(tab.id);
-    if (!parsed || parsed.kind !== 'legacy') return tab;
+    if (!parsed || parsed.kind !== 'legacy') continue;
     // Wait until this server's sessions have been fetched: migrating without them would
     // always fall back to the ref form and lose the windowId even for registered windows.
     const sessions = sessionsByServer.get(parsed.serverName);
-    if (!sessions) return tab;
+    if (!sessions) continue;
+    // A window that is not listed can only be given a tmux ref; on any other driver that ref is
+    // wrong (and is what the broken-tab repair hands over), so the tab is dropped.
+    if (findSessionWindowRef(sessions, parsed.target) === null && !isTmuxServer(parsed.serverName)) {
+      dropped.add(tab.id);
+      continue;
+    }
     const ref = terminalRefFromLegacyTarget(parsed.serverName, parsed.target, sessions);
     const terminalRef: TerminalRef = { ...ref, pane: parsed.pane } as TerminalRef;
     const newId = terminalTabId(terminalRef);
-    if (newId !== tab.id) changed = true;
-    return { ...tab, id: newId, terminalRef };
-  });
-  return { tabs: next, changed };
+    migrated.set(tab.id, { ...tab, id: newId, terminalRef });
+    migratedIds.add(tab.id);
+  }
+  if (migrated.size === 0 && dropped.size === 0) return { tabs, changed: false, idMap };
+
+  // Same collision rule as applyRetargetTab: an already-present tab with the new id is kept
+  // (reconnected) and the migrated one is folded into it.
+  const result: PersistedTab[] = [];
+  const bumped = new Set<string>();
+  for (const tab of tabs) {
+    if (dropped.has(tab.id)) continue;
+    const next = migrated.get(tab.id);
+    if (!next) { result.push(tab); continue; }
+    idMap.set(tab.id, next.id);
+    const clash = tabs.some((t) => t.id === next.id && !migratedIds.has(t.id)) || result.some((t) => t.id === next.id);
+    if (clash) bumped.add(next.id);
+    else result.push(next);
+  }
+  const final = result.map((t) => (bumped.has(t.id) ? { ...t, reconnectKey: (t.reconnectKey ?? 0) + 1 } : t));
+  return { tabs: final, changed: true, idMap };
 }
 
 export function useTabPersistence(storageKey?: string) {
@@ -336,15 +362,13 @@ export function useTabPersistence(storageKey?: string) {
    * sessions for their servers are known (Workspace calls this whenever sessionData changes;
    * it is a no-op when nothing is left to migrate). The active tab id follows the rename.
    */
-  const migrateLegacyTerminalTabIds = useCallback((sessionsByServer: Map<string, Session[]>) => {
-    const current = tabsRef.current;
-    const { tabs: migrated, changed } = migrateTerminalTabs(current, sessionsByServer);
-    if (!changed) return;
-    const idMap = new Map<string, string>();
-    current.forEach((t, i) => { if (migrated[i].id !== t.id) idMap.set(t.id, migrated[i].id); });
+  const migrateLegacyTerminalTabIds = useCallback((sessionsByServer: Map<string, Session[]>, isTmuxServer: (serverName: string) => boolean): Map<string, string> => {
+    const { tabs: migrated, changed, idMap } = migrateTerminalTabs(tabsRef.current, sessionsByServer, isTmuxServer);
+    if (!changed) return idMap;
     setTabs(migrated);
     const active = activeTabIdRef.current;
     if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
+    return idMap;
   }, []);
 
   const togglePin = useCallback((tabId: string) => {
@@ -476,13 +500,12 @@ export function useTabPersistence(storageKey?: string) {
     return tab ? tab.label : null;
   }, []);
 
-  /** Returns the id the tab now has, so the caller can update the split layout to match. */
-  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]): string => {
-    const newRef = retargetedTerminalRef(oldTabId, serverName, windowId, sessions);
-    const next = applyRetargetTab({ tabs: tabsRef.current, activeTabId: activeTabIdRef.current }, oldTabId, newRef);
+  /** Returns the id renames, so the caller can update the split layout to match. */
+  const retargetTabs = useCallback((oldTabIds: string[], serverName: string, windowId: number, sessions?: Session[]): { oldId: string; newId: string }[] => {
+    const next = applyRetargetTabs({ tabs: tabsRef.current, activeTabId: activeTabIdRef.current }, oldTabIds, serverName, windowId, sessions);
     setTabs(next.tabs);
     setActiveTabId(next.activeTabId);
-    return terminalTabId(newRef);
+    return next.moves;
   }, []);
 
   /** Points a terminal tab at another pane of the same window; when a tab for that pane is already open, that one is kept. */
@@ -636,5 +659,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

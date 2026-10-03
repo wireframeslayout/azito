@@ -404,7 +404,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   let window: Window;
   let server: ServerConfig;
 
-  async function setup(respawn: WindowRespawnService['respawn']): Promise<FastifyInstance> {
+  async function setup(respawn: WindowRespawnService['respawn'], invalidateSessionCache?: (serverName: string) => void): Promise<FastifyInstance> {
     const windowRepo: Partial<IWindowRepository> = {
       findById: (id: number) => (id === window.id ? window : undefined),
     };
@@ -425,6 +425,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       sessionCaptureService: { scheduleInitialScan: vi.fn() } as unknown as SessionCaptureService,
       supervisorRegistry: makeSupervisorRegistry(),
       windowActivityStatusService: makeWindowActivityStatusService(),
+      invalidateSessionCache,
     });
     await instance.ready();
     return instance;
@@ -433,6 +434,18 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
   beforeEach(() => {
     window = makeWindow();
     server = makeServer();
+  });
+
+  it('drops the server session cache after a successful respawn, and not after a failed one', async () => {
+    const invalidate = vi.fn();
+    app = await setup(vi.fn(async () => ({ tmuxTarget: 'proj:win1' })), invalidate);
+    await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+    expect(invalidate).toHaveBeenCalledWith(server.name);
+
+    const failing = vi.fn();
+    const app2 = await setup(vi.fn(async () => { throw new Error('boom'); }), failing);
+    await app2.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+    expect(failing).not.toHaveBeenCalled();
   });
 
   it('translates ExecutionGatePendingApprovalError into 409 execution_pending_approval (not a generic 500)', async () => {

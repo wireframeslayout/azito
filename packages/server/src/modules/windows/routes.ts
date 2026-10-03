@@ -43,6 +43,8 @@ export interface WindowsRouteOptions {
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
   harnessPrefix?: string;
+  /** Drops the cached GET /sessions list of a server, so a client re-reading it after a respawn sees the new window. */
+  invalidateSessionCache?: (serverName: string) => void;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
 }
 
@@ -434,6 +436,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
         throw err;
       }
+      opts.invalidateSessionCache?.(srv.name);
       notifyWindowsChanged(srv.name);
       return { ok: true, tmuxTarget: result.tmuxTarget, windowId: id };
     },

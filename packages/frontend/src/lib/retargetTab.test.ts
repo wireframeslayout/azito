@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyRetargetTab, findWindowTerminalTab, planWindowReconnect } from './retargetTab';
+import { applyRetargetTab, applyRetargetTabs, findWindowTerminalTabs } from './retargetTab';
 import { retargetedTerminalRef, resolveRespawnedPane, terminalTabId, isValidTerminalRef, type TerminalRef } from './terminalRef';
 import { normalizeLegacyTabs, type PersistedTab } from '../hooks/useTabPersistence';
 import type { Session } from '../pages/workspace/types';
@@ -58,29 +58,38 @@ describe('retarget pane resolution', () => {
   });
 });
 
-describe('findWindowTerminalTab', () => {
-  it('finds a windowId tab on any pane', () => {
-    const t = winTab(9, 2);
-    expect(findWindowTerminalTab([winTab(1), t], 'local', 9, undefined)).toBe(t);
-  });
-  it('finds a ref-form tab through the sessions listing', () => {
-    const t = refTab(2);
-    expect(findWindowTerminalTab([t], 'local', 9, sessions(9, 2))).toBe(t);
-    expect(findWindowTerminalTab([t], 'local', 9, undefined)).toBeUndefined();
+describe('findWindowTerminalTabs', () => {
+  it('finds windowId tabs on every pane, and ref-form tabs through the sessions listing', () => {
+    const a = winTab(9, 1);
+    const b = winTab(9, 2);
+    const c = refTab(3);
+    expect(findWindowTerminalTabs([winTab(1), a, b, c], 'local', 9, sessions(9, 3))).toEqual([a, b, c]);
+    expect(findWindowTerminalTabs([c], 'local', 9, undefined)).toEqual([]);
   });
 });
 
-describe('planWindowReconnect', () => {
-  it('reconnects a windowId tab in place', () => {
+describe('applyRetargetTabs', () => {
+  it('retargets every pane tab of the window, resolving each pane against the new sessions', () => {
+    const p1 = refTab(1);
+    const p3 = refTab(3);
+    const r = applyRetargetTabs({ tabs: [p1, p3], activeTabId: p3.id }, [p1.id, p3.id], 'local', 9, sessions(9, 2));
+    expect(r.tabs.map((t) => t.id)).toEqual(['terminal:local::w9.1']);
+    expect(r.moves).toEqual([{ oldId: p1.id, newId: 'terminal:local::w9.1' }, { oldId: p3.id, newId: 'terminal:local::w9.1' }]);
+    expect(r.activeTabId).toBe('terminal:local::w9.1');
+  });
+
+  it('only reconnects a windowId tab whose pane still exists', () => {
     const t = winTab(9, 2);
-    expect(planWindowReconnect([t], 'local', 9, undefined)).toEqual({ action: 'reconnect', ref: t.terminalRef });
+    const r = applyRetargetTabs({ tabs: [t], activeTabId: t.id }, [t.id], 'local', 9, sessions(9, 2));
+    expect(r.tabs[0]).toMatchObject({ id: t.id, reconnectKey: 1 });
+    expect(r.moves).toEqual([]);
   });
-  it('moves a ref-form tab to windowId form (its ref changes on a misao respawn)', () => {
-    const t = refTab();
-    expect(planWindowReconnect([t], 'local', 9, sessions(9, 1))).toEqual({ action: 'retarget', tabId: t.id });
-  });
-  it('opens pane 1 when no tab shows the window', () => {
-    expect(planWindowReconnect([winTab(1)], 'local', 9, undefined)).toEqual({ action: 'open', ref: { kind: 'windowId', serverName: 'local', windowId: 9, pane: 1 } });
+
+  it('moves a windowId tab to pane 1 when its pane no longer exists', () => {
+    const t = winTab(9, 3);
+    const r = applyRetargetTabs({ tabs: [t], activeTabId: t.id }, [t.id], 'local', 9, sessions(9, 1));
+    expect(r.tabs[0].id).toBe('terminal:local::w9.1');
+    expect(r.moves).toEqual([{ oldId: t.id, newId: 'terminal:local::w9.1' }]);
   });
 });
 

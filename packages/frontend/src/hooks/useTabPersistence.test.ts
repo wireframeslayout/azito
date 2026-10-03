@@ -75,7 +75,7 @@ describe('migrateTerminalTabs — legacy terminal tab ids (stage 5-B)', () => {
 
   it('rewrites a registered window to the windowId form and keeps the pane ordinal', () => {
     const tab = makeTab({ id: 'terminal:local/azito:win--abc.2', type: 'terminal', serverName: 'local', target: 'azito:win--abc.2' });
-    const { tabs, changed } = migrateTerminalTabs([tab], new Map([['local', sessions]]));
+    const { tabs, changed } = migrateTerminalTabs([tab], new Map([['local', sessions]]), () => true);
     expect(changed).toBe(true);
     expect(tabs[0].id).toBe('terminal:local::w695.2');
     expect(tabs[0].terminalRef).toEqual({ kind: 'windowId', serverName: 'local', windowId: 695, pane: 2 });
@@ -83,14 +83,14 @@ describe('migrateTerminalTabs — legacy terminal tab ids (stage 5-B)', () => {
 
   it('falls back to the ref form for a live but unregistered window', () => {
     const tab = makeTab({ id: 'terminal:local/azito:orphan.1', type: 'terminal', serverName: 'local', target: 'azito:orphan.1' });
-    const { tabs } = migrateTerminalTabs([tab], new Map([['local', sessions]]));
+    const { tabs } = migrateTerminalTabs([tab], new Map([['local', sessions]]), () => true);
     expect(tabs[0].terminalRef).toEqual({ kind: 'ref', serverName: 'local', ref: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'orphan' }), pane: 1 });
     expect(tabs[0].id.startsWith('terminal:local::ref:')).toBe(true);
   });
 
   it('leaves a tab untouched while its server\'s sessions are not fetched yet', () => {
     const tab = makeTab({ id: 'terminal:server007/azito:win--x.1', type: 'terminal', serverName: 'server007', target: 'azito:win--x.1' });
-    const { tabs, changed } = migrateTerminalTabs([tab], new Map([['local', sessions]]));
+    const { tabs, changed } = migrateTerminalTabs([tab], new Map([['local', sessions]]), () => true);
     expect(changed).toBe(false);
     expect(tabs[0]).toBe(tab);
   });
@@ -98,7 +98,7 @@ describe('migrateTerminalTabs — legacy terminal tab ids (stage 5-B)', () => {
   it('is a no-op for tabs that already carry a TerminalRef or are not terminals', () => {
     const done = makeTab({ id: 'terminal:local::w695.1', type: 'terminal', serverName: 'local', terminalRef: { kind: 'windowId', serverName: 'local', windowId: 695, pane: 1 } });
     const file = makeTab();
-    const { tabs, changed } = migrateTerminalTabs([done, file], new Map([['local', sessions]]));
+    const { tabs, changed } = migrateTerminalTabs([done, file], new Map([['local', sessions]]), () => true);
     expect(changed).toBe(false);
     expect(tabs[0]).toBe(done);
     expect(tabs[1]).toBe(file);
@@ -131,5 +131,44 @@ describe('normalizeLegacyTabs — broken windowId tabs (rc.6 regression)', () =>
   it('leaves a healthy windowId tab alone', () => {
     const ok = makeTab({ id: 'terminal:server007::w729.1', type: 'terminal', serverName: 'server007', terminalRef: { kind: 'windowId', serverName: 'server007', windowId: 729, pane: 1 } });
     expect(normalizeLegacyTabs([ok])).toEqual([ok]);
+  });
+});
+
+describe('migrateTerminalTabs — id map, collisions and non-tmux servers', () => {
+  const sessions: Session[] = [{
+    name: 'azito',
+    windows: [{ index: 1, name: 'win--abc', ref: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'win--abc' }), windowId: 695, panes: [] }],
+  }] as unknown as Session[];
+  const legacy = (target: string) => makeTab({ id: `terminal:local/${target}`, type: 'terminal', serverName: 'local', target });
+  const healthy = makeTab({ id: 'terminal:local::w695.1', type: 'terminal', serverName: 'local', terminalRef: { kind: 'windowId', serverName: 'local', windowId: 695, pane: 1 } });
+
+  it('returns the old to new id map', () => {
+    const r = migrateTerminalTabs([legacy('azito:win--abc.1')], new Map([['local', sessions]]), () => true);
+    expect([...r.idMap]).toEqual([['terminal:local/azito:win--abc.1', 'terminal:local::w695.1']]);
+  });
+
+  it('keeps the healthy tab and reconnects it when a migrated tab collides with it', () => {
+    const r = migrateTerminalTabs([legacy('azito:win--abc.1'), healthy], new Map([['local', sessions]]), () => true);
+    expect(r.tabs).toHaveLength(1);
+    expect(r.tabs[0]).toMatchObject({ id: 'terminal:local::w695.1', reconnectKey: 1 });
+    expect(r.idMap.get('terminal:local/azito:win--abc.1')).toBe('terminal:local::w695.1');
+  });
+
+  it('drops a tab whose window is not listed on a non-tmux server instead of guessing a tmux ref', () => {
+    const r = migrateTerminalTabs([legacy('s:w_01HZZ.1')], new Map([['local', sessions]]), () => false);
+    expect(r.changed).toBe(true);
+    expect(r.tabs).toHaveLength(0);
+  });
+
+  it('still falls back to a tmux ref on a tmux server', () => {
+    const r = migrateTerminalTabs([legacy('azito:gone.1')], new Map([['local', sessions]]), () => true);
+    expect(r.tabs[0].terminalRef?.kind).toBe('ref');
+  });
+});
+
+describe('normalizeLegacyTabs — repaired pane ordinal', () => {
+  it('takes the pane from the target suffix when the broken ref carries none', () => {
+    const broken = makeTab({ id: 'terminal:local::w[object Object].1', type: 'terminal', serverName: 'local', target: 'azito:win.3' });
+    expect(normalizeLegacyTabs([broken])[0].id).toBe('terminal:local/azito:win.3');
   });
 });

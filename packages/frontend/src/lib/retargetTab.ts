@@ -1,4 +1,4 @@
-import { terminalTabId, terminalRefDisplayLabel, type TerminalRef } from './terminalRef';
+import { terminalTabId, terminalRefDisplayLabel, retargetedTerminalRef, type TerminalRef } from './terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 interface TerminalTabLike {
@@ -40,30 +40,39 @@ export function applyRetargetTab<T extends TerminalTabLike>(state: TabsState<T>,
   };
 }
 
-/** The open terminal tab showing window `windowId` (any pane, windowId or ref form), if any. */
-export function findWindowTerminalTab<T extends TerminalTabLike>(tabs: T[], serverName: string, windowId: number, sessions: Session[] | undefined): T | undefined {
+/**
+ * Re-points every tab in `oldTabIds` at `windowId` (pane resolved against the post-respawn
+ * `sessions`). A tab whose id does not change is only reconnected. `moves` lists the id renames
+ * so the split layout can follow them.
+ */
+export function applyRetargetTabs<T extends TerminalTabLike>(
+  state: TabsState<T>,
+  oldTabIds: string[],
+  serverName: string,
+  windowId: number,
+  sessions: Session[] | undefined,
+): TabsState<T> & { moves: { oldId: string; newId: string }[] } {
+  let current = state;
+  const moves: { oldId: string; newId: string }[] = [];
+  for (const oldId of oldTabIds) {
+    const newRef = retargetedTerminalRef(oldId, serverName, windowId, sessions);
+    const newId = terminalTabId(newRef);
+    if (newId === oldId) {
+      current = { ...current, tabs: current.tabs.map((t) => (t.id === oldId ? { ...t, reconnectKey: (t.reconnectKey ?? 0) + 1 } : t)) };
+    } else {
+      current = applyRetargetTab(current, oldId, newRef);
+      moves.push({ oldId, newId });
+    }
+  }
+  return { ...current, moves };
+}
+
+/** Every open terminal tab showing window `windowId` (any pane, windowId or ref form). */
+export function findWindowTerminalTabs<T extends TerminalTabLike>(tabs: T[], serverName: string, windowId: number, sessions: Session[] | undefined): T[] {
   const windowRef = sessions?.flatMap((s) => s.windows).find((w) => w.windowId === windowId)?.ref;
-  return tabs.find((t) => {
+  return tabs.filter((t) => {
     const r = t.terminalRef;
     if (t.type !== 'terminal' || !r || r.serverName !== serverName) return false;
     return r.kind === 'windowId' ? r.windowId === windowId : r.ref === windowRef;
   });
-}
-
-export type WindowReconnectPlan =
-  | { action: 'reconnect'; ref: TerminalRef }
-  | { action: 'retarget'; tabId: string }
-  | { action: 'open'; ref: TerminalRef };
-
-/**
- * What to do with a respawned window's terminal tab. `tabs` / `sessions` are the pre-respawn
- * view, which is what the tab's ref was built from. A windowId tab only needs a reconnect; a
- * ref-form tab holds the driver's old ref (a misao respawn mints a new one), so it is moved to
- * windowId form; with no tab, pane 1 is opened.
- */
-export function planWindowReconnect<T extends TerminalTabLike>(tabs: T[], serverName: string, windowId: number, sessions: Session[] | undefined): WindowReconnectPlan {
-  const tab = findWindowTerminalTab(tabs, serverName, windowId, sessions);
-  if (!tab?.terminalRef) return { action: 'open', ref: { kind: 'windowId', serverName, windowId, pane: 1 } };
-  if (tab.terminalRef.kind === 'ref') return { action: 'retarget', tabId: tab.id };
-  return { action: 'reconnect', ref: tab.terminalRef };
 }

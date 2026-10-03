@@ -20,7 +20,8 @@ import { useNotificationChannel } from '../hooks/useNotificationChannel';
 import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
-import { planWindowReconnect } from '../lib/retargetTab';
+import { muxKindForRuntime } from '@azito/shared';
+import { findWindowTerminalTabs } from '../lib/retargetTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
@@ -97,7 +98,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab: retargetTabRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -121,14 +122,6 @@ function WorkspaceInner() {
 
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
-
-  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
-  // sessions of their servers are available (per server, so unfetched servers wait).
-  useEffect(() => {
-    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
-    if (byServer.size === 0) return;
-    migrateLegacyTerminalTabIds(byServer);
-  }, [sessionData, migrateLegacyTerminalTabIds]);
 
   // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
   // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
@@ -246,14 +239,33 @@ function WorkspaceInner() {
   const layout = usePaneLayout('workspace-layout', allTabIds);
   // A tab id rename must reach the split layout in the same batch as the tab list, or reconcile()
   // would drop the old id from its pane and re-add the new one to whichever pane has focus.
+  const retargetTabs = useCallback((oldTabIds: string[], serverName: string, windowId: number, sessions?: Session[]) => {
+    for (const { oldId, newId } of retargetTabsRaw(oldTabIds, serverName, windowId, sessions)) layout.replaceTab(oldId, newId);
+  }, [layout.replaceTab, retargetTabsRaw]);
   const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]) => {
-    layout.replaceTab(oldTabId, retargetTabRaw(oldTabId, serverName, windowId, sessions));
-  }, [layout.replaceTab, retargetTabRaw]);
+    retargetTabs([oldTabId], serverName, windowId, sessions);
+  }, [retargetTabs]);
   const retargetTabPane = useCallback((oldTabId: string, pane: number) => {
     const newTabId = retargetTabPaneRaw(oldTabId, pane);
     if (newTabId) layout.replaceTab(oldTabId, newTabId);
   }, [layout.replaceTab, retargetTabPaneRaw]);
   const paneRects = usePaneRects();
+
+  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
+  // sessions of their servers are available (per server, so unfetched servers wait).
+  const isTmuxServer = useCallback((serverName: string) => {
+    const server = servers.find((sv) => sv.name === serverName);
+    return !server || muxKindForRuntime(server.muxRuntime ?? 'system') === 'tmux';
+  }, [servers]);
+  useEffect(() => {
+    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
+    if (byServer.size === 0) return;
+    const idMap = migrateLegacyTerminalTabIds(byServer, isTmuxServer);
+    // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
+    idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionData, migrateLegacyTerminalTabIds]);
+
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
   // Every existing "open a tab" call site funnels through useTabPersistence's
@@ -751,12 +763,14 @@ function WorkspaceInner() {
     reconnectWindow: async (win) => {
       // `tabs` / `sessionData` are the pre-respawn view the tab's ref was built from; the ref
       // itself is re-resolved against a post-respawn session list when it has to be replaced.
-      const plan = planWindowReconnect(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
-      if (plan.action === 'retarget') {
-        retargetTab(plan.tabId, win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
-      } else {
-        connectPane(plan.ref, undefined, { reconnect: true });
+      const open = findWindowTerminalTabs(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
+      if (open.length === 0) {
+        connectPane({ kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 }, undefined, { reconnect: true });
+        return;
       }
+      // Every pane tab of the window follows it: the pane is re-resolved and a ref-form tab
+      // (a misao respawn mints a new ref) moves to windowId form.
+      retargetTabs(open.map((t) => t.id), win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
     },
   });
 
