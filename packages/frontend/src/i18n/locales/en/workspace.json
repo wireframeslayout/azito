@@ -89,6 +89,7 @@
     "adding": "Adding...",
     "server": "Server",
     "serverLabel": "Server:",
+    "serverOffline": "offline",
     "session": "Session",
     "windowName": "Window Name (optional)",
     "windowNamePlaceholder": "e.g. dev",

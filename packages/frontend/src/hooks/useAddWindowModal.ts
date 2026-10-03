@@ -8,6 +8,8 @@ import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import type { TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
+import { useServerStatuses } from './useServerStatuses';
+import { fetchSessionsForServers } from '../lib/fetchServerSessions';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
 export function isInsufficientResources(res: unknown): res is { error: string; resources: ResourceStatus } {
@@ -75,6 +77,7 @@ export function useAddWindowModal(
   const [awTarget, setAwTarget] = useState('');
   const [awLabel, setAwLabel] = useState('');
   const [awSessionData, setAwSessionData] = useState<Record<string, Session[]>>({});
+  const [awOfflineServers, setAwOfflineServers] = useState<string[]>([]);
   const [awSelectedSession, setAwSelectedSession] = useState('');
   const [awNewSession, setAwNewSession] = useState('');
   const [awNewWindowName, setAwNewWindowName] = useState('');
@@ -98,6 +101,8 @@ export function useAddWindowModal(
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { showToast } = useToast();
+  const { statuses } = useServerStatuses();
+  const isServerOffline = useCallback((name: string) => statuses[name]?.status === 'offline', [statuses]);
 
   const agentPresets = useMemo(() => buildAgentPresets(agentDefs, t), [agentDefs, t]);
 
@@ -132,11 +137,9 @@ export function useAddWindowModal(
     const availableServers = effectiveProjectServers.length > 0
       ? servers.filter((s) => effectiveProjectServers.some((ps) => ps.serverName === s.name))
       : servers;
-    const data: Record<string, Session[]> = {};
-    for (const srv of availableServers) {
-      try { const s = await api<Session[]>(`/servers/${srv.name}/sessions`); if (Array.isArray(s)) data[srv.name] = s; } catch {}
-    }
+    const { data, offline } = await fetchSessionsForServers(availableServers, isServerOffline);
     setAwSessionData(data);
+    setAwOfflineServers(offline);
     const firstServer = availableServers[0]?.name || '';
     setAwServer(firstServer);
     setAwTarget(''); setAwLabel(''); setAwMode('new');
@@ -148,7 +151,7 @@ export function useAddWindowModal(
     setAwAgent('none'); setAwAgentModel(''); setAwWorkerModels([]);
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
-  }, [servers, projectServers, project]);
+  }, [servers, projectServers, project, isServerOffline]);
 
   /**
    * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
@@ -176,12 +179,12 @@ export function useAddWindowModal(
     setAwAgentModel('');
     setAwWorkerModels([]);
     setAwSessionData({});
+    setAwOfflineServers([]);
     setAwQuickAddOpen(true);
     setAwQuickAddLoading(true);
 
     void (async () => {
-      const data: Record<string, Session[]> = {};
-      try { const s = await api<Session[]>(`/servers/${serverName}/sessions`); if (Array.isArray(s)) data[serverName] = s; } catch {}
+      const { data, offline } = await fetchSessionsForServers([{ name: serverName }], isServerOffline);
       let models: { id: string; label: string }[] = [];
       if (agent !== 'none') {
         try {
@@ -191,10 +194,11 @@ export function useAddWindowModal(
       }
       if (awQuickAddGenRef.current !== gen) return; // 自分より後の呼び出しがある場合は破棄
       setAwSessionData(data);
+      setAwOfflineServers(offline);
       setAwWorkerModels(models);
       setAwQuickAddLoading(false);
     })();
-  }, [projectServers, project]);
+  }, [projectServers, project, isServerOffline]);
 
   /**
    * クイック追加モーダルを閉じる。世代を進めて、走行中の取得（openQuickAddWindow 内の
@@ -204,6 +208,15 @@ export function useAddWindowModal(
     awQuickAddGenRef.current++;
     setAwQuickAddOpen(false);
   }, []);
+
+  /** 既存ウィンドウ/セッション取り込みモードへ切り替える前に、未取得でオフラインでもないサーバーのセッションを並列取得する。 */
+  const loadMissingSessions = useCallback(async (): Promise<void> => {
+    const missing = servers.filter((s) => !awSessionData[s.name] && !awOfflineServers.includes(s.name));
+    if (missing.length === 0) return;
+    const { data, offline } = await fetchSessionsForServers(missing, isServerOffline);
+    setAwSessionData((prev) => ({ ...prev, ...data }));
+    setAwOfflineServers((prev) => [...new Set([...prev, ...offline])]);
+  }, [servers, awSessionData, awOfflineServers, isServerOffline]);
 
   const getWindowTargets = useCallback((): { value: string; label: string }[] => {
     const sessions = awSessionData[awServer] || [];
@@ -396,6 +409,7 @@ export function useAddWindowModal(
     awTarget,
     awLabel,
     awSessionData,
+    awOfflineServers,
     awSelectedSession,
     awNewSession,
     awNewWindowName,
@@ -422,7 +436,6 @@ export function useAddWindowModal(
     setAwServer,
     setAwTarget,
     setAwLabel,
-    setAwSessionData,
     setAwSelectedSession,
     setAwNewSession,
     setAwNewWindowName,
@@ -439,6 +452,7 @@ export function useAddWindowModal(
     openAddWindow,
     openQuickAddWindow,
     closeQuickAddWindow,
+    loadMissingSessions,
     getWindowTargets,
     handleAddWindow,
   };

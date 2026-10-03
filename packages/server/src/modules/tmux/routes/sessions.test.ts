@@ -10,6 +10,8 @@ import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { TmuxClient as TmuxClientImpl } from '../TmuxClient';
+import { mapAppError } from '../../../app/mapAppError';
+import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -1048,5 +1050,36 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     const res = await app.inject({ method: 'POST', url: `/api/servers/tmux1/mux/windows/${tmuxRef}/panes/open` });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ error: 'mux_operation_unsupported', operation: 'openPaneInWindow' });
+  });
+});
+
+describe('unreachable agent server', () => {
+  it('rethrows AgentUnreachableError from GET /sessions so the app error handler can answer 503', async () => {
+    const srv: ServerConfig = { name: 'srv1', type: 'agent' } as ServerConfig;
+    const tmux: Partial<TmuxClient> = {
+      listSessions: vi.fn(async () => { throw new AgentUnreachableError('srv1', 'refused'); }),
+    };
+    const app = Fastify();
+    app.setErrorHandler((err, _req, reply) => {
+      const mapped = mapAppError(err);
+      if (mapped) return reply.status(mapped.status).send(mapped.body);
+      return reply.status(500).send({ error: (err as Error).message });
+    });
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(srv),
+      tmux: tmux as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo: makeWindowRepo(),
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    await app.ready();
+    try {
+      invalidateSessionCache('srv1');
+      const res = await app.inject({ method: 'GET', url: '/api/servers/srv1/sessions' });
+      expect(res.statusCode).toBe(503);
+      expect(res.json()).toEqual({ error: 'agent_unreachable', server: 'srv1', reason: 'refused' });
+    } finally {
+      await app.close();
+    }
   });
 });

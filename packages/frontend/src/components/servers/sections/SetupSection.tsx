@@ -37,10 +37,30 @@ const INSTALL_COMMANDS: Record<string, { label: string; commands: { os: string; 
 interface SetupSectionProps {
   server: Server;
   installStatus: InstallStatusResponse | null;
+  installStatusError: 'offline' | 'failed' | null;
   refresh: () => void;
 }
 
-export default function SetupSection({ server, installStatus, refresh }: SetupSectionProps) {
+function SetupHeading() {
+  const { t } = useTranslation('servers');
+  return (
+    <h3 style={{
+      fontFamily: 'var(--mono)',
+      fontSize: 'var(--font-xs)',
+      letterSpacing: '.12em',
+      textTransform: 'uppercase',
+      color: 'var(--text-dim)',
+      borderBottom: '1px solid var(--border)',
+      paddingBottom: 6,
+      marginBottom: 'var(--space-4)',
+      marginTop: 0,
+    }}>
+      {t('setup.title')}
+    </h3>
+  );
+}
+
+export default function SetupSection({ server, installStatus, installStatusError, refresh }: SetupSectionProps) {
   const { t } = useTranslation('servers');
   const [installingHarness, setInstallingHarness] = useState(false);
   const [installingAgent, setInstallingAgent] = useState(false);
@@ -139,10 +159,50 @@ export default function SetupSection({ server, installStatus, refresh }: SetupSe
     else showToast('Recommended config applied');
   }, [server.name, showToast]);
 
-  if (!installStatus) return null;
-
   const isRemote = server.type === 'agent';
   const canInstallAgent = isRemote && server.sshHost;
+
+  if (!installStatus) {
+    if (installStatusError === 'failed') {
+      return (
+        <div>
+          <SetupHeading />
+          <p role="alert" style={{ fontSize: 'var(--font-sm)', color: 'var(--danger)', margin: '0 0 var(--space-4)' }}>
+            {t('setup.checkFailedNotice')}
+          </p>
+          <Button size="sm" onClick={handleRecheck} disabled={isRechecking}>
+            {isRechecking ? t('setup.rechecking') : `⟳ ${t('setup.retry')}`}
+          </Button>
+        </div>
+      );
+    }
+    if (installStatusError !== 'offline') return null;
+    // 到達不能: 導入状況は確認できないが、SSH 経由のエージェント導入（復旧手段）だけは出す。
+    return (
+      <div>
+        <SetupHeading />
+        <p role="status" style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', margin: '0 0 var(--space-4)' }}>
+          {t('setup.offlineNotice')}
+        </p>
+        {canInstallAgent && (
+          <StepRow
+            label="Agent Server"
+            item={{ installed: false, detail: t('setup.offline') }}
+            categoryLabel={t('setup.agentLabel')}
+            running={installingAgent}
+            action={
+              <Button size="sm" variant="primary" onClick={handleInstallAgent} disabled={installingAgent}>
+                {installingAgent ? 'Installing...' : 'Install'}
+              </Button>
+            }
+          >
+            <StepLog steps={agentSteps} installing={installingAgent} />
+          </StepRow>
+        )}
+      </div>
+    );
+  }
+
   const showTailscale = !!installStatus.tailscale;
   const showAgent = !!(installStatus.agent || canInstallAgent);
   const showChromium = !!installStatus.chromium;
@@ -175,19 +235,7 @@ export default function SetupSection({ server, installStatus, refresh }: SetupSe
         }
       `}</style>
 
-      <h3 style={{
-        fontFamily: 'var(--mono)',
-        fontSize: 'var(--font-xs)',
-        letterSpacing: '.12em',
-        textTransform: 'uppercase',
-        color: 'var(--text-dim)',
-        borderBottom: '1px solid var(--border)',
-        paddingBottom: 6,
-        marginBottom: 'var(--space-4)',
-        marginTop: 0,
-      }}>
-        {t('setup.title')}
-      </h3>
+      <SetupHeading />
 
       {/* 進捗行 */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
