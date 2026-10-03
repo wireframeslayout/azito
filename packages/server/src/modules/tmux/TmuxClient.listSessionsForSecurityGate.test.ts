@@ -85,7 +85,14 @@ describe('TmuxClient.locatePane', () => {
 
   it('finds the pane and reports its window', async () => {
     const result = await makeClient(async () => ({ stdout: `${found}\n`, stderr: '', code: 0 })).locatePane(srv, handle);
-    expect(result).toEqual({ status: 'found', ref: { kind: 'tmux', workspace: 's', window: 'win' }, ordinal: 1 });
+    expect(result).toEqual({ status: 'found', ref: { kind: 'tmux', workspace: 's', window: 'win' }, ordinal: 1, workspaces: ['s'] });
+  });
+
+  it('collects every session and group name a grouped pane is listed under', async () => {
+    const lines = [['%7', 'A', 'win', '1', 'grp'], ['%7', 'A2', 'win', '1', 'grp'], ['%8', 'B', 'win', '1', 'B']].map((l) => l.join('\t')).join('\n');
+    const result = await makeClient(async () => ({ stdout: lines, stderr: '', code: 0 })).locatePane(srv, handle);
+    expect(result).toMatchObject({ status: 'found', workspaces: expect.arrayContaining(['A', 'A2', 'grp']) });
+    expect(result.status === 'found' && result.workspaces).toHaveLength(3);
   });
 
   it('is absent when the listing does not contain the pane', async () => {

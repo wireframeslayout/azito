@@ -80,9 +80,10 @@ export async function closePaneInWindow(
       throw Object.assign(new Error('Could not verify the pane'), { statusCode: 503 });
     }
     if (location.status === 'absent') return;
-    // A tmux window name is unique only within its session group, and a grouped session reports the group name:
-    // the workspace is compared for misao only (its window id is globally unique anyway).
-    const sameWindow = location.ref.window === ref.window && (ref.kind !== 'misao' || location.ref.workspace === ref.workspace);
+    // tmux: the window name alone is not unique, so the requested session must be one the pane is listed under
+    // (any session of its group). misao: the window id is globally unique, the workspace must match too.
+    const sameWindow = location.ref.window === ref.window
+      && (location.workspaces ? location.workspaces.includes(ref.workspace) : location.ref.workspace === ref.workspace);
     if (!sameWindow) {
       throw Object.assign(new Error('Pane does not belong to this window'), { statusCode: 404 });
     }

@@ -9,7 +9,8 @@ export interface PaneWindowLabels {
 }
 
 export type PaneLocation =
-  | { status: 'found'; ref: MuxRef; ordinal: PaneOrdinal }
+  /** `workspaces` (tmux): every session name and session-group name the pane is listed under (a grouped session lists the same pane once per session). */
+  | { status: 'found'; ref: MuxRef; ordinal: PaneOrdinal; workspaces?: string[] }
   | { status: 'absent' }
   | { status: 'unknown' };
 

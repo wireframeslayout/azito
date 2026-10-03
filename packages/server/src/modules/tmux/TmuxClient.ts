@@ -696,12 +696,13 @@ export class TmuxClient implements IMuxClient {
 
     const lines = result.stdout.trim().split('\n').filter(Boolean);
     const parsed = lines.map(line => {
-      const [paneId, _sessionName, windowName, paneIndex, resolvedSession] = line.split('\t');
-      return { paneId, windowName, paneIndex: parseInt(paneIndex, 10), resolvedSession };
+      const [paneId, sessionName, windowName, paneIndex, resolvedSession] = line.split('\t');
+      return { paneId, sessionName, windowName, paneIndex: parseInt(paneIndex, 10), resolvedSession };
     });
 
     const target = parsed.find(p => p.paneId === (handle as string));
     if (!target) return { status: 'absent' };
+    const workspaces = [...new Set(parsed.filter(p => p.paneId === (handle as string)).flatMap(p => [p.sessionName, p.resolvedSession]))];
 
     const windowKey = `${target.resolvedSession}\t${target.windowName}`;
     const siblings = parsed
@@ -709,7 +710,7 @@ export class TmuxClient implements IMuxClient {
       .sort((a, b) => a.paneIndex - b.paneIndex);
     const ordinal = siblings.findIndex(p => p.paneId === (handle as string)) + 1;
 
-    return { status: 'found', ref: { kind: 'tmux', workspace: target.resolvedSession, window: target.windowName }, ordinal };
+    return { status: 'found', ref: { kind: 'tmux', workspace: target.resolvedSession, window: target.windowName }, ordinal, workspaces };
   }
 
   async probePane(server: ServerConfig, handle: PaneHandle) { return this.checkPaneLiveness(server, handle as string); }

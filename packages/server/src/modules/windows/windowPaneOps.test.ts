@@ -105,6 +105,24 @@ describe('closePaneInWindow with a handle', () => {
     expect(closePane).not.toHaveBeenCalled();
   });
 
+  describe('tmux', () => {
+    const tmuxRef: MuxRef = { kind: 'tmux', workspace: 'A', window: 'bash' };
+    const TMUX_HANDLE = '%5';
+    const tmuxFound = (workspaces: string[], window = 'bash'): PaneLocation => ({ status: 'found', ref: { kind: 'tmux', workspace: workspaces[0], window }, ordinal: 1, workspaces });
+
+    it('refuses a pane of a same-named window in another session with 404', async () => {
+      const { client, closePane } = driver(tmuxFound(['B']));
+      await expect(closePaneInWindow(client, server, tmuxRef, { ordinal: 1, handle: TMUX_HANDLE })).rejects.toMatchObject({ statusCode: 404 });
+      expect(closePane).not.toHaveBeenCalled();
+    });
+
+    it('accepts a grouped session requested under its own name rather than the group name', async () => {
+      const { client, closePane } = driver(tmuxFound(['group1', 'A']));
+      await closePaneInWindow(client, server, tmuxRef, { ordinal: 1, handle: TMUX_HANDLE });
+      expect(closePane).toHaveBeenCalledWith(server, TMUX_HANDLE);
+    });
+  });
+
   it('refuses a malformed handle with 400', async () => {
     const { client } = driver(found);
     await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: '%3' })).rejects.toMatchObject({ statusCode: 400 });
