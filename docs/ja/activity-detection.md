@@ -547,9 +547,14 @@ request`）を返します。
   完了とする: 窓の最新の hook が `stop` で、その時刻が直近の `working` 報告より後のとき、`tier0_mux` の
   idle 行は `completed` で停止し、`refinedBy: tier1_hook_stop` が付く（`decidedBy` は `tier0_mux` のまま）。
   hook の `start` 以降に idle になっても Stop が来ていなければ、Stop の後に再び working になっていれば、
-  完了にならない通常の idle。blocked の画面補正が優先で、blocked なら完了は出ない。Stop は Claude が応答を
-  終えた時点、misao の idle はその後の静止の判定なので、通常は hook → idle の順に届く（idle が先に届いて
-  停止が announce された後の Stop は、遅れて完了へ書き換えない）。hook の無いエージェント（codex 等）は
+  完了にならない通常の idle。blocked の画面補正が優先で、blocked なら完了は出ない。misao は Claude の窓ではタイトルが
+  スピナーから `✳` に変わった瞬間に idle を出す一方、Stop hook は切り離した curl で届くため、idle が Stop より
+  先に届くことがよくある。そこで窓の最新の hook がまだ `start`（Stop 未着）のときは、idle を受けてから短い猶予
+  （`MISAO_STOP_HOOK_GRACE_MS`、4 秒）だけキーを稼働のまま保留して何も announce せず、猶予内に Stop が来れば
+  （blocked 確認の後）`completed` を 1 回だけ announce、猶予切れなら通常の idle として announce する（その後の
+  Stop は完了へ書き換えない）。hook が無い、または既に Stop 済みなら保留せず即時。hook は窓の**第1ペインのもの
+  だけ**を記録する（分割ペインの Claude の start / Stop は無視）。tick 実行中に届いた hook は、その tick の後に
+  もう一度評価される。hook の無いエージェント（codex 等）は
   従来どおり `exited` だけが完了。
 - **hook。** `$TMUX_PANE` が無く `$MISAO_PANE_ID`（`p_` + ULID 26文字）がある場合、3つの hook は
   tmux のフィールドの代わりに `misaoPaneId` を送る。ハブは `PaneHandleResolver` で窓を解決し、

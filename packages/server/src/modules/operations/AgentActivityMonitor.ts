@@ -218,6 +218,14 @@ interface SupervisorState {
 const POLL_INTERVAL_MS = resolveInterval(5_000, 1_500);
 
 /**
+ * How long a misao `idle` whose window's latest hook is still a `start` is held back (the key stays
+ * running, nothing announced) waiting for the Claude Stop hook. misao judges idle the moment the
+ * title leaves the spinner, while the hook is a detached curl, so the Stop often trails the idle by
+ * a moment. When the grace runs out without a Stop the idle is announced as a plain idle.
+ */
+const MISAO_STOP_HOOK_GRACE_MS = 4_000;
+
+/**
  * Number of activity advances (not necessarily consecutive) required, within
  * the trailing START_WINDOW_TICKS window, before a manual candidate is
  * confirmed as running. A single advance is indistinguishable from a tmux
@@ -640,6 +648,8 @@ export class AgentActivityMonitor {
   private tickCounter = 0;
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
+  // A hook signal arrived while a tick was running (that tick would not see it); run once more after it.
+  private rerunAfterTick = false;
 
   private hookMatchedBy = new Map<string, 'muxPaneRef' | 'windowSpec'>();
 
@@ -739,7 +749,9 @@ export class AgentActivityMonitor {
     if (signal.muxPaneRef && this.paneHandleResolver) {
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
-        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event);
+        // Only the window's first pane carries the agent state (see misaoActivityBridge); a hook from
+        // another pane must not stand in for it.
+        if (resolved.ordinal === 1) this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event);
         return;
       }
       if (resolved === undefined) {
@@ -764,7 +776,7 @@ export class AgentActivityMonitor {
       this.hookMatchedBy.set(key, 'windowSpec');
     }
 
-    void this.tick();
+    this.requestTick();
   }
 
   /**
@@ -775,7 +787,7 @@ export class AgentActivityMonitor {
     const key = windowKey(serverName, tmuxTarget);
     this.hookStates.set(key, { status: event === 'start' ? 'running' : 'idle', at: Date.now() });
     this.hookMatchedBy.set(key, 'muxPaneRef');
-    void this.tick();
+    this.requestTick();
   }
 
   /**
@@ -846,6 +858,10 @@ export class AgentActivityMonitor {
     // compared against it (see misaoStopHookCompleted).
     const lastWorkingAt = status === 'working' ? at : this.muxStates.get(key)?.lastWorkingAt;
     this.muxStates.set(key, { status, at, serverName, target, decidedBy: detail?.decidedBy, lastWorkingAt });
+    // An idle held back for a Stop hook (see MISAO_STOP_HOOK_GRACE_MS) needs a tick when the grace ends.
+    if (status === 'idle' && this.hookStates.get(key)?.status === 'running') {
+      setTimeout(() => this.requestTick(), MISAO_STOP_HOOK_GRACE_MS + 50).unref();
+    }
     void this.tick();
   }
 
@@ -902,7 +918,17 @@ export class AgentActivityMonitor {
       console.error('[agent-activity] tick failed:', err instanceof Error ? err.message : err);
     } finally {
       this.ticking = false;
+      if (this.rerunAfterTick) {
+        this.rerunAfterTick = false;
+        void this.tick();
+      }
     }
+  }
+
+  /** Like `tick()`, but a call that lands while a tick is in flight is re-run afterwards instead of being dropped. */
+  private requestTick(): void {
+    if (this.ticking) this.rerunAfterTick = true;
+    else void this.tick();
   }
 
   /**
@@ -1317,8 +1343,27 @@ export class AgentActivityMonitor {
             const muxServer = servers.get(w.serverName);
             // The Stop hook completion is recorded here and dropped again by the screen check
             // below when the pane turns out to be blocked, so blocked keeps priority.
-            const stopConfirmed = !!muxServer && isMisaoServer(muxServer)
-              && this.misaoStopHookCompleted(muxState, this.hookStates.get(key));
+            const isMisaoMux = !!muxServer && isMisaoServer(muxServer);
+            const muxHook = this.hookStates.get(key);
+            if (isMisaoMux && muxState.status === 'idle' && muxHook?.status === 'running'
+              && Date.now() - muxState.at < MISAO_STOP_HOOK_GRACE_MS) {
+              // The turn's Stop hook has not arrived yet: keep the key running (announce nothing) for the grace.
+              decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'working', w.taskId ?? undefined, muxState.at);
+              next.set(key, {
+                serverName: w.serverName,
+                target: w.tmuxTarget,
+                running: true,
+                source: 'manual',
+                operation: false,
+                taskId: w.taskId ?? undefined,
+                label: w.label ?? undefined,
+                projectId: w.projectId ?? undefined,
+                windowId: w.id,
+              });
+              reasons.delete(key);
+              continue;
+            }
+            const stopConfirmed = isMisaoMux && this.misaoStopHookCompleted(muxState, muxHook);
             if (stopConfirmed) reasons.set(key, 'completed');
             decide(key, w.serverName, w.tmuxTarget, 'tier0_mux', 'idle', w.taskId ?? undefined, muxState.at,
               stopConfirmed ? 'tier1_hook_stop' : undefined);

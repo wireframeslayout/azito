@@ -579,10 +579,15 @@ tmux behavior above is unchanged.
   latest `working` report, the `tier0_mux` idle row stops with `completed` and carries
   `refinedBy: tier1_hook_stop` (`decidedBy` stays `tier0_mux`). An idle after a hook `start` with
   no Stop yet, or an idle after the pane went working again following the Stop, is a plain idle.
-  The blocked screen refinement wins: a blocked pane announces no completion. Claude fires Stop
-  when it finishes its turn and misao judges idle after the quiet that follows, so the hook
-  normally arrives first (a Stop that arrives after an idle that already announced the stop does
-  not rewrite it into a completion). Agents without hooks (codex etc.) still complete only on
+  The blocked screen refinement wins: a blocked pane announces no completion. misao reports idle for a Claude window
+  the moment the title leaves the spinner for `✳`, while the Stop hook travels as a detached curl,
+  so the idle often arrives first. When the window's latest hook is still a `start` (no Stop yet),
+  the idle is therefore held back for a short grace (`MISAO_STOP_HOOK_GRACE_MS`, 4s): the key stays
+  running and nothing is announced; a Stop within the grace (after the blocked check) announces
+  `completed` exactly once, and without one the idle is announced as a plain idle (a later Stop
+  does not rewrite it). With no hook, or a Stop already received, nothing is held. Only hooks from
+  the window's **first pane** are recorded (a split pane's Claude start / Stop is ignored), and a
+  hook that lands while a tick is running is evaluated again right after it. Agents without hooks (codex etc.) still complete only on
   `exited`.
 - **Hooks.** With `$TMUX_PANE` absent and `$MISAO_PANE_ID` (`p_` + 26 ULID characters) set, the
   three hook scripts send `misaoPaneId` instead of the tmux fields. The hub resolves the window

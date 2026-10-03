@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { AgentActivityMonitor, parseWindowTarget, findLiveWindow } from './AgentActivityMonitor';
+import type { PaneHandleResolver } from './PaneHandleResolver';
 import type { ProcessActivityProbeEntry } from './AgentActivityMonitor';
 import type { ExecuteTaskUseCase } from '../tasks/execution/ExecuteTaskUseCase';
 import type { IWindowRepository, Window } from '../windows/Window';
@@ -2423,26 +2424,17 @@ describe('AgentActivityMonitor', () => {
 
     describe('Stop hook completion', () => {
       const hook = (event: 'start' | 'stop') => monitor.recordResolvedHookSignal('local', 'azito:agent-1', event);
+      const completions = () => stopPayloads().filter((p) => p.reason === 'completed');
 
-      it('idle after working, then a Stop hook, completes with refinedBy tier1_hook_stop', async () => {
-        arrange();
-        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
-        await drain();
-        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
-        await drain();
-        emit.mockClear();
-        hook('stop');
-        await drain();
-
-        expect(monitor.snapshot()).toEqual([]);
-        expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'idle', decidedBy: 'tier0_mux', refinedBy: 'tier1_hook_stop' }));
+      afterEach(() => {
+        vi.useRealTimers();
       });
 
-      it('a Stop hook followed by idle completes', async () => {
+      it('a Stop hook followed by idle completes at once, exactly one completed announcement', async () => {
         arrange();
-        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
-        await drain();
         hook('start');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
         await drain();
         hook('stop');
         await drain();
@@ -2451,23 +2443,78 @@ describe('AgentActivityMonitor', () => {
         await drain();
 
         expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
-        expect(diagnosticsRow()?.refinedBy).toBe('tier1_hook_stop');
+        expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'idle', decidedBy: 'tier0_mux', refinedBy: 'tier1_hook_stop' }));
       });
 
-      it('idle with only a start hook (no Stop yet) is a plain idle, not a completion', async () => {
+      it('idle first, Stop within the grace: the key is held running, then completed exactly once', async () => {
         arrange();
-        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
-        await drain();
         hook('start');
         await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+        emit.mockClear();
         monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
         await drain();
 
-        expect(stopPayloads()).toEqual([expect.not.objectContaining({ reason: 'completed' })]);
-        expect(diagnosticsRow()?.refinedBy).toBeUndefined();
+        expect(stopPayloads()).toEqual([]);
+        expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true })]);
+
+        hook('stop');
+        await drain();
+
+        expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
+        expect(monitor.snapshot()).toEqual([]);
       });
 
-      it('idle without any hook is a plain idle', async () => {
+      it('a Stop that arrives while a tick is in flight is not dropped', async () => {
+        arrange();
+        hook('start');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+        await drain();
+        emit.mockClear();
+
+        let releaseScreen!: () => void;
+        listSessions.mockImplementationOnce(() => new Promise((r) => {
+          releaseScreen = () => r(makeSessions('azito', 'agent-1', 0, paneActivity, [makePane({ command: 'claude', title: '✳ idle' })]).map((ses) => {
+            ses.windows[0].ref = MISAO_REF;
+            return ses;
+          }));
+        }));
+        const inFlight = monitor.tick();
+        await vi.waitFor(() => expect(releaseScreen).toBeDefined());
+        hook('stop');
+        releaseScreen();
+        await inFlight;
+        await drain();
+
+        expect(completions()).toHaveLength(1);
+      });
+
+      it('idle first and no Stop within the grace is announced as a plain idle, and a later Stop does not upgrade it', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        arrange();
+        hook('start');
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+        await drain();
+        expect(stopPayloads()).toEqual([]);
+
+        vi.advanceTimersByTime(10_000);
+        await monitor.tick();
+        expect(stopPayloads()).toEqual([expect.not.objectContaining({ reason: 'completed' })]);
+        emit.mockClear();
+
+        vi.advanceTimersByTime(10);
+        hook('stop');
+        await drain();
+        expect(completions()).toEqual([]);
+      });
+
+      it('idle without any hook is announced at once as a plain idle', async () => {
         arrange();
         monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
         await drain();
@@ -2487,7 +2534,7 @@ describe('AgentActivityMonitor', () => {
         monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
         await drain();
 
-        expect(stopPayloads()).toEqual([expect.not.objectContaining({ reason: 'completed' })]);
+        expect(completions()).toEqual([]);
         expect(diagnosticsRow()?.refinedBy).toBeUndefined();
       });
 
@@ -2505,6 +2552,32 @@ describe('AgentActivityMonitor', () => {
         expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, status: 'blocked' })]);
         expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'blocked', refinedBy: 'tier2_title' }));
         expect(stopPayloads()).toEqual([]);
+      });
+
+      it('a hook from a pane other than the first is not recorded, so its Stop does not complete the first pane idle', async () => {
+        arrange();
+        const getCached = vi.fn().mockReturnValue({ windowId: 1, ref: MISAO_REF, ordinal: 2, tmuxTarget: 'azito:agent-1' });
+        monitor = new AgentActivityMonitor(
+          { getRunning } as unknown as ExecuteTaskUseCase,
+          { findAll } as unknown as IWindowRepository,
+          mockRegistry(listSessions, screenReads, resolvePane),
+          { findByName } as unknown as IServerRepository,
+          { emit } as unknown as NotificationBus,
+          undefined,
+          undefined,
+          { getCached, warm: vi.fn() } as unknown as PaneHandleResolver,
+        );
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+        monitor.recordHookSignal({ serverName: 'local', sessionName: '', windowIndex: 0, windowName: '', paneIndex: 1, event: 'stop', muxPaneRef: 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXB' });
+        await drain();
+        emit.mockClear();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+        await drain();
+
+        expect(getCached).toHaveBeenCalled();
+        expect(diagnosticsRow()?.hook).toBeUndefined();
+        expect(completions()).toEqual([]);
       });
     });
 
