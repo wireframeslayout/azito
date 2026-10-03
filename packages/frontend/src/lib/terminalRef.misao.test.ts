@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, findSessionWindowRef } from './terminalRef';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, resolveTabTargetRef, findSessionWindowRef } from './terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 const MISAO_REF = '{"kind":"misao","workspace":"azito","window":"w_01M40229BC46M2RPATEBX4JN25"}';
@@ -14,18 +14,25 @@ const sessions: Session[] = [{
 }];
 
 describe('misao windows are never turned into a tmux-kind ref', () => {
+  it('a tab target without sessions waits instead of becoming a tmux ref, and is unresolved once sessions lack the window', () => {
+    expect(resolveTabTargetRef('local-misao', 'azito:unregistered', { muxKind: 'misao' })).toEqual({ status: 'wait' });
+    expect(resolveTabTargetRef('local-misao', 'azito:gone', { muxKind: 'misao', sessions })).toEqual({ status: 'unresolved' });
+    expect(resolveTabTargetRef('local-misao', 'w843.2', {})).toEqual({ status: 'ready', ref: { kind: 'windowId', serverName: 'local-misao', windowId: 843, pane: 2 } });
+    expect(resolveTabTargetRef('local-misao', 'plain', { muxKind: 'misao' })).toEqual({ status: 'none' });
+  });
+
   it('terminalRefFromTarget resolves a registered misao window to its windowId', () => {
-    expect(terminalRefFromTarget('local-misao', 'azito:test-window--nksu', sessions))
+    expect(terminalRefFromTarget('local-misao', 'azito:test-window--nksu', { sessions, muxKind: 'misao' }))
       .toEqual({ kind: 'windowId', serverName: 'local-misao', windowId: 843, pane: 1 });
   });
 
   it('terminalRefFromTarget keeps the server-reported ref for an unregistered misao window', () => {
-    expect(terminalRefFromTarget('local-misao', 'azito:unregistered.2', sessions))
+    expect(terminalRefFromTarget('local-misao', 'azito:unregistered.2', { sessions, muxKind: 'misao' }))
       .toEqual({ kind: 'ref', serverName: 'local-misao', ref: UNREGISTERED_REF, pane: 2 });
   });
 
   it('terminalRefFromTabTarget uses sessions when given', () => {
-    expect(terminalRefFromTabTarget('local-misao', 'azito:test-window--nksu', sessions))
+    expect(terminalRefFromTabTarget('local-misao', 'azito:test-window--nksu', { sessions }))
       .toEqual({ kind: 'windowId', serverName: 'local-misao', windowId: 843, pane: 1 });
   });
 
@@ -36,17 +43,17 @@ describe('misao windows are never turned into a tmux-kind ref', () => {
 });
 
 describe('terminalConnectionKey', () => {
+  const target = 'azito:test-window--nksu';
+  const refFromSessions = terminalRefFromTarget('local-misao', target, { sessions, muxKind: 'misao' });
+
   it('changes when the ref changes from a tmux-kind ref to a windowId although target is the same', () => {
-    const target = 'azito:test-window--nksu';
-    const before = terminalConnectionKey('local-misao', target, terminalRefFromTarget('local-misao', target));
-    const after = terminalConnectionKey('local-misao', target, terminalRefFromTarget('local-misao', target, sessions));
-    expect(after).not.toBe(before);
+    const tmuxRef = terminalRefFromTarget('local-misao', target, { muxKind: 'tmux' });
+    expect(terminalConnectionKey('local-misao', target, refFromSessions ?? undefined)).not.toBe(terminalConnectionKey('local-misao', target, tmuxRef ?? undefined));
   });
 
   it('is stable for an equal ref', () => {
-    const target = 'azito:test-window--nksu';
-    expect(terminalConnectionKey('s', target, terminalRefFromTarget('s', target, sessions)))
-      .toBe(terminalConnectionKey('s', target, terminalRefFromTarget('s', target, sessions)));
+    expect(terminalConnectionKey('s', target, refFromSessions ?? undefined))
+      .toBe(terminalConnectionKey('s', target, terminalRefFromTarget('local-misao', target, { sessions, muxKind: 'misao' }) ?? undefined));
   });
 });
 
@@ -89,10 +96,10 @@ describe('resolveWindowRegistrationRef', () => {
 
 describe('resolveWindowRegistrationRef before sessions arrive (legacy / persisted tab)', () => {
   const target = 'azito:unregistered';
-  // What terminalRefFromTabTarget synthesises from the target while sessions are still missing.
-  const synthesised = terminalRefFromTabTarget('local-misao', target);
+  // A tmux-kind ref a persisted tab may still carry from before the mux kind was honoured.
+  const synthesised = terminalRefFromTabTarget('local-misao', target, { muxKind: 'tmux' });
 
-  it('synthesises a tmux-kind ref, which a misao server must not adopt', () => {
+  it('a tmux-kind ref is not adopted by a misao server', () => {
     expect(synthesised).toMatchObject({ kind: 'ref' });
     expect(resolveWindowRegistrationRef({ muxKind: 'misao', target, terminalRef: synthesised ?? undefined })).toBeNull();
   });

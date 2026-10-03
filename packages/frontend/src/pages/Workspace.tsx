@@ -11,6 +11,7 @@ import { LoadingState, TabBar, Button, EmptyState, IconButton } from '../compone
 import type { TabItem } from '../components/ui';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { useTabPersistence, type PersistedTab } from '../hooks/useTabPersistence';
+import { useTerminalTargetOpener } from '../hooks/useTerminalTargetOpener';
 import { useBrowserKeepalive } from '../hooks/useBrowserKeepalive';
 import { useBrowserGroups } from '../hooks/useBrowserGroups';
 import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
@@ -469,15 +470,19 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }, legacyOpts?: { reconnect?: boolean }) => {
-    const projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
-    if (typeof serverNameOrRef === 'object') {
-      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
-    } else {
-      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId), legacyOpts);
-    }
+  const connectRef = useCallback((ref: TerminalRef, projectId?: number, opts?: { reconnect?: boolean }) => {
+    connectPaneRaw(ref, projectId ?? currentProjectId, opts);
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
+  // A target string is resolved against the server's mux kind / sessions (and waits for them) — never into a tmux ref blindly.
+  const openTerminalTarget = useTerminalTargetOpener({ servers, sessionData, connect: connectRef });
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }) => {
+    if (typeof serverNameOrRef === 'object') {
+      connectRef(serverNameOrRef, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
+    } else {
+      openTerminalTarget({ serverName: serverNameOrRef, target: targetOrProjectId as string }, typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined);
+    }
+  }, [connectRef, openTerminalTarget]);
 
   const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
@@ -497,9 +502,9 @@ function WorkspaceInner() {
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);
   useEffect(() => {
-    setOnOpenInTerminal(connectPane);
+    setOnOpenInTerminal(openTerminalTarget);
     return () => setOnOpenInTerminal(null);
-  }, [connectPane, setOnOpenInTerminal]);
+  }, [openTerminalTarget, setOnOpenInTerminal]);
   // SP端末クイックキーフッター（Issue #69 T3）の右端▦がタブスイッチャーを開けるよう登録する
   // （TerminalContainer は TabContentRenderer 配下の深い位置にあり、mobileTabSwitcherOpen の
   // setter を prop drilling で届けるより WorkspaceTargetsContext 経由の方が既存の

@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
 import type { WindowPaneTreeProps } from '../ui/WindowPaneTree';
-import type { ConnectPaneFn } from '../../lib/terminalRef';
+import type { ConnectPaneFn, TerminalRef } from '../../lib/terminalRef';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { ContextMenuItem } from '../ContextMenu';
@@ -51,7 +51,7 @@ interface WorkspaceSidebarContentProps {
   onCloseMobileSidebar: () => void;
   tabs: PersistedTab[];
   closeTab: (tabId: string) => void;
-  connectPaneRaw: (serverName: string, target: string) => void;
+  connectPaneRaw: (ref: TerminalRef, projectId?: number, opts?: { reconnect?: boolean }) => void;
   openServer: (name: string) => void;
   openBrowser: (serverName: string, groupId?: string) => void;
   browserGroups?: Record<string, BrowserGroupInfo[]>;

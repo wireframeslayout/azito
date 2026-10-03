@@ -21,7 +21,7 @@ import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
-import { resolveTerminalTarget, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
+import { resolveTerminalTarget, resolveTabTargetRef, type TerminalRef } from '../lib/terminalRef';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
@@ -98,10 +98,20 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
   // sessions. Legacy callers (TaskPanel) pass a tmux target and no ref — derive the ref then.
-  const terminalRef = useMemo<TerminalRef | undefined>(
-    () => terminalRefProp ?? terminalRefFromTabTarget(serverName, rawTarget, sessions) ?? undefined,
-    [terminalRefProp, serverName, rawTarget, sessions],
+  const { servers } = useServerStatuses();
+  const serverRuntime = servers.find((s) => s.name === serverName)?.muxRuntime;
+  // Unknown until the server list arrives: registration then waits instead of guessing a mux kind.
+  const muxKind = serverRuntime ? muxKindForRuntime(serverRuntime) : undefined;
+  // A tab with a ref connects by it. Without one (a legacy tab not migrated yet, a task terminal before its window
+  // is known) the target is resolved against sessions: until it can be, nothing connects — a tmux-kind ref guessed
+  // for a misao window would be refused — and when it cannot be on a non-tmux server the window is missing.
+  const tabRef = useMemo(
+    () => (terminalRefProp ? { status: 'ready' as const, ref: terminalRefProp } : resolveTabTargetRef(serverName, rawTarget, { sessions, muxKind })),
+    [terminalRefProp, serverName, rawTarget, sessions, muxKind],
   );
+  const terminalRef = tabRef.status === 'ready' ? tabRef.ref : undefined;
+  const refPending = tabRef.status === 'wait';
+  const refUnresolved = tabRef.status === 'unresolved';
   const target = useMemo(() => {
     if (terminalRef) {
       return resolveTerminalTarget(terminalRef, sessions) ?? rawTarget;
@@ -110,11 +120,8 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   }, [rawTarget, terminalRef, sessions]);
 
   const { t } = useTranslation('common');
-  const { servers } = useServerStatuses();
-  const serverRuntime = servers.find((s) => s.name === serverName)?.muxRuntime;
-  // Unknown until the server list arrives: registration then waits instead of guessing a mux kind.
-  const muxKind = serverRuntime ? muxKindForRuntime(serverRuntime) : undefined;
-  const [windowMissing, setWindowMissing] = useState(false);
+  const [windowMissingState, setWindowMissing] = useState(false);
+  const windowMissing = windowMissingState || refUnresolved;
   const [paneUnavailable, setPaneUnavailable] = useState<PaneUnavailableReason | null>(null);
   const [disconnected, setDisconnected] = useState(false);
   const [connectFailed, setConnectFailed] = useState(false);
@@ -380,7 +387,16 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
           />
         ) : (
           <>
-        {!windowMissing && (
+        {refPending && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--bg)', color: 'var(--text-dim)', fontSize: 'var(--font-base)', zIndex: 6 }}
+          >
+            {t('terminal.connecting')}
+          </div>
+        )}
+        {!windowMissing && !refPending && (
           <XTermView
             key={xtermKey}
             ref={xtermRef}

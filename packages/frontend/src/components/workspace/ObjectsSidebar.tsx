@@ -12,7 +12,8 @@ import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
 import type { WindowPaneTreeProps } from '../ui/WindowPaneTree';
 import { isTerminalTabActive } from '../../lib/windowMatch';
-import { terminalRefFromTarget, muxRefJson, type TerminalRef } from '../../lib/terminalRef';
+import { muxRefJson, type TerminalRef } from '../../lib/terminalRef';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -299,6 +300,7 @@ export default function ObjectsSidebar({
     label: type === 'terminal' ? t('common:labels.terminal') : (agentByType.get(type)?.label ?? type),
   })), [agentByType, t]);
 
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const handlePaneClick = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, muxRef?: string) => {
     if (mobile) {
       try {
@@ -311,13 +313,11 @@ export default function ObjectsSidebar({
         }
       } catch { /* best-effort */ }
     }
-    const ref: TerminalRef = windowId != null
-      ? { kind: 'windowId' as const, serverName, windowId, pane: paneOrdinal ?? 1 }
-      : terminalRefFromTarget(serverName, target);
-    connectPane(ref);
+    if (windowId != null) connectPane({ kind: 'windowId', serverName, windowId, pane: paneOrdinal ?? 1 });
+    else openTerminal({ serverName, target });
     if (windowId != null) onWindowFocus?.(windowId);
     if (mobile) onCloseMobileSidebar();
-  }, [mobile, connectPane, onCloseMobileSidebar, onWindowFocus]);
+  }, [mobile, connectPane, openTerminal, onCloseMobileSidebar, onWindowFocus]);
 
   const handleOpenBrowser = useCallback((serverName: string, groupId?: string) => {
     openBrowser(serverName, groupId);

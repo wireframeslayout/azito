@@ -50,6 +50,8 @@ export interface AppNotification {
   projectId?: number;
   serverName?: string;
   target?: string;
+  /** The window the notification is about, so a misao window opens by id instead of by a tmux-style target. */
+  windowId?: number;
   read: boolean;
   createdAt: number;
 }
