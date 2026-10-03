@@ -1,6 +1,6 @@
 // misao ドライバ用の Playwright `test`。既存の fixtures/test.ts を土台に、worker スコープの
 // `harness` だけを差し替える: 一時ソケットで自前の misao デーモンを立て、そこへ繋ぐハブ
-// （AZITO_EXPERIMENTAL_MISAO=1）を起動する。`app` / 後片付けの auto fixture は test.ts のものをそのまま使う。
+// （MISAO_SOCKET で一時デーモンを指す）を起動する。`app` / 後片付けの auto fixture は test.ts のものをそのまま使う。
 //
 // 既存の tmux 系 spec は fixtures/test.ts を import し続けるので、この差し替えの影響を受けない。
 
