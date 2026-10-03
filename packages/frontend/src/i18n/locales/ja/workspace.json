@@ -230,6 +230,7 @@
     "noTerminalSelected": "ターミナルが選択されていません",
     "sendKeysFailed": "キー送信に失敗しました: {{error}}",
     "browserTabOpened": "{{serverName}} でブラウザタブを開きました",
+    "taskWindowAddFailed": "タスクへの窓の追加に失敗しました: {{error}}",
     "taskProjectFailed": "タスクの所属プロジェクト情報の取得に失敗しました",
     "noUnit": "Unitが割り当てられていません",
     "startExecution": "実行を開始",

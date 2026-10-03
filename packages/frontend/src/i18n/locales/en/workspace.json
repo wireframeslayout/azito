@@ -230,6 +230,7 @@
     "noTerminalSelected": "No terminal selected",
     "sendKeysFailed": "Failed to send keys: {{error}}",
     "browserTabOpened": "Browser tab opened on {{serverName}}",
+    "taskWindowAddFailed": "Failed to add the window to the task: {{error}}",
     "taskProjectFailed": "Failed to get task project info",
     "noUnit": "No Unit assigned",
     "startExecution": "Start Execution",

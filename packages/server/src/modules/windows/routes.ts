@@ -108,6 +108,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
+      if (!givenRef && srv && muxKindForRuntime(srv.muxRuntime) !== 'tmux')
+        return reply.status(400).send({ error: 'ref required for this server' });
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
@@ -241,6 +244,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
+      if (!givenRef && srv && muxKindForRuntime(srv.muxRuntime) !== 'tmux')
+        return reply.status(400).send({ error: 'ref required for this server' });
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
@@ -258,9 +264,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           const label = (body['label'] as string) || undefined;
           const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
-          return { ok: true, id: existing.id, adopted: true };
+          return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
         }
-        return { ok: true, id: existing.id };
+        return { ok: true, id: existing.id, tmuxTarget: existing.tmuxTarget };
       }
 
       if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
@@ -289,7 +295,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId, id);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
       notifyWindowsChanged(serverName);
-      return { ok: true, id: winId };
+      return { ok: true, id: winId, tmuxTarget };
     },
   );
 

@@ -77,3 +77,22 @@ describe('window registration routes share one row per physical misao window (re
     expect(session.json()).toMatchObject({ ok: true, count: 1, ids: [first.json().id] });
   });
 });
+
+describe('registration without a ref on a misao server', () => {
+  it('is rejected with 400 for project and task registration and stores no row', async () => {
+    const { repo, projectId, taskId, post } = await setup();
+    const project = await post(`/api/projects/${projectId}/windows`, { tmux_target: NAMED_TARGET });
+    const task = await post(`/api/tasks/${taskId}/windows`, { tmux_target: NAMED_TARGET });
+    expect(project.statusCode).toBe(400);
+    expect(task.statusCode).toBe(400);
+    expect(repo.findByServerAndTarget('local-misao', NAMED_TARGET)).toBeUndefined();
+  });
+
+  it('task registration by ref reports the row target so the client selects the stored row', async () => {
+    const { projectId, taskId, post } = await setup();
+    await post(`/api/projects/${projectId}/windows/session`, { session: 'azito' });
+    const res = await post(`/api/tasks/${taskId}/windows`, { tmux_target: REF_ONLY_TARGET, ref: formatMuxRef(MISAO_REF) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ adopted: true, tmuxTarget: NAMED_TARGET });
+  });
+});

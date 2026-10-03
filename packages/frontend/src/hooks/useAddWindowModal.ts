@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
-import { resolveWindowRegistrationRef, registeredWindowTerminalRef, type TerminalRef } from '../lib/terminalRef';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, taskWindowRegistration, type TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
 import { useServerStatuses } from './useServerStatuses';
@@ -266,8 +266,11 @@ export function useAddWindowModal(
         const sess = (awSessionData[awServer] || []).find((s) => s.name === awSelectedSession);
         if (sess && sess.windows.length > 0) {
           if (awTaskId != null) {
+            const muxKind = muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime);
             for (const [index, w] of sess.windows.entries()) {
-              await onTaskWindowAdded?.(awTaskId, awServer, `${awSelectedSession}:${w.name}`, w.name, index === 0);
+              const reg = taskWindowRegistration({ muxKind, target: `${awSelectedSession}:${w.name}`, ref: w.ref });
+              if (!reg) throw new Error(`window ref is not resolved for ${awSelectedSession}:${w.name}`);
+              await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
             }
           } else {
             const firstWin = sess.windows[0];
@@ -290,7 +293,13 @@ export function useAddWindowModal(
         if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
         const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
-          await onTaskWindowAdded?.(awTaskId, awServer, awTarget, awLabel.trim(), true);
+          const reg = taskWindowRegistration({
+            muxKind: muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime),
+            target: awTarget,
+            ref: existingRef,
+          });
+          if (!reg) throw new Error(`window ref is not resolved for ${awTarget}`);
+          await onTaskWindowAdded?.(awTaskId, awServer, reg.target, awLabel.trim(), true, reg.ref ? { ref: reg.ref } : undefined);
         } else {
           onConnect?.(registeredWindowTerminalRef(awServer, registered.id), numericProjectId);
         }
@@ -308,11 +317,11 @@ export function useAddWindowModal(
         const serverInfo = servers.find((s) => s.name === awServer);
         const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
         const useMuxRoutes = muxKind !== 'tmux';
-        let createdWindowName: string;
+        let createdTarget: string;
         let createdRef: string | undefined;
         if (useMuxRoutes) {
           if (!sessionExists) {
-            const res = await api<{ ok: boolean; ref: string; windowName: string }>(`/servers/${awServer}/mux/workspaces`, {
+            const res = await api<{ ok: boolean; ref: string; target: string; windowName: string }>(`/servers/${awServer}/mux/workspaces`, {
               method: 'POST',
               body: JSON.stringify({ name: sessionName, windowName: awNewWindowName.trim() || undefined, force }),
             });
@@ -321,10 +330,10 @@ export function useAddWindowModal(
               return;
             }
             if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-            createdWindowName = res.windowName;
+            createdTarget = res.target;
             createdRef = res.ref;
           } else {
-            const res = await api<{ ok: boolean; ref: string; windowName: string }>(`/servers/${awServer}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, {
+            const res = await api<{ ok: boolean; ref: string; target: string; windowName: string }>(`/servers/${awServer}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, {
               method: 'POST',
               body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
             });
@@ -333,7 +342,7 @@ export function useAddWindowModal(
               return;
             }
             if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-            createdWindowName = res.windowName;
+            createdTarget = res.target;
             createdRef = res.ref;
           }
         } else {
@@ -346,7 +355,7 @@ export function useAddWindowModal(
               setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
               return;
             }
-            createdWindowName = res.windowName;
+            createdTarget = `${sessionName}:${res.windowName}`;
           } else {
             const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions/${sessionName}/windows`, {
               method: 'POST',
@@ -356,11 +365,11 @@ export function useAddWindowModal(
               setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
               return;
             }
-            createdWindowName = res.windowName;
+            createdTarget = `${sessionName}:${res.windowName}`;
           }
         }
 
-        const target = `${sessionName}:${createdWindowName}`;
+        const target = createdTarget;
         const label = awLabel.trim() || awNewWindowName.trim() || '';
         let newRef: string | undefined = createdRef;
         if (!newRef) { try { newRef = formatMuxRef(muxRefFromTmuxTarget(target)); } catch { /* keep undefined */ } }

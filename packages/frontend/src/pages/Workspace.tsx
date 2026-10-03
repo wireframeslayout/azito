@@ -785,22 +785,27 @@ function WorkspaceInner() {
     activate: boolean,
     extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; ref?: string },
   ) => {
+    const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
+    if (extra?.ref) body['ref'] = extra.ref;
+    if (extra?.windowType) body['window_type'] = extra.windowType;
+    if (extra?.workerType) body['worker_type'] = extra.workerType;
+    if (extra?.workerModel) body['worker_model'] = extra.workerModel;
+    if (extra?.workingDirectory) body['working_directory'] = extra.workingDirectory;
+    let res: { error?: string; tmuxTarget?: string };
     try {
-      const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
-      if (extra?.ref) body['ref'] = extra.ref;
-      if (extra?.windowType) body['window_type'] = extra.windowType;
-      if (extra?.workerType) body['worker_type'] = extra.workerType;
-      if (extra?.workerModel) body['worker_model'] = extra.workerModel;
-      if (extra?.workingDirectory) body['working_directory'] = extra.workingDirectory;
-      await api(`/tasks/${taskId}/windows`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-    } catch { /* project window was still added */ }
-    if (activate) {
-      selectTaskTerminal(taskId, { serverName, target: tmuxTarget });
+      res = await api<{ error?: string; tmuxTarget?: string }>(`/tasks/${taskId}/windows`, { method: 'POST', body: JSON.stringify(body) });
+    } catch (err) {
+      res = { error: err instanceof Error ? err.message : String(err) };
     }
-  }, []);
+    if (res.error || !res.tmuxTarget) {
+      // The project window was still added; only the task attachment failed.
+      showToast(t('workspace:toast.taskWindowAddFailed', { error: res.error ?? 'missing tmuxTarget' }));
+      return;
+    }
+    if (activate) {
+      selectTaskTerminal(taskId, { serverName, target: res.tmuxTarget });
+    }
+  }, [showToast, t]);
 
   const addWindowModal = useAddWindowModal(id, project, servers, projectServers, refreshWorkspace, data.refreshSessions, connectPane, handleWindowAddedToTask);
 
