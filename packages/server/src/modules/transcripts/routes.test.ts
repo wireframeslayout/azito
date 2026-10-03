@@ -1202,13 +1202,51 @@ describe('window routes: pane handle format follows the window mux kind', () => 
   const misaoWindow = { muxRef: { kind: 'misao', workspace: 'w', window: 'w_01HZX3K9M2N4P5Q6R7S8T9V0WX' } };
   const tmuxWindow = { muxRef: { kind: 'tmux', workspace: 's', window: '0' } };
 
-  it.each([
-    ['window-input', { text: 'hi' }],
-    ['window-signal', { action: 'interrupt' }],
-  ])('%s accepts a misao pane handle for a misao window', async (route, extra) => {
-    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never } });
-    const res = await app.inject({ method: 'POST', url: `/api/transcripts/${route}`, payload: { windowId: 42, paneId: MISAO_PANE, ...extra } });
+  it('window-input passes a misao pane handle through to the service', async () => {
+    const sendInput = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never }, windowInputService: { sendInput } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: MISAO_PANE, text: 'hi' } });
     expect(res.statusCode).toBe(200);
+    expect(sendInput).toHaveBeenCalledWith(42, MISAO_PANE, 'hi');
+    await app.close();
+  });
+
+  it('window-signal passes a misao pane handle, action and key through to the service', async () => {
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never }, windowInputService: { sendSignal } });
+    const interrupt = await app.inject({ method: 'POST', url: '/api/transcripts/window-signal', payload: { windowId: 42, paneId: MISAO_PANE, action: 'interrupt' } });
+    const key = await app.inject({ method: 'POST', url: '/api/transcripts/window-signal', payload: { windowId: 42, paneId: MISAO_PANE, action: 'key', key: 'Escape' } });
+    expect(interrupt.statusCode).toBe(200);
+    expect(key.statusCode).toBe(200);
+    expect(sendSignal).toHaveBeenNthCalledWith(1, 42, MISAO_PANE, 'interrupt', undefined);
+    expect(sendSignal).toHaveBeenNthCalledWith(2, 42, MISAO_PANE, 'key', 'Escape');
+    await app.close();
+  });
+
+  it('window-signal answer resolves the misao pane ordinal, consumes the question and sends the digit', async () => {
+    const resolvePaneIndex = vi.fn(async () => 2);
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const consumePendingAnswer = vi.fn(() => true);
+    const app = buildApp([buildClaudeSource()], {}, {
+      windowRepo: { findById: () => misaoWindow as never },
+      windowInputService: { resolvePaneIndex, sendSignal },
+      interactionMonitor: { consumePendingAnswer },
+    });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-signal', payload: { windowId: 42, paneId: MISAO_PANE, action: 'answer', key: '2', openedAt: 1000 } });
+    expect(res.statusCode).toBe(200);
+    expect(resolvePaneIndex).toHaveBeenCalledWith(42, MISAO_PANE);
+    expect(consumePendingAnswer).toHaveBeenCalledWith(42, { openedAt: 1000, optionNumber: 2, paneIndex: 2 });
+    expect(sendSignal).toHaveBeenCalledWith(42, MISAO_PANE, 'key', '2');
+    await app.close();
+  });
+
+  it('treats a window row without muxRef as tmux: %n passes, p_... is rejected', async () => {
+    const legacy = { muxRef: undefined };
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => legacy as never } });
+    const ok = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: '%5', text: 'hi' } });
+    const bad = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: MISAO_PANE, text: 'hi' } });
+    expect(ok.statusCode).toBe(200);
+    expect(bad.statusCode).toBe(400);
     await app.close();
   });
 

@@ -1,7 +1,6 @@
-import type { PaneHandle } from '@azito/shared';
+import { isPaneHandleLike, muxKindForRuntime, type MuxDriverKind, type PaneHandle } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
-import type { IWindowRepository } from '../windows/Window';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { InterruptKey } from './sources/profiles';
 
@@ -39,36 +38,42 @@ export class TranscriptPaneService {
     private readonly claudeTranscriptSource: TranscriptSource,
     private readonly muxDriverRegistry: MuxDriverRegistry,
     private readonly serverRepo: IServerRepository,
-    private readonly windowRepo: IWindowRepository,
   ) {}
 
-  /**
-   * セッションの cwd に対応するローカルサーバーの ServerConfig を取得する。トランスクリプトは
-   * ローカルの `~/.claude/projects` 配下のみを走査するため、対応するペインも常にローカル。
-   * local が1台ならそれを使う。複数ある場合は、workingDirectory が cwd と一致する窓行を持つ
-   * local サーバーを使う（一致なし・cwd 不明は決められないのでエラー）。local が無いのは構成
-   * 不整合としてエラーにする（フォールバックで空候補を返して隠さない）。
-   */
-  private findLocalServer(cwd: string | null): ServerConfig {
+  /** ローカルサーバー（type=local）の一覧。無いのは構成不整合としてエラーにする。 */
+  private listLocalServers(): ServerConfig[] {
     const locals = this.serverRepo.findAll().filter((s) => s.type === 'local');
     if (locals.length === 0) throw new Error('No local server is configured');
-    if (locals.length === 1) return locals[0];
+    return locals;
+  }
 
-    const matched = cwd === null ? undefined : this.windowRepo.findAll().find(
-      (w) => w.workingDirectory === cwd && locals.some((s) => s.name === w.serverName),
-    );
-    const server = matched && locals.find((s) => s.name === matched.serverName);
-    if (!server) throw new Error('Cannot determine which local server holds the session: no window matches its cwd');
-    return server;
+  /**
+   * ローカルサーバーを mux 種別ごとに 1 台へ絞る（tmux の local は同じ tmux を見るため先頭 1 台で
+   * 足りる。misao の local とは別のデーモンを見る）。
+   */
+  private listLocalServersByKind(): ServerConfig[] {
+    const byKind = new Map<MuxDriverKind, ServerConfig>();
+    for (const server of this.listLocalServers()) {
+      const kind = muxKindForRuntime(server.muxRuntime);
+      if (!byKind.has(kind)) byKind.set(kind, server);
+    }
+    return [...byKind.values()];
+  }
+
+  /** handle の形式と同じ mux 種別のローカルサーバーを返す。該当が無ければ undefined。 */
+  private findLocalServerForHandle(handle: PaneHandle): ServerConfig | undefined {
+    return this.listLocalServersByKind().find((s) => isPaneHandleLike(handle, muxKindForRuntime(s.muxRuntime)));
   }
 
   async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return null;
 
-    const server = this.findLocalServer(meta.cwd);
-    const driver = this.muxDriverRegistry.resolve(server);
-    const allPanes = await driver.listAllPanes(server);
+    const allPanes = (
+      await Promise.all(
+        this.listLocalServersByKind().map((server) => this.muxDriverRegistry.resolve(server).listAllPanes(server)),
+      )
+    ).flat();
     const panes: PaneCandidate[] = allPanes.map((pane) => ({
       paneId: pane.paneId,
       sessionName: pane.sessionName,
@@ -87,7 +92,8 @@ export class TranscriptPaneService {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
-    const server = this.findLocalServer(meta.cwd);
+    const server = this.findLocalServerForHandle(handle);
+    if (!server) return 'pane_not_found';
     const driver = this.muxDriverRegistry.resolve(server);
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';
@@ -108,7 +114,8 @@ export class TranscriptPaneService {
     const meta = source.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
-    const server = this.findLocalServer(meta.cwd);
+    const server = this.findLocalServerForHandle(handle);
+    if (!server) return 'pane_not_found';
     const driver = this.muxDriverRegistry.resolve(server);
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';
