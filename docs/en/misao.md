@@ -1,13 +1,13 @@
-# misao runtime (experimental)
+# misao runtime
 
 misao (操) is a headless pane server for AI coding agents. Instead of tmux, it can host the
-windows and panes of a local server. This is an **experimental feature** and is available only
-with `AZITO_EXPERIMENTAL_MISAO=1`. On a hub without the flag, the API, the UI, and all behavior
-are unchanged.
+windows and panes of a local server. The hub always registers the misao driver and each server picks its
+"default terminal" (misao or tmux). The hub starts even when no daemon is running; that server is then
+reported as unable to connect.
 
 It applies to **local servers only** (it cannot be selected for agent / SSH servers).
 
-## Enabling it
+## Getting started
 
 ### 1. Install and start misao
 
@@ -30,31 +30,25 @@ You can check that it is up from a terminal:
 misao status
 ```
 
-### 2. Start the hub with the flag
-
-Add `AZITO_EXPERIMENTAL_MISAO=1` to the hub's environment and restart it.
-
-| How you run it | Where to set it |
-|---|---|
-| Source checkout (`npm run dev`) | `packages/server/.env` |
-| Release build (systemd / launchd) | `~/.azito/hub/.env` |
-
-```bash
-echo 'AZITO_EXPERIMENTAL_MISAO=1' >> packages/server/.env
-```
+### 2. Check where the hub connects
 
 The hub connects to `~/.misao/misao.sock` by default. To use a daemon on another socket, set
 `MISAO_SOCKET=<absolute socket path>` in **the hub's environment** (the socket path must be at most 107 bytes).
-The hub and the `misao` command must see the same socket.
+The hub and the `misao` command must see the same socket. Set it in `packages/server/.env` for a source checkout
+(`npm run dev`), or in `~/.azito/hub/.env` for a release build (systemd / launchd).
 
 ### 3. Switch in the server settings
 
 1. Open the `local` server from Servers and press Edit on the Overview.
-2. In "tmux runtime" choose **misao (experimental)** and save.
-3. When the Overview shows `misao (experimental)` under "mux runtime" with a "Connected" chip, you are done.
+2. In "Default terminal" choose **misao** and save ("tmux executable" is the setting for when you use tmux: System or Managed).
+3. When the Overview shows `misao` under "Default terminal" with a "Connected" chip, you are done.
 
 Windows that already exist in tmux are not migrated to misao; windows you create afterwards are
-misao panes. To go back, choose system or managed in the same dialog.
+misao panes. To go back, choose tmux under "Default terminal" in the same dialog.
+
+The API takes `defaultMux` (`"misao"` / `"tmux"`; misao is local servers only) and `muxRuntime`
+(`"system"` / `"managed"`, the tmux executable) separately on `PUT /api/servers/:name`.
+The former `muxRuntime: "misao"` is still accepted as `defaultMux: "misao"` for compatibility, and will be removed in the next release.
 
 ## When it cannot connect
 
@@ -64,10 +58,6 @@ the hub cannot reach the daemon.
 - Run `misao status` to check that the daemon is running.
 - Check that `MISAO_SOCKET` in the hub's environment (or `~/.misao/misao.sock` when unset) is the daemon's socket.
 - The hub reconnects automatically when the daemon comes back.
-
-If it shows "This runtime is only available with AZITO_EXPERIMENTAL_MISAO=1", you opened a misao
-server on a hub where the flag is off. Enable the flag, or switch the runtime back to system or
-managed from Edit.
 
 ## Stopped panes and empty windows
 
@@ -98,4 +88,4 @@ managed from Edit.
   [activity detection reference](./activity-detection.md) for details.
 - tmux-specific operations such as pane zoom, saving and applying layouts, and setting pane titles are not supported.
 - Restarting the daemon loses the pane processes (only metadata remains, shown as `stopped`).
-- misao on agent / SSH servers, choosing it in the Add Server dialog, and the managed tmux install flow are out of scope.
+- misao on agent / SSH servers, choosing it in the Add Server dialog, and the managed tmux install flow are out of scope. Choosing misao or tmux per window is future work.

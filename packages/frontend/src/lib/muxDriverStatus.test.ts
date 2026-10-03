@@ -6,9 +6,8 @@ describe('parseMuxDriverStatus', () => {
     expect(parseMuxDriverStatus({ runtime: 'misao', kind: 'misao', driverAvailable: true, caps: {} })).toBe('ok');
   });
 
-  it('maps daemon_unreachable and misao_disabled', () => {
+  it('maps daemon_unreachable', () => {
     expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'daemon_unreachable' })).toBe('unreachable');
-    expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'misao_disabled' })).toBe('disabled');
   });
 
   it('maps protocol_incompatible so the operator sees the cause, not just "cannot connect"', () => {

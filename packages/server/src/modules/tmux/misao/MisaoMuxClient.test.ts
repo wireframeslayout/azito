@@ -12,7 +12,7 @@ import { WindowInputService } from '../../transcripts/WindowInputService';
 import type { IWindowRepository, Window } from '../../windows/Window';
 import type { IServerRepository } from '../../servers/Server';
 
-const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const HUB_ENV = { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' };
 /** What every misao pane gets from hubPaneEnv on a non-isolated local server. */
 const HUB_PANE_ENV = { AZITO_URL: 'http://127.0.0.1:3001', AZITO_WEBHOOK_TOKEN: 'wh-token' };
@@ -474,7 +474,7 @@ describe('MisaoMuxClient writes', () => {
 });
 
 describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () => {
-  const isolated = { name: 'local', type: 'local', muxRuntime: 'misao', isolationIntent: true } as ServerConfig;
+  const isolated = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system', isolationIntent: true } as ServerConfig;
 
   it('gives every pane-creating call AZITO_URL and the webhook token as ephemeralEnv, never as persisted env', async () => {
     const { daemon, client } = setup();
@@ -536,8 +536,8 @@ describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () =
   // The rule must be identical to TmuxClient's: capture the `-e` args tmux is given for the same server and
   // compare them to what misao puts in the pane's env, for isolated and non-isolated servers.
   it.each([
-    ['non-isolated local', { name: 'local', type: 'local', muxRuntime: 'misao' }],
-    ['isolated local', { name: 'local', type: 'local', muxRuntime: 'misao', isolationIntent: true }],
+    ['non-isolated local', { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' }],
+    ['isolated local', { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system', isolationIntent: true }],
   ])('passes the same env as TmuxClient for a %s server', async (_label, cfg) => {
     const srv = cfg as ServerConfig;
     const extraEnv = { AZITO_UI_TOKEN: srv.isolationIntent ? '' : 'ui-secret' };
@@ -648,7 +648,7 @@ describe('MisaoMuxClient behind WindowInputService', () => {
     const pane = daemon.addPane(w);
     const otherPane = daemon.addPane(other);
     const isPaneInMode = vi.spyOn(client, 'isPaneInModeByHandle');
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', client);
     const window = { id: 5, serverName: 'local', tmuxTarget: '', muxRef: refOf('proj', w), workerType: null } as unknown as Window;
     const service = new WindowInputService(

@@ -1,4 +1,4 @@
-import { muxKindForRuntime, type PaneHandle } from '@azito/shared';
+import { type PaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../../tmux/IMuxClient';
 import type { WorkerInputService } from '../WorkerInputService';
 import type { WorkerWaiter } from '../WorkerWaiter';
@@ -66,7 +66,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
-    const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, muxKindForRuntime(ctx.server.muxRuntime))
+    const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.server.defaultMux)
       ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
           server: ctx.server,
           target: ctx.supervisorTarget,

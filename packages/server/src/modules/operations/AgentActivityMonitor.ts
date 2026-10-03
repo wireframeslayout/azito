@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, muxKindForRuntime, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef } from '@azito/shared';
+import { windowKey, asPaneHandle, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { resolveInterval } from '../../shared/testIntervals';
@@ -349,7 +349,7 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
 }
 
 function isMisaoServer(server: ServerConfig): boolean {
-  return muxKindForRuntime(server.muxRuntime) === 'misao';
+  return server.defaultMux === 'misao';
 }
 
 /**
@@ -1207,7 +1207,7 @@ export class AgentActivityMonitor {
       if (!w.muxRef) return true;
       const server = servers.get(w.serverName);
       if (!server) return true;
-      const serverKind = muxKindForRuntime(server.muxRuntime ?? 'system');
+      const serverKind = server.defaultMux;
       if (w.muxRef.kind !== serverKind) {
         const key = windowKey(w.serverName, w.tmuxTarget);
         reasons.set(key, 'offline');

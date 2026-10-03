@@ -22,7 +22,6 @@ import { useNotificationChannel } from '../hooks/useNotificationChannel';
 import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
-import { muxKindForRuntime } from '@azito/shared';
 import { findWindowTerminalTabs } from '../lib/retargetTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
@@ -262,7 +261,7 @@ function WorkspaceInner() {
   // undefined while the server list has not reported this server yet (migration then waits).
   const isTmuxServer = useCallback((serverName: string): boolean | undefined => {
     const server = servers.find((sv) => sv.name === serverName);
-    return server ? muxKindForRuntime(server.muxRuntime ?? 'system') === 'tmux' : undefined;
+    return server ? server.defaultMux === 'tmux' : undefined;
   }, [servers]);
   useEffect(() => {
     const byServer = new Map<string, Session[]>(Object.entries(sessionData));

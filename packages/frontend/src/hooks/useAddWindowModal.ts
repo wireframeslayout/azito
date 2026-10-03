@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api } from '../api/client';
-import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { resolveWindowRegistrationRef, registeredWindowTerminalRef, taskWindowRegistration, type TerminalRef } from '../lib/terminalRef';
@@ -260,7 +260,7 @@ export function useAddWindowModal(
     setAddWindowLoading(true);
     const effectiveProjectId = awEffectiveProjectId || projectId;
     const numericProjectId = effectiveProjectId ? parseInt(effectiveProjectId, 10) : undefined;
-    const muxKind = muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime);
+    const muxKind = servers.find((s) => s.name === awServer)?.defaultMux ?? 'tmux';
     // The window is already registered on the project when the task attachment fails; surface it instead of rejecting.
     const failTaskWindow = (err: unknown): void => {
       console.error('task window add failed', err);

@@ -17,7 +17,7 @@ import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
-const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
 const isolatedServer = { ...server, isolationIntent: true } as ServerConfig;
 // The daemon builds a child's env from its own env, so credentials it holds are inherited unless the hub blanks them.
@@ -217,7 +217,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
   });
 
   it('delivers input to registered windows through WindowInputService, and only to their own panes', async () => {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', client);
     const window = { id: 7, serverName: 'local', tmuxTarget: '', muxRef: ref1, workerType: null } as unknown as Window;
     const service = new WindowInputService(

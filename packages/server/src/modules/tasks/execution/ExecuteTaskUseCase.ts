@@ -53,7 +53,7 @@ import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { muxKindForRuntime, type MuxRef, type PaneHandle } from '@azito/shared';
+import { type MuxRef, type PaneHandle } from '@azito/shared';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
 import { isSameWindow, taskWindowRef, windowRefOf } from '../../tmux/windowIdentity';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
@@ -1393,7 +1393,7 @@ export class ExecuteTaskUseCase {
         }
       }
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
-      if (shouldSupervise(server.type, windowType, muxKindForRuntime(server.muxRuntime))) {
+      if (shouldSupervise(server.type, windowType, server.defaultMux)) {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
       const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
@@ -1906,7 +1906,7 @@ export class ExecuteTaskUseCase {
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
         const primaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
         const followUpWindowType = primaryWin?.windowType ?? 'terminal';
-        if (shouldSupervise(server.type, followUpWindowType, muxKindForRuntime(server.muxRuntime))) {
+        if (shouldSupervise(server.type, followUpWindowType, server.defaultMux)) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }
         try {

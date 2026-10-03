@@ -19,7 +19,7 @@ import { PaneHandleResolver } from './PaneHandleResolver';
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const SOCKET_BYTES_MAX = 107;
-const SERVER = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const SERVER = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 
 /** A selection prompt claude's screen rules read as blocked (see the unit tests of AgentActivityMonitor). */
 const BLOCKED_SCREEN = '  1. Yes\n  2. No\n  Enter to select · Esc to cancel';
@@ -120,7 +120,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
     const driver = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange: () => {}, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', driver, () => connection.availability());
     await connection.start();
     await connection.request('workspace.create', { name: 'azact' });

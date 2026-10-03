@@ -5,7 +5,7 @@ import { WorkerWaiter } from './WorkerWaiter';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import type { ServerConfig } from '../../servers/Server';
 
-const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const handle = asPaneHandle('p_1');
 
 class FakeStream extends EventEmitter {

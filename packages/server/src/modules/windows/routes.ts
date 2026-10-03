@@ -19,7 +19,7 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
-import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
@@ -59,7 +59,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   const driverFor = (srv: ServerConfig): IMuxClient => opts.muxDriverRegistry.resolve(srv);
   const muxUnavailableBody = (srv: ServerConfig): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
     const availability = opts.muxDriverRegistry.availability(srv);
-    return availability.available ? null : { error: 'mux_driver_unavailable', kind: muxKindForRuntime(srv.muxRuntime), reason: availability.reason };
+    return availability.available ? null : { error: 'mux_driver_unavailable', kind: srv.defaultMux, reason: availability.reason };
   };
 
   // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
@@ -115,7 +115,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
-      if (!givenRef && srv && muxKindForRuntime(srv.muxRuntime) !== 'tmux')
+      if (!givenRef && srv && srv.defaultMux !== 'tmux')
         return reply.status(400).send({ error: 'ref required for this server' });
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
@@ -251,7 +251,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
-      if (!givenRef && srv && muxKindForRuntime(srv.muxRuntime) !== 'tmux')
+      if (!givenRef && srv && srv.defaultMux !== 'tmux')
         return reply.status(400).send({ error: 'ref required for this server' });
       const unavailable = srv ? muxUnavailableBody(srv) : null;
       if (unavailable) return reply.status(400).send(unavailable);
@@ -397,7 +397,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
       }
 
-      const supervised = shouldSupervise(srv.type, win.windowType, muxKindForRuntime(srv.muxRuntime));
+      const supervised = shouldSupervise(srv.type, win.windowType, srv.defaultMux);
       const paneHandle = await driverFor(srv).resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
@@ -540,7 +540,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const win = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       const srv = serverRepo.findByName(serverName);
-      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType, muxKindForRuntime(srv.muxRuntime));
+      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType, srv.defaultMux);
 
       const entry = supervisorRegistry
         .snapshot()

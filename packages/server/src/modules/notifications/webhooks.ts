@@ -7,8 +7,7 @@ import type { ResolvedWindow } from '../operations/PaneHandleResolver';
 
 /**
  * Hook signals from a misao pane, which has no tmux coordinates and identifies itself by its pane id
- * (`$MISAO_PANE_ID`, sent as `misaoPaneId`). Injected only when AZITO_EXPERIMENTAL_MISAO is on; without it
- * the field is ignored and the tmux fields stay required.
+ * (`$MISAO_PANE_ID`, sent as `misaoPaneId`). Takes effect only when the body carries no tmux fields.
  */
 export interface MisaoWebhookOptions {
   /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
@@ -22,7 +21,7 @@ export interface WebhookRouteOptions {
   recordAgentActivity: (signal: AgentHookSignal) => void;
   /** v1 only ever receives event: 'open' — see InteractionMonitor's doc comment. */
   recordInteractionSignal: (signal: InteractionSignal) => void;
-  misao?: MisaoWebhookOptions;
+  misao: MisaoWebhookOptions;
 }
 
 interface HookSignalBody {
@@ -35,11 +34,11 @@ interface HookSignalBody {
 }
 
 /**
- * The misao pane id a hook body carries instead of tmux coordinates: `undefined` when this is a tmux signal
- * (or misao is off), `null` when the field is present but is not a misao pane id.
+ * The misao pane id a hook body carries instead of tmux coordinates: `undefined` when this is a tmux signal,
+ * `null` when the field is present but is not a misao pane id.
  */
-function readMisaoPaneId(body: HookSignalBody, misaoEnabled: boolean): string | null | undefined {
-  if (!misaoEnabled || body.misaoPaneId === undefined) return undefined;
+function readMisaoPaneId(body: HookSignalBody): string | null | undefined {
+  if (body.misaoPaneId === undefined) return undefined;
   const hasTmuxFields = [body.sessionName, body.windowIndex, body.windowName, body.paneIndex].some((v) => v !== undefined);
   if (hasTmuxFields) return undefined;
   return typeof body.misaoPaneId === 'string' && isPaneHandleLike(body.misaoPaneId, 'misao') ? body.misaoPaneId : null;
@@ -154,8 +153,8 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       misaoPaneId?: unknown;
     };
 
-    const misaoPaneId = readMisaoPaneId(body, misao !== undefined);
-    if (misao && misaoPaneId !== undefined) {
+    const misaoPaneId = readMisaoPaneId(body);
+    if (misaoPaneId !== undefined) {
       if (typeof body.serverName !== 'string' || body.serverName === '') {
         return reply.status(400).send({ error: 'serverName required' });
       }
@@ -234,8 +233,8 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       misaoPaneId?: unknown;
     };
 
-    const misaoPaneId = readMisaoPaneId(body, misao !== undefined);
-    if (misao && misaoPaneId !== undefined) {
+    const misaoPaneId = readMisaoPaneId(body);
+    if (misaoPaneId !== undefined) {
       if (typeof body.serverName !== 'string' || body.serverName === '') {
         return reply.status(400).send({ error: 'serverName required' });
       }

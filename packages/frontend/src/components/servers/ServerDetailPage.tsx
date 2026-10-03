@@ -38,7 +38,6 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
     loading, error, refresh,
   } = useServerDetail(serverName);
   const mgmt = useServerEditForm();
-  const { misaoEnabled } = useHealth();
 
   const activeSection: ServerSectionId = section && VALID_SECTIONS.has(section)
     ? section as ServerSectionId
@@ -112,7 +111,6 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               isolationCleanupReport={isolationCleanupReport}
               isolationCleanupReportUnavailable={isolationCleanupReportUnavailable}
               muxDriverStatus={muxDriverStatus}
-              misaoEnabled={misaoEnabled}
               refresh={refresh}
               onEdit={() => mgmt.openEditModal(server)}
             />
@@ -146,6 +144,8 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
       onTokenChange={mgmt.setEditToken}
       muxRuntime={mgmt.editMuxRuntime}
       onMuxRuntimeChange={mgmt.setEditMuxRuntime}
+      defaultMux={mgmt.editDefaultMux}
+      onDefaultMuxChange={mgmt.setEditDefaultMux}
       isolationIntent={mgmt.editIsolationIntent}
       onIsolationIntentChange={mgmt.setEditIsolationIntent}
     />

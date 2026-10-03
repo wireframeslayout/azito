@@ -21,7 +21,7 @@ const SOCKET_BYTES_MAX = 107;
 const WORKSPACE = 'wrs-ws';
 const DISPLAY_NAME = 'task-7--ab12';
 const server = {
-  name: 'misao-it', type: 'local', muxRuntime: 'misao', host: null, agentPort: null, agentToken: null, agentVersion: null,
+  name: 'misao-it', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system', host: null, agentPort: null, agentToken: null, agentVersion: null,
   sshHost: null, sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
   isolationCleanupReport: null, createdAt: '2026-01-01T00:00:00Z',
 } as ServerConfig;
@@ -67,7 +67,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
     driver = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange: vi.fn(), log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
     await connection.start();
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', driver, () => connection.availability());
 
     // A sleeping task window: its misao window was closed when it went to sleep, the row still names the old id.

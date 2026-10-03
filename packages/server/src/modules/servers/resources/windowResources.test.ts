@@ -3,7 +3,7 @@ import { measureWindowResources } from './windowResources';
 import type { ServerConfig } from '../Server';
 import { formatMuxRef, type MuxRef } from '@azito/shared';
 
-const server = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
+const server = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
 
 function ref(session: string, window: string): MuxRef {
   return { kind: 'tmux', workspace: session, window };
@@ -94,7 +94,7 @@ describe('measureWindowResources', () => {
     const t = makeTransport({ stdout: '100 1 1024\n200 100 1024', code: 0 });
     const m = makeMux([{ ref: misaoRef, pid: 100 }]);
 
-    const result = await measureWindowResources(t, m, { ...server, muxRuntime: 'misao' } as ServerConfig);
+    const result = await measureWindowResources(t, m, { ...server, defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig);
 
     expect(result).toEqual([{ target: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', ref: formatMuxRef(misaoRef), rssBytes: 2048 * 1024 }]);
   });

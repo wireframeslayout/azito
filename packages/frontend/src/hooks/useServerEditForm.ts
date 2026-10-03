@@ -3,9 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../api/client';
 import type { Server } from './useServerManagement';
 import { useToast } from './useToast';
-import type { MuxRuntime } from '@azito/shared';
-import { editableMuxRuntime, muxRuntimeOptions } from '../lib/muxRuntimeForm';
-import { useHealth } from './useHealth';
+import type { MuxDriverKind, MuxRuntime } from '@azito/shared';
+import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
 
 // ServerDetailPage の編集モーダル専用フック。useServerManagement は全サーバーの
 // セッション取得 + 60sポーリング + イベント購読を伴うため、編集フォーム状態と
@@ -17,6 +16,7 @@ export function useServerEditForm() {
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
   const [editMuxRuntime, setEditMuxRuntime] = useState<MuxRuntime>('system');
+  const [editDefaultMux, setEditDefaultMux] = useState<MuxDriverKind>('tmux');
   // Issue #29 review (3rd pass), Important finding 4: isolationIntent had no
   // UI — the only way to declare a server isolated was a raw PUT. Mirrors
   // the other edit* fields: seeded from the server row on open, sent back
@@ -25,7 +25,6 @@ export function useServerEditForm() {
   const [editIsolationIntent, setEditIsolationIntent] = useState(false);
   const { showToast } = useToast();
   const { t } = useTranslation('servers');
-  const { misaoEnabled } = useHealth();
 
   const openEditModal = useCallback((srv: Server) => {
     setEditServer(srv);
@@ -33,16 +32,17 @@ export function useServerEditForm() {
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime, muxRuntimeOptions(srv.type, misaoEnabled, srv.muxRuntime)));
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
+    setEditDefaultMux(editableDefaultMux(srv.defaultMux, defaultMuxOptions(srv.type)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
-  }, [misaoEnabled]);
+  }, []);
 
   // 成功時のみ true を返す。呼び出し元はこれを見て、バリデーション失敗/APIエラー時に
   // refresh を走らせないようにする。
   const handleEditServer = useCallback(async (): Promise<boolean> => {
     if (!editServer) return false;
-    // A local server has no connection settings to edit; only its mux runtime can change.
-    const body: Record<string, unknown> = { muxRuntime: editMuxRuntime };
+    // A local server has no connection settings to edit; only its mux settings can change.
+    const body: Record<string, unknown> = { muxRuntime: editMuxRuntime, defaultMux: editDefaultMux };
     if (editServer.type !== 'local') {
       if (!editHost.trim()) { showToast('Host is required'); return false; }
       if (!editPort.trim()) { showToast('Port is required'); return false; }
@@ -105,7 +105,7 @@ export function useServerEditForm() {
     else if (res.isolationCleanup === 'skipped') showToast(t('overview.isolationCleanupToastSkipped'));
     setEditServer(null);
     return true;
-  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, showToast, t]);
+  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editDefaultMux, editIsolationIntent, showToast, t]);
 
   return {
     editServer, setEditServer,
@@ -114,6 +114,7 @@ export function useServerEditForm() {
     editPort, setEditPort,
     editToken, setEditToken,
     editMuxRuntime, setEditMuxRuntime,
+    editDefaultMux, setEditDefaultMux,
     editIsolationIntent, setEditIsolationIntent,
     openEditModal,
     handleEditServer,

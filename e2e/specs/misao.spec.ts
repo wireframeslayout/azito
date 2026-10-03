@@ -1,8 +1,8 @@
-// misao ドライバ（実験的）の主要導線を、LLM を一切起動せずに検証する。
+// misao ドライバの主要導線を、LLM を一切起動せずに検証する。
 //
 // 構成: 一時ソケットで自前の misao デーモンを起動し（fixtures/misaoDaemon.ts）、そこへ繋ぐハブ
-// （AZITO_EXPERIMENTAL_MISAO=1）を立てる（fixtures/misaoTest.ts）。常駐デーモンや tmux の
-// 既定ソケットには触れない。シナリオは前のシナリオの状態（misao runtime への切替・登録した窓）に
+// （MISAO_SOCKET で一時デーモンを指す）を立てる（fixtures/misaoTest.ts）。常駐デーモンや tmux の
+// 既定ソケットには触れない。シナリオは前のシナリオの状態（既定のターミナル方式の切替・登録した窓）に
 // 依存するため直列で流し、最後に「デーモン断」を検証する。
 //
 // misao のビルド成果物（MISAO_CLI、既定 ~/workspace/misao/packages/cli/dist/main.js）が無い環境では
@@ -51,6 +51,7 @@ function finishedRow(page: Page, windowId: number): Locator {
 }
 
 interface ServerDetail {
+  defaultMux: string;
   muxRuntime: string;
   mux: { runtime: string; kind: string; driverAvailable: boolean; reason?: string };
 }
@@ -68,28 +69,27 @@ test.describe('misao ドライバ', () => {
     projectId = await harness.createProject('E2E misao');
   });
 
-  test('設定: local サーバーの mux runtime を misao へ切り替えられる', async ({ app, harness }) => {
-    const health = await harness.api<{ experimentalMisao?: boolean }>('/health');
-    expect(health.experimentalMisao).toBe(true);
-
+  test('設定: local サーバーの既定のターミナル方式を misao へ切り替えられる', async ({ app, harness }) => {
     await app.goto(`${harness.baseUrl}/servers/local`);
     await app.getByRole('button', { name: /編集/ }).click();
-    // local の編集フォームは mux runtime だけ（接続情報の欄は出ない）。
-    // （Modal は dialog ロールを持たず label も select に紐付かないため、misao の option で特定する。）
-    const runtimeSelect = app.locator('select', { has: app.locator('option[value="misao"]') });
-    await expect(runtimeSelect.locator('option')).toHaveText(['システム tmux', 'AZITO 管理の tmux', 'misao（実験的）']);
-    await runtimeSelect.selectOption('misao');
-    await expect(app.getByText(/misao デーモンへ切り替えます/)).toBeVisible();
+    // local の編集フォームは 2 項目だけ（接続情報の欄は出ない）: 既定のターミナル方式と tmux の実行ファイル。
+    // （Modal は dialog ロールを持たず label も select に紐付かないため、option で特定する。）
+    const defaultMuxSelect = app.locator('select', { has: app.locator('option[value="misao"]') });
+    await expect(defaultMuxSelect.locator('option')).toHaveText(['misao', 'tmux']);
+    const runtimeSelect = app.locator('select', { has: app.locator('option[value="managed"]') });
+    await expect(runtimeSelect.locator('option')).toHaveText(['システム', '管理版']);
+    await defaultMuxSelect.selectOption('misao');
+    await expect(app.getByText(/ターミナル方式を misao デーモンへ切り替えます/)).toBeVisible();
     await app.getByRole('button', { name: '保存' }).click();
 
-    // 概要に runtime と接続状態が出る。接続できているので「接続できません」は出ない。
-    const runtimeRow = app.getByText(/^misao（実験的）/);
-    await expect(runtimeRow).toBeVisible();
+    // 概要に既定のターミナル方式と接続状態が出る。接続できているので「接続できません」は出ない。
+    await expect(app.getByText('既定のターミナル方式')).toBeVisible();
     await expect(app.getByText('接続中', { exact: true })).toBeVisible();
     await expect(app.getByText(/misao に接続できません/)).toHaveCount(0);
 
     const detail = await harness.api<ServerDetail>('/servers/local');
-    expect(detail.muxRuntime).toBe('misao');
+    expect(detail.defaultMux).toBe('misao');
+    expect(detail.muxRuntime).toBe('system');
     expect(detail.mux).toMatchObject({ kind: 'misao', driverAvailable: true });
   });
 

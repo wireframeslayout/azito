@@ -16,7 +16,7 @@ import type { ServerConfig } from '../../servers/Server';
 // buildEnvForNewWindow() returns; this test drives real tmux to confirm the
 // `-e KEY=''` override this class emits actually masks a session-level value
 // in the pane a task worker runs in — the property the fix depends on.
-const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
+const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
 const SESSION = `azito-test-env-leak-${process.pid}-${Date.now()}`;
 
 function tmux(...args: string[]): string {
@@ -77,7 +77,7 @@ describe('TaskPaneEnvironmentService x real tmux: session-env leak', () => {
     const { env } = paneEnvService.buildEnvForNewWindow(task, LOCAL_SERVER);
     expect(env.AZITO_UI_TOKEN).toBe('');
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1');
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', { muxAvailability: () => ({ available: true }) });
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     const { windowName } = await tmuxClient.createWindow(LOCAL_SERVER, SESSION, 'task-window', { exactName: true, extraEnv: env });
     const target = `${SESSION}:${windowName}`;

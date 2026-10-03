@@ -93,7 +93,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
     createdAt: '2026-06-16T00:00:00Z',
     ...overrides,
   };

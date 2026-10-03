@@ -520,10 +520,10 @@ request`）を返します。
 `e2e/specs/smoke.spec.ts`。misao 窓（§13）は `e2e/specs/misao.spec.ts`（一時ソケットの自前デーモンを使用）が
 `pane.state` 由来の稼働行と、プロセス終了による完了行を検証する。
 
-## 13. misao 窓（`AZITO_EXPERIMENTAL_MISAO=1`）
+## 13. misao 窓
 
-マルチプレクサ種別が `misao` の local サーバーは tmux ではなく misao デーモンが担う。以下はすべて
-フラグオンのときだけ存在し、オフでは何も生成されず、これまでの tmux の挙動は変わらない。
+既定のマルチプレクサ（`servers.default_mux`）が `misao` の local サーバーは tmux ではなく misao デーモンが担う。
+tmux のサーバーでは以下は何も生成されず、これまでの tmux の挙動は変わらない。
 
 - **supervisor なし。** `shouldSupervise(serverType, windowType, muxKind)` は misao 窓で false になり、
   `tui-supervisor` は起動しない。`azs` も `$MISAO_PANE_ID` があって `$TMUX_PANE` が無いペインでは

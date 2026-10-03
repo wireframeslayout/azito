@@ -15,7 +15,7 @@ function makeOpts(overrides: Partial<FileBrowseRouteOptions> = {}): FileBrowseRo
       findAll: vi.fn(() => []),
       findByName: vi.fn((name: string) => (name === 'local'
         ? { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-            sshHost: null, muxRuntime: 'system' as const, sshHostFingerprint: null,
+            sshHost: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, sshHostFingerprint: null,
             isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' }
         : undefined)),
       create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(),

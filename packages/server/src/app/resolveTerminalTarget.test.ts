@@ -8,8 +8,8 @@ const TMUX_REF: MuxRef = { kind: 'tmux', workspace: 'sess', window: 'win' };
 const MISAO_REF: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' };
 
 const servers: Record<string, ServerConfig> = {
-  tmuxsrv: { name: 'tmuxsrv', muxRuntime: 'system' } as ServerConfig,
-  misaosrv: { name: 'misaosrv', muxRuntime: 'misao' } as ServerConfig,
+  tmuxsrv: { name: 'tmuxsrv', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
+  misaosrv: { name: 'misaosrv', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig,
 };
 const windows: Record<number, Window> = {
   7: { id: 7, serverName: 'tmuxsrv', tmuxTarget: 'sess:win', muxRef: TMUX_REF } as Window,

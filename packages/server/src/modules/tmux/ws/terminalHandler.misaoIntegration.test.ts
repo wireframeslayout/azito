@@ -16,7 +16,7 @@ import { handleTerminalConnection } from './terminalHandler';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
-const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
 const transportFactory = { getTransport: () => { throw new Error('tmux transport must not be used'); } } as unknown as TransportFactory;
 
@@ -85,7 +85,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 
     const sdk = await import('@misao/sdk');
-    registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry = new MuxDriverRegistry();
     const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
     connection = handle.connection;
     driver = handle.driver;

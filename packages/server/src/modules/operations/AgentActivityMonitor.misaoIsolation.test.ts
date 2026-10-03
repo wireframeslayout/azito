@@ -18,8 +18,8 @@ function makeWindow(overrides: Partial<Window>): Window {
   };
 }
 
-function server(name: string, muxRuntime: ServerConfig['muxRuntime']): ServerConfig {
-  return { name, type: 'local', muxRuntime } as ServerConfig;
+function server(name: string, defaultMux: ServerConfig['defaultMux']): ServerConfig {
+  return { name, type: 'local', defaultMux, muxRuntime: 'system' } as ServerConfig;
 }
 
 describe('AgentActivityMonitor with a misao server whose driver is unavailable', () => {
@@ -29,10 +29,10 @@ describe('AgentActivityMonitor with a misao server whose driver is unavailable',
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const listWorkspaces = vi.fn().mockResolvedValue([]);
-    const registry = new MuxDriverRegistry({ misaoEnabled: false });
+    const registry = new MuxDriverRegistry();
     registry.register('tmux', { kind: 'tmux', listWorkspaces, captureScreen: vi.fn() } as unknown as IMuxClient);
 
-    const servers: Record<string, ServerConfig> = { local: server('local', 'system'), misao1: server('misao1', 'misao') };
+    const servers: Record<string, ServerConfig> = { local: server('local', 'tmux'), misao1: server('misao1', 'misao') };
     const emit = vi.fn();
     const monitor = new AgentActivityMonitor(
       { getRunning: () => ({ 5: [{ taskId: 10, target: 'azito:task-10', serverName: 'local' }] }) } as unknown as ExecuteTaskUseCase,
@@ -58,6 +58,6 @@ describe('AgentActivityMonitor with a misao server whose driver is unavailable',
     expect(listWorkspaces).not.toHaveBeenCalledWith(servers.misao1);
     const misaoWarnings = warn.mock.calls.filter((c) => String(c[0]).includes('misao1'));
     expect(misaoWarnings).toHaveLength(1);
-    expect(String(misaoWarnings[0][0])).toContain('misao_disabled');
+    expect(String(misaoWarnings[0][0])).toContain('driver_not_registered');
   });
 });

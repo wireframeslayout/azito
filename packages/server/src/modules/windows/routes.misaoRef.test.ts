@@ -12,9 +12,9 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 const MISAO_REF = formatMuxRef({ kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
 const URLS = ['/api/projects/1/windows', '/api/tasks/1/windows'];
 
-async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = false, registerMisao = false) {
+async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = false) {
   const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined), add: vi.fn(() => 7), create: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
-  const muxDriverRegistry = new MuxDriverRegistry({ misaoEnabled });
+  const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', { kind: 'tmux' } as unknown as IMuxClient);
   if (registerMisao) muxDriverRegistry.register('misao', { kind: 'misao', supportsPaneLabels: false } as unknown as IMuxClient);
   const app = Fastify();
@@ -22,7 +22,7 @@ async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = f
     windowRepo: windowRepo as unknown as IWindowRepository,
     projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
     taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
-    serverRepo: { findByName: () => ({ name: 's', muxRuntime }) } as unknown as IServerRepository,
+    serverRepo: { findByName: () => ({ name: 's', defaultMux }) } as unknown as IServerRepository,
     muxDriverRegistry,
     sessionCaptureService: { scheduleInitialScan: vi.fn() },
   } as any);
@@ -32,7 +32,7 @@ async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = f
 
 describe('window registration with a misao ref', () => {
   it.each(URLS)('%s rejects a misao ref on a tmux server even with tmux_target', async (url) => {
-    const { app, windowRepo } = await buildApp('system');
+    const { app, windowRepo } = await buildApp('tmux');
     const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', tmux_target: 'a:b', ref: MISAO_REF } });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'Invalid ref' });
@@ -42,7 +42,7 @@ describe('window registration with a misao ref', () => {
 
 describe('window registration with only a misao ref', () => {
   it.each(URLS)('%s derives tmux_target as <workspace>:<window id> from the ref', async (url) => {
-    const { app, windowRepo } = await buildApp('misao', true, true);
+    const { app, windowRepo } = await buildApp('misao', true);
     const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', ref: MISAO_REF } });
     expect(res.statusCode).toBe(200);
     expect(windowRepo.findByServerAndTarget).toHaveBeenCalledWith('s', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
@@ -50,10 +50,11 @@ describe('window registration with only a misao ref', () => {
 });
 
 describe('window registration on a server whose mux driver is unavailable', () => {
-  it.each(URLS.flatMap((url) => [[url, false, 'misao_disabled'], [url, true, 'driver_not_registered']] as const))(
-    '%s rejects without writing a window row (misaoEnabled=%s)',
-    async (url, misaoEnabled, reason) => {
-      const { app, windowRepo } = await buildApp('misao', misaoEnabled);
+  it.each(URLS)(
+    '%s rejects without writing a window row',
+    async (url) => {
+      const reason = 'driver_not_registered';
+      const { app, windowRepo } = await buildApp('misao');
       const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', tmux_target: 'a:b', ref: MISAO_REF } });
       expect(res.statusCode).toBe(400);
       expect(res.json()).toEqual({ error: 'mux_driver_unavailable', kind: 'misao', reason });

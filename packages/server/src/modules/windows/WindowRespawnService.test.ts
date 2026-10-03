@@ -52,7 +52,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -2221,11 +2221,11 @@ describe('WindowRespawnService — misao window identity', () => {
       result: { stdout: '', stderr: '', code: 0 },
       windowName: baseName,
     }));
-    built.serverRepo.findByName.mockImplementation(() => makeServer({ muxRuntime: 'misao' }));
+    built.serverRepo.findByName.mockImplementation(() => makeServer({ defaultMux: 'misao' as const, muxRuntime: 'system' }));
     return { ...built, driver };
   }
 
-  const server = makeServer({ muxRuntime: 'misao' });
+  const server = makeServer({ defaultMux: 'misao' as const, muxRuntime: 'system' });
 
   it('kills the live old window by its id, re-opens it under its display name, and points the row and the task at the new id', async () => {
     const win = makeWindow({ id: 7, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: 'task-5--ab12' });

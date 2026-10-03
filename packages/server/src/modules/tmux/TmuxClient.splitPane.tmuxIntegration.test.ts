@@ -16,7 +16,7 @@ import type { ServerConfig } from '../servers/Server';
 // beyond the first silently inherited whatever the session carried (e.g. an
 // operator's own AZITO_UI_TOKEN) instead of the task's scoped
 // AZITO_TASK_TOKEN.
-const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
+const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
 const SESSION = `azito-test-split-env-${process.pid}-${Date.now()}`;
 
 function tmux(...args: string[]): string {
@@ -52,7 +52,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     const target = `${SESSION}:w1`;
     await waitForPane(target, (text) => text.trim().length > 0);
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1');
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', { muxAvailability: () => ({ available: true }) });
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     await tmuxClient.splitPane(LOCAL_SERVER, target, 'v');
 
@@ -71,7 +71,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     const target = `${SESSION}:w1`;
     await waitForPane(target, (text) => text.trim().length > 0);
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1');
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', { muxAvailability: () => ({ available: true }) });
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     // Same masking env TaskPaneEnvironmentService.buildEnvForNewWindow emits
     // in scoped-auth mode: an explicit empty override plus the task token.

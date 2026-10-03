@@ -1,14 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { formatMuxRef, parseMuxRef, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, isPaneHandleLike, isPaneHandle, type MuxRef } from './mux';
+import { formatMuxRef, parseMuxRef, tmuxTargetFromMuxRef, windowKeyForRef, isPaneHandleLike, isPaneHandle, type MuxRef } from './mux';
 
 const WINDOW_ID = 'w_01J8ZK3M5N7P9Q2R4S6T8V0WXY';
 const PANE_ID = 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXY';
 
 describe('misao MuxRef', () => {
-  it('maps the misao runtime to the misao kind', () => {
-    expect(muxKindForRuntime('misao')).toBe('misao');
-  });
-
   it('round-trips a misao ref', () => {
     const ref: MuxRef = { kind: 'misao', workspace: 'ws', window: WINDOW_ID };
     expect(parseMuxRef(formatMuxRef(ref))).toEqual(ref);

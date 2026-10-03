@@ -1,4 +1,3 @@
-import { muxKindForRuntime } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
@@ -20,10 +19,33 @@ export interface MisaoRuntimeInput {
   shell: string;
 }
 
-/** Loads the ESM-only SDK and resolves the daemon socket. Called only when AZITO_EXPERIMENTAL_MISAO is on. */
+/** Loads the ESM-only SDK and resolves the daemon socket. Does not touch the daemon: it may be absent. */
 export async function resolveMisaoRuntime({ env, homeDir, shell }: MisaoRuntimeInput): Promise<MisaoRuntime> {
   const sdk = await import('@misao/sdk');
   return { sdk, socketPath: sdk.resolveSocketPath({ env, homeDir }), shell };
+}
+
+/** Socket used when the configured one is unusable: nothing listens there, so the driver reports `daemon_unreachable`. */
+const UNUSABLE_SOCKET_PATH = '/nonexistent/misao.sock';
+
+/**
+ * `resolveMisaoRuntime` for the composition root. A socket setting the OS cannot bind (relative path, over 107 bytes)
+ * must not stop a hub that uses no misao server: it is logged and the driver is left pointing at an unreachable socket.
+ * With a misao server registered the error propagates (fail fast), since that server could never work.
+ */
+export async function resolveMisaoRuntimeForHub(
+  input: MisaoRuntimeInput,
+  hasMisaoServers: boolean,
+  log: { warn(message: string): void },
+): Promise<MisaoRuntime> {
+  try {
+    return await resolveMisaoRuntime(input);
+  } catch (err) {
+    if (hasMisaoServers) throw err;
+    log.warn(`[misao] the misao socket setting is unusable, so the misao driver stays unavailable (daemon_unreachable): ${err instanceof Error ? err.message : String(err)}`);
+    const sdk = await import('@misao/sdk');
+    return { sdk, socketPath: UNUSABLE_SOCKET_PATH, shell: input.shell };
+  }
 }
 
 export interface MisaoHandle {
@@ -53,8 +75,8 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
 }
 
 /** Servers the misao driver serves: local servers running the misao mux. */
-export function selectLocalMisaoServers<T extends Pick<ServerConfig, 'muxRuntime' | 'type'>>(servers: T[]): T[] {
-  return servers.filter((s) => muxKindForRuntime(s.muxRuntime) === 'misao' && s.type === 'local');
+export function selectLocalMisaoServers<T extends Pick<ServerConfig, 'defaultMux' | 'type'>>(servers: T[]): T[] {
+  return servers.filter((s) => s.defaultMux === 'misao' && s.type === 'local');
 }
 
 /**
@@ -83,12 +105,11 @@ export function registerMisaoDriver(
  * subscription is established when the daemon becomes reachable.
  */
 export function syncMisaoChangeHooks(
-  misao: MisaoHandle | undefined,
+  misao: MisaoHandle,
   previous: ServerConfig,
   next: ServerConfig,
   log: { warn(message: string): void },
 ): void {
-  if (!misao) return;
   const wasMisao = selectLocalMisaoServers([previous]).length > 0;
   const isMisao = selectLocalMisaoServers([next]).length > 0;
   if (isMisao && !wasMisao) {

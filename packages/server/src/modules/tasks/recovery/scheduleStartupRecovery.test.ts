@@ -24,13 +24,6 @@ function fakeRecovery(pendingAfterEachPass: number[], initiallyPending = 1) {
 }
 
 describe('scheduleStartupRecovery', () => {
-  it('without misao, recovers once and never runs the skipped-task pass', async () => {
-    const recovery = fakeRecovery([]);
-    await scheduleStartupRecovery(recovery, undefined);
-    expect(recovery.recover).toHaveBeenCalledTimes(1);
-    expect(recovery.recoverSkipped).not.toHaveBeenCalled();
-  });
-
   it('recovers once when the daemon is already connected', async () => {
     const recovery = fakeRecovery([]);
     await scheduleStartupRecovery(recovery, fakeConnection(true));

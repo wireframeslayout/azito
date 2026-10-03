@@ -1,13 +1,13 @@
-# misao 実行系統（実験的）
+# misao 実行系統
 
 misao（操）は、AI コーディングエージェント向けのヘッドレスなペインサーバーです。tmux の代わりに、
-local サーバーのウィンドウとペインを misao デーモンへ任せられます。**実験的機能**であり、
-`AZITO_EXPERIMENTAL_MISAO=1` のときだけ有効です。フラグがオフのハブでは、API・画面・挙動は
-これまでと一切変わりません。
+local サーバーのウィンドウとペインを misao デーモンへ任せられます。ハブは misao ドライバを常に登録し、
+サーバーごとの「既定のターミナル方式」（misao / tmux）で使い分けます。デーモンが無い環境でもハブは起動し、
+そのサーバーは「接続できません」として扱われます。
 
 対象は **local サーバーだけ**です（agent / SSH サーバーでは選べません）。
 
-## 有効化の手順
+## 使い始める手順
 
 ### 1. misao をインストールして起動する
 
@@ -30,31 +30,24 @@ misao serve            # フォアグラウンド起動。常駐させるなら 
 misao status
 ```
 
-### 2. ハブをフラグ付きで起動する
-
-ハブの環境変数に `AZITO_EXPERIMENTAL_MISAO=1` を足して再起動します。
-
-| 起動方法 | 設定場所 |
-|---|---|
-| ソース版（`npm run dev`） | `packages/server/.env` |
-| リリース版（systemd / launchd） | `~/.azito/hub/.env` |
-
-```bash
-echo 'AZITO_EXPERIMENTAL_MISAO=1' >> packages/server/.env
-```
+### 2. ハブの接続先を確認する
 
 ハブは既定で `~/.misao/misao.sock` に接続します。別のソケットを使うデーモンへ繋ぐときは、
 **ハブの環境**に `MISAO_SOCKET=<ソケットの絶対パス>` を設定します（ソケットパスは 107 バイト以内）。
-ハブと `misao` コマンドで同じソケットを見ている必要があります。
+ハブと `misao` コマンドで同じソケットを見ている必要があります。設定場所は、ソース版（`npm run dev`）なら
+`packages/server/.env`、リリース版（systemd / launchd）なら `~/.azito/hub/.env` です。
 
 ### 3. サーバー設定で切り替える
 
 1. Servers から `local` サーバーを開き、概要の「編集」を押します。
-2. 「tmux ランタイム」で **misao（実験的）** を選んで保存します。
-3. 概要の「mux runtime」が `misao（実験的）` になり、接続状態のチップが「接続中」になれば完了です。
+2. 「既定のターミナル方式」で **misao** を選んで保存します（「tmux の実行ファイル」は tmux を使うときの設定で、システム / 管理版を選びます）。
+3. 概要の「既定のターミナル方式」が `misao` になり、接続状態のチップが「接続中」になれば完了です。
 
 tmux 上にあるウィンドウは misao へ移行されません。切り替え後に作ったウィンドウから misao の
-ペインになります。元に戻すときも同じ画面で system / managed を選びます。
+ペインになります。元に戻すときも同じ画面で「既定のターミナル方式」に tmux を選びます。
+
+API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`、misao は local サーバーのみ）と `muxRuntime`（`"system"` / `"managed"`、tmux の実行ファイル）を別々に指定します。
+以前の `muxRuntime: "misao"` は `defaultMux: "misao"` として今のところ受け付けますが、互換のためで、次のリリースで廃止する予定です。
 
 ## 接続できないとき
 
@@ -64,9 +57,6 @@ tmux 上にあるウィンドウは misao へ移行されません。切り替�
 - `misao status` でデーモンが動いているか確認します。
 - ハブの環境の `MISAO_SOCKET`（未設定なら `~/.misao/misao.sock`）が、デーモンのソケットと一致しているか確認します。
 - デーモンが復帰すると、ハブは自動で再接続します。
-
-「この runtime は AZITO_EXPERIMENTAL_MISAO=1 のときだけ使えます」と出る場合は、フラグがオフのハブで
-misao のサーバーを開いています。フラグを有効にするか、編集から runtime を system / managed に戻してください。
 
 ## 停止中のペインと空のウィンドウ
 
@@ -96,4 +86,4 @@ misao のサーバーを開いています。フラグを有効にするか、�
   プロセスが終了したときだけ出ます。詳細は [稼働検知 Tier 判定リファレンス](./activity-detection.md) の「misao 窓」を参照してください。
 - ペインのズーム、レイアウトの保存・適用、ペインタイトルの設定などの tmux 固有の操作は未対応です。
 - デーモンを再起動するとペインのプロセスは失われます（メタデータだけが残り、`stopped` になります）。
-- agent / SSH サーバーでの misao、Add Server 画面での選択、managed tmux の導入導線は対象外です。
+- agent / SSH サーバーでの misao、Add Server 画面での選択、managed tmux の導入導線は対象外です。窓ごとに misao / tmux を選ぶ機能は今後の対応です。

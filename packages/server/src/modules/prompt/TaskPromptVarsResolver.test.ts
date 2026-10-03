@@ -63,7 +63,7 @@ const makeServer = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
   agentVersion: null,
   sshHost: null,
   sshHostFingerprint: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   isolationIntent: false,
   isolationVerifiedAt: null,
   isolationReport: null, isolationCleanupReport: null,

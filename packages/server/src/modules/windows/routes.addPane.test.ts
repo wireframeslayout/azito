@@ -32,7 +32,7 @@ describe('POST /api/windows/:id/panes', () => {
   const heldAt: boolean[] = [];
   const splitPaneByHandle = vi.fn(async () => { heldAt.push(lockHeld); return { handle: 'p_2', result: { stdout: '', stderr: '', code: 0 } }; });
   const driver = { splitPaneByHandle, resolvePane: vi.fn(async () => 'p_1') };
-  const normal = { name: 'misao1', type: 'local', muxRuntime: 'misao', isolationIntent: false } as ServerConfig;
+  const normal = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system', isolationIntent: false } as ServerConfig;
   const isolated = { ...normal, isolationIntent: true } as ServerConfig;
 
   async function build(server: ServerConfig, window: Window, buildSecondaryWindowEnv: (taskId: number, s: ServerConfig) => Record<string, string> = () => ({})): Promise<void> {
@@ -101,7 +101,7 @@ describe('POST /api/windows/:id/panes', () => {
 
 describe('DELETE /api/windows/:id/panes/:ordinal', () => {
   const HANDLE = 'p_00000000000000000000000001';
-  const server = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const server = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
   let app: FastifyInstance;
   const closePane = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const resolvePane = vi.fn(async () => 'p_ordinal');

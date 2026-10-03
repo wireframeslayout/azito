@@ -46,7 +46,6 @@ export interface InstallStatusResponse {
 const MISAO_DETAIL_KEYS: Record<string, string> = {
   daemon_unreachable: 'overview.misaoUnreachable',
   protocol_incompatible: 'overview.misaoIncompatible',
-  misao_disabled: 'overview.misaoDisabled',
   driver_not_registered: 'overview.misaoDriverNotRegistered',
 };
 

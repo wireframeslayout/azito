@@ -10,7 +10,7 @@ import { AgentTransport } from './transport/AgentTransport';
 const agentServer: ServerConfig = {
   name: 'srv7', type: 'agent', host: '10.0.0.7', agentPort: 4021, agentToken: 'tok', agentVersion: null, sshHost: null,
   sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
-  isolationCleanupReport: null, muxRuntime: 'system', createdAt: '2026-01-01T00:00:00Z',
+  isolationCleanupReport: null, defaultMux: 'tmux' as const, muxRuntime: 'system', createdAt: '2026-01-01T00:00:00Z',
 };
 
 function json(body: unknown, status = 200): Response {
@@ -23,6 +23,7 @@ async function buildApp(transport: AgentTransport) {
   const serverRepo = { findByName: vi.fn(() => agentServer), findAll: vi.fn(() => []) } as unknown as IServerRepository;
   const opts: ServersRouteOptions = {
     serverRepo,
+    misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: {
       getTransport: () => transport,
@@ -34,7 +35,7 @@ async function buildApp(transport: AgentTransport) {
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,
-    muxDriverRegistry: new MuxDriverRegistry({ misaoEnabled: false }),
+    muxDriverRegistry: new MuxDriverRegistry(),
   };
   const app = Fastify();
   await app.register(serversRoutes, opts);

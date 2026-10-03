@@ -15,8 +15,5 @@ export function MuxDriverNotice({ status }: MuxDriverNoticeProps) {
   if (status === 'incompatible') {
     return <Notice tone="warning" sub={t('overview.misaoIncompatibleSub')}>{t('overview.misaoIncompatible')}</Notice>;
   }
-  if (status === 'disabled') {
-    return <Notice tone="warning" sub={t('overview.misaoDisabledSub')}>{t('overview.misaoDisabled')}</Notice>;
-  }
   return null;
 }

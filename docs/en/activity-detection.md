@@ -547,11 +547,10 @@ Corresponding specs: `e2e/specs/activity.spec.ts`, `e2e/specs/question-answer.sp
 `e2e/specs/smoke.spec.ts`. misao windows (§13) are covered by `e2e/specs/misao.spec.ts` (with its own daemon on a temporary
 socket), which checks the `pane.state`-driven working row and the finished row produced by process exit.
 
-## 13. misao windows (`AZITO_EXPERIMENTAL_MISAO=1`)
+## 13. misao windows
 
-Local servers whose mux runtime is `misao` are served by the misao daemon instead of tmux. All
-of the following exists only while the flag is on; with it off nothing below is created and the
-tmux behavior above is unchanged.
+Local servers whose default mux (`servers.default_mux`) is `misao` are served by the misao daemon instead of
+tmux. For tmux servers nothing below is created and the tmux behavior above is unchanged.
 
 - **No supervisor.** `shouldSupervise(serverType, windowType, muxKind)` is false for a misao
   window, so no `tui-supervisor` is launched and `azs` (which sees `$MISAO_PANE_ID` and no

@@ -2,17 +2,8 @@ import { stripPaneSuffix, windowKey } from './windowKey';
 
 export type MuxDriverKind = 'tmux' | 'misao';
 
-export type MuxRuntime = 'system' | 'managed' | 'misao';
-
-export function muxKindForRuntime(runtime: MuxRuntime): MuxDriverKind {
-  switch (runtime) {
-    case 'system':
-    case 'managed':
-      return 'tmux';
-    case 'misao':
-      return 'misao';
-  }
-}
+/** Which tmux binary a server runs: the system one or the hub-managed one. Unrelated to the mux kind (`MuxDriverKind`). */
+export type MuxRuntime = 'system' | 'managed';
 
 export interface MuxRef {
   kind: MuxDriverKind;
