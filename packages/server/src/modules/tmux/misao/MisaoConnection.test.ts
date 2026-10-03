@@ -13,6 +13,8 @@ interface FakeClientControl {
   clients: FakeClient[];
   /** Errors returned by successive connect() calls; once empty, connect succeeds. */
   connectFailures: Error[];
+  /** Errors thrown by successive subscribeEvents() calls; once empty, subscribing succeeds. */
+  subscribeEventsFailures: Error[];
   /** Throws from subscribeLines when set. */
   subscribeLinesError?: () => never;
 }
@@ -47,15 +49,41 @@ class FakeClient {
     this.requests.push({ method, params });
     return this.requestHandler(method, params);
   }
-  async subscribeEvents(): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> {
-    return { unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } };
+  eventHandler: ((event: unknown) => void) | undefined;
+  eventSubscribeCalls = 0;
+  eventUnsubscribeCalls = 0;
+  /** Like the SDK: one events subscription per connection. */
+  subscribeEvents = async (handler: (event: unknown) => void): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> => {
+    this.eventSubscribeCalls += 1;
+    const failure = this.control.subscribeEventsFailures.shift();
+    if (failure) throw failure;
+    if (this.eventHandler) throw new Error('stream already registered: events');
+    this.eventHandler = handler;
+    return { unsubscribe: () => { this.eventHandler = undefined; this.eventUnsubscribeCalls += 1; }, cursor: { seq: 0, epoch: 'e' } };
+  };
+  /** An SDK reconnect, in the SDK's order: a refused events restore is reported while restoring, then the state turns connected. */
+  reconnect(restore: 'restored' | 'refused'): void {
+    for (const cb of this.stateListeners) cb({ status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('lost') });
+    if (restore === 'refused') {
+      this.eventHandler = undefined;
+      for (const cb of this.subscriptionErrorListeners) cb({ stream: { kind: 'events' }, error: new Error('refused') });
+    }
+    for (const cb of this.stateListeners) cb({ status: 'connected' });
+  }
+  /** Makes subscribeEvents() resolve only when `release()` is called. */
+  holdSubscribeEvents(): { release(): void } {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const original = this.subscribeEvents.bind(this);
+    this.subscribeEvents = async (handler) => { await held; return original(handler); };
+    return { release };
   }
   close(): void { this.closed = true; }
 }
 
 /** A stand-in for the ESM-only SDK module: only what MisaoConnection touches. */
 function createFakeSdk(): { sdk: MisaoSdk; control: FakeClientControl } {
-  const control: FakeClientControl = { clients: [], connectFailures: [] };
+  const control: FakeClientControl = { clients: [], connectFailures: [], subscribeEventsFailures: [] };
   const sdk = {
     MisaoClient: function MisaoClient() {
       const client = new FakeClient(control);
@@ -180,6 +208,219 @@ describe('MisaoConnection', () => {
     off();
     for (const cb of control.clients[0].gapListeners) cb(gap);
     expect(late).toHaveBeenCalledTimes(1);
+  });
+
+  describe('events', () => {
+    it('shares one SDK subscription between concurrent handlers and delivers to both', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const a = vi.fn();
+      const b = vi.fn();
+      await Promise.all([connection.subscribeEvents(a), connection.subscribeEvents(b)]);
+      expect(control.clients[0].eventSubscribeCalls).toBe(1);
+      control.clients[0].eventHandler?.({ type: 'pane.state' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the other handler running when one unsubscribes, and releases the SDK subscription after the last', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const a = vi.fn();
+      const b = vi.fn();
+      const subA = await connection.subscribeEvents(a);
+      const subB = await connection.subscribeEvents(b);
+      subA.unsubscribe();
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(a).not.toHaveBeenCalled();
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(0);
+      subB.unsubscribe();
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(1);
+      const c = vi.fn();
+      await connection.subscribeEvents(c);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+    });
+
+    it('keeps delivering to every handler after the SDK reconnects, and a throwing handler does not starve the others', async () => {
+      const { connection, control, warn } = setup();
+      await connection.start();
+      const a = vi.fn(() => { throw new Error('boom'); });
+      const b = vi.fn();
+      await connection.subscribeEvents(a);
+      await connection.subscribeEvents(b);
+      for (const cb of control.clients[0].stateListeners) cb({ status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('lost') });
+      for (const cb of control.clients[0].stateListeners) cb({ status: 'connected' });
+      control.clients[0].eventHandler?.({ type: 'pane.state' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    });
+
+    it('registers the same function twice independently', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const handler = vi.fn();
+      const first = await connection.subscribeEvents(handler);
+      await connection.subscribeEvents(handler);
+      first.unsubscribe();
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(0);
+    });
+
+    it('re-subscribes at once when the SDK refuses the restore on reconnect, delivers to every handler, and tells listeners it recovered', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      await connection.start();
+      const recovered = vi.fn();
+      connection.onEventsRecovered(recovered);
+      const a = vi.fn();
+      const b = vi.fn();
+      await connection.subscribeEvents(a);
+      await connection.subscribeEvents(b);
+      expect(recovered).not.toHaveBeenCalled();
+      control.clients[0].reconnect('refused');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      expect(recovered).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      control.clients[0].eventHandler?.({ type: 'pane.state' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('reaches every recovery listener even if one throws, and leaves the subscription healthy', async () => {
+      vi.useFakeTimers();
+      const { connection, control, warn } = setup();
+      await connection.start();
+      const after = vi.fn();
+      connection.onEventsRecovered(() => { throw new Error('listener boom'); });
+      connection.onEventsRecovered(after);
+      const handler = vi.fn();
+      await connection.subscribeEvents(handler);
+      control.clients[0].reconnect('refused');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('listener boom'));
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not report recovery for a restore the SDK accepted', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const recovered = vi.fn();
+      connection.onEventsRecovered(recovered);
+      await connection.subscribeEvents(vi.fn());
+      control.clients[0].reconnect('restored');
+      expect(recovered).not.toHaveBeenCalled();
+      expect(control.clients[0].eventSubscribeCalls).toBe(1);
+    });
+
+    it('retries a refused re-subscribe with backoff until it succeeds, reports recovery once, and stops when the last handler leaves', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      await connection.start();
+      const recovered = vi.fn();
+      connection.onEventsRecovered(recovered);
+      const handler = vi.fn();
+      const registration = await connection.subscribeEvents(handler);
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'), new FakeMisaoRpcError(-32000, 'busy'));
+      control.clients[0].reconnect('refused');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(100);
+      expect(control.clients[0].eventSubscribeCalls).toBe(3);
+      expect(recovered).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(200);
+      expect(control.clients[0].eventSubscribeCalls).toBe(4);
+      expect(recovered).toHaveBeenCalledTimes(1);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'));
+      control.clients[0].reconnect('refused');
+      await vi.advanceTimersByTimeAsync(0);
+      registration.unsubscribe();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(control.clients[0].eventSubscribeCalls).toBe(5);
+      expect(recovered).toHaveBeenCalledTimes(1);
+    });
+
+    it('drops a subscription that succeeds after the last handler left', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      await connection.start();
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'));
+      const registration = await connection.subscribeEvents(vi.fn());
+      const held = control.clients[0].holdSubscribeEvents();
+      await vi.advanceTimersByTimeAsync(100);
+      registration.unsubscribe();
+      held.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(control.clients[0].eventHandler).toBeUndefined();
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(1);
+    });
+
+    it('drops a subscription that succeeds after the connection was closed', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      await connection.start();
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'));
+      await connection.subscribeEvents(vi.fn());
+      const held = control.clients[0].holdSubscribeEvents();
+      await vi.advanceTimersByTimeAsync(100);
+      connection.close();
+      held.release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(1);
+    });
+
+    it('keeps the handlers registered and retries in the background when the first subscribe fails while connected', async () => {
+      vi.useFakeTimers();
+      const { connection, control, warn } = setup();
+      await connection.start();
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'));
+      const a = vi.fn();
+      const b = vi.fn();
+      const recovered = vi.fn();
+      connection.onEventsRecovered(recovered);
+      await Promise.all([connection.subscribeEvents(a), connection.subscribeEvents(b)]);
+      expect(control.clients[0].eventSubscribeCalls).toBe(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('busy'));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      expect(recovered).toHaveBeenCalledTimes(1);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects every waiting handler when the daemon is unreachable (a connection error) and registers none', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      control.clients[0].reconnect('restored');
+      control.subscribeEventsFailures.push(new FakeMisaoConnectionError('down'));
+      const results = await Promise.allSettled([connection.subscribeEvents(vi.fn()), connection.subscribeEvents(vi.fn())]);
+      expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+      const late = vi.fn();
+      await connection.subscribeEvents(late);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(late).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects every waiting handler when the subscription fails, and a later attempt can succeed', async () => {
+      const { connection, control } = setup();
+      await expect(connection.subscribeEvents(vi.fn())).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+      await connection.start();
+      const ok = vi.fn();
+      await connection.subscribeEvents(ok);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(ok).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('lines', () => {

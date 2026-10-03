@@ -1,5 +1,5 @@
-import type { EventHandler, Subscription } from '@misao/sdk' with { 'resolution-mode': 'import' };
-import type { MisaoDisconnectSource, MisaoEventSource, MisaoRpc } from './MisaoConnection';
+import type { EventHandler } from '@misao/sdk' with { 'resolution-mode': 'import' };
+import type { EventRegistration, MisaoDisconnectSource, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { sortPanes, type MisaoPane } from './misaoMapping';
 
 export interface MisaoPaneState {
@@ -57,7 +57,7 @@ function toSnapshot(panes: readonly MisaoPane[]): MisaoPaneState[] {
  * changes, so the full pane list is re-read on every (re)connect and gap to bring the receiver back in sync.
  */
 export class MisaoPaneStateEvents {
-  private subscription: Subscription | undefined;
+  private subscription: EventRegistration | undefined;
   private subscribing: Promise<void> | undefined;
   private stopListening: Array<() => void> = [];
   private started = false;
@@ -75,6 +75,7 @@ export class MisaoPaneStateEvents {
     this.stopListening = [
       this.source.onConnected(() => { this.syncAll(true); }),
       this.source.onGap(() => { this.syncAll(false); }),
+      this.source.onEventsRecovered(() => { this.syncAll(false); }),
       this.source.onDisconnected(() => this.receiver.handleDisconnected()),
     ];
     await this.ensureSubscribed();

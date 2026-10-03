@@ -1,5 +1,5 @@
-import type { EventHandler, Subscription } from '@misao/sdk' with { 'resolution-mode': 'import' };
-import type { MisaoEventSource } from './MisaoConnection';
+import type { EventHandler } from '@misao/sdk' with { 'resolution-mode': 'import' };
+import type { EventRegistration, MisaoEventSource } from './MisaoConnection';
 
 /** Notifications are coalesced over this window: pane.title fires on every spinner frame of a busy agent. */
 export const CHANGE_COALESCE_MS = 200;
@@ -13,11 +13,11 @@ function isChangeEvent(type: string): boolean {
 /**
  * The misao counterpart of tmux change hooks: one `events.subscribe` stream shared by every installed server,
  * reported as "something changed" (the daemon is global, so every installed server is notified).
- * Subscribing waits for the connection when the daemon is not up yet, and a gap counts as a change.
+ * Subscribing waits for the connection when the daemon is not up yet, and a gap or a recovered subscription counts as a change.
  */
 export class MisaoChangeEvents {
   private readonly servers = new Set<string>();
-  private subscription: Subscription | undefined;
+  private subscription: EventRegistration | undefined;
   private subscribing: Promise<void> | undefined;
   private flushTimer: NodeJS.Timeout | undefined;
 
@@ -30,6 +30,7 @@ export class MisaoChangeEvents {
       this.ensureSubscribed().catch((err: unknown) => this.log.warn(`[misao] change event subscription failed: ${err instanceof Error ? err.message : String(err)}`));
     });
     source.onGap(() => this.scheduleNotify());
+    source.onEventsRecovered(() => this.scheduleNotify());
   }
 
   /** Rejects when the daemon is unreachable; the subscription is then made as soon as the connection comes up. */

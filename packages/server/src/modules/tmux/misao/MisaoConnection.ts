@@ -17,9 +17,16 @@ export interface MisaoRpc {
 /** What a terminal needs from its own daemon connection: attach is per connection, so each terminal owns one. */
 export type MisaoAttachClient = Pick<MisaoClient, 'request' | 'subscribeEvents' | 'onNotification' | 'onStateChange' | 'close'>;
 
+/** What a consumer holds for an events registration: the shared SDK subscription is not its to manage. */
+export interface EventRegistration {
+  unsubscribe(): void;
+}
+
 export interface MisaoEventSource {
-  subscribeEvents(handler: EventHandler): Promise<Subscription>;
+  subscribeEvents(handler: EventHandler): Promise<EventRegistration>;
   onGap(listener: (gap: GapInfo) => void): () => void;
+  /** Fires when the events subscription is back after a period without one (events in between were not delivered), like a gap. */
+  onEventsRecovered(listener: () => void): () => void;
   /** Fires on every transition into the connected state (first connect, retry success, SDK reconnect). */
   onConnected(listener: () => void): () => void;
 }
@@ -52,6 +59,15 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   private client: MisaoClient | undefined;
   private status: Status = 'idle';
   private retryTimer: NodeJS.Timeout | undefined;
+  /** One entry per registration, so registering the same function twice stays two independent registrations. */
+  private readonly eventHandlers = new Set<{ handler: EventHandler }>();
+  private eventSubscription: Subscription | undefined;
+  private eventSubscribing: Promise<void> | undefined;
+  private eventRetryTimer: NodeJS.Timeout | undefined;
+  private eventRetryAttempt = 0;
+  /** True while registered handlers have no live subscription, i.e. events may be missed. */
+  private eventsInterrupted = false;
+  private readonly eventsRecoveredListeners = new Set<() => void>();
   private readonly connectedListeners = new Set<() => void>();
   private readonly disconnectedListeners = new Set<() => void>();
   private readonly gapListeners = new Set<(gap: GapInfo) => void>();
@@ -67,7 +83,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     this.client = client;
     client.onStateChange((state) => this.handleState(state));
     client.onGap((gap) => { for (const listener of this.gapListeners) listener(gap); });
-    client.onSubscriptionError((info) => { for (const listener of this.subscriptionErrorListeners) listener(info); });
+    client.onSubscriptionError((info) => this.handleSubscriptionError(info));
     client.onError((err) => this.options.log.warn(`[misao] callback error: ${err instanceof Error ? err.message : String(err)}`));
     await this.connectAttempt(client, 1);
   }
@@ -84,11 +100,113 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     }
   }
 
-  async subscribeEvents(handler: EventHandler): Promise<Subscription> {
+  /**
+   * The SDK holds one events subscription per connection, so the connection owns it and fans it out to every handler:
+   * the first handler subscribes, the last unsubscribe releases it. While the daemon is connected, the subscription is
+   * maintained here (re-made with backoff after a refused re-subscribe or a failed first attempt); the call rejects only
+   * when the daemon is not reachable, in which case the handler is not registered and the caller retries on connect.
+   */
+  async subscribeEvents(handler: EventHandler): Promise<EventRegistration> {
+    const registered = { handler };
+    this.eventHandlers.add(registered);
+    const registration: EventRegistration = {
+      unsubscribe: () => {
+        this.eventHandlers.delete(registered);
+        this.releaseEventSubscriptionIfUnused();
+      },
+    };
     try {
-      return await this.requireClient().subscribeEvents(handler);
+      await this.ensureEventSubscription();
     } catch (err) {
-      throw this.translate(err);
+      if (this.status !== 'connected' || this.isConnectionError(err)) {
+        registration.unsubscribe();
+        throw this.translate(err);
+      }
+      this.eventsInterrupted = true;
+      this.options.log.warn(`[misao] events subscription failed, retrying in the background: ${err instanceof Error ? err.message : String(err)}`);
+      this.scheduleEventRetry();
+    }
+    return registration;
+  }
+
+  private ensureEventSubscription(): Promise<void> {
+    if (this.eventSubscription) return Promise.resolve();
+    this.eventSubscribing ??= this.requireClient().subscribeEvents((event) => this.dispatchEvent(event))
+      .then((subscription) => {
+        // The last registration left (or the connection closed) while this was in flight: nobody wants it any more.
+        if (this.eventHandlers.size === 0 || this.status === 'closed') {
+          subscription.unsubscribe();
+          return;
+        }
+        this.eventSubscription = subscription;
+        this.clearEventRetry();
+        if (!this.eventsInterrupted) return;
+        this.eventsInterrupted = false;
+        for (const listener of [...this.eventsRecoveredListeners]) {
+          try {
+            listener();
+          } catch (err) {
+            this.options.log.warn(`[misao] events recovered listener failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
+      })
+      .finally(() => { this.eventSubscribing = undefined; });
+    return this.eventSubscribing;
+  }
+
+  private scheduleEventRetry(): void {
+    if (this.eventRetryTimer || this.eventHandlers.size === 0 || this.status === 'closed') return;
+    this.eventRetryAttempt += 1;
+    const { sdk } = this.options;
+    this.eventRetryTimer = setTimeout(() => {
+      this.eventRetryTimer = undefined;
+      this.retryEventSubscription();
+    }, sdk.computeBackoffDelay(this.eventRetryAttempt, sdk.DEFAULT_BACKOFF));
+    this.eventRetryTimer.unref();
+  }
+
+  /** Re-makes the shared subscription for the handlers that are still registered. A lost connection is picked up by the next connected transition. */
+  private retryEventSubscription(): void {
+    if (this.eventHandlers.size === 0 || this.status !== 'connected') return;
+    this.ensureEventSubscription().catch((err: unknown) => {
+      if (this.isConnectionError(err)) return;
+      this.options.log.warn(`[misao] events subscription retry failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.scheduleEventRetry();
+    });
+  }
+
+  /** The SDK already dropped its own registration when it reports a refused re-subscribe; ours is stale. */
+  private handleSubscriptionError(info: SubscriptionErrorInfo): void {
+    if (info.stream.kind === 'events') {
+      this.eventSubscription = undefined;
+      this.eventsInterrupted = true;
+      this.options.log.warn(`[misao] events re-subscribe refused, retrying in the background: ${info.error.message}`);
+      this.scheduleEventRetry();
+    }
+    for (const listener of this.subscriptionErrorListeners) listener(info);
+  }
+
+  private releaseEventSubscriptionIfUnused(): void {
+    if (this.eventHandlers.size > 0) return;
+    this.clearEventRetry();
+    this.eventsInterrupted = false;
+    this.eventSubscription?.unsubscribe();
+    this.eventSubscription = undefined;
+  }
+
+  private clearEventRetry(): void {
+    if (this.eventRetryTimer) clearTimeout(this.eventRetryTimer);
+    this.eventRetryTimer = undefined;
+    this.eventRetryAttempt = 0;
+  }
+
+  private dispatchEvent(event: Parameters<EventHandler>[0]): void {
+    for (const { handler } of [...this.eventHandlers]) {
+      try {
+        handler(event);
+      } catch (err) {
+        this.options.log.warn(`[misao] event handler failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
@@ -108,6 +226,11 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   onGap(listener: (gap: GapInfo) => void): () => void {
     this.gapListeners.add(listener);
     return () => { this.gapListeners.delete(listener); };
+  }
+
+  onEventsRecovered(listener: () => void): () => void {
+    this.eventsRecoveredListeners.add(listener);
+    return () => { this.eventsRecoveredListeners.delete(listener); };
   }
 
   onConnected(listener: () => void): () => void {
@@ -130,6 +253,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
 
   close(): void {
     this.status = 'closed';
+    this.clearEventRetry();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
     this.client?.close();
@@ -148,6 +272,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     if (this.status === 'closed') return;
     if (state.status === 'connected') {
       this.status = 'connected';
+      this.retryEventSubscription();
       for (const listener of this.connectedListeners) listener();
     } else {
       if (state.status === 'closed' && state.cause) {
