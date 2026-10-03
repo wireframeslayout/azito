@@ -60,7 +60,7 @@ interface TerminalContainerProps {
   onTargetRemoved?: () => void;
   /** Re-points this terminal at another pane of its window (a pane opened in an empty window is pane 1). */
   onRetargetPane?: (pane: number) => void;
-  onRetargetTab?: (serverName: string, windowId: number) => void;
+  onRetargetTab?: (serverName: string, windowId: number, sessions?: Session[]) => void;
   reconnectKey?: number;
   /**
    * SP タスク画面の「ウィンドウ」セグメント（Issue #69 修正3）向け: ウィンドウ選択
@@ -233,14 +233,14 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
       setConnectFailed(false);
       setRespawnError(null);
       setXtermKey((k) => k + 1);
-      onRetargetTab?.(serverName, dbWindow.id);
+      onRetargetTab?.(serverName, dbWindow.id, sessions);
       onWindowChanged?.();
     } catch (err) {
       setRespawnError(err instanceof Error ? err.message : 'Respawn failed');
     } finally {
       setRespawning(false);
     }
-  }, [dbWindow, serverName, onRetargetTab, onWindowChanged]);
+  }, [dbWindow, serverName, sessions, onRetargetTab, onWindowChanged]);
 
   // The pane-unavailable notice can open a pane in the window, which needs the window's MuxRef.
   const windowMuxRef = useMemo<string | null>(() => {

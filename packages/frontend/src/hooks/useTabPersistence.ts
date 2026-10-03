@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
+import { applyRetargetTab } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
 import {
   type TerminalRef,
@@ -470,13 +471,10 @@ export function useTabPersistence(storageKey?: string) {
     return tab ? tab.label : null;
   }, []);
 
-  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number) => {
-    const newRef = retargetedTerminalRef(oldTabId, serverName, windowId);
-    const newTabId = terminalTabId(newRef);
-    setTabs((prev) => prev.map((t) =>
-      t.id === oldTabId ? { ...t, id: newTabId, target: `w${windowId}`, label: terminalRefDisplayLabel(newRef), terminalRef: newRef } : t,
-    ));
-    setActiveTabId((prev) => prev === oldTabId ? newTabId : prev);
+  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]) => {
+    const newRef = retargetedTerminalRef(oldTabId, serverName, windowId, sessions);
+    setTabs((prev) => applyRetargetTab({ tabs: prev, activeTabId: null }, oldTabId, newRef).tabs);
+    setActiveTabId((prev) => (prev === oldTabId ? terminalTabId(newRef) : prev));
   }, []);
 
   /** Points a terminal tab at another pane of the same window; when a tab for that pane is already open, that one is kept. */

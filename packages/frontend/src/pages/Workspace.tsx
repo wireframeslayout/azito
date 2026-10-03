@@ -20,6 +20,7 @@ import { useNotificationChannel } from '../hooks/useNotificationChannel';
 import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
+import { findWindowTerminalTab } from '../lib/retargetTab';
 import { useWindowActions } from '../hooks/useWindowActions';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 
@@ -441,12 +442,12 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }) => {
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }, legacyOpts?: { reconnect?: boolean }) => {
     const projectId = typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined;
     if (typeof serverNameOrRef === 'object') {
       connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
     } else {
-      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId));
+      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId), legacyOpts);
     }
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
@@ -737,7 +738,11 @@ function WorkspaceInner() {
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
     showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, servers,
-    reconnectWindow: (win) => connectPane({ kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 }, undefined, { reconnect: true }),
+    reconnectWindow: (win) => {
+      const open = findWindowTerminalTab(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
+      const ref: TerminalRef = open?.terminalRef ?? { kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 };
+      connectPane(ref, undefined, { reconnect: true });
+    },
   });
 
   const handleWindowAddedToTask = useCallback(async (

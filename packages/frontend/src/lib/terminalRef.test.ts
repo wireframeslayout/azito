@@ -251,16 +251,21 @@ describe('windowKillRequest', () => {
   });
 });
 
+const win = (windowId: number, paneCount: number): Session => ({
+  name: 's',
+  windows: [{ index: 0, name: 'w', ref: '', windowId, panes: Array.from({ length: paneCount }, (_, i) => ({ index: i, title: '', command: '', width: 1, height: 1, active: i === 0 })) }],
+});
+
 describe('retargetedTerminalRef', () => {
   it('always yields a windowId ref, keeping the pane of a windowId tab', () => {
-    expect(retargetedTerminalRef('terminal:local::w7.3', 'local', 9)).toEqual({ kind: 'windowId', serverName: 'local', windowId: 9, pane: 3 });
+    expect(retargetedTerminalRef('terminal:local::w7.3', 'local', 9, [win(9, 3)])).toEqual({ kind: 'windowId', serverName: 'local', windowId: 9, pane: 3 });
   });
 
   it('keeps the pane of a ref-form tab (tmux and misao refs alike)', () => {
     const tmux = terminalTabId({ kind: 'ref', serverName: 'local', ref: '{"kind":"tmux","workspace":"azito","window":"w"}', pane: 2 });
     const misao = terminalTabId({ kind: 'ref', serverName: 'local', ref: '{"kind":"misao","workspace":"a","window":"b"}', pane: 2 });
-    expect(retargetedTerminalRef(tmux, 'local', 5)).toEqual({ kind: 'windowId', serverName: 'local', windowId: 5, pane: 2 });
-    expect(retargetedTerminalRef(misao, 'local', 5)).toEqual({ kind: 'windowId', serverName: 'local', windowId: 5, pane: 2 });
+    expect(retargetedTerminalRef(tmux, 'local', 5, [win(5, 2)])).toEqual({ kind: 'windowId', serverName: 'local', windowId: 5, pane: 2 });
+    expect(retargetedTerminalRef(misao, 'local', 5, [win(5, 2)])).toEqual({ kind: 'windowId', serverName: 'local', windowId: 5, pane: 2 });
   });
 
   it('falls back to pane 1 for a legacy or unparsable tab id', () => {
