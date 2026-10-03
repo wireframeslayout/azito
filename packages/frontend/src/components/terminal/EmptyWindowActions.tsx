@@ -55,7 +55,7 @@ export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, 
   const isBusy = killing || openSubmitting;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', padding: 'var(--space-1) var(--space-3) var(--space-2) 40px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', padding: 'var(--space-1) var(--space-3) var(--space-2) calc(var(--space-6) + var(--space-4))' }}>
       <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
         <Button variant="primary" size="sm" onClick={() => setOpenFormShown((shown) => !shown)} disabled={isBusy} aria-expanded={openFormShown}>
           {t('terminal.paneUnavailable.openPane')}

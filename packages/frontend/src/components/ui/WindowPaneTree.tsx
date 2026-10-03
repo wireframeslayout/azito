@@ -319,26 +319,25 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
   return (
     <div>
       <div
-        role="button"
-        tabIndex={0}
         onClick={onPaneClick}
-        onKeyDown={(e) => {
-          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPaneClick(); }
-        }}
         onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, ctxExtra) : undefined}
         {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, ctxExtra)) : {})}
         className={`row-hover${(active || focused) ? ' row-selected' : ''}${activityClassName ? ` ${activityClassName}` : ''}`}
         style={{
           ...(hasLongPress ? longPressStyle : {}),
+          position: 'relative',
           padding: '6px 12px', fontSize: 'var(--font-md)', cursor: 'pointer', borderRadius: 'var(--radius-sm)', margin: '1px 0',
           display: 'flex', alignItems: 'center', gap: 8, minHeight: 44,
           color: active ? 'var(--accent)' : 'inherit',
         }}
       >
-        <span style={{ width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
+        {/* Keyboard / assistive-tech target for the row. Siblings (task badge, extra) stay separate interactive
+            elements; a click anywhere on the row, this button included, reaches the row's onClick. */}
+        <button type="button" className="window-row-hit" aria-label={plainTitle} />
+        <span style={{ position: 'relative', width: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-dim)', flexShrink: 0 }}>
           <AgentIcon workerType={w.workerType} windowType={w.windowType} size={16} />
         </span>
-        <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
+        <div style={{ position: 'relative', flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {showIdChip && <WindowIdChip id={w.id!} />}
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
@@ -348,7 +347,7 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
             {t('windows.noPanes')}
           </div>
         </div>
-        {extra}
+        {extra != null && <span style={{ position: 'relative', display: 'flex' }}>{extra}</span>}
       </div>
       {onWindowsChanged && (
         <EmptyWindowActions

@@ -420,7 +420,16 @@ button:focus-within .diff-open-btn {
   opacity: 1 !important;
 }
 
-.row-hover[role="button"]:focus-visible,
+.window-row-hit {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  padding: 0; margin: 0; border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.window-row-hit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .list-row:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
