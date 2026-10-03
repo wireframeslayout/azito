@@ -12,9 +12,9 @@ function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.f
   const kind = opts.kind ?? 'misao';
   const closeWindow = opts.closeWindow ?? vi.fn(async () => ok);
   const driver = { kind, closeWindow } as unknown as IMuxClient;
-  const registry = new MuxDriverRegistry({ misaoEnabled: true });
+  const registry = new MuxDriverRegistry();
   registry.register(kind, driver, opts.resolveThrows ? () => ({ available: false, reason: 'daemon_unreachable' }) : undefined);
-  const server = { name: 'local', type: 'local', muxRuntime: kind === 'misao' ? 'misao' : 'system' };
+  const server = { name: 'local', type: 'local', defaultMux: kind === 'misao' ? 'misao' : 'tmux', muxRuntime: 'system' };
   const service = new TaskCleanupService({
     serverRepo: { findByName: () => server } as never,
     worktreeServiceFactory: {} as never,

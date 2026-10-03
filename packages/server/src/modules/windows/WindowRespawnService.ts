@@ -3,7 +3,7 @@ import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { muxKindForRuntime, muxRefFromTmuxTarget, type MuxRef, type PaneHandle } from '@azito/shared';
+import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -180,7 +180,7 @@ export class WindowRespawnService {
     return { serverIsolationMutex: this.serverIsolationMutex, serverRepo: this.serverRepo };
   }
 
-  private resolveDriver(server: Pick<ServerConfig, 'muxRuntime'>): IMuxClient {
+  private resolveDriver(server: Pick<ServerConfig, 'defaultMux'>): IMuxClient {
     return this.muxDriverRegistry.resolve(server);
   }
 
@@ -264,7 +264,7 @@ export class WindowRespawnService {
     const allowedRoot = this.resolveAllowedRoot(win, server.name);
     const resolvedCwds = await this.resolveAllCwds(server, win, allowedRoot);
 
-    const supervise = shouldSupervise(server.type, win.windowType, muxKindForRuntime(server.muxRuntime));
+    const supervise = shouldSupervise(server.type, win.windowType, server.defaultMux);
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
@@ -334,7 +334,7 @@ export class WindowRespawnService {
       if (!windowPart) throw new Error(`Invalid tmuxTarget: ${currentWin.tmuxTarget}`);
       // The name the re-created window is opened with. tmux: the window part is the name. misao: it is the
       // window id, which a new window cannot reuse — the row's label (its display name) is carried over.
-      const openName = muxKindForRuntime(server.muxRuntime) === 'misao'
+      const openName = server.defaultMux === 'misao'
         ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}` : 'win'))
         : windowPart;
 
@@ -875,7 +875,7 @@ export class WindowRespawnService {
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
         const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
-        const isSupervised = shouldSupervise(server.type, 'agent', muxKindForRuntime(server.muxRuntime));
+        const isSupervised = shouldSupervise(server.type, 'agent', server.defaultMux);
         if (isSupervised) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }

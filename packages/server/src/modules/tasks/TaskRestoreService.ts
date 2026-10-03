@@ -116,7 +116,7 @@ export class TaskRestoreService {
     return { serverIsolationMutex: this.deps.serverIsolationMutex, serverRepo: this.deps.serverRepo };
   }
 
-  private resolveDriver(server: Pick<ServerConfig, 'muxRuntime'>): IMuxClient {
+  private resolveDriver(server: Pick<ServerConfig, 'defaultMux'>): IMuxClient {
     return this.deps.muxDriverRegistry.resolve(server);
   }
 

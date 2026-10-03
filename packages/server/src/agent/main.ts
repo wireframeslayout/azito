@@ -12,7 +12,7 @@ import type { WebSocket } from 'ws';
 
 import agentRoutes from './routes';
 import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
-import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
@@ -90,12 +90,11 @@ async function main(): Promise<void> {
   });
 
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  const muxKind = muxKindForRuntime(muxRuntime);
-  const isTmuxDriver = muxKind === 'tmux';
-  const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
-  const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
+  // Agent servers are tmux-only: the misao mux is local-only (see parseMuxInput / POST /api/servers).
+  const muxKind = 'tmux';
+  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
 
-  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '');
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '');
 
   // WebSocket routes
   await app.register(async (fastify) => {
@@ -235,7 +234,6 @@ async function main(): Promise<void> {
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
   // the initial install fails because tmux isn't up yet, and the next periodic pass installs it).
-  // Skipped entirely for non-tmux drivers.
   if (hookRt) {
     let lastInstallFailed: boolean | null = null;
     const installTmuxHooks = (): void => {

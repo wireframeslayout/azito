@@ -9,7 +9,7 @@ import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
@@ -225,7 +225,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
       // Resolved before the cache is read so a lost daemon is a 503 (global handler), not a stale 200 list.
-      const driver = opts.muxDriverRegistry && muxKindForRuntime(srv.muxRuntime ?? 'system') !== 'tmux'
+      const driver = opts.muxDriverRegistry && srv.defaultMux !== 'tmux'
         ? opts.muxDriverRegistry.resolve(srv)
         : undefined;
 
@@ -262,7 +262,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   function requireTmuxDriver(srv: ServerConfig, reply: any): boolean {
-    const kind = muxKindForRuntime(srv.muxRuntime ?? 'system');
+    const kind = srv.defaultMux;
     if (kind !== 'tmux') {
       reply.status(409).send({ error: 'tmux_only_route' });
       return false;

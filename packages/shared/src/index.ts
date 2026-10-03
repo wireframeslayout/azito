@@ -34,7 +34,6 @@ export {
   muxRefFromTmuxTarget,
   tmuxTargetFromMuxRef,
   windowKeyForRef,
-  muxKindForRuntime,
   isPaneHandle,
   isPaneHandleLike,
   isMisaoWindowId,

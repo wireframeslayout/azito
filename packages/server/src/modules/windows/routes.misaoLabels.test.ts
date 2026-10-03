@@ -25,14 +25,14 @@ async function buildApp(labelWindowPanes = vi.fn(async () => undefined)) {
     labelWindowPanes,
     listWorkspaces: vi.fn(async () => [{ name: 'ws', windowCount: 1, attached: false, created: 0, windows: [{ index: 0, name: 'main', active: false, panes: [], activity: 0, ref: REF }] }]),
   } as unknown as IMuxClient;
-  const muxDriverRegistry = new MuxDriverRegistry({ misaoEnabled: true });
+  const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('misao', driver);
   const app = Fastify();
   await app.register(windowsRoutes, {
     windowRepo: windowRepo as unknown as IWindowRepository,
     projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
     taskRepo: { findById: () => ({ id: 7 }) } as unknown as ITaskRepository,
-    serverRepo: { findByName: () => ({ name: 's', type: 'local', muxRuntime: 'misao' }) } as unknown as IServerRepository,
+    serverRepo: { findByName: () => ({ name: 's', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' }) } as unknown as IServerRepository,
     sessionCaptureService: { scheduleInitialScan: vi.fn() },
     muxDriverRegistry,
   } as any);

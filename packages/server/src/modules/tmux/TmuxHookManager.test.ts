@@ -50,28 +50,28 @@ describe('TmuxHookManager', () => {
 });
 
 describe('syncTmuxChangeHooks', () => {
-  const srv = (muxRuntime: 'system' | 'managed' | 'misao', type: 'local' | 'agent' = 'local') => ({ name: 's', type, muxRuntime }) as ServerConfig;
+  const srv = (defaultMux: 'tmux' | 'misao', type: 'local' | 'agent' = 'local', muxRuntime: 'system' | 'managed' = 'system') => ({ name: 's', type, defaultMux, muxRuntime }) as ServerConfig;
   const manager = () => ({ install: vi.fn(async () => {}) });
   const log = { warn: vi.fn() };
 
   it('installs hooks when a local server is switched back onto tmux', () => {
     const m = manager();
-    syncTmuxChangeHooks(m, srv('system'), log);
-    syncTmuxChangeHooks(m, srv('managed'), log);
+    syncTmuxChangeHooks(m, srv('tmux'), log);
+    syncTmuxChangeHooks(m, srv('tmux', 'local', 'managed'), log);
     expect(m.install).toHaveBeenCalledTimes(2);
   });
 
   it('does nothing for a misao server or a non-local server', () => {
     const m = manager();
     syncTmuxChangeHooks(m, srv('misao'), log);
-    syncTmuxChangeHooks(m, srv('system', 'agent'), log);
+    syncTmuxChangeHooks(m, srv('tmux', 'agent'), log);
     expect(m.install).not.toHaveBeenCalled();
   });
 
   it('warns instead of throwing when the install fails', async () => {
     const m = manager();
     m.install.mockRejectedValueOnce(new Error('no tmux server'));
-    syncTmuxChangeHooks(m, srv('system'), log);
+    syncTmuxChangeHooks(m, srv('tmux'), log);
     await new Promise((r) => setImmediate(r));
     expect(log.warn).toHaveBeenCalledTimes(1);
   });

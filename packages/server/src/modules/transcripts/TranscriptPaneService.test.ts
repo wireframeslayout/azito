@@ -16,7 +16,7 @@ const LOCAL_SERVER: ServerConfig = {
   agentToken: null,
   agentVersion: null,
   sshHost: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -93,7 +93,7 @@ describe('TranscriptPaneService', () => {
     });
 
     describe('with several local servers', () => {
-      const MISAO_LOCAL: ServerConfig = { ...LOCAL_SERVER, name: 'misao-local', muxRuntime: 'misao' };
+      const MISAO_LOCAL: ServerConfig = { ...LOCAL_SERVER, name: 'misao-local', defaultMux: 'misao' as const, muxRuntime: 'system' };
       const TMUX_LOCAL2: ServerConfig = { ...LOCAL_SERVER, name: 'local2' };
       const MISAO_PANE = 'p_01HZX3K9M2N4P5Q6R7S8T9V0WX';
 
@@ -106,7 +106,7 @@ describe('TranscriptPaneService', () => {
         const sent: Array<{ server: string; handle: string }> = [];
         const registry = {
           resolve: (s: ServerConfig) => ({
-            listAllPanes: async () => [pane(s.muxRuntime === 'misao' ? MISAO_PANE : `%${s.name.length}`)],
+            listAllPanes: async () => [pane(s.defaultMux === 'misao' ? MISAO_PANE : `%${s.name.length}`)],
             probePane: async () => ({ alive: true, verified: true }),
             sendTextToHandle: async (_s: ServerConfig, handle: string) => { sent.push({ server: s.name, handle }); },
             sendKeysToHandle: async () => {},

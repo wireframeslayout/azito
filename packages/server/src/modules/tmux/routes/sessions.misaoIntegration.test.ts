@@ -16,7 +16,7 @@ import sessionsRoutes, { invalidateSessionCache } from './sessions';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
-const server = { name: 'misao-it', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const server = { name: 'misao-it', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
 const WORKSPACE = 'azs-ws';
 const RENAMED = 'azs-renamed';
@@ -51,7 +51,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
     const driver = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange: vi.fn(), log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
     await connection.start();
 
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', driver, () => connection.availability());
     app = Fastify();
     await app.register(sessionsRoutes, {

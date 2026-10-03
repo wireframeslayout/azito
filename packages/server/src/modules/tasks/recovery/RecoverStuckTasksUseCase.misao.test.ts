@@ -22,8 +22,8 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
     vi.mocked(fs.readdirSync).mockReturnValue([]);
     vi.mocked(fs.readFileSync).mockReturnValue('');
     const servers: Record<string, ServerConfig> = {
-      'misao-server': { name: 'misao-server', type: 'local', muxRuntime: 'misao' } as ServerConfig,
-      'tmux-server': { name: 'tmux-server', type: 'local', muxRuntime: 'system' } as ServerConfig,
+      'misao-server': { name: 'misao-server', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig,
+      'tmux-server': { name: 'tmux-server', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
     };
     const tmuxDriver = {
       kind: 'tmux',
@@ -31,7 +31,7 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
       probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
       sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
     } as unknown as IMuxClient;
-    const registry = new MuxDriverRegistry({ misaoEnabled: false });
+    const registry = new MuxDriverRegistry();
     registry.register('tmux', tmuxDriver);
     const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
     const logger = { info: vi.fn(), warn: vi.fn() };
@@ -57,7 +57,7 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
     expect(resumeStateMachine).toHaveBeenCalledTimes(1);
     expect(resumeStateMachine).toHaveBeenCalledWith(1, 21);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('task 20'));
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('misao_disabled'));
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('driver_not_registered'));
   });
 });
 
@@ -73,14 +73,14 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
       probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
       sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
     };
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', misaoDriver as unknown as IMuxClient);
     const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
     const logger = { info: vi.fn(), warn: vi.fn() };
     const useCase = new RecoverStuckTasksUseCase(
       { findByStatus: vi.fn((status: string) => (status === 'running' ? [taskRow] : [])), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() } as never,
       { findById: vi.fn().mockReturnValue({ id: 1, workerExecutionMode: 'tmux-pipe', unitType: 'devops' }) } as never,
-      { findByName: () => ({ name: 'misao-server', type: 'local', muxRuntime: 'misao' }) } as never,
+      { findByName: () => ({ name: 'misao-server', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' }) } as never,
       { findById: vi.fn().mockReturnValue({ id: 1, defaultUnitId: null }) } as never,
       { find: vi.fn().mockReturnValue(null), findByProject: vi.fn().mockReturnValue([]) } as never,
       { findByTask: vi.fn().mockReturnValue([]), append: vi.fn() } as never,
@@ -121,8 +121,8 @@ describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
     vi.mocked(fs.readdirSync).mockReturnValue([]);
     vi.mocked(fs.readFileSync).mockReturnValue('');
     const servers: Record<string, ServerConfig> = {
-      'misao-server': { name: 'misao-server', type: 'local', muxRuntime: 'misao' } as ServerConfig,
-      'tmux-server': { name: 'tmux-server', type: 'local', muxRuntime: 'system' } as ServerConfig,
+      'misao-server': { name: 'misao-server', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig,
+      'tmux-server': { name: 'tmux-server', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
     };
     const driverOf = (kind: string) => ({
       kind,
@@ -133,7 +133,7 @@ describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
     const tmuxDriver = driverOf('tmux');
     const misaoDriver = driverOf('misao');
     let daemonUp = false;
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('tmux', tmuxDriver as unknown as IMuxClient);
     registry.register('misao', misaoDriver as unknown as IMuxClient, () => (daemonUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
     const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
@@ -186,14 +186,14 @@ describe('RecoverStuckTasksUseCase keeps a task pending while the daemon keeps d
       probePane: vi.fn().mockRejectedValueOnce(down()).mockResolvedValue({ alive: true, verified: true }),
       sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
     };
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', misaoDriver as unknown as IMuxClient);
     const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
     const logger = { info: vi.fn(), warn: vi.fn() };
     const useCase = new RecoverStuckTasksUseCase(
       { findByStatus: vi.fn((status: string) => (status === 'running' ? [{ ...task(50, 'misao-server'), tmuxWindow: WINDOW_ID }] : [])), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() } as never,
       { findById: vi.fn().mockReturnValue({ id: 1, workerExecutionMode: 'tmux-pipe', unitType: 'devops' }) } as never,
-      { findByName: () => ({ name: 'misao-server', type: 'local', muxRuntime: 'misao' }) } as never,
+      { findByName: () => ({ name: 'misao-server', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' }) } as never,
       { findById: vi.fn().mockReturnValue({ id: 1, defaultUnitId: null }) } as never,
       { find: vi.fn().mockReturnValue(null), findByProject: vi.fn().mockReturnValue([]) } as never,
       { findByTask: vi.fn().mockReturnValue([]), append: vi.fn() } as never,

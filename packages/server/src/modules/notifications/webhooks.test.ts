@@ -13,6 +13,7 @@ function buildOptions(overrides: Partial<WebhookRouteOptions> = {}): WebhookRout
     verifyToken: createTokenVerifier(TOKEN),
     recordAgentActivity: vi.fn(),
     recordInteractionSignal: vi.fn(),
+    misao: { resolvePane: vi.fn().mockResolvedValue(null), recordAgentActivity: vi.fn() },
     ...overrides,
   };
 }
@@ -501,16 +502,6 @@ describe('hook webhooks from a misao pane (misaoPaneId)', () => {
     expect(misao.resolvePane).not.toHaveBeenCalled();
   });
 
-  it('without the misao dependency (flag off) misaoPaneId is ignored and the tmux fields stay required', async () => {
-    const options = buildOptions();
-    app = await buildApp(options);
-
-    const res = await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId: PANE_ID, event: 'start' });
-
-    expect(res.statusCode).toBe(400);
-    expect(options.recordAgentActivity).not.toHaveBeenCalled();
-  });
-
   it('agent-interaction records the signal against the resolved window id and pane ordinal', async () => {
     const { options } = misaoOptions();
     app = await buildApp(options);
@@ -542,15 +533,5 @@ describe('hook webhooks from a misao pane (misaoPaneId)', () => {
     const res = await post('/api/webhooks/agent-interaction', { serverName: 'local', misaoPaneId: 'nope', event: 'open' });
 
     expect(res.statusCode).toBe(400);
-  });
-
-  it('agent-interaction without the misao dependency (flag off) keeps requiring the tmux fields', async () => {
-    const options = buildOptions();
-    app = await buildApp(options);
-
-    const res = await post('/api/webhooks/agent-interaction', { serverName: 'local', misaoPaneId: PANE_ID, event: 'open' });
-
-    expect(res.statusCode).toBe(400);
-    expect(options.recordInteractionSignal).not.toHaveBeenCalled();
   });
 });

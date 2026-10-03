@@ -1,9 +1,8 @@
 import type { MuxDriverKind } from '@azito/shared';
 
-export type MuxDriverUnavailableReason = 'misao_disabled' | 'driver_not_registered' | 'daemon_unreachable' | 'protocol_incompatible' | 'remote_unsupported';
+export type MuxDriverUnavailableReason = 'driver_not_registered' | 'daemon_unreachable' | 'protocol_incompatible' | 'remote_unsupported';
 
 const UNAVAILABLE_MESSAGES: Record<MuxDriverUnavailableReason, (kind: MuxDriverKind) => string> = {
-  misao_disabled: (kind) => `Mux driver for kind "${kind}" is disabled (set AZITO_EXPERIMENTAL_MISAO=1 to enable)`,
   driver_not_registered: (kind) => `No mux driver registered for kind "${kind}"`,
   daemon_unreachable: (kind) => `The "${kind}" daemon is not reachable`,
   protocol_incompatible: (kind) => `The "${kind}" daemon speaks a protocol this hub cannot use`,

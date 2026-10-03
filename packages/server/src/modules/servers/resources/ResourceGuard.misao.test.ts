@@ -13,9 +13,9 @@ describe('ResourceGuard with a misao local server', () => {
   it('measures through the shell transport even though the mux driver is unavailable', async () => {
     const exec = vi.spyOn(MuxlessLocalTransport.prototype, 'exec').mockResolvedValue({ stdout: HEALTHY_STDOUT, stderr: '', code: 0 });
     const settingsRepo = { get: () => ({ enabled: true, memAvailablePercentMin: 10, loadPerCoreMax: 2 }), update: vi.fn() };
-    const guard = new ResourceGuard(new TransportFactory('http://hub:3001'), settingsRepo as never);
+    const guard = new ResourceGuard(new TransportFactory('http://hub:3001', { muxAvailability: () => ({ available: true }) }), settingsRepo as never);
 
-    const misao = { name: 'm', type: 'local', host: null, agentPort: null, agentToken: null, muxRuntime: 'misao' } as ServerConfig;
+    const misao = { name: 'm', type: 'local', host: null, agentPort: null, agentToken: null, defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
     const measurement = await guard.measure(misao);
 
     expect(exec).toHaveBeenCalled();

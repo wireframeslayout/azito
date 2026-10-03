@@ -136,7 +136,7 @@ async function buildApp(opts: {
   serverRepo?: IServerRepository;
   resourceGuard?: { check: ReturnType<typeof vi.fn> };
 }): Promise<FastifyInstance> {
-  const srv: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: opts.isolationIntent ?? false } as ServerConfig;
+  const srv: ServerConfig = { name: 'srv1', type: 'local', defaultMux: 'tmux', isolationIntent: opts.isolationIntent ?? false } as ServerConfig;
   const app = Fastify();
   await app.register(sessionsRoutes, {
     serverRepo: opts.serverRepo ?? makeServerRepo(srv),
@@ -656,7 +656,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
   // on a re-fetched row) no longer targeted.
   it('resolves the server exactly once, inside the lock, and resolves identity/splitPane against that row', async () => {
     const windowRepo = makeWindowRepo();
-    const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
+    const srvV2: ServerConfig = { name: 'srv1', type: 'local', defaultMux: 'tmux', isolationIntent: false, host: 'host-v2' } as ServerConfig;
     const findByName = vi.fn(() => srvV2);
     const serverRepo = { findByName } as unknown as IServerRepository;
     const resolveRef = vi.fn(async () => null);
@@ -733,7 +733,7 @@ describe('POST /api/servers/:name/sessions', () => {
   // called exactly once, and resourceGuard.check to receive that same row.
   it('resolves the server exactly once, inside the lock, and runs the resource check against that row', async () => {
     const windowRepo = makeWindowRepo();
-    const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
+    const srvV2: ServerConfig = { name: 'srv1', type: 'local', defaultMux: 'tmux', isolationIntent: false, host: 'host-v2' } as ServerConfig;
     const findByName = vi.fn(() => srvV2);
     const serverRepo = { findByName } as unknown as IServerRepository;
     const resourceGuardCheck = vi.fn(async () => ({ ok: true }));
@@ -784,7 +784,7 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
   // guarantee as the analogous POST /sessions test above.
   it('resolves the server exactly once, inside the lock, and runs the resource check against that row', async () => {
     const windowRepo = makeWindowRepo();
-    const srvV2: ServerConfig = { name: 'srv1', type: 'local', isolationIntent: false, host: 'host-v2' } as ServerConfig;
+    const srvV2: ServerConfig = { name: 'srv1', type: 'local', defaultMux: 'tmux', isolationIntent: false, host: 'host-v2' } as ServerConfig;
     const findByName = vi.fn(() => srvV2);
     const serverRepo = { findByName } as unknown as IServerRepository;
     const resourceGuardCheck = vi.fn(async () => ({ ok: true }));
@@ -804,7 +804,7 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
 });
 
 describe('GET /api/servers/:name/sessions on a misao server', () => {
-  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoServer = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
   const misaoRef = { kind: 'misao', workspace: 'ws-a', window: 'w_01' } as const;
   const workspaces = [{
     name: 'ws-a', windowCount: 1, attached: false, created: 0,
@@ -813,7 +813,7 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
   let app: FastifyInstance;
 
   async function build(listWorkspaces: ReturnType<typeof vi.fn>, windowRepo = makeWindowRepo()) {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', { listWorkspaces } as unknown as IMuxClient);
     const tmux = { listSessions: vi.fn(), cleanupLinkedSessions: vi.fn() };
     app = Fastify();
@@ -874,7 +874,7 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
   it('answers 503 for a cached list once the driver is no longer available', async () => {
     let available = true;
     const listWorkspaces = vi.fn(async () => workspaces);
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', { listWorkspaces } as unknown as IMuxClient, () => (available ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
     app = Fastify();
     app.setErrorHandler((err, _request, reply) => {
@@ -901,7 +901,7 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
   });
 
   it('lets an unavailable driver reach the app error handler instead of the route 500', async () => {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     const listWorkspaces = vi.fn();
     registry.register('misao', { listWorkspaces } as unknown as IMuxClient, () => ({ available: false, reason: 'daemon_unreachable' }));
     app = Fastify();
@@ -927,14 +927,14 @@ describe('GET /api/servers/:name/sessions on a misao server', () => {
 });
 
 describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
-  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoServer = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
   const windowId = 'w_0123456789ABCDEFGHJKMNPQRS';
   const misaoRef = { kind: 'misao', workspace: 'ws-a', window: windowId } as const;
   let app: FastifyInstance;
   const openPaneInWindow = vi.fn(async () => 'p_1');
 
   async function build(emit = vi.fn(), extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string> } = {}) {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', { openPaneInWindow } as unknown as IMuxClient);
     app = Fastify();
     await app.register(sessionsRoutes, {
@@ -1030,8 +1030,8 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
   });
 
   it('answers 501 on a tmux server (tmux windows never lose their last pane)', async () => {
-    const tmuxServer = { name: 'tmux1', type: 'local', muxRuntime: 'system' } as ServerConfig;
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const tmuxServer = { name: 'tmux1', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+    const registry = new MuxDriverRegistry();
     registry.register('tmux', { openPaneInWindow: TmuxClientImpl.prototype.openPaneInWindow } as unknown as IMuxClient);
     app = Fastify();
     app.setErrorHandler((err, _request, reply) => {
@@ -1071,7 +1071,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
   } as unknown as IMuxClient;
 
   async function build(server: ServerConfig, extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string> } = {}) {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', driver);
     const mutex = new KeyedMutex();
     const withLock = mutex.withLock.bind(mutex);
@@ -1089,7 +1089,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     await app.ready();
   }
 
-  const normal = { name: 'misao1', type: 'local', muxRuntime: 'misao', isolationIntent: false } as ServerConfig;
+  const normal = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system', isolationIntent: false } as ServerConfig;
   const isolated = { ...normal, isolationIntent: true } as ServerConfig;
 
   afterEach(async () => {
@@ -1167,7 +1167,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
 
 describe('unreachable agent server', () => {
   it('rethrows AgentUnreachableError from GET /sessions so the app error handler can answer 503', async () => {
-    const srv: ServerConfig = { name: 'srv1', type: 'agent' } as ServerConfig;
+    const srv: ServerConfig = { name: 'srv1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
     const tmux: Partial<TmuxClient> = {
       listSessions: vi.fn(async () => { throw new AgentUnreachableError('srv1', 'refused'); }),
     };
@@ -1197,12 +1197,12 @@ describe('unreachable agent server', () => {
 });
 
 describe('POST /api/servers/:name/mux/workspaces (and /windows) response identity', () => {
-  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoServer = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
   const misaoRef = { kind: 'misao', workspace: 'ws-a', window: 'w_0123456789ABCDEFGHJKMNPQRS' } as const;
   let app: FastifyInstance;
 
   async function build() {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', {
       openWorkspace: vi.fn(async () => ({ ref: misaoRef, result: { code: 0 }, windowName: 'main--abcd' })),
       openWindow: vi.fn(async () => ({ ref: misaoRef, result: { code: 0 }, windowName: 'extra--efgh' })),
@@ -1231,7 +1231,7 @@ describe('POST /api/servers/:name/mux/workspaces (and /windows) response identit
 
 describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
   const HANDLE = 'p_00000000000000000000000001';
-  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoServer = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
   const misaoRef = { kind: 'misao', workspace: 'ws-a', window: 'w_0123456789ABCDEFGHJKMNPQRS' } as const;
   const url = `/api/servers/misao1/mux/windows/${encodeURIComponent(JSON.stringify(misaoRef))}/panes/1`;
   let app: FastifyInstance;
@@ -1240,7 +1240,7 @@ describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
   const locatePane = vi.fn();
 
   beforeEach(async () => {
-    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    const registry = new MuxDriverRegistry();
     registry.register('misao', { closePane, resolvePane, locatePane } as unknown as IMuxClient);
     app = Fastify();
     await app.register(sessionsRoutes, {

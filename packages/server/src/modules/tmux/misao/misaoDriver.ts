@@ -1,4 +1,3 @@
-import { muxKindForRuntime } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
@@ -20,7 +19,7 @@ export interface MisaoRuntimeInput {
   shell: string;
 }
 
-/** Loads the ESM-only SDK and resolves the daemon socket. Called only when AZITO_EXPERIMENTAL_MISAO is on. */
+/** Loads the ESM-only SDK and resolves the daemon socket. Does not touch the daemon: it may be absent. */
 export async function resolveMisaoRuntime({ env, homeDir, shell }: MisaoRuntimeInput): Promise<MisaoRuntime> {
   const sdk = await import('@misao/sdk');
   return { sdk, socketPath: sdk.resolveSocketPath({ env, homeDir }), shell };
@@ -53,8 +52,8 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
 }
 
 /** Servers the misao driver serves: local servers running the misao mux. */
-export function selectLocalMisaoServers<T extends Pick<ServerConfig, 'muxRuntime' | 'type'>>(servers: T[]): T[] {
-  return servers.filter((s) => muxKindForRuntime(s.muxRuntime) === 'misao' && s.type === 'local');
+export function selectLocalMisaoServers<T extends Pick<ServerConfig, 'defaultMux' | 'type'>>(servers: T[]): T[] {
+  return servers.filter((s) => s.defaultMux === 'misao' && s.type === 'local');
 }
 
 /**
@@ -83,12 +82,11 @@ export function registerMisaoDriver(
  * subscription is established when the daemon becomes reachable.
  */
 export function syncMisaoChangeHooks(
-  misao: MisaoHandle | undefined,
+  misao: MisaoHandle,
   previous: ServerConfig,
   next: ServerConfig,
   log: { warn(message: string): void },
 ): void {
-  if (!misao) return;
   const wasMisao = selectLocalMisaoServers([previous]).length > 0;
   const isMisao = selectLocalMisaoServers([next]).length > 0;
   if (isMisao && !wasMisao) {

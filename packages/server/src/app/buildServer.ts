@@ -86,8 +86,8 @@ import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/Super
 export interface ServerHandles {
   tmuxHookManager: TmuxHookManager;
   agentEventStreams: AgentEventStream[];
-  /** Present only when AZITO_EXPERIMENTAL_MISAO is on. Created but not started: main.ts starts it once the daemon connection is. */
-  misaoPaneStates?: MisaoPaneStateEvents;
+  /** Created but not started: main.ts starts it once the daemon connection is. */
+  misaoPaneStates: MisaoPaneStateEvents;
 }
 
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
@@ -270,19 +270,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (win) supervisorRegistry.setWindowId(event.serverName, event.target, win.id);
   });
 
-  const misaoActivityBridge = wiring.misao && new MisaoActivityBridge({
+  const misaoActivityBridge = new MisaoActivityBridge({
     resolver: paneHandleResolver,
     findWindowByRef: (serverName, ref) => windowRepo.findByServerAndRef(serverName, ref),
     monitor: agentActivityMonitor,
     listServerNames: () => selectLocalMisaoServers(serverRepo.findAll()).map((srv) => srv.name),
     log: app.log,
   });
-  const misaoPaneStates = wiring.misao && misaoActivityBridge && new MisaoPaneStateEvents(wiring.misao.connection, misaoActivityBridge, app.log);
+  const misaoPaneStates = new MisaoPaneStateEvents(wiring.misao.connection, misaoActivityBridge, app.log);
 
   notificationBus.on((event) => {
     if (event.type === 'sessions:updated') {
       paneHandleResolver.invalidate(event.payload.serverName);
-      misaoActivityBridge?.handleWindowsChanged();
+      misaoActivityBridge.handleWindowsChanged();
     }
   });
 
@@ -468,9 +468,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
-    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, misaoEnabled: wiring.misaoEnabled,
-    misaoDaemonStatus: wiring.misao && (() => describeMisaoDaemon(wiring.misao!.connection)),
-    onMuxRuntimeChanged: ({ previous, next }) => {
+    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    misaoDaemonStatus: () => describeMisaoDaemon(wiring.misao.connection),
+    onMuxChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);
       // The session cache is shared across mux kinds; drop the previous runtime's listing.
       invalidateSessionCache(next.name);
@@ -590,7 +590,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     verifyToken: verifyWebhookToken,
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
-    misao: wiring.misao && {
+    misao: {
       // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
       resolvePane: async (serverName, paneId) => {
         if (!selectLocalMisaoServers(serverRepo.findAll()).some((srv) => srv.name === serverName)) return null;
@@ -627,7 +627,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
   await app.register(chatCommandsRoutes, { chatCommandLoader });
   await app.register(supervisorsRoutes, { supervisorRegistry });
-  await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled, misaoEnabled: wiring.misaoEnabled });
+  await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
@@ -835,11 +835,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     agentActivityMonitor.stop();
     const localServers = partitionByTmuxRuntime(serverRepo.findAll()).tmux.filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
-    if (wiring.misao) {
-      misaoPaneStates?.stop();
-      for (const srv of selectLocalMisaoServers(serverRepo.findAll())) await wiring.misao.driver.uninstallChangeHooks(srv);
-      wiring.misao.connection.close();
-    }
+    misaoPaneStates.stop();
+    for (const srv of selectLocalMisaoServers(serverRepo.findAll())) await wiring.misao.driver.uninstallChangeHooks(srv);
+    wiring.misao.connection.close();
     for (const stream of agentEventStreams) stream.stop();
     notificationBus.destroy();
   });

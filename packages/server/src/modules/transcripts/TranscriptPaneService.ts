@@ -1,4 +1,4 @@
-import { isPaneHandleLike, muxKindForRuntime, type MuxDriverKind, type PaneHandle } from '@azito/shared';
+import { isPaneHandleLike, type MuxDriverKind, type PaneHandle } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptSource } from './sources/TranscriptSource';
@@ -54,7 +54,7 @@ export class TranscriptPaneService {
   private listLocalServersByKind(): ServerConfig[] {
     const byKind = new Map<MuxDriverKind, ServerConfig>();
     for (const server of this.listLocalServers()) {
-      const kind = muxKindForRuntime(server.muxRuntime);
+      const kind = server.defaultMux;
       if (!byKind.has(kind)) byKind.set(kind, server);
     }
     return [...byKind.values()];
@@ -62,7 +62,7 @@ export class TranscriptPaneService {
 
   /** handle の形式と同じ mux 種別のローカルサーバーを返す。該当が無ければ undefined。 */
   private findLocalServerForHandle(handle: PaneHandle): ServerConfig | undefined {
-    return this.listLocalServersByKind().find((s) => isPaneHandleLike(handle, muxKindForRuntime(s.muxRuntime)));
+    return this.listLocalServersByKind().find((s) => isPaneHandleLike(handle, s.defaultMux));
   }
 
   async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {

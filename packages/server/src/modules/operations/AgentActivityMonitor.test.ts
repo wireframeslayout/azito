@@ -2334,7 +2334,7 @@ describe('AgentActivityMonitor', () => {
       paneActivity = nowSec() - 5;
       screenReads = vi.fn(async () => ({ stdout: screen, stderr: '', code: 0 }));
       resolvePane = vi.fn().mockResolvedValue('p_01J8ZK3M5N7P9Q2R4S6T8V0WXA');
-      findByName.mockReturnValue({ name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig);
+      findByName.mockReturnValue({ name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig);
       monitor = new AgentActivityMonitor(
         { getRunning } as unknown as ExecuteTaskUseCase,
         { findAll } as unknown as IWindowRepository,
@@ -2407,7 +2407,7 @@ describe('AgentActivityMonitor', () => {
       monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
       await drain();
 
-      expect(resolvePane).toHaveBeenCalledWith(expect.objectContaining({ muxRuntime: 'misao' }), MISAO_REF, 1);
+      expect(resolvePane).toHaveBeenCalledWith(expect.objectContaining({ defaultMux: 'misao' as const, muxRuntime: 'system' }), MISAO_REF, 1);
     });
 
     it('a working mux state with an ordinary screen stays working without refinedBy', async () => {

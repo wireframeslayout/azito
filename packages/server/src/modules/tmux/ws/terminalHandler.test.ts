@@ -10,8 +10,8 @@ import { handleTerminalConnection } from './terminalHandler';
 
 const OPEN = 1;
 const ref = { kind: 'misao', workspace: 'w', window: 'w_1' } as MuxRef;
-const tmuxServer = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
-const misaoServer = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+const tmuxServer = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+const misaoServer = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 
 function fakeWs() {
   const ws = Object.assign(new EventEmitter(), { OPEN, readyState: OPEN, send: vi.fn(), close: vi.fn(), ping: vi.fn(), terminate: vi.fn() });
@@ -24,7 +24,7 @@ function fixtures() {
   const getTransport = vi.fn(() => ({ openTerminal: tmuxOpen }));
   const transportFactory = { getTransport } as unknown as TransportFactory;
   const misaoOpen = vi.fn(async () => stream);
-  const registry = new MuxDriverRegistry({ misaoEnabled: true });
+  const registry = new MuxDriverRegistry();
   const resolve = vi.spyOn(registry, 'resolve').mockReturnValue({ openTerminal: misaoOpen } as never);
   return { stream, tmuxOpen, getTransport, transportFactory, misaoOpen, registry, resolve };
 }
@@ -112,7 +112,7 @@ describe('handleTerminalConnection driver selection', () => {
 
   it('sends the message and closes when the misao driver is unavailable', async () => {
     const f = fixtures();
-    f.resolve.mockImplementation(() => { throw new MuxDriverUnavailableError('misao', 'misao_disabled'); });
+    f.resolve.mockImplementation(() => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); });
     const ws = fakeWs();
     connect(ws, misaoServer, f);
     await vi.waitFor(() => expect(ws.close).toHaveBeenCalledWith());

@@ -10,11 +10,11 @@ const MISAO_REF: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X
 
 describe('isRefKindCompatible', () => {
   it('matches the ref kind against the server runtime', () => {
-    expect(isRefKindCompatible(TMUX_REF, { muxRuntime: 'system' })).toBe(true);
-    expect(isRefKindCompatible(TMUX_REF, { muxRuntime: 'managed' })).toBe(true);
-    expect(isRefKindCompatible(MISAO_REF, { muxRuntime: 'system' })).toBe(false);
-    expect(isRefKindCompatible(MISAO_REF, { muxRuntime: 'misao' })).toBe(true);
-    expect(isRefKindCompatible(TMUX_REF, { muxRuntime: 'misao' })).toBe(false);
+    expect(isRefKindCompatible(TMUX_REF, { defaultMux: 'tmux' as const })).toBe(true);
+    expect(isRefKindCompatible(TMUX_REF, { defaultMux: 'tmux' as const })).toBe(true);
+    expect(isRefKindCompatible(MISAO_REF, { defaultMux: 'tmux' as const })).toBe(false);
+    expect(isRefKindCompatible(MISAO_REF, { defaultMux: 'misao' as const })).toBe(true);
+    expect(isRefKindCompatible(TMUX_REF, { defaultMux: 'misao' as const })).toBe(false);
   });
 
   it('accepts only tmux refs when the server is unknown', () => {
@@ -25,12 +25,12 @@ describe('isRefKindCompatible', () => {
 
 describe('resolveRefForServer', () => {
   it('returns a compatible ref', () => {
-    expect(resolveRefForServer(encodeURIComponent(formatMuxRef(TMUX_REF)), { muxRuntime: 'system' })).toEqual(TMUX_REF);
+    expect(resolveRefForServer(encodeURIComponent(formatMuxRef(TMUX_REF)), { defaultMux: 'tmux' as const })).toEqual(TMUX_REF);
   });
 
   it('rejects a misao ref on a tmux server with a 400', () => {
     try {
-      resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), { muxRuntime: 'system' });
+      resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), { defaultMux: 'tmux' as const });
       expect.unreachable();
     } catch (err) {
       expect((err as Error).message).toBe('Invalid ref parameter');
@@ -40,7 +40,7 @@ describe('resolveRefForServer', () => {
 });
 
 describe('killWindowCore with a misao window', () => {
-  const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const server = { name: 'local', type: 'local', defaultMux: 'misao' as const } as ServerConfig;
   const ok = { stdout: '', stderr: '', code: 0 };
 
   it('closes an unregistered window and succeeds (no tmux target is derived from the misao ref)', async () => {

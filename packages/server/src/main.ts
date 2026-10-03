@@ -13,7 +13,6 @@ import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { scheduleStartupRecovery } from './modules/tasks/recovery/scheduleStartupRecovery';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
-import { reportMisaoServersWhenDisabled } from './modules/servers/misaoStartupCheck';
 import { partitionByTmuxRuntime } from './modules/servers/tmuxServers';
 import { selectLocalMisaoServers } from './modules/tmux/misao/misaoDriver';
 import { writeHubCanary } from './modules/servers/hubCanary';
@@ -149,29 +148,25 @@ async function main(): Promise<void> {
     }
   }
 
-  reportMisaoServersWhenDisabled(wiring.serverRepo, wiring.misaoEnabled, app.log);
-
   // ─── Startup: install tmux hooks + connect agent event streams ───
 
   const { tmux: tmuxServers, skipped: nonTmuxServers } = partitionByTmuxRuntime(wiring.serverRepo.findAll());
   for (const srv of nonTmuxServers) {
-    app.log.info(`Skipping tmux startup hooks and linked-session GC for ${srv.name}: mux runtime '${srv.muxRuntime}' is not tmux`);
+    app.log.info(`Skipping tmux startup hooks and linked-session GC for ${srv.name}: default mux '${srv.defaultMux}' is not tmux`);
   }
 
   // Not awaited: the daemon may come up later. Change events for a server installed while the daemon is down
   // start flowing as soon as the connection is established.
   const misao = wiring.misao;
-  if (misao) {
-    const misaoServers = selectLocalMisaoServers(nonTmuxServers);
-    void misao.connection.start().then(() => Promise.all([
-      ...misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
-        app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
-      })),
-      misaoPaneStates?.start().catch((err) => {
-        app.log.warn(`Activity events are not active yet (will start when the misao daemon is reachable): ${err}`);
-      }),
-    ]));
-  }
+  const misaoServers = selectLocalMisaoServers(nonTmuxServers);
+  void misao.connection.start().then(() => Promise.all([
+    ...misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
+      app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
+    })),
+    misaoPaneStates.start().catch((err) => {
+      app.log.warn(`Activity events are not active yet (will start when the misao daemon is reachable): ${err}`);
+    }),
+  ]));
 
   for (const srv of tmuxServers) {
     if (srv.type === 'local') {
@@ -219,7 +214,7 @@ async function main(): Promise<void> {
       recoverSkipped: () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
       hasPending: () => recoverStuckTasks.hasPendingForDaemon(),
     },
-    misao?.connection,
+    misao.connection,
   );
 
   setInterval(() => {

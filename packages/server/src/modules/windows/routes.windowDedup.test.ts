@@ -13,12 +13,12 @@ const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01M40229BC46M2
 const REF_ONLY_TARGET = 'azito:w_01M40229BC46M2RPATEBX4JN25';
 const NAMED_TARGET = 'azito:test-window--nksu';
 
-async function setup(muxRuntime = 'misao') {
+async function setup(defaultMux: 'tmux' | 'misao' = 'misao') {
   const db = buildSeededDb();
   const repo = new SqliteWindowRepository(db);
   const projectId = insertProject(db, 'P');
   const taskId = insertTask(db, projectId, 'T');
-  const registry = new MuxDriverRegistry({ misaoEnabled: true });
+  const registry = new MuxDriverRegistry();
   registry.register('tmux', { kind: 'tmux', supportsPaneLabels: false } as unknown as IMuxClient);
   registry.register('misao', {
     kind: 'misao',
@@ -33,7 +33,7 @@ async function setup(muxRuntime = 'misao') {
     windowRepo: repo,
     projectRepo: { findById: () => ({ id: projectId }) },
     taskRepo: { findById: () => ({ id: taskId }) },
-    serverRepo: { findByName: () => ({ name: 'local-misao', muxRuntime }) },
+    serverRepo: { findByName: () => ({ name: 'local-misao', defaultMux }) },
     muxDriverRegistry: registry,
     sessionCaptureService: { scheduleInitialScan: vi.fn() },
   } as never);
@@ -101,7 +101,7 @@ describe('registration without a ref on a misao server', () => {
 
 describe('registration without a ref on a tmux server', () => {
   it('still succeeds from the target alone', async () => {
-    const { repo, projectId, taskId, post } = await setup('system');
+    const { repo, projectId, taskId, post } = await setup('tmux');
     const project = await post(`/api/projects/${projectId}/windows`, { tmux_target: 'sess:win' });
     const task = await post(`/api/tasks/${taskId}/windows`, { tmux_target: 'sess:other' });
     expect(project.statusCode).toBe(200);

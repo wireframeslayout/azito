@@ -444,6 +444,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
         agentVersion: (row.agent_version as string) ?? null,
         sshHost: (row.ssh_host as string) ?? null,
         muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+        defaultMux: (row.default_mux as ServerConfig['defaultMux']) ?? 'tmux',
         sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
         isolationIntent: false,
         isolationVerifiedAt: null,
@@ -454,7 +455,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       return config;
     }
 
-    const tmux = new TmuxClient(new TransportFactory(''), '', '', '', '');
+    const tmux = new TmuxClient(new TransportFactory('', { muxAvailability: () => ({ available: false, reason: 'driver_not_registered' }) }), '', '', '', '');
 
     const alive: string[] = [];
     const unverifiable: string[] = [];
