@@ -13,12 +13,13 @@ const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01M40229BC46M2
 const REF_ONLY_TARGET = 'azito:w_01M40229BC46M2RPATEBX4JN25';
 const NAMED_TARGET = 'azito:test-window--nksu';
 
-async function setup() {
+async function setup(muxRuntime = 'misao') {
   const db = buildSeededDb();
   const repo = new SqliteWindowRepository(db);
   const projectId = insertProject(db, 'P');
   const taskId = insertTask(db, projectId, 'T');
   const registry = new MuxDriverRegistry({ misaoEnabled: true });
+  registry.register('tmux', { kind: 'tmux', supportsPaneLabels: false } as unknown as IMuxClient);
   registry.register('misao', {
     kind: 'misao',
     supportsPaneLabels: false,
@@ -32,7 +33,7 @@ async function setup() {
     windowRepo: repo,
     projectRepo: { findById: () => ({ id: projectId }) },
     taskRepo: { findById: () => ({ id: taskId }) },
-    serverRepo: { findByName: () => ({ name: 'local-misao', muxRuntime: 'misao' }) },
+    serverRepo: { findByName: () => ({ name: 'local-misao', muxRuntime }) },
     muxDriverRegistry: registry,
     sessionCaptureService: { scheduleInitialScan: vi.fn() },
   } as never);
@@ -75,5 +76,36 @@ describe('window registration routes share one row per physical misao window (re
     const session = await post(`/api/projects/${projectId}/windows/session`, { session: 'azito' });
     expect(session.statusCode).toBe(200);
     expect(session.json()).toMatchObject({ ok: true, count: 1, ids: [first.json().id] });
+  });
+});
+
+describe('registration without a ref on a misao server', () => {
+  it('is rejected with 400 for project and task registration and stores no row', async () => {
+    const { repo, projectId, taskId, post } = await setup();
+    const project = await post(`/api/projects/${projectId}/windows`, { tmux_target: NAMED_TARGET });
+    const task = await post(`/api/tasks/${taskId}/windows`, { tmux_target: NAMED_TARGET });
+    expect(project.statusCode).toBe(400);
+    expect(task.statusCode).toBe(400);
+    expect(task.json()).toEqual({ error: 'ref required for this server' });
+    expect(repo.findByServerAndTarget('local-misao', NAMED_TARGET)).toBeUndefined();
+  });
+
+  it('task registration by ref reports the row target so the client selects the stored row', async () => {
+    const { projectId, taskId, post } = await setup();
+    await post(`/api/projects/${projectId}/windows/session`, { session: 'azito' });
+    const res = await post(`/api/tasks/${taskId}/windows`, { tmux_target: REF_ONLY_TARGET, ref: formatMuxRef(MISAO_REF) });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ adopted: true, tmuxTarget: NAMED_TARGET });
+  });
+});
+
+describe('registration without a ref on a tmux server', () => {
+  it('still succeeds from the target alone', async () => {
+    const { repo, projectId, taskId, post } = await setup('system');
+    const project = await post(`/api/projects/${projectId}/windows`, { tmux_target: 'sess:win' });
+    const task = await post(`/api/tasks/${taskId}/windows`, { tmux_target: 'sess:other' });
+    expect(project.statusCode).toBe(200);
+    expect(task.statusCode).toBe(200);
+    expect(repo.findByServerAndTarget('local-misao', 'sess:other')).toBeDefined();
   });
 });

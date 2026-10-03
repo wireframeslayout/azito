@@ -1195,3 +1195,36 @@ describe('unreachable agent server', () => {
     }
   });
 });
+
+describe('POST /api/servers/:name/mux/workspaces (and /windows) response identity', () => {
+  const misaoServer = { name: 'misao1', type: 'local', muxRuntime: 'misao' } as ServerConfig;
+  const misaoRef = { kind: 'misao', workspace: 'ws-a', window: 'w_0123456789ABCDEFGHJKMNPQRS' } as const;
+  let app: FastifyInstance;
+
+  async function build() {
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', {
+      openWorkspace: vi.fn(async () => ({ ref: misaoRef, result: { code: 0 }, windowName: 'main--abcd' })),
+      openWindow: vi.fn(async () => ({ ref: misaoRef, result: { code: 0 }, windowName: 'extra--efgh' })),
+    } as unknown as IMuxClient);
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(misaoServer),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+  }
+
+  afterEach(async () => { await app.close(); });
+
+  it('returns the canonical target (id form) and the display name separately from both routes', async () => {
+    await build();
+    const ws = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a' } });
+    const win = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: {} });
+    expect(ws.json()).toMatchObject({ target: `ws-a:${misaoRef.window}`, windowName: 'main--abcd' });
+    expect(win.json()).toMatchObject({ target: `ws-a:${misaoRef.window}`, windowName: 'extra--efgh' });
+  });
+});

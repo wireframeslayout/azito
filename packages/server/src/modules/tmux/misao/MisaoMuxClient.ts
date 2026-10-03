@@ -66,12 +66,12 @@ export class MisaoMuxClient implements IMuxClient {
     return this.listWorkspaces(server);
   }
 
-  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult }> {
+  async openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }> {
     await this.rpc.request('workspace.create', { name });
     const windowName = opts?.exactName && opts.windowName ? opts.windowName : generateWindowName(opts?.windowName || 'win');
     try {
       const windowId = await this.createWindowWithPane(server, name, windowName, opts?.command, opts?.extraEnv);
-      return { ref: misaoRef(name, windowId), result: OK };
+      return { ref: misaoRef(name, windowId), result: OK, windowName };
     } catch (err) {
       // Best-effort rollback of the workspace this call created; the original failure is what the caller sees.
       await this.rpc.request('workspace.close', { name }).catch(() => undefined);

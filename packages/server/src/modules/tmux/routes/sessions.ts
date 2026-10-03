@@ -15,6 +15,7 @@ import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+import { muxWindowTarget } from '../muxWindowTarget';
 
 /** Generic route failure -> 500; an unreachable agent is rethrown so the app error handler answers 503. */
 function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
@@ -1032,16 +1033,17 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
         }
         try {
-          const { ref } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
+          const { ref, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
+          // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
+          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyRouteError(reply, err);
@@ -1068,7 +1070,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const workspace = decodeURIComponent(request.params.workspace);
           const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
+          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
           return replyRouteError(reply, err);
