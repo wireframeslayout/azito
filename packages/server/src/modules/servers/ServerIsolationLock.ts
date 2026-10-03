@@ -2,7 +2,7 @@ import type { IServerRepository, ServerConfig } from './Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import { KeyedMutex } from '../../shared/keyedMutex';
-import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
+import { ISOLATION_HUB_SECRET_MASK } from '../../shared/auth/isolationMaskedEnv';
 
 // Issue #29 review (independent QC), M-3: this file used to live in
 // `modules/tasks/execution/WindowRotation.ts` — an upper-layer module — even
@@ -41,14 +41,14 @@ import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
  * tmux SESSION's env.
  *
  * This helper only ever MASKS, never injects: isolated servers get the
- * shared {@link ISOLATION_MASKED_ENV} (explicit empty values are required to
+ * shared {@link ISOLATION_HUB_SECRET_MASK} (explicit empty values are required to
  * override a token an existing session's env may already carry — see
  * `TaskPaneEnvironmentService`'s doc comment), non-isolated servers get `{}`
  * (no keys touched at all — the task-scoped env layered on afterwards is the
  * only source of a token task windows ever see).
  */
 export function isolationMaskForServer(server: Pick<ServerConfig, 'isolationIntent'>): Record<string, string> {
-  return server.isolationIntent ? { ...ISOLATION_MASKED_ENV } : {};
+  return server.isolationIntent ? { ...ISOLATION_HUB_SECRET_MASK } : {};
 }
 
 /**

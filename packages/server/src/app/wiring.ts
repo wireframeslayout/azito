@@ -247,7 +247,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     ? registerMisaoDriver(muxDriverRegistry, misaoRuntime, (serverName) => {
       invalidateSessionCache(serverName);
       notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
-    }, console)
+    }, console, { publicUrl, localUrl, webhookToken })
     : undefined;
   const paneStreamFactory = new PaneStreamFactory(transportFactory, misao?.connection);
   const sidekickPackageLoader = new SidekickPackageLoader(undefined, dataPaths.sidekicks);
