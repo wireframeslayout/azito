@@ -13,7 +13,7 @@ import MarkdownRenderer, { mdStyles } from '../MarkdownRenderer';
 import { TerminalContainer, viewModeStorageKey, type WindowViewMode } from '../TerminalContainer';
 import { DiffViewer, CommitList } from '../diff';
 import { Chip } from '../ui';
-import { resolveTmuxWindow } from '../../lib/tmuxPane';
+import { findSessionWindow } from '../../lib/windowMatch';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../ContextMenu';
 import ResourceWarningDialog from '../ResourceWarningDialog';
 import PhaseProgressBar from './PhaseProgressBar';
@@ -655,9 +655,9 @@ export default function TaskPanel({
     if (!focusedWindowTarget) return null;
     const sessions = sessionData[focusedWindowTarget.serverName];
     if (!sessions) return null;
-    const tw = resolveTmuxWindow(sessions, focusedWindowTarget.target);
+    const tw = focusedWindow ? findSessionWindow(focusedWindow, sessions)?.window : undefined;
     return tw ? tw.panes.length : null;
-  }, [focusedWindowTarget, sessionData]);
+  }, [focusedWindowTarget, focusedWindow, sessionData]);
 
   // SP 端末/チャットセグメント（Issue #69 T5）: 表示モードは TaskPanel が単一の真実源として
   // localStorage（azito.windowView.<windowId>、TerminalContainer と同一キー形式を共有）を
@@ -681,7 +681,7 @@ export default function TaskPanel({
   useEffect(() => {
     if (!isVisible || !isPaneFocused) return;
     const displayed = focusedWindowTarget ?? resolveDisplayedTaskTerminal(taskId, windows);
-    setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, taskId });
+    setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, windowId: displayed?.windowId ?? null, taskId });
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocus]);
 
   useEffect(() => {
@@ -1083,7 +1083,7 @@ export default function TaskPanel({
       const w = windows.find((x) => x.serverName === focusedWindowTarget.serverName && isSameWindowTarget(x.tmuxTarget, focusedWindowTarget.target));
       if (!w) return focusedWindowTarget.target;
       const sessions = sessionData[w.serverName];
-      const tw = sessions ? resolveTmuxWindow(sessions, w.tmuxTarget) : null;
+      const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
       const pane0 = tw?.panes[0];
       const display = resolveWindowDisplay({
         windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
@@ -1138,7 +1138,7 @@ export default function TaskPanel({
       const w = windows.find((x) => x.serverName === focusedWindowTarget.serverName && isSameWindowTarget(x.tmuxTarget, focusedWindowTarget.target));
       if (!w) return focusedWindowTarget.target;
       const sessions = sessionData[w.serverName];
-      const tw = sessions ? resolveTmuxWindow(sessions, w.tmuxTarget) : null;
+      const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
       const pane0 = tw?.panes[0];
       const display = resolveWindowDisplay({
         windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,

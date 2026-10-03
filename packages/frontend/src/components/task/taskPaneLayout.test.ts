@@ -284,7 +284,7 @@ describe('resolveDisplayedTaskTerminal', () => {
       makeWindow({ id: 20, isPrimary: false, tmuxTarget: 'sess:middle.1' }),
       makeWindow({ id: 30, isPrimary: false, tmuxTarget: 'sess:newest.1' }),
     ];
-    expect(resolveDisplayedTaskTerminal(99, windows)).toEqual({ serverName: 'local', target: 'sess:newest.1' });
+    expect(resolveDisplayedTaskTerminal(99, windows)).toEqual({ serverName: 'local', target: 'sess:newest.1', windowId: 30 });
   });
 
   it('prefers primary over newest when primary exists', () => {
@@ -297,7 +297,7 @@ describe('resolveDisplayedTaskTerminal', () => {
       makeWindow({ id: 5, isPrimary: true, tmuxTarget: 'sess:primary.1' }),
       makeWindow({ id: 20, isPrimary: false, tmuxTarget: 'sess:newer.1' }),
     ];
-    expect(resolveDisplayedTaskTerminal(99, windows)).toEqual({ serverName: 'local', target: 'sess:primary.1' });
+    expect(resolveDisplayedTaskTerminal(99, windows)).toEqual({ serverName: 'local', target: 'sess:primary.1', windowId: 5 });
   });
 
   it('resolves the persisted (pane-suffix-stripped) window tab id back to the window\'s real tmuxTarget', () => {
@@ -314,7 +314,7 @@ describe('resolveDisplayedTaskTerminal', () => {
       setItem: (k: string, v: string) => { store[k] = v; },
     };
     const windows = [makeWindow({ serverName: 'local', tmuxTarget: 'sess:main.1' })];
-    expect(resolveDisplayedTaskTerminal(7, windows)).toEqual({ serverName: 'local', target: 'sess:main.1' });
+    expect(resolveDisplayedTaskTerminal(7, windows)).toEqual({ serverName: 'local', target: 'sess:main.1', windowId: 1 });
   });
 });
 

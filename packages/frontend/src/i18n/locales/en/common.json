@@ -191,7 +191,9 @@
       "openPane": "Open a pane",
       "open": "Open",
       "opening": "Opening…",
-      "killWindow": "Delete window"
+      "killWindow": "Delete window",
+      "killWindowConfirmTitle": "Delete window",
+      "killWindowConfirmMessage": "Delete window \"{{name}}\"?"
     }
   },
   "resourceWarning": {
