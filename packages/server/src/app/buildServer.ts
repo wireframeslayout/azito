@@ -6,7 +6,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
-import { taskPushUrl, agentPushUrl } from '../modules/notifications/push/pushLinks';
+import { taskPushUrl, agentActivityPushUrl } from '../modules/notifications/push/pushLinks';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import compress from '@fastify/compress';
@@ -175,16 +175,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, projectId, running, status, reason } = event.payload;
+    const { serverName, target, label, taskId, running, status, reason } = event.payload;
 
-    const resolveUrl = (): string => {
-      if (projectId != null) return agentPushUrl({ projectId, serverName, target });
-      if (taskId != null) {
-        const found = taskRepo.findById(taskId);
-        if (found) return agentPushUrl({ projectId: found.projectId, serverName, target });
-      }
-      return agentPushUrl({ serverName, target });
-    };
+    const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 
     if (running === false && reason === 'completed') {
       const url = resolveUrl();
@@ -654,7 +647,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // ─── WebSocket ───
 
   await app.register(async (fastify) => {
-    fastify.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
+    fastify.get('/ws', { websocket: true }, async (socket: WebSocket, request) => {
       const origin = request.headers.origin;
       if (origin && !allowedOrigins.includes(origin)) {
         socket.close(1008, 'Forbidden origin');
@@ -734,7 +727,20 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const paneParam = wsUrl.searchParams.get('pane');
 
       const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
-      const resolved = resolveTerminalTarget({ serverName, windowId: windowIdParam, ref: refParam, target }, { serverRepo, windowRepo });
+      const resolved = await resolveTerminalTarget(
+        { serverName, windowId: windowIdParam, ref: refParam, target },
+        {
+          serverRepo,
+          windowRepo,
+          resolveDriverRef: async (server, driverTarget) => {
+            try {
+              return await muxDriverRegistry.resolve(server).resolveRef(server, driverTarget);
+            } catch {
+              return null; // driver unavailable or daemon down: the target stays unresolved and the connection is rejected
+            }
+          },
+        },
+      );
       if (!resolved) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();
