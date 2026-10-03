@@ -58,3 +58,18 @@ export function preferredPaneOrdinal(win: WindowWithPanes): number | null {
   const running = win.panes.findIndex((p) => p.processState === 'running');
   return (running === -1 ? 0 : running) + 1;
 }
+
+interface RegisteredWindowRef {
+  id: number;
+  taskId?: number | null;
+  ownerType?: 'project' | 'task';
+}
+
+/**
+ * The registered window whose agent a stopped pane can be resumed through: the task's window (owner `task`, or a
+ * `taskId` where the owner is not carried). A hand-made window has no agent to resume, so it yields null.
+ */
+export function resumableWindowId(win: RegisteredWindowRef | null | undefined): number | null {
+  if (!win || win.taskId == null) return null;
+  return win.ownerType === undefined || win.ownerType === 'task' ? win.id : null;
+}

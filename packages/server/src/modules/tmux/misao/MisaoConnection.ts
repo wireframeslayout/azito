@@ -36,11 +36,25 @@ export interface MisaoDisconnectSource {
   onDisconnected(listener: () => void): () => void;
 }
 
-/** Per-pane line stream. The SDK re-subscribes after a reconnect; a re-subscribe the daemon refuses is reported through onSubscriptionError. */
+/**
+ * Per-pane line stream. A reconnect of the same SDK client is restored by the SDK itself; when the connection replaces
+ * its client (the SDK gave up on it), the connection re-subscribes every line stream on the new client from its last
+ * cursor (a daemon restart or truncated history is reported through onGap). A re-subscribe the daemon refuses is
+ * reported through onSubscriptionError, and that stream is dropped.
+ */
 export interface MisaoLineSource {
   subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription>;
   onGap(listener: (gap: GapInfo) => void): () => void;
   onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void;
+}
+
+interface LineRegistration {
+  paneId: string;
+  handler: LineHandler;
+  /** The live subscription on the current client; undefined while detached between two clients. */
+  subscription: Subscription | undefined;
+  /** Where the stream stood when its client was thrown away. */
+  lastCursor?: { seq: number; epoch: string };
 }
 
 type MisaoProtocolVersionErrorLike = InstanceType<MisaoSdk['MisaoProtocolVersionError']>;
@@ -81,6 +95,10 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   private eventRetryAttempt = 0;
   /** True while registered handlers have no live subscription, i.e. events may be missed. */
   private eventsInterrupted = false;
+  /** Line subscriptions the connection keeps alive across a client replacement (the SDK only restores within one client). */
+  private readonly lineRegistrations = new Set<LineRegistration>();
+  /** True from a client replacement until the lines have been re-subscribed on the new client. */
+  private linesNeedRestore = false;
   private readonly eventsRecoveredListeners = new Set<() => void>();
   private readonly connectedListeners = new Set<() => void>();
   private readonly disconnectedListeners = new Set<() => void>();
@@ -230,11 +248,68 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   async subscribeLines(paneId: string, handler: LineHandler): Promise<Subscription> {
+    let inner: Subscription;
     try {
-      return await this.requireClient().subscribeLines(paneId, handler);
+      inner = await this.requireClient().subscribeLines(paneId, handler);
     } catch (err) {
       throw this.translate(err);
     }
+    const registration: LineRegistration = { paneId, handler, subscription: inner };
+    this.lineRegistrations.add(registration);
+    return {
+      get cursor() { return registration.subscription?.cursor ?? registration.lastCursor!; },
+      unsubscribe: () => {
+        this.lineRegistrations.delete(registration);
+        registration.subscription?.unsubscribe();
+        registration.subscription = undefined;
+      },
+    };
+  }
+
+  /** Detaches the line subscriptions from a client that is being thrown away, keeping their cursors for the new one. */
+  private detachLines(): void {
+    for (const registration of this.lineRegistrations) {
+      try {
+        registration.lastCursor = registration.subscription?.cursor ?? registration.lastCursor;
+        registration.subscription?.unsubscribe();
+      } catch (err) {
+        this.options.log.warn(`[misao] could not release line subscription for ${registration.paneId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      registration.subscription = undefined;
+    }
+    this.linesNeedRestore = this.lineRegistrations.size > 0;
+  }
+
+  /** Re-subscribes every detached line stream on the current client, from its last cursor. */
+  private restoreLines(): void {
+    if (!this.linesNeedRestore) return;
+    this.linesNeedRestore = false;
+    const client = this.client;
+    if (!client) return;
+    for (const registration of [...this.lineRegistrations]) {
+      if (registration.subscription) continue;
+      const since = registration.lastCursor;
+      client.subscribeLines(registration.paneId, registration.handler, since ? { since: since.seq, epoch: since.epoch } : undefined).then(
+        (subscription) => {
+          if (this.lineRegistrations.has(registration)) registration.subscription = subscription;
+          else subscription.unsubscribe();
+        },
+        (err: unknown) => this.handleLineRestoreFailure(registration, err),
+      );
+    }
+  }
+
+  private handleLineRestoreFailure(registration: LineRegistration, err: unknown): void {
+    if (!this.lineRegistrations.has(registration)) return;
+    // The connection dropped again before the restore finished: the next replacement or connect retries it.
+    if (this.isConnectionError(err)) {
+      this.linesNeedRestore = true;
+      return;
+    }
+    this.lineRegistrations.delete(registration);
+    this.options.log.warn(`[misao] line subscription for ${registration.paneId} could not be restored: ${err instanceof Error ? err.message : String(err)}`);
+    const info = { stream: { kind: 'lines', paneId: registration.paneId }, error: err } as SubscriptionErrorInfo;
+    for (const listener of this.subscriptionErrorListeners) listener(info);
   }
 
   onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void {
@@ -292,6 +367,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     if (state.status === 'connected') {
       this.status = 'connected';
       this.incompatibility = undefined;
+      this.restoreLines();
       this.retryEventSubscription();
       for (const listener of this.connectedListeners) listener();
     } else {
@@ -312,6 +388,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     this.eventSubscription = undefined;
     this.eventSubscribing = undefined;
     this.eventsInterrupted = this.eventHandlers.size > 0;
+    this.detachLines();
     const client = this.createClient();
     this.scheduleConnect(client, 1);
   }

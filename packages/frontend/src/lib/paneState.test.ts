@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isPaneLive, missingPaneOutcome, paneNoticeActions, paneStateChip, preferredPaneOrdinal } from './paneState';
+import { isPaneLive, missingPaneOutcome, paneNoticeActions, paneStateChip, preferredPaneOrdinal, resumableWindowId } from './paneState';
 
 const pane = (index: number, processState?: 'running' | 'exited' | 'stopped' | 'unknown') => ({ index, processState });
 
@@ -62,5 +62,15 @@ describe('missingPaneOutcome', () => {
     expect(missingPaneOutcome('misao')).toBe('pane_closed');
     expect(missingPaneOutcome('tmux')).toBe('window_missing');
     expect(missingPaneOutcome(undefined)).toBe('window_missing');
+  });
+});
+
+describe('resumableWindowId', () => {
+  it('resumes only task windows', () => {
+    expect(resumableWindowId({ id: 7, taskId: 3 })).toBe(7);
+    expect(resumableWindowId({ id: 7, taskId: 3, ownerType: 'task' })).toBe(7);
+    expect(resumableWindowId({ id: 7, taskId: null })).toBeNull();
+    expect(resumableWindowId({ id: 7, taskId: 3, ownerType: 'project' })).toBeNull();
+    expect(resumableWindowId(undefined)).toBeNull();
   });
 });

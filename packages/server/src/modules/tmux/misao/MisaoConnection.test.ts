@@ -34,10 +34,18 @@ class FakeClient {
   subscriptionErrorListeners: Array<(info: unknown) => void> = [];
   lineHandlers = new Map<string, (line: unknown) => void>();
   onSubscriptionError(cb: (info: unknown) => void): () => void { this.subscriptionErrorListeners.push(cb); return () => {}; }
-  async subscribeLines(paneId: string, handler: (line: unknown) => void): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> {
+  lineSubscribes: Array<{ paneId: string; options: unknown }> = [];
+  lineUnsubscribes: string[] = [];
+  /** Where each line stream stands, as the SDK's live `cursor` would report it. */
+  lineCursors = new Map<string, { seq: number; epoch: string }>();
+  lineSubscribeFailure: Error | undefined;
+  async subscribeLines(paneId: string, handler: (line: unknown) => void, options?: unknown): Promise<{ unsubscribe(): void; readonly cursor: { seq: number; epoch: string } }> {
     this.control.subscribeLinesError?.();
+    this.lineSubscribes.push({ paneId, options });
+    if (this.lineSubscribeFailure) throw this.lineSubscribeFailure;
     this.lineHandlers.set(paneId, handler);
-    return { unsubscribe: () => {}, cursor: { seq: 0, epoch: 'e' } };
+    const cursors = this.lineCursors;
+    return { unsubscribe: () => { this.lineUnsubscribes.push(paneId); }, get cursor() { return cursors.get(paneId) ?? { seq: 0, epoch: 'e' }; } };
   }
   onError(): () => void { return () => {}; }
   async connect(): Promise<void> {
@@ -502,6 +510,63 @@ describe('MisaoConnection', () => {
       off();
       for (const cb of control.clients[0].subscriptionErrorListeners) cb(info);
       expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    describe('line subscriptions across a client replacement', () => {
+      async function replaceClient(connection: MisaoConnection, control: { clients: FakeClient[] }): Promise<void> {
+        for (const cb of control.clients[0].stateListeners) cb({ status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('lost') });
+        for (const cb of control.clients[0].stateListeners) cb({ status: 'closed', cause: new FakeProtocolVersionError('server 2.0, client 1.0') } as never);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(connection.availability()).toEqual({ available: true });
+      }
+
+      it('re-subscribes on the new client from the last cursor so the existing handler keeps receiving lines, and releases the old subscription', async () => {
+        vi.useFakeTimers();
+        const { connection, control } = setup();
+        await connection.start();
+        const handler = vi.fn();
+        await connection.subscribeLines('p_1', handler);
+        control.clients[0].lineCursors.set('p_1', { seq: 42, epoch: 'e1' });
+
+        await replaceClient(connection, control);
+        expect(control.clients[0].lineUnsubscribes).toEqual(['p_1']);
+        expect(control.clients[1].lineSubscribes).toEqual([{ paneId: 'p_1', options: { since: 42, epoch: 'e1' } }]);
+        const line = { text: 'hello' };
+        control.clients[1].lineHandlers.get('p_1')?.(line);
+        expect(handler).toHaveBeenCalledWith(line);
+      });
+
+      it('does not re-subscribe a stream that was unsubscribed', async () => {
+        vi.useFakeTimers();
+        const { connection, control } = setup();
+        await connection.start();
+        const subscription = await connection.subscribeLines('p_1', vi.fn());
+        subscription.unsubscribe();
+        await replaceClient(connection, control);
+        expect(control.clients[1].lineSubscribes).toEqual([]);
+      });
+
+      it('tells listeners when the daemon refuses a stream on the new client, and drops it', async () => {
+        vi.useFakeTimers();
+        const { connection, control } = setup();
+        await connection.start();
+        await connection.subscribeLines('p_1', vi.fn());
+        const listener = vi.fn();
+        connection.onSubscriptionError(listener);
+        const original = control.clients;
+        // The replacement client refuses the stream (e.g. the pane is gone).
+        const refusing = new Error('no such pane');
+        const make = original.push.bind(original);
+        original.push = (...clients: FakeClient[]) => { clients.forEach((c) => { c.lineSubscribeFailure = refusing; }); return make(...clients); };
+
+        await replaceClient(connection, control);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(listener).toHaveBeenCalledWith(expect.objectContaining({ stream: { kind: 'lines', paneId: 'p_1' }, error: refusing }));
+        // Dropped: another replacement does not try again.
+        for (const cb of control.clients[1].stateListeners) cb({ status: 'closed', cause: new FakeProtocolVersionError('x') } as never);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(control.clients[2].lineSubscribes).toEqual([]);
+      });
     });
 
     it('translates a connection error from subscribeLines and rejects before start', async () => {

@@ -39,7 +39,7 @@ function collectRunningTaskIds(running: RunningExecutions): Set<number> {
 }
 
 /** The daemon is not usable right now but the connection keeps retrying: the work waits for it instead of failing. */
-function isDaemonUnreachable(err: unknown): boolean {
+function isWaitingForDaemon(err: unknown): boolean {
   return err instanceof MuxDriverUnavailableError && (err.reason === 'daemon_unreachable' || err.reason === 'protocol_incompatible');
 }
 
@@ -161,7 +161,7 @@ export class RecoverStuckTasksUseCase {
     try {
       await this.recoverTaskNow(task);
     } catch (err) {
-      if (!isDaemonUnreachable(err)) throw err;
+      if (!isWaitingForDaemon(err)) throw err;
       this.pendingForDaemon.add(task.id);
       this.logger.warn(`Recovery deferred: mux daemon unreachable for task ${task.id}`);
     }
@@ -202,7 +202,7 @@ export class RecoverStuckTasksUseCase {
       driver = this.muxDriverRegistry.resolve(server);
     } catch (err) {
       if (!(err instanceof MuxDriverUnavailableError)) throw err;
-      if (isDaemonUnreachable(err)) this.pendingForDaemon.add(task.id);
+      if (isWaitingForDaemon(err)) this.pendingForDaemon.add(task.id);
       this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
       return;
     }
@@ -216,7 +216,7 @@ export class RecoverStuckTasksUseCase {
     try {
       handle = await driver.resolvePane(server, ref, 1);
     } catch (err) {
-      if (isDaemonUnreachable(err)) throw err;
+      if (isWaitingForDaemon(err)) throw err;
       this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWindowTarget(ref)})`);
       return;
     }
@@ -225,7 +225,7 @@ export class RecoverStuckTasksUseCase {
     try {
       probe = await driver.probePane(server, handle);
     } catch (err) {
-      if (isDaemonUnreachable(err)) throw err;
+      if (isWaitingForDaemon(err)) throw err;
       this.logger.warn(`Recovery skip: probePane failed for task ${task.id} (${handle})`);
       return;
     }

@@ -26,7 +26,7 @@ import { PENDING_TERMINAL_OPEN_TTL_MS } from '../lib/terminalTargetOpen';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
-import { missingPaneOutcome, type PaneUnavailableReason } from '../lib/paneState';
+import { missingPaneOutcome, resumableWindowId, type PaneUnavailableReason } from '../lib/paneState';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -52,6 +52,8 @@ interface TerminalContainerProps {
   resolveOnServer?: boolean;
   projectId?: number;
   taskId?: number;
+  /** The registered window this terminal shows, for callers that cannot pass project / allTasks to resolve it. */
+  registeredWindow?: { id: number; taskId?: number | null };
   project?: Project | null;
   allTasks?: Task[];
   sessions?: Session[];
@@ -96,7 +98,7 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ registeredWindow, serverName, target: rawTarget, terminalRef: terminalRefProp, resolveOnServer, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -169,6 +171,9 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   const isTaskOwnedPane = isTaskOwnedWindow(currentWindow);
   const dbWindow = currentWindow;
   const windowId = dbWindow?.id ?? null;
+  // Callers without project / task data (the server detail page) name the registered window themselves.
+  const respawnWindowId = dbWindow?.id ?? registeredWindow?.id ?? null;
+  const canResume = resumableWindowId(dbWindow ?? registeredWindow) !== null;
 
   const [style, setStyle] = useTranscriptStyle();
 
@@ -223,11 +228,11 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   }, [showQuickKeyBar, keyboardOverlayOpen]);
 
   const handleRespawn = useCallback(async function perform(force = false) {
-    if (!dbWindow) return;
+    if (respawnWindowId === null) return;
     setRespawning(true);
     setRespawnError(null);
     try {
-      const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number }>(`/windows/${dbWindow.id}/respawn`, {
+      const res = await api<{ tmuxTarget: string; error?: string; message?: string; windowId?: number }>(`/windows/${respawnWindowId}/respawn`, {
         method: 'POST',
         body: JSON.stringify({ force }),
       });
@@ -255,14 +260,14 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
       setConnectFailed(false);
       setRespawnError(null);
       setXtermKey((k) => k + 1);
-      onRetargetTab?.(serverName, dbWindow.id, await fetchSessionsOrUndefined(serverName));
+      onRetargetTab?.(serverName, respawnWindowId, await fetchSessionsOrUndefined(serverName));
       onWindowChanged?.();
     } catch (err) {
       setRespawnError(err instanceof Error ? err.message : 'Respawn failed');
     } finally {
       setRespawning(false);
     }
-  }, [dbWindow, serverName, onRetargetTab, onWindowChanged]);
+  }, [respawnWindowId, serverName, onRetargetTab, onWindowChanged]);
 
   // The pane-unavailable notice can open a pane in the window, which needs the window's MuxRef.
   const windowMuxRef = useMemo<string | null>(() => {
@@ -441,7 +446,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             terminalRef={terminalRef}
             muxRef={windowMuxRef}
             onResolved={handlePaneNoticeResolved}
-            onResume={isTaskOwnedPane && dbWindow ? () => { void handleRespawn(); } : undefined}
+            onResume={canResume ? () => { void handleRespawn(); } : undefined}
             resuming={respawning}
             resumeError={respawnError}
           />

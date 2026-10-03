@@ -216,6 +216,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
             serverName={server.name}
             target={activeLabel ?? ''}
             terminalRef={activeRef}
+            registeredWindow={activeRef.kind === 'windowId' ? windowById.get(activeRef.windowId) : undefined}
             sessions={sessions}
             onWindowChanged={refresh}
             onTargetRemoved={() => setSelectedRef(null)}

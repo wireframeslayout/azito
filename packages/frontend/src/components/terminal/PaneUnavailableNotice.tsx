@@ -93,7 +93,7 @@ export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved,
           {error ?? resumeError}
         </div>
       )}
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'center' }}>
         {actions.includes('resume') && (
           <Button variant="primary" size="sm" onClick={onResume} disabled={isBusy && !resuming} loading={resuming} loadingLabel={t('terminal.paneUnavailable.resuming')}>
             {t('terminal.paneUnavailable.resume')}
