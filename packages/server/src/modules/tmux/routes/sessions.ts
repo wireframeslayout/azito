@@ -1,4 +1,4 @@
-import type { FastifyPluginCallback } from 'fastify';
+import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
@@ -14,6 +14,13 @@ import { resolveRefForServer, resolvePaneHandle, killWindowCore, type KillWindow
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
+import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+
+/** Generic route failure -> 500; an unreachable agent is rethrown so the app error handler answers 503. */
+function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
+  if (err instanceof AgentUnreachableError) throw err;
+  return reply.status(500).send({ error: (err as Error).message });
+}
 
 // ─── Types ───
 
@@ -248,7 +255,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
 
         return enrichSessions(sessions, request.params.name, opts.windowRepo);
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -301,7 +308,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           notifySessionsChanged(request.params.name);
           return { ok: true, windowName };
         } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       });
     },
@@ -335,7 +342,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const createdRef: MuxRef = { kind: 'tmux', workspace: request.params.session, window: windowName };
           return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef) };
         } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       });
     },
@@ -420,7 +427,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return { ok: true };
         });
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -564,7 +571,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -643,7 +650,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // return the resolved identity so they can close every matching tab.
         return { ok: true, identity };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -672,7 +679,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -691,7 +698,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -711,7 +718,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -731,7 +738,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -759,7 +766,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const { stdout } = await tmux.captureScreen(srv, asPaneHandle(decodedTarget), -h, undefined);
           return { content: stdout };
         } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       }
 
@@ -767,7 +774,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const { stdout } = await tmux.captureScreen(srv, asPaneHandle(decodedTarget), startLine, endLine);
         return { content: stdout };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -787,7 +794,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         await tmux.sendKeysToHandle(srv, asPaneHandle(decodeURIComponent(request.params.target)), keys);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -804,7 +811,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         await tmux.zoomPane(srv, decodeURIComponent(request.params.target));
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -821,7 +828,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         await tmux.unzoomPane(srv, decodeURIComponent(request.params.target));
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -1077,7 +1084,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       });
     },
@@ -1104,7 +1111,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       });
     },

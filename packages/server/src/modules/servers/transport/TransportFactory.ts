@@ -55,12 +55,18 @@ export class TransportFactory {
     if (server.type === 'local') {
       transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, os.homedir()), this.publicUrl);
     } else if (server.type === 'agent') {
-      transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime);
+      transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name);
     } else {
       throw new Error(`Unsupported server type: ${server.type}`);
     }
     this.cache.set(key, transport);
     return transport;
+  }
+
+  /** The cached AgentTransport of an agent server, for health/breaker access. */
+  getAgentTransport(server: Parameters<TransportFactory['getTransport']>[0]): AgentTransport {
+    if (server.type !== 'agent') throw new Error(`Server "${server.name}" is not an agent server`);
+    return this.getTransport(server) as AgentTransport;
   }
 
   invalidate(serverName: string): void {

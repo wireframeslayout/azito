@@ -16,7 +16,7 @@ describe('AgentTransport', () => {
   });
 
   it('sends mux field in /api/mux POST for tmux requests', async () => {
-    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system');
+    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv');
     await transport.execMux({ kind: 'tmux', args: ['list-sessions'] });
 
     expect(fetchSpy).toHaveBeenCalledOnce();
@@ -27,7 +27,7 @@ describe('AgentTransport', () => {
   });
 
   it('sends managed mux runtime when configured', async () => {
-    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'managed');
+    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'managed', 'srv');
     await transport.execMux({ kind: 'tmux', args: ['list-windows'] });
 
     const body = JSON.parse(fetchSpy.mock.calls[0][1]!.body as string);
@@ -35,7 +35,7 @@ describe('AgentTransport', () => {
   });
 
   it('matchesMuxRuntime returns true for same runtime', () => {
-    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system');
+    const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv');
     expect(transport.matchesMuxRuntime('system')).toBe(true);
     expect(transport.matchesMuxRuntime('managed')).toBe(false);
   });

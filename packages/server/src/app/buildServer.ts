@@ -72,6 +72,7 @@ import { LocalRepoCloneService } from '../modules/git/LocalRepoCloneService';
 import { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modules/tmux/MuxCapabilityError';
+import { AgentUnreachableError } from '../modules/servers/transport/AgentUnreachableError';
 import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
@@ -113,6 +114,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   app.setErrorHandler((err, request, reply) => {
     if (err instanceof MuxDriverUnavailableError) {
       return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind, reason: err.reason });
+    }
+    if (err instanceof AgentUnreachableError) {
+      return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason });
     }
     if (err instanceof MuxOperationUnsupportedError) {
       return reply.status(501).send({ error: 'mux_operation_unsupported', kind: err.kind, operation: err.operation });

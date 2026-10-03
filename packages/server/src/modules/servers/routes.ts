@@ -10,6 +10,7 @@ import { muxKindForRuntime, type MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
+import { AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -1097,9 +1098,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
         if (srv.type === 'agent') {
           try {
-            const res = await fetch(`http://${srv.host}:${srv.agentPort}/health`, { signal: AbortSignal.timeout(5000) });
-            if (!res.ok) return { status: 'offline' as const, tmux: false, message: `Agent returned ${res.status}` };
-            const health = await res.json() as { version: string; pid: number; uptime: number };
+            const health = await transportFactory.getAgentTransport(srv).fetchHealth() as { version: string; pid: number; uptime: number };
             const versionMatch = hubBundleHash ? health.version === hubBundleHash : true;
             let tmuxAvailable = false;
             let tmuxVersion = '';
@@ -1118,7 +1117,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
               message: tmuxAvailable ? undefined : 'tmux not found on agent server',
             };
           } catch (err: unknown) {
-            return { status: 'offline' as const, tmux: false, message: `Agent unreachable: ${(err as Error).message}` };
+            if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, tmux: false, message: `Agent returned an error: ${(err as Error).message}` };
+            return { status: 'offline' as const, tmux: false, message: `Agent unreachable: ${err.reason}` };
           }
         } else {
           // Check if tmux is available locally
@@ -1145,6 +1145,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
       const transport = transportFactory.getTransport(srv);
+      const agentTransport = srv.type === 'agent' ? transportFactory.getAgentTransport(srv) : null;
 
       // misaoDaemonStatus is wired exactly when the misao driver is: a missing one with the flag on is a wiring gap, not "disabled".
       const checkMisao = async () => {
@@ -1202,9 +1203,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkAgent = async () => {
         try {
-          const res = await fetch(`http://${srv.host}:${srv.agentPort}/health`, { signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return { installed: false, detail: `Agent returned ${res.status}` };
-          const health = await res.json() as { version: string };
+          if (!agentTransport) throw new Error(`Server "${srv.name}" is not an agent server`);
+          const health = await agentTransport.fetchHealth() as { version: string };
           // Bundle content hash comparison (see /status route); undefined when the
           // local bundle hasn't been built — matches the previous null-hubSha handling.
           const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
@@ -1216,7 +1216,15 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       };
 
       const isRemote = srv.type === 'agent';
-      const osName = (await transport.exec('uname -s')).stdout.trim();
+      let osName: string;
+      try {
+        osName = (await transport.exec('uname -s')).stdout.trim();
+      } catch (err: unknown) {
+        if (err instanceof AgentUnreachableError) {
+          return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline' });
+        }
+        throw err;
+      }
 
       const isMisao = muxKindForRuntime(srv.muxRuntime) === 'misao';
       const [muxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
