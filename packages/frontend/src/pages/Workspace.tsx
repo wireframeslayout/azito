@@ -799,7 +799,8 @@ function WorkspaceInner() {
     }
     if (res.error || !res.tmuxTarget) {
       // The project window was still added; only the task attachment failed.
-      showToast(t('workspace:toast.taskWindowAddFailed', { error: res.error ?? 'missing tmuxTarget' }));
+      console.error('task window add failed', res.error ?? 'missing tmuxTarget');
+      showToast(t(res.error === 'ref required for this server' ? 'workspace:toast.taskWindowRefRequired' : 'workspace:toast.taskWindowAddFailed'));
       return;
     }
     if (activate) {

@@ -15,6 +15,7 @@ const windows: Record<number, Window> = {
   7: { id: 7, serverName: 'tmuxsrv', tmuxTarget: 'sess:win', muxRef: TMUX_REF } as Window,
   8: { id: 8, serverName: 'misaosrv', tmuxTarget: 'ws:name', muxRef: TMUX_REF } as Window,
   9: { id: 9, serverName: 'misaosrv', tmuxTarget: 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', muxRef: MISAO_REF } as Window,
+  11: { id: 11, serverName: 'tmuxsrv', tmuxTarget: 'sess:win' } as Window,
   10: { id: 10, serverName: 'misaosrv', tmuxTarget: 'ws:name' } as Window,
 };
 const deps = {
@@ -25,6 +26,10 @@ const params = (p: Partial<TerminalTargetParams>): TerminalTargetParams => ({ se
 const encoded = (ref: MuxRef) => encodeURIComponent(formatMuxRef(ref));
 
 describe('resolveTerminalTarget (windowId)', () => {
+  it('accepts an old tmux row without a stored ref on a tmux server', () => {
+    expect(resolveTerminalTarget(params({ windowId: '11' }), deps)).toEqual({ server: servers.tmuxsrv, ref: TMUX_REF });
+  });
+
   it('accepts a row whose ref kind matches its server', () => {
     expect(resolveTerminalTarget(params({ windowId: '9' }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
   });

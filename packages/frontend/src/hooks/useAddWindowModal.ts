@@ -260,17 +260,27 @@ export function useAddWindowModal(
     setAddWindowLoading(true);
     const effectiveProjectId = awEffectiveProjectId || projectId;
     const numericProjectId = effectiveProjectId ? parseInt(effectiveProjectId, 10) : undefined;
+    const muxKind = muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime);
+    // The window is already registered on the project when the task attachment fails; surface it instead of rejecting.
+    const failTaskWindow = (err: unknown): void => {
+      console.error('task window add failed', err);
+      showToast(t('addWindow.taskWindowAddFailed'));
+    };
     try {
       if (awMode === 'session') {
         await api(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: awSelectedSession }) });
         const sess = (awSessionData[awServer] || []).find((s) => s.name === awSelectedSession);
         if (sess && sess.windows.length > 0) {
           if (awTaskId != null) {
-            const muxKind = muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime);
-            for (const [index, w] of sess.windows.entries()) {
-              const reg = taskWindowRegistration({ muxKind, target: `${awSelectedSession}:${w.name}`, ref: w.ref });
-              if (!reg) throw new Error(`window ref is not resolved for ${awSelectedSession}:${w.name}`);
-              await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
+            try {
+              for (const [index, w] of sess.windows.entries()) {
+                const reg = taskWindowRegistration({ muxKind, target: `${awSelectedSession}:${w.name}`, ref: w.ref });
+                if (!reg) throw new Error(`window ref is not resolved for ${awSelectedSession}:${w.name}`);
+                await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
+              }
+            } catch (err) {
+              failTaskWindow(err);
+              return;
             }
           } else {
             const firstWin = sess.windows[0];
@@ -286,20 +296,21 @@ export function useAddWindowModal(
         }
       } else if (awMode === 'existing') {
         const existingRef = resolveWindowRegistrationRef({
-          muxKind: muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime),
+          muxKind,
           target: awTarget,
           sessions: awSessionData[awServer],
         });
         if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
         const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
-          const reg = taskWindowRegistration({
-            muxKind: muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime),
-            target: awTarget,
-            ref: existingRef,
-          });
-          if (!reg) throw new Error(`window ref is not resolved for ${awTarget}`);
-          await onTaskWindowAdded?.(awTaskId, awServer, reg.target, awLabel.trim(), true, reg.ref ? { ref: reg.ref } : undefined);
+          try {
+            const reg = taskWindowRegistration({ muxKind, target: awTarget, ref: existingRef });
+            if (!reg) throw new Error(`window ref is not resolved for ${awTarget}`);
+            await onTaskWindowAdded?.(awTaskId, awServer, reg.target, awLabel.trim(), true, reg.ref ? { ref: reg.ref } : undefined);
+          } catch (err) {
+            failTaskWindow(err);
+            return;
+          }
         } else {
           onConnect?.(registeredWindowTerminalRef(awServer, registered.id), numericProjectId);
         }
@@ -315,7 +326,6 @@ export function useAddWindowModal(
         const beforeSessions = awSessionData[awServer] || [];
         const sessionExists = beforeSessions.some((s) => s.name === sessionName);
         const serverInfo = servers.find((s) => s.name === awServer);
-        const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
         const useMuxRoutes = muxKind !== 'tmux';
         let createdTarget: string;
         let createdRef: string | undefined;
