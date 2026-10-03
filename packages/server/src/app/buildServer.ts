@@ -19,6 +19,7 @@ import type { WebSocket } from 'ws';
 import { resolveRoot } from '../shared/releaseInfo';
 import type { Wiring } from './wiring';
 
+import type { ServerConfig } from '../modules/servers/Server';
 import serversRoutes from '../modules/servers/routes';
 import projectsRoutes from '../modules/projects/routes';
 import unitsRoutes from '../modules/units/routes';
@@ -486,6 +487,16 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       syncTmuxChangeHooks(tmuxHookManager, next, app.log);
     },
   });
+  const buildSecondaryWindowEnv = (taskId: number, server: ServerConfig): Record<string, string> => {
+    const task = taskRepo.findById(taskId);
+    // Should be unreachable in practice (the caller only reaches here for
+    // a `windowRow.taskId` pulled from the same `windows` table row that
+    // references this task), but a task that no longer exists must not
+    // fall back to a legacy/empty env — mask both credentials exactly as
+    // buildEnvForSecondaryWindow's else-branch does.
+    if (!task) return { ...ISOLATION_MASKED_ENV };
+    return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
+  };
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
@@ -526,16 +537,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         killSession,
       );
     },
-    buildSecondaryWindowEnv: (taskId, server) => {
-      const task = taskRepo.findById(taskId);
-      // Should be unreachable in practice (the caller only reaches here for
-      // a `windowRow.taskId` pulled from the same `windows` table row that
-      // references this task), but a task that no longer exists must not
-      // fall back to a legacy/empty env — mask both credentials exactly as
-      // buildEnvForSecondaryWindow's else-branch does.
-      if (!task) return { ...ISOLATION_MASKED_ENV };
-      return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
-    },
+    buildSecondaryWindowEnv,
   });
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
@@ -562,6 +564,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
     windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
+    uiToken: wiring.uiToken, buildSecondaryWindowEnv, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
       return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {

@@ -5,7 +5,7 @@ import type { ServerConfig } from '../servers/Server';
 import { generateWindowName, extractWindowId } from './windowNameUtils';
 import type { IMuxClient, PaneWindowLabels } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
-import { hubPaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
+import { composePaneEnv, type HubPaneEnvConfig } from './hubPaneEnv';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxCapabilities, type MuxDriverKind, asPaneHandle, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
 import { windowSpecMatches, type TmuxPane, type TmuxWindow, type TmuxSession, type TmuxPaneInfo, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo } from './types';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
@@ -129,8 +129,8 @@ export class TmuxClient implements IMuxClient {
   }
 
   // Env args injected into every new-session / new-window via `-e` (the rule is shared with every mux driver: hubPaneEnv).
-  private baseEnvArgs(server: ServerConfig): string[] {
-    return Object.entries(hubPaneEnv(this.hubEnvConfig, server)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
+  private envArgs(server: ServerConfig, extraEnv: Record<string, string> | undefined): string[] {
+    return Object.entries(composePaneEnv(this.hubEnvConfig, server, extraEnv)).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   }
 
   private async runTmuxCommand(server: ServerConfig, args: string[]): Promise<ExecResult> {
@@ -223,12 +223,7 @@ export class TmuxClient implements IMuxClient {
     const windowName = options?.exactName && options?.windowName
       ? options.windowName
       : generateWindowName(options?.windowName || 'win');
-    const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, ...this.baseEnvArgs(server)];
-    if (options?.extraEnv) {
-      for (const [k, v] of Object.entries(options.extraEnv)) {
-        args.push('-e', `${k}=${v}`);
-      }
-    }
+    const args = ['new-session', '-d', '-s', sessionName, '-n', windowName, ...this.envArgs(server, options?.extraEnv)];
     if (options?.command) args.push(options.command);
     const result = await this.runTmuxCommand(server, args);
     await this.setWindowStatusFormat(server, sessionName, windowName);
@@ -244,12 +239,7 @@ export class TmuxClient implements IMuxClient {
     // azito` try to create AT that window's index and fail with
     // "create window failed: index 1 in use" (observed on the server001 hub
     // when respawning a window while the RC hub ran in a window named azito-rc).
-    const args = ['new-window', '-t', `${sessionName}:`, '-n', windowName, ...this.baseEnvArgs(server)];
-    if (options?.extraEnv) {
-      for (const [k, v] of Object.entries(options.extraEnv)) {
-        args.push('-e', `${k}=${v}`);
-      }
-    }
+    const args = ['new-window', '-t', `${sessionName}:`, '-n', windowName, ...this.envArgs(server, options?.extraEnv)];
     const result = await this.runTmuxCommand(server, args);
     await this.setWindowStatusFormat(server, sessionName, windowName);
     return { result, windowName };

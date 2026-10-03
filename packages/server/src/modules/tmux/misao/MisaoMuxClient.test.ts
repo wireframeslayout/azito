@@ -509,7 +509,20 @@ describe('MisaoMuxClient pane env (hub env a misao pane does not inherit)', () =
   it('does not hand the webhook token to an isolated server, and keeps the mask env the caller passes', async () => {
     const { daemon, client } = setup();
     await client.openWorkspace(isolated, 'ws', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
-    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(daemon.callsTo('pane.open')[0].ephemeralEnv).toEqual({ AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
+  });
+
+  it('blanks every hub credential on an isolated server even when no mask or a real token is passed', async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    const source = daemon.addPane(w, {});
+    const leak = { AZITO_UI_TOKEN: 'ui', AZITO_AGENT_TOKEN: 'agent', AZITO_WEBHOOK_TOKEN: 'wh' };
+    const blank = { AZITO_URL: HUB_PANE_ENV.AZITO_URL, AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' };
+    await client.openWorkspace(isolated, 'ws', { extraEnv: leak });
+    await client.openWindow(isolated, 'proj', 'x', { extraEnv: leak });
+    await client.openPaneInWindow(isolated, refOf('proj', w));
+    await client.splitPaneByHandle(isolated, handle(source), 'h', leak);
+    for (const open of daemon.callsTo('pane.open')) expect(open.ephemeralEnv).toEqual(blank);
   });
 
   // The rule must be identical to TmuxClient's: capture the `-e` args tmux is given for the same server and

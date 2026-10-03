@@ -195,7 +195,7 @@ describe('ensureSessionWithLock', () => {
     const result = await ensureSessionWithLock(tmux, lock, server, 'azito');
 
     expect(result.created).toBe(true);
-    expect(tmux.openWorkspace).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } });
+    expect(tmux.openWorkspace).toHaveBeenCalledWith(server, 'azito', { extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' } });
   });
 
   it('does not create a session when one of that name already exists, and returns created: false', async () => {

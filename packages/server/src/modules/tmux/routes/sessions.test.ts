@@ -644,7 +644,7 @@ describe('POST /api/servers/:name/sessions/:session/windows/:window/panes', () =
     const res = await app.inject({ method: 'POST', url: '/api/servers/srv1/sessions/session/windows/2/panes' });
 
     expect(res.statusCode).toBe(200);
-    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(splitPane).toHaveBeenCalledWith(expect.objectContaining({ name: 'srv1' }), 'session:2', 'v', { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
   // Issue #29 review, Important finding 2: identity resolution and the
@@ -702,7 +702,7 @@ describe('POST /api/servers/:name/sessions', () => {
     expect(createSession).toHaveBeenCalledWith(
       expect.objectContaining({ name: 'srv1' }),
       'newsess',
-      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } }),
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' } }),
     );
   });
 
@@ -776,7 +776,7 @@ describe('POST /api/servers/:name/sessions/:session/windows', () => {
       expect.objectContaining({ name: 'srv1' }),
       'session',
       undefined,
-      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' } }),
+      expect.objectContaining({ extraEnv: { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' } }),
     );
   });
 
@@ -1057,7 +1057,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
   const windowId = 'w_0123456789ABCDEFGHJKMNPQRS';
   const ref = { kind: 'misao', workspace: 'ws-a', window: windowId } as const;
   const refParam = encodeURIComponent(JSON.stringify(ref));
-  const MASKED = { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+  const MASKED = { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' };
   let app: FastifyInstance;
   let lockHeld = false;
   const heldAtCall: boolean[] = [];

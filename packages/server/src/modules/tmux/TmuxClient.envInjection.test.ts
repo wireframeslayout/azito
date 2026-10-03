@@ -94,20 +94,32 @@ describe('TmuxClient AZITO_WEBHOOK_TOKEN injection (#427)', () => {
     expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBe(WEBHOOK_TOKEN);
   });
 
-  it('createSession does NOT inject AZITO_WEBHOOK_TOKEN for an isolated server', async () => {
+  it('createSession blanks AZITO_WEBHOOK_TOKEN for an isolated server (an inherited session value must not survive)', async () => {
     const isolatedSrv: ServerConfig = { ...srv, isolationIntent: true };
     const calls: string[][] = [];
     const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
     await client.createSession(isolatedSrv, 'test-session', { windowName: 'win' });
-    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBeUndefined();
+    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBe('');
   });
 
-  it('createWindow does NOT inject AZITO_WEBHOOK_TOKEN for an isolated server', async () => {
+  it('an isolated server gets the credential mask last, so a caller cannot inject a hub token', async () => {
+    const isolatedSrv: ServerConfig = { ...srv, isolationIntent: true };
+    const calls: string[][] = [];
+    const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
+    const leak = { AZITO_UI_TOKEN: 'ui', AZITO_AGENT_TOKEN: 'agent', AZITO_WEBHOOK_TOKEN: 'wh' };
+    await client.createSession(isolatedSrv, 'test-session', { windowName: 'win', extraEnv: leak });
+    await client.createWindow(isolatedSrv, 'test-session', 'win', { extraEnv: leak });
+    for (const args of calls.filter((a) => a[0] === 'new-session' || a[0] === 'new-window')) {
+      for (const key of Object.keys(leak)) expect(envValue(args, key)).toBe('');
+    }
+  });
+
+  it('createWindow blanks AZITO_WEBHOOK_TOKEN for an isolated server (an inherited session value must not survive)', async () => {
     const isolatedSrv: ServerConfig = { ...srv, isolationIntent: true };
     const calls: string[][] = [];
     const client = makeClient(async (args) => { calls.push(args); return { stdout: '', stderr: '', code: 0 }; });
     await client.createWindow(isolatedSrv, 'test-session', 'win');
-    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBeUndefined();
+    expect(envValue(calls[0], 'AZITO_WEBHOOK_TOKEN')).toBe('');
   });
 });
 
@@ -176,12 +188,12 @@ describe('uiTokenEnvForServer (shared/auth/uiTokenEnv)', () => {
 
   it('masks the token with an explicit empty string for an isolation_intent server', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(uiTokenEnvForServer(UI_TOKEN, isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(uiTokenEnvForServer(UI_TOKEN, isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
   it('masks even when the underlying uiToken is empty (still an explicit key, not omitted)', () => {
     const isolatedSrv: ServerConfig = { ...remoteSrv, isolationIntent: true };
-    expect(uiTokenEnvForServer('', isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' });
+    expect(uiTokenEnvForServer('', isolatedSrv)).toEqual({ AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '', AZITO_WEBHOOK_TOKEN: '' });
   });
 
   it('masks the exact same key set as ISOLATION_MASKED_ENV (single source shared with TaskPaneEnvironmentService)', () => {

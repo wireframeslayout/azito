@@ -18,4 +18,7 @@
 export const ISOLATION_MASKED_ENV: Readonly<Record<string, string>> = Object.freeze({
   AZITO_UI_TOKEN: '',
   AZITO_AGENT_TOKEN: '',
+  // A driver that does not isolate the pane from its parent's env (misao: the daemon's own env) or a session env
+  // that already carries the hub webhook token would otherwise hand it to an isolated pane.
+  AZITO_WEBHOOK_TOKEN: '',
 });

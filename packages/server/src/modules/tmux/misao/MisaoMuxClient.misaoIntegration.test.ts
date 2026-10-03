@@ -19,6 +19,9 @@ import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
 const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const server = { name: 'local', type: 'local', muxRuntime: 'misao' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
+const isolatedServer = { ...server, isolationIntent: true } as ServerConfig;
+// The daemon builds a child's env from its own env, so credentials it holds are inherited unless the hub blanks them.
+const DAEMON_SENTINELS = { AZITO_WEBHOOK_TOKEN: 'sentinel-wh', AZITO_UI_TOKEN: 'sentinel-ui', AZITO_AGENT_TOKEN: 'sentinel-agent' };
 
 describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao daemon', () => {
   let dir: string;
@@ -43,7 +46,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-'));
     const socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore', env: { ...process.env, ...DAEMON_SENTINELS } });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 
@@ -191,6 +194,26 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     expect(exposed).not.toContain('wh-token');
     expect(fs.readFileSync(path.join(dir, 'persistence.json'), 'utf8')).not.toContain('wh-token');
     await client.closeWindow(server, ref);
+  });
+
+  it("blanks credentials the daemon itself holds in an isolated server's panes; a non-isolated pane gets the hub token", async () => {
+    const probe = 'echo cred-[${#AZITO_WEBHOOK_TOKEN}/${#AZITO_UI_TOKEN}/${#AZITO_AGENT_TOKEN}]';
+    const { ref } = await client.openWindow(isolatedServer, 'azm-ws2', 'isolated', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'leaked' } });
+    const pane = await client.resolvePane(isolatedServer, ref, 1);
+    const split = await client.splitPaneByHandle(isolatedServer, pane, 'h', { AZITO_WEBHOOK_TOKEN: 'leaked' });
+    for (const handle of [pane, split.handle]) {
+      await client.sendTextToHandle(isolatedServer, handle, probe);
+      await client.sendKeysToHandle(isolatedServer, handle, ['Enter']);
+      await waitForScreen(handle, 'cred-[0/0/0]');
+    }
+    await client.closeWindow(isolatedServer, ref);
+
+    const open = await client.openWindow(server, 'azm-ws2', 'plain', { exactName: true });
+    const plain = await client.resolvePane(server, open.ref, 1);
+    await client.sendTextToHandle(server, plain, probe);
+    await client.sendKeysToHandle(server, plain, ['Enter']);
+    await waitForScreen(plain, 'cred-[8/');
+    await client.closeWindow(server, open.ref);
   });
 
   it('delivers input to registered windows through WindowInputService, and only to their own panes', async () => {

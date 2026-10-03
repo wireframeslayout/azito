@@ -1,11 +1,11 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
-import { isPrimaryTaskWindow } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
@@ -23,7 +23,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -46,6 +46,12 @@ export interface WindowsRouteOptions {
   /** Drops the cached GET /sessions list of a server, so a client re-reading it after a respawn sees the new window. */
   invalidateSessionCache?: (serverName: string) => void;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
+  /** Operator UI token a manual pane gets on a non-isolated server. */
+  uiToken: string;
+  /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
+  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+  /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
+  serverIsolationMutex: KeyedMutex;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
@@ -593,28 +599,29 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   );
 
   // ── POST /api/windows/:id/panes ──
+  // The window and server rows, the primary/secondary task-window decision, the env and the split all run inside
+  // the per-server lock (see serverIsolationMutex's doc comment on SessionsRouteOptions), against rows fetched in it.
   fastify.post<{ Params: { id: string } }>(
     '/api/windows/:id/panes',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
-      const { window: win, ref } = resolveWindowById(windowRepo, id);
-      const srv = serverRepo.findByName(win.serverName);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const serverName = resolveWindowById(windowRepo, id).window.serverName;
+      return opts.serverIsolationMutex.withLock(serverName, async () => {
+        const { window: win, ref } = resolveWindowById(windowRepo, id);
+        const srv = serverRepo.findByName(win.serverName);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      if (win.taskId !== null && isPrimaryTaskWindow(win)) {
-        return reply.status(409).send({
-          error: 'primary_task_window_pane_add_unsupported',
-          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-        });
-      }
+        const paneEnv = resolvePaneAddEnv(win, srv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-      const body = request.body as { ordinal?: number; direction?: string };
-      const direction = (body.direction || 'v') as 'h' | 'v';
-      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).splitPaneByHandle(srv, handle, direction);
-      notifyWindowsChanged(win.serverName);
-      return { ok: true };
+        const body = request.body as { ordinal?: number; direction?: string };
+        const direction = (body.direction || 'v') as 'h' | 'v';
+        const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+        const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+        await driverFor(srv).splitPaneByHandle(srv, handle, direction, paneEnv.extraEnv);
+        notifyWindowsChanged(win.serverName);
+        return { ok: true };
+      });
     },
   );
 

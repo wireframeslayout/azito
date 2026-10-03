@@ -5,6 +5,7 @@ import type { Window, IWindowRepository } from './Window';
 import { isPrimaryTaskWindow } from './Window';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, muxKindForRuntime } from '@azito/shared';
 import { resolveKillOutcome, type KillOutcome } from '../tmux/killOutcome';
+import { uiTokenEnvForServer } from '../../shared/auth/uiTokenEnv';
 
 // ─── Resolution helpers ───
 
@@ -50,6 +51,45 @@ export async function resolvePaneHandle(
   } catch {
     throw Object.assign(new Error(`Pane ordinal ${ordinal} not found`), { statusCode: 404 });
   }
+}
+
+// ─── Adding a pane to an existing window ───
+
+export interface PaneAddEnvDeps {
+  uiToken: string;
+  /** Masked-only env of a secondary task-owned window (never a task token). */
+  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+}
+
+export type PaneAddEnv =
+  | { ok: true; extraEnv: Record<string, string> }
+  | { ok: false; status: 409; body: { error: string; message: string } };
+
+/**
+ * Decides, for every route that adds a pane to an existing window, whether that is allowed and with which env.
+ * Must be called inside the per-server `serverIsolationMutex` lock, with the server row and window row fetched
+ * inside it, so the decision is made against the same isolation state the pane is created under.
+ *
+ * - A task's primary window: refused. Its first pane holds the live task-token generation and the plaintext is
+ *   never stored, so no env can give a new pane the same generation without rotating it; respawn the window first.
+ * - A secondary task window: its masked-only env.
+ * - Any other window: the manual-window env (UI token, or the isolation mask on an isolated server).
+ */
+export function resolvePaneAddEnv(window: Window | undefined, server: ServerConfig, deps: PaneAddEnvDeps): PaneAddEnv {
+  if (window && window.taskId !== null) {
+    if (isPrimaryTaskWindow(window)) {
+      return {
+        ok: false,
+        status: 409,
+        body: {
+          error: 'primary_task_window_pane_add_unsupported',
+          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+        },
+      };
+    }
+    return { ok: true, extraEnv: deps.buildSecondaryWindowEnv?.(window.taskId, server) ?? {} };
+  }
+  return { ok: true, extraEnv: uiTokenEnvForServer(deps.uiToken, server) };
 }
 
 // ─── Kill window (shared across windowId / ref / legacy target routes) ───

@@ -6,7 +6,7 @@ import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
-import { hubPaneEnv, type HubPaneEnvConfig } from '../hubPaneEnv';
+import { composePaneEnv, type HubPaneEnvConfig } from '../hubPaneEnv';
 import type { MisaoAttachClient, MisaoEventSource, MisaoRpc } from './MisaoConnection';
 import { MisaoChangeEvents } from './misaoChangeEvents';
 import { MISAO_PANE_EXITED, MISAO_PANE_NOT_FOUND, MISAO_WINDOW_NOT_FOUND, MISAO_WORKSPACE_NOT_FOUND } from './misaoErrorCodes';
@@ -361,11 +361,12 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   /**
-   * The pane's env: the hub env every driver gives (hubPaneEnv) with the caller's env on top.
+   * The pane's env (composePaneEnv, the rule shared with tmux): hub env, caller's env, then the isolation mask.
+   * The daemon builds a child's env from its own process.env, so the mask is what blanks an inherited credential.
    * Secrets go in ephemeralEnv: env is persisted by the daemon and shown by pane.info/pane.list.
    */
   private paneEnvParams(server: ServerConfig, extra: Record<string, string> | undefined): { env?: Record<string, string>; ephemeralEnv?: Record<string, string> } {
-    const { env, ephemeralEnv } = splitPaneEnv({ ...hubPaneEnv(this.options.hubEnv, server), ...extra });
+    const { env, ephemeralEnv } = splitPaneEnv(composePaneEnv(this.options.hubEnv, server, extra));
     return {
       ...(Object.keys(env).length > 0 ? { env } : {}),
       ...(Object.keys(ephemeralEnv).length > 0 ? { ephemeralEnv } : {}),
