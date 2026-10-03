@@ -31,6 +31,16 @@ export interface MuxCapabilities {
   copyMode: boolean;
 }
 
+/** Process state a driver reports for a pane. Only the misao driver sets it (tmux panes do not carry it). */
+export type MuxPaneProcessState = 'running' | 'exited' | 'stopped' | 'unknown';
+
+/** Terminal WebSocket close codes and reasons the hub uses to say why a pane cannot be attached. */
+export const TERMINAL_CLOSE = {
+  windowNotFound: { code: 4404, reason: 'window not found' },
+  paneStopped: { code: 4410, reason: 'pane stopped' },
+  windowEmpty: { code: 4412, reason: 'window empty' },
+} as const;
+
 export interface MuxPane {
   index: number;
   command: string;
@@ -39,6 +49,8 @@ export interface MuxPane {
   height: number;
   active: boolean;
   pid: number;
+  /** Set by drivers that know the pane's process state (misao). Omitted = the driver does not report it. */
+  processState?: MuxPaneProcessState;
 }
 
 export interface MuxWindowInfo {

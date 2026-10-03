@@ -2,6 +2,7 @@ import { muxKindForRuntime } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
+import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
 
 /** Everything the misao driver needs from its environment, resolved once at the composition root. */
@@ -45,6 +46,7 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
     const info = await connection.request('server.info', {});
     return { installed: true, version: info.protocolVersion };
   } catch (err) {
+    if (err instanceof MuxDriverUnavailableError) return { installed: false, detail: err.reason };
     return { installed: false, detail: err instanceof Error ? err.message : String(err) };
   }
 }

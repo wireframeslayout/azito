@@ -731,6 +731,10 @@ export class TmuxClient implements IMuxClient {
     return { handle: asPaneHandle(result.stdout.trim().split('\n')[0] || ''), result };
   }
 
+  async openPaneInWindow(_server: ServerConfig, _ref: MuxRef, _opts?: { command?: string; extraEnv?: Record<string, string> }): Promise<PaneHandle> {
+    throw new MuxOperationUnsupportedError('tmux', 'openPaneInWindow');
+  }
+
   async closePane(server: ServerConfig, handle: PaneHandle) { return this.killPane(server, handle as string); }
   async captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult> {
     const args = ['capture-pane', '-p', '-t', handle as string, '-e'];

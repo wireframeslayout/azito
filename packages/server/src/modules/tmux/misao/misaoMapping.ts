@@ -30,7 +30,7 @@ export function lastOutputEpochSeconds(panes: readonly MisaoPane[]): number | nu
 
 /** Window and pane indexes are 1-based: AZITO's pane ordinals and window numbers follow tmux base-index / pane-base-index 1, and the UI uses `index` as the ordinal as-is. */
 function toMuxPane(pane: MisaoPane, index: number): MuxPane {
-  return { index, command: paneCommand(pane), title: pane.title, width: pane.cols, height: pane.rows, active: false, pid: pane.pid ?? 0 };
+  return { index, command: paneCommand(pane), title: pane.title, width: pane.cols, height: pane.rows, active: false, pid: pane.pid ?? 0, processState: pane.processState };
 }
 
 function toMuxWindow(workspace: string, window: MisaoWorkspace['windows'][number], index: number, panes: readonly MisaoPane[]): MuxWindowInfo {

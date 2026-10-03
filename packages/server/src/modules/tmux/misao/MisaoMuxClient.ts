@@ -140,7 +140,11 @@ export class MisaoMuxClient implements IMuxClient {
   async openTerminal(_server: ServerConfig, ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number): Promise<ITerminalStream> {
     const { workspaces, panes } = await this.snapshot();
     if (!workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window))) throw new Error('WINDOW_NOT_FOUND');
-    const pane = paneAtOrdinal(panesOfWindow(panes, ref.window), ordinal, ref);
+    const windowPanes = panesOfWindow(panes, ref.window);
+    if (windowPanes.length === 0) throw new Error('WINDOW_EMPTY');
+    const pane = paneAtOrdinal(windowPanes, ordinal, ref);
+    // A stopped pane (restored after a daemon restart) can never be attached: say so before opening a connection.
+    if (pane.processState === 'stopped') throw new Error('PANE_STOPPED');
     const client = await this.options.connectAttachClient();
     try {
       return await MisaoTerminalStream.open({
@@ -157,7 +161,8 @@ export class MisaoMuxClient implements IMuxClient {
       if (this.rpc.isConnectionError(err)) throw new MuxDriverUnavailableError('misao', 'daemon_unreachable');
       // A stopped pane can never be attached, so it must not look retryable: the browser reconnects on any other close.
       const code = this.rpc.rpcErrorCode(err);
-      throw code === MISAO_PANE_NOT_FOUND || code === MISAO_PANE_EXITED ? new Error('WINDOW_NOT_FOUND') : err;
+      if (code === MISAO_PANE_EXITED) throw new Error('PANE_STOPPED');
+      throw code === MISAO_PANE_NOT_FOUND ? new Error('WINDOW_NOT_FOUND') : err;
     }
   }
 
@@ -202,6 +207,20 @@ export class MisaoMuxClient implements IMuxClient {
       ...paneEnvParams(env),
     });
     return { handle: asPaneHandle(paneId), result: { stdout: paneId, stderr: '', code: 0 } };
+  }
+
+  /** Opens a shell pane in an existing window and, when given, types `command` into it (like a new window's launch command). */
+  async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string> }): Promise<PaneHandle> {
+    const windowName = await this.windowName(ref);
+    const { paneId } = await this.rpc.request('pane.open', {
+      cmd: [this.options.shell],
+      windowId: ref.window,
+      labels: { origin: 'hub', name: windowName },
+      ...paneEnvParams(opts?.extraEnv),
+    });
+    const handle = asPaneHandle(paneId);
+    if (opts?.command) await this.sendKeysToHandle(server, handle, [opts.command, 'Enter']);
+    return handle;
   }
 
   async closePane(_server: ServerConfig, handle: PaneHandle): Promise<ExecResult> {
@@ -282,6 +301,16 @@ export class MisaoMuxClient implements IMuxClient {
     const { workspaces, panes } = await this.snapshot();
     if (!workspaces.some((ws) => ws.windows.some((w) => w.windowId === ref.window))) throw new Error(`misao window ${ref.window} not found`);
     return panesOfWindow(panes, ref.window);
+  }
+
+  /** Name of the window. Throws when the window does not exist. */
+  private async windowName(ref: MuxRef): Promise<string> {
+    const workspaces = await this.rpc.request('workspace.list', {});
+    for (const ws of workspaces) {
+      const win = ws.windows.find((w) => w.windowId === ref.window);
+      if (win) return win.name;
+    }
+    throw new Error(`misao window ${ref.window} not found`);
   }
 
   /** null when the daemon has no such pane. */
