@@ -39,9 +39,13 @@ class FakeClient {
   /** Where each line stream stands, as the SDK's live `cursor` would report it. */
   lineCursors = new Map<string, { seq: number; epoch: string }>();
   lineSubscribeFailure: Error | undefined;
+  /** When set, subscribeLines() waits for it before resolving (or rejecting with `holdFailure`). */
+  lineHold: Promise<void> | undefined;
+  holdFailure: Error | undefined;
   async subscribeLines(paneId: string, handler: (line: unknown) => void, options?: unknown): Promise<{ unsubscribe(): void; readonly cursor: { seq: number; epoch: string } }> {
     this.control.subscribeLinesError?.();
     this.lineSubscribes.push({ paneId, options });
+    if (this.lineHold) { await this.lineHold; if (this.holdFailure) throw this.holdFailure; }
     if (this.lineSubscribeFailure) throw this.lineSubscribeFailure;
     this.lineHandlers.set(paneId, handler);
     const cursors = this.lineCursors;
@@ -544,6 +548,71 @@ describe('MisaoConnection', () => {
         subscription.unsubscribe();
         await replaceClient(connection, control);
         expect(control.clients[1].lineSubscribes).toEqual([]);
+      });
+
+      it('forgets a stream the SDK dropped after refusing its automatic re-subscribe, so a later replacement does not bring it back', async () => {
+        vi.useFakeTimers();
+        const { connection, control } = setup();
+        await connection.start();
+        const stale = vi.fn();
+        await connection.subscribeLines('p_1', stale);
+        for (const cb of control.clients[0].subscriptionErrorListeners) cb({ stream: { kind: 'lines', paneId: 'p_1' }, error: new Error('refused') });
+        expect(control.clients[0].lineUnsubscribes).toEqual(['p_1']);
+        const fresh = vi.fn();
+        await connection.subscribeLines('p_1', fresh);
+
+        await replaceClient(connection, control);
+        expect(control.clients[1].lineSubscribes).toHaveLength(1);
+        control.clients[1].lineHandlers.get('p_1')?.({ text: 'x' });
+        expect(stale).not.toHaveBeenCalled();
+        expect(fresh).toHaveBeenCalledTimes(1);
+      });
+
+      it('releases a stream that is unsubscribed while its re-subscribe is in flight', async () => {
+        vi.useFakeTimers();
+        const { connection, control } = setup();
+        await connection.start();
+        const subscription = await connection.subscribeLines('p_1', vi.fn());
+        let release!: () => void;
+        const hold = new Promise<void>((resolve) => { release = resolve; });
+        const original = control.clients;
+        const make = original.push.bind(original);
+        original.push = (...clients: FakeClient[]) => { clients.forEach((c) => { c.lineHold = hold; }); return make(...clients); };
+
+        await replaceClient(connection, control);
+        expect(control.clients[1].lineSubscribes).toHaveLength(1);
+        subscription.unsubscribe();
+        release();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(control.clients[1].lineUnsubscribes).toEqual(['p_1']);
+      });
+
+      it('retries a re-subscribe that the connection dropped mid-flight on the next client, delivering to the handler once', async () => {
+        vi.useFakeTimers();
+        const { connection, control } = setup();
+        await connection.start();
+        const handler = vi.fn();
+        await connection.subscribeLines('p_1', handler);
+        let fail!: () => void;
+        const hold = new Promise<void>((resolve) => { fail = resolve; });
+        const original = control.clients;
+        const make = original.push.bind(original);
+        let first = true;
+        original.push = (...clients: FakeClient[]) => {
+          if (first) { first = false; clients.forEach((c) => { c.lineHold = hold; c.holdFailure = new FakeMisaoConnectionError('lost'); }); }
+          return make(...clients);
+        };
+
+        await replaceClient(connection, control);
+        fail();
+        await vi.advanceTimersByTimeAsync(0);
+        // The second replacement carries the stream over; nothing is double-subscribed on the first.
+        for (const cb of control.clients[1].stateListeners) cb({ status: 'closed', cause: new FakeProtocolVersionError('x') } as never);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(control.clients[2].lineSubscribes).toHaveLength(1);
+        expect(control.clients[1].lineUnsubscribes).toEqual([]);
+        control.clients[2].lineHandlers.get('p_1')?.({ text: 'x' });
+        expect(handler).toHaveBeenCalledTimes(1);
       });
 
       it('tells listeners when the daemon refuses a stream on the new client, and drops it', async () => {

@@ -219,6 +219,10 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
       this.eventsInterrupted = true;
       this.options.log.warn(`[misao] events re-subscribe refused, retrying in the background: ${info.error.message}`);
       this.scheduleEventRetry();
+    } else {
+      // The SDK dropped this line stream from its own table; ours must go too, or a later client replacement would
+      // re-subscribe a stream that already ended (and could collide with a fresh subscription of the same pane).
+      this.dropLineRegistrations(info.stream.paneId);
     }
     for (const listener of this.subscriptionErrorListeners) listener(info);
   }
@@ -264,6 +268,19 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
         registration.subscription = undefined;
       },
     };
+  }
+
+  private dropLineRegistrations(paneId: string): void {
+    for (const registration of [...this.lineRegistrations]) {
+      if (registration.paneId !== paneId) continue;
+      this.lineRegistrations.delete(registration);
+      try {
+        registration.subscription?.unsubscribe();
+      } catch (err) {
+        this.options.log.warn(`[misao] could not release line subscription for ${paneId}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      registration.subscription = undefined;
+    }
   }
 
   /** Detaches the line subscriptions from a client that is being thrown away, keeping their cursors for the new one. */

@@ -5,8 +5,9 @@ import type { PaneStreamGapEvent } from '../PaneStream';
 import type { MisaoLineSource } from './MisaoConnection';
 
 /**
- * Reads a pane's output from the daemon's line stream instead of a pipe-pane file. Reconnects are the SDK's job:
- * it resumes from the last seq. Lines lost anyway (daemon restart, ring overrun) are reported as 'gap'; phase
+ * Reads a pane's output from the daemon's line stream instead of a pipe-pane file. Reconnects are not this class's job:
+ * within one client the SDK resumes from the last seq, and when the connection replaces its client MisaoConnection
+ * re-subscribes from the last cursor. Lines lost anyway (daemon restart, ring overrun) are reported as 'gap'; phase
  * completion is decided by the signal stream, so a gap only costs buffered output. A refused re-subscribe or a
  * failed subscribe is reported as 'subscription_error' ('error' would crash the process when nobody listens).
  *
