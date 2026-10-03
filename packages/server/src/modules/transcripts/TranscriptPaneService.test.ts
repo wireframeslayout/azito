@@ -92,6 +92,51 @@ describe('TranscriptPaneService', () => {
       expect(result!.panes[0].cwdMatch).toBe(false);
     });
 
+    describe('with several local servers', () => {
+      const MISAO_LOCAL: ServerConfig = { ...LOCAL_SERVER, name: 'misao-local', muxRuntime: 'misao' };
+      const TMUX_LOCAL2: ServerConfig = { ...LOCAL_SERVER, name: 'local2' };
+      const MISAO_PANE = 'p_01HZX3K9M2N4P5Q6R7S8T9V0WX';
+
+      function pane(paneId: string): MuxPaneInfo {
+        return { paneId, sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/x', currentCommand: 'claude' } as MuxPaneInfo;
+      }
+
+      function build(servers: ServerConfig[]) {
+        const deps = buildDeps({ getSessionCwd: () => ({ cwd: '/x' }), servers });
+        const sent: Array<{ server: string; handle: string }> = [];
+        const registry = {
+          resolve: (s: ServerConfig) => ({
+            listAllPanes: async () => [pane(s.muxRuntime === 'misao' ? MISAO_PANE : `%${s.name.length}`)],
+            probePane: async () => ({ alive: true, verified: true }),
+            sendTextToHandle: async (_s: ServerConfig, handle: string) => { sent.push({ server: s.name, handle }); },
+            sendKeysToHandle: async () => {},
+          }),
+        } as unknown as MuxDriverRegistry;
+        return { service: new TranscriptPaneService(deps.claudeTranscriptSource, registry, deps.serverRepo), sent };
+      }
+
+      it('lists panes from one local server per mux kind', async () => {
+        const { service } = build([LOCAL_SERVER, TMUX_LOCAL2, MISAO_LOCAL]);
+        const result = await service.listPaneCandidates(SID);
+        expect(result!.panes.map((p) => p.paneId)).toEqual(['%5', MISAO_PANE]);
+      });
+
+      it('routes input to the local server whose mux kind matches the handle', async () => {
+        const { service, sent } = build([LOCAL_SERVER, MISAO_LOCAL]);
+        expect(await service.sendInput(SID, asPaneHandle(MISAO_PANE), 'hi')).toBe('ok');
+        expect(await service.sendInput(SID, asPaneHandle('%1'), 'hi')).toBe('ok');
+        expect(sent).toEqual([
+          { server: 'misao-local', handle: MISAO_PANE },
+          { server: 'local', handle: '%1' },
+        ]);
+      });
+
+      it('returns pane_not_found when no local server matches the handle kind', async () => {
+        const { service } = build([LOCAL_SERVER, TMUX_LOCAL2]);
+        expect(await service.sendInput(SID, asPaneHandle(MISAO_PANE), 'hi')).toBe('pane_not_found');
+      });
+    });
+
     it('throws when no local server is configured', async () => {
       const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),

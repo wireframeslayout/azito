@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatMuxRef, parseMuxRef, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, isPaneHandleLike, type MuxRef } from './mux';
+import { formatMuxRef, parseMuxRef, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, isPaneHandleLike, isPaneHandle, type MuxRef } from './mux';
 
 const WINDOW_ID = 'w_01J8ZK3M5N7P9Q2R4S6T8V0WXY';
 const PANE_ID = 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXY';
@@ -45,5 +45,15 @@ describe('isPaneHandleLike', () => {
     expect(isPaneHandleLike('%12', 'misao')).toBe(false);
     expect(isPaneHandleLike(WINDOW_ID, 'misao')).toBe(false);
     expect(isPaneHandleLike('p_81J8ZK3M5N7P9Q2R4S6T8V0WXY', 'misao')).toBe(false);
+  });
+});
+
+describe('isPaneHandle', () => {
+  it('accepts tmux and misao handles and rejects anything else', () => {
+    expect(isPaneHandle('%3')).toBe(true);
+    expect(isPaneHandle('p_01HZX3K9M2N4P5Q6R7S8T9V0WX')).toBe(true);
+    expect(isPaneHandle('w_01HZX3K9M2N4P5Q6R7S8T9V0WX')).toBe(false);
+    expect(isPaneHandle('p_short')).toBe(false);
+    expect(isPaneHandle('')).toBe(false);
   });
 });
