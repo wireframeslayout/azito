@@ -362,6 +362,7 @@ Settings → System → **稼働検知診断**（3秒更新・読み取り専用
 | `tier1_hook` 〜 `tier4_probe` | その層のフォールバックが判定した状態。`tier4_probe` 表示が多い場合は supervisor / hook の配線を確認 |
 | `none`（稼働中） | 実行ラン登録による稼働（登録 = 稼働。検知層の判定ではない） |
 | `tier0_mux` | マルチプレクサ自身（misao、§13）が報告した状態で判定された行。行の `mux` 材料にある misao 側の判定ルール名（`exit` / プロファイル名 / `title` / `bytes`）が Tier チップの横に出る |
+| `refinedBy: tier1_hook_stop` | misao 窓で `tier0_mux` の idle を Claude の Stop hook が完了と確認した印（§13）。`decidedBy` は `tier0_mux` のまま |
 | `refinedBy: tier2_title` | Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した印（misao 窓では `tier0_mux` の working 行も対象、§13）。`decidedBy` は判定した層のまま残る（「Tier 0 idle ＋ Tier 2 blocked」と読む） |
 | 最終遷移 | 直近の遷移とその reason（§7）-- 「なぜ消えたか」の証跡 |
 
@@ -542,6 +543,14 @@ request`）を返します。
   blocked となって完了を出さない。向きは一方向のみで、画面を読めないときは直前の状態を保持する
   （`heldStatusOnUnknown`）。`mux_ref` を持たない misao 窓は tmux ターゲットから推測せず、画面確認は
   `unknown` になる。
+- **Stop hook による完了。** misao の `idle` 単体は完了の証拠にしない。ただし Claude の Stop hook が届いていれば
+  完了とする: 窓の最新の hook が `stop` で、その時刻が直近の `working` 報告より後のとき、`tier0_mux` の
+  idle 行は `completed` で停止し、`refinedBy: tier1_hook_stop` が付く（`decidedBy` は `tier0_mux` のまま）。
+  hook の `start` 以降に idle になっても Stop が来ていなければ、Stop の後に再び working になっていれば、
+  完了にならない通常の idle。blocked の画面補正が優先で、blocked なら完了は出ない。Stop は Claude が応答を
+  終えた時点、misao の idle はその後の静止の判定なので、通常は hook → idle の順に届く（idle が先に届いて
+  停止が announce された後の Stop は、遅れて完了へ書き換えない）。hook の無いエージェント（codex 等）は
+  従来どおり `exited` だけが完了。
 - **hook。** `$TMUX_PANE` が無く `$MISAO_PANE_ID`（`p_` + ULID 26文字）がある場合、3つの hook は
   tmux のフィールドの代わりに `misaoPaneId` を送る。ハブは `PaneHandleResolver` で窓を解決し、
   Tier 1 の hook 状態の記録・保留中質問の記録をその窓に対して行う。解決できないペイン（デーモンに

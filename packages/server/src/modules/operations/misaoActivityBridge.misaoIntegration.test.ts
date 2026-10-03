@@ -37,6 +37,8 @@ const frame = () => {
   process.stdout.write('\\x1b[2J\\x1b[H' + '\\x1b[0m'.repeat(24) + text.replace(/\\n/g, '\\r\\n'));
 };
 frame();
+// 'quiet' redraws until the test asks it to stop, then stays alive without output (idle).
+if (mode === 'quiet') setInterval(() => { if (!fs.existsSync(screenFile + '.quiet')) frame(); }, 500);
 if (mode === 'redraw' || mode === 'finish') setInterval(frame, 500);
 else setInterval(() => {}, 1000);
 // 'finish' exits only once the test asks for it, so the daemon is always given time to report \`working\` first.
@@ -61,7 +63,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
   }
 
   /** Opens a window running the fake agent and registers its `windows` row, as the hub does for an agent window. */
-  async function launchAgent(name: string, text: string, mode: 'redraw' | 'once' | 'finish'): Promise<{ target: string; screen: string }> {
+  async function launchAgent(name: string, text: string, mode: 'redraw' | 'once' | 'finish' | 'quiet'): Promise<{ target: string; screen: string }> {
     const screen = screenFile(name, text);
     const { windowId } = await connection.request('window.create', { workspace: 'azact', name });
     const ref: MuxRef = { kind: 'misao', workspace: 'azact', window: windowId };
@@ -198,4 +200,19 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux', refinedBy: 'tier2_title' }));
     expect(stopPayloads(target)).toEqual([]);
   });
+
+  it('a pane that goes idle after its Stop hook arrived is a completion marked tier1_hook_stop (the hook alone is not)', async () => {
+    const { target, screen } = await launchAgent('stophook', PLAIN_OUTPUT, 'quiet');
+    const completions = () => stopPayloads(target).filter((p) => p.reason === 'completed');
+
+    await waitFor(() => diagnosticsOf(target)?.mux?.status === 'working' && diagnosticsOf(target)?.decidedBy === 'tier0_mux');
+    // Claude fires Stop when its turn ends; the daemon judges the pane idle some seconds of silence later.
+    monitor.recordResolvedHookSignal(SERVER.name, target, 'stop');
+    await monitor.tick();
+    expect(completions()).toEqual([]);
+
+    fs.writeFileSync(`${screen}.quiet`, '');
+    await waitFor(() => completions().length > 0);
+    expect(diagnosticsOf(target)).toEqual(expect.objectContaining({ decidedBy: 'tier0_mux', state: 'idle', refinedBy: 'tier1_hook_stop' }));
+  }, 60000);
 });

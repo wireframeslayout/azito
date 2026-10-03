@@ -389,6 +389,7 @@ Settings → System → **Activity detection diagnostics** (3s refresh, read-onl
 | Supervisor column "no frame received" | The connection is alive but no activity frame has arrived yet (an old supervisor build, or right after a reconnect). A lower tier is deciding in the meantime |
 | `tier1_hook` … `tier4_probe` | That tier's fallback decided the state. A lot of `tier4_probe` rows means the supervisor / hook wiring is worth checking |
 | `none` (while running) | Running by execution-run registration (registered = running; not a detection tier's verdict) |
+| `refinedBy: tier1_hook_stop` | A marker that a Claude Stop hook confirmed a misao `tier0_mux` `idle` as a completion (§13). `decidedBy` stays `tier0_mux` |
 | `refinedBy: tier2_title` | A marker that Tier 2's screen classification refined a Tier 0 `idle` row into `blocked` (on a misao window, a `tier0_mux` `working` row as well, §13). `decidedBy` deliberately stays at the deciding tier -- read the row as "Tier 0 idle + Tier 2 blocked" |
 | Last transition | The most recent transition and its reason (§7) -- the trail for "why did it disappear" |
 
@@ -573,6 +574,16 @@ tmux behavior above is unchanged.
   same via the existing idle refinement, announcing no completion. One direction only; an
   unreadable screen holds the previous status (`heldStatusOnUnknown`). A misao window with no
   `mux_ref` is never guessed from a tmux target -- its screen check is `unknown`.
+- **Completion by the Stop hook.** A misao `idle` alone is not evidence of completion, but a
+  Claude Stop hook confirms it: when the window's latest hook is a `stop` that arrived after the
+  latest `working` report, the `tier0_mux` idle row stops with `completed` and carries
+  `refinedBy: tier1_hook_stop` (`decidedBy` stays `tier0_mux`). An idle after a hook `start` with
+  no Stop yet, or an idle after the pane went working again following the Stop, is a plain idle.
+  The blocked screen refinement wins: a blocked pane announces no completion. Claude fires Stop
+  when it finishes its turn and misao judges idle after the quiet that follows, so the hook
+  normally arrives first (a Stop that arrives after an idle that already announced the stop does
+  not rewrite it into a completion). Agents without hooks (codex etc.) still complete only on
+  `exited`.
 - **Hooks.** With `$TMUX_PANE` absent and `$MISAO_PANE_ID` (`p_` + 26 ULID characters) set, the
   three hook scripts send `misaoPaneId` instead of the tmux fields. The hub resolves the window
   through `PaneHandleResolver` and records the Tier 1 hook state / opens the pending question on

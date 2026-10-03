@@ -92,8 +92,9 @@ managed from Edit.
 - Browser terminal attach, creating and operating windows and panes, task execution (the agent
   runs in a window on the worktree), and activity detection are supported.
 - Activity detection uses the daemon's `pane.state` events (`tier0_mux` in `GET /api/debug/activity`);
-  tui-supervisor is not used. A misao `idle` is not treated as evidence of completion, so a
-  finished row ("完了 ·") appears when the agent's process exits. See "misao windows" in the
+  tui-supervisor is not used. A misao `idle` alone is not treated as evidence of completion, but when Claude's
+  Stop hook has arrived the finished row ("完了 ·") appears (`refinedBy: tier1_hook_stop`); for agents without hooks
+  (codex etc.) it appears only when the process exits. See "misao windows" in the
   [activity detection reference](./activity-detection.md) for details.
 - tmux-specific operations such as pane zoom, saving and applying layouts, and setting pane titles are not supported.
 - Restarting the daemon loses the pane processes (only metadata remains, shown as `stopped`).
