@@ -8,7 +8,8 @@ import { resolveKillOutcome } from '../killOutcome';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
-import { MuxDriverUnavailableError } from '../MuxCapabilityError';
+import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
+import { TmuxClient as TmuxClientImpl } from '../TmuxClient';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
   return {
@@ -991,6 +992,23 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token' } });
   });
 
+  it('labels the pane of a registered non-task window with its windowId', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 7, ownerType: 'project', taskId: null, projectId: 1, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: false,
+    });
+    await build(vi.fn(), { windowRepo });
+    const res = await app.inject({ method: 'POST', url });
+    expect(res.statusCode).toBe(200);
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token' }, labels: { windowId: 7 } });
+  });
+
+  it('opens an unregistered window without labels', async () => {
+    await build(vi.fn(), { windowRepo: makeWindowRepo() });
+    await app.inject({ method: 'POST', url });
+    expect(openPaneInWindow.mock.calls[0]).toEqual([misaoServer, misaoRef, expect.not.objectContaining({ labels: expect.anything() })]);
+  });
+
   it("rejects with 409 for a task's primary window", async () => {
     await build(vi.fn(), { windowRepo: taskWindowRepo(true) });
     const res = await app.inject({ method: 'POST', url });
@@ -1006,6 +1024,29 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
     const res = await app.inject({ method: 'POST', url });
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, misaoServer);
-    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: maskedEnv });
+    expect(openPaneInWindow).toHaveBeenCalledWith(misaoServer, misaoRef, { command: undefined, extraEnv: maskedEnv, labels: { windowId: 5, taskId: 42 } });
+  });
+
+  it('answers 501 on a tmux server (tmux windows never lose their last pane)', async () => {
+    const tmuxServer = { name: 'tmux1', type: 'local', muxRuntime: 'system' } as ServerConfig;
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('tmux', { openPaneInWindow: TmuxClientImpl.prototype.openPaneInWindow } as unknown as IMuxClient);
+    app = Fastify();
+    app.setErrorHandler((err, _request, reply) => {
+      if (err instanceof MuxOperationUnsupportedError) return reply.status(501).send({ error: 'mux_operation_unsupported', operation: err.operation });
+      return reply.status(500).send({ error: 'unexpected' });
+    });
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(tmuxServer),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(),
+    });
+    await app.ready();
+    const tmuxRef = encodeURIComponent(JSON.stringify({ kind: 'tmux', workspace: 'main', window: 'w1' }));
+    const res = await app.inject({ method: 'POST', url: `/api/servers/tmux1/mux/windows/${tmuxRef}/panes/open` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'mux_operation_unsupported', operation: 'openPaneInWindow' });
   });
 });

@@ -731,7 +731,7 @@ export class TmuxClient implements IMuxClient {
     return { handle: asPaneHandle(result.stdout.trim().split('\n')[0] || ''), result };
   }
 
-  async openPaneInWindow(_server: ServerConfig, _ref: MuxRef, _opts?: { command?: string; extraEnv?: Record<string, string> }): Promise<PaneHandle> {
+  async openPaneInWindow(_server: ServerConfig, _ref: MuxRef, _opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
     throw new MuxOperationUnsupportedError('tmux', 'openPaneInWindow');
   }
 

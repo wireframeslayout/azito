@@ -122,8 +122,7 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   async labelWindowPanes(_server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void> {
-    const set: Record<string, string> = { windowId: String(labels.windowId) };
-    if (labels.taskId !== undefined) set.task = String(labels.taskId);
+    const set = paneLabelsOf(labels);
     for (const pane of await this.windowPanes(ref)) {
       await this.rpc.request('pane.set_label', { paneId: pane.paneId, set });
     }
@@ -209,13 +208,16 @@ export class MisaoMuxClient implements IMuxClient {
     return { handle: asPaneHandle(paneId), result: { stdout: paneId, stderr: '', code: 0 } };
   }
 
-  /** Opens a shell pane in an existing window and, when given, types `command` into it (like a new window's launch command). */
-  async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string> }): Promise<PaneHandle> {
+  /**
+   * Opens a shell pane in an existing window and, when given, types `command` into it (like a new window's launch command).
+   * `labels` carries a registered window's `windowId` / `task` labels, which a split inherits from its source pane.
+   */
+  async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
     const windowName = await this.windowName(ref);
     const { paneId } = await this.rpc.request('pane.open', {
       cmd: [this.options.shell],
       windowId: ref.window,
-      labels: { origin: 'hub', name: windowName },
+      labels: { origin: 'hub', name: windowName, ...(opts?.labels ? paneLabelsOf(opts.labels) : {}) },
       ...paneEnvParams(opts?.extraEnv),
     });
     const handle = asPaneHandle(paneId);
@@ -369,6 +371,13 @@ function paneEnvParams(input: Record<string, string> | undefined): { env?: Recor
 function paneAtOrdinal(panes: MisaoPane[], ordinal: PaneOrdinal, ref: MuxRef): MisaoPane {
   if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > panes.length) throw new Error(`Pane ordinal ${ordinal} out of range (1..${panes.length}) for ${ref.window}`);
   return panes[ordinal - 1];
+}
+
+/** misao pane labels for a registered window (`windowId`, and `task` for a task's window). */
+function paneLabelsOf(labels: PaneWindowLabels): Record<string, string> {
+  const set: Record<string, string> = { windowId: String(labels.windowId) };
+  if (labels.taskId !== undefined) set.task = String(labels.taskId);
+  return set;
 }
 
 function inheritedLabels(source: MisaoPane): Record<string, string> {

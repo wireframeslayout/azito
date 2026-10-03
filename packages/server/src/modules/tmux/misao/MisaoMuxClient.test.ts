@@ -335,6 +335,13 @@ describe('MisaoMuxClient writes', () => {
     expect(daemon.callsTo('pane.write')).toEqual([{ paneId: opened, data: 'claude', source: 'hub' }, { paneId: opened, data: '\r', source: 'hub' }]);
   });
 
+  it("openPaneInWindow labels the pane with a registered window's windowId and task", async () => {
+    const { daemon, client } = setup();
+    const w = daemon.addWindow('proj', 'main');
+    await client.openPaneInWindow(server, refOf('proj', w), { labels: { windowId: 5, taskId: 42 } });
+    expect(daemon.callsTo('pane.open')[0]).toMatchObject({ labels: { origin: 'hub', name: 'main', windowId: '5', task: '42' } });
+  });
+
   it('openPaneInWindow without a command only opens the shell', async () => {
     const { daemon, client } = setup();
     const w = daemon.addWindow('proj', 'main');

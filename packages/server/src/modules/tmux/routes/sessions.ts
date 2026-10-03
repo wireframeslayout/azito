@@ -923,8 +923,10 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const extraEnv = windowRow && windowRow.taskId !== null
           ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
           : uiTokenEnvForServer(opts.uiToken, freshSrv);
+        // A registered window's panes carry its windowId / task labels (labelWindowPanes); a new pane must too.
+        const labels = windowRow ? { windowId: windowRow.id, ...(windowRow.taskId !== null ? { taskId: windowRow.taskId } : {}) } : undefined;
         const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
-        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv });
+        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv, labels });
         notifySessionsChanged(request.params.name);
         return { ok: true };
       });

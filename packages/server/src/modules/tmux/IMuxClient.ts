@@ -39,7 +39,7 @@ export interface IMuxClient {
   probePane(server: ServerConfig, handle: PaneHandle): Promise<{ alive: boolean; verified: boolean }>;
   splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }>;
   /** Opens a new shell pane in an existing window and types `command` into it. Only the misao driver supports it. */
-  openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string> }): Promise<PaneHandle>;
+  openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle>;
   closePane(server: ServerConfig, handle: PaneHandle): Promise<ExecResult>;
   captureScreen(server: ServerConfig, handle: PaneHandle, start?: number, end?: number): Promise<ExecResult>;
   sendKeysToHandle(server: ServerConfig, handle: PaneHandle, keys: string[]): Promise<void>;
