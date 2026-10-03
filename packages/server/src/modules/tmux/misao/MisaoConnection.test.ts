@@ -291,6 +291,24 @@ describe('MisaoConnection', () => {
       expect(b).toHaveBeenCalledTimes(1);
     });
 
+    it('reaches every recovery listener even if one throws, and leaves the subscription healthy', async () => {
+      vi.useFakeTimers();
+      const { connection, control, warn } = setup();
+      await connection.start();
+      const after = vi.fn();
+      connection.onEventsRecovered(() => { throw new Error('listener boom'); });
+      connection.onEventsRecovered(after);
+      const handler = vi.fn();
+      await connection.subscribeEvents(handler);
+      control.clients[0].reconnect('refused');
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(after).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('listener boom'));
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+
     it('does not report recovery for a restore the SDK accepted', async () => {
       const { connection, control } = setup();
       await connection.start();

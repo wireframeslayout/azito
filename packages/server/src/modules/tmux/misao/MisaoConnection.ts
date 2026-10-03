@@ -142,7 +142,13 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
         this.clearEventRetry();
         if (!this.eventsInterrupted) return;
         this.eventsInterrupted = false;
-        for (const listener of this.eventsRecoveredListeners) listener();
+        for (const listener of [...this.eventsRecoveredListeners]) {
+          try {
+            listener();
+          } catch (err) {
+            this.options.log.warn(`[misao] events recovered listener failed: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
       })
       .finally(() => { this.eventSubscribing = undefined; });
     return this.eventSubscribing;
