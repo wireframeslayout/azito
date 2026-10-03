@@ -841,7 +841,7 @@ export class AgentActivityMonitor {
         agentStatus: state === 'active' ? agentStatus : undefined,
       });
     }
-    void this.tick();
+    this.requestTick();
   }
 
   /**
@@ -868,7 +868,7 @@ export class AgentActivityMonitor {
     if (status === 'idle' && this.hookStates.get(key)?.status === 'running') {
       setTimeout(() => this.requestTick(), MISAO_STOP_HOOK_GRACE_MS + 50).unref();
     }
-    void this.tick();
+    this.requestTick();
   }
 
   private mapMuxStatus(raw: MuxAgentStatus): { state: ActivityDecidedState; reason?: AgentActivityStopReason } | null {

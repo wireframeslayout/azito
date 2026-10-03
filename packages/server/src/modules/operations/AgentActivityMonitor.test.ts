@@ -2396,9 +2396,9 @@ describe('AgentActivityMonitor', () => {
       monitor.recordMuxSignal('local', 'azito:agent-1', 'done', { decidedBy: 'exit' });
       releaseScreen();
       await inFlight;
-      expect(stopPayloads()).toEqual([]);
 
-      await monitor.tick();
+      // The signal re-runs a tick right after the in-flight one, and that tick publishes the completion.
+      await drain();
       expect(stopPayloads()).toEqual([expect.objectContaining({ target: 'azito:agent-1', reason: 'completed' })]);
     });
 
@@ -2533,6 +2533,66 @@ describe('AgentActivityMonitor', () => {
         vi.advanceTimersByTime(10);
         hook('stop');
         await drain();
+        expect(completions()).toEqual([]);
+      });
+
+      /** Holds the next listSessions call until released, so a tick is in flight while the test sends signals. */
+      function holdNextTick(): { start: () => Promise<void>; release: () => void } {
+        let release: (() => void) | undefined;
+        listSessions.mockImplementationOnce(() => new Promise((r) => {
+          release = () => r(makeSessions('azito', 'agent-1', 0, paneActivity, [makePane({ command: 'claude', title: '✳ idle' })]).map((ses) => {
+            ses.windows[0].ref = MISAO_REF;
+            return ses;
+          }));
+        }));
+        return {
+          start: async () => {
+            void monitor.tick();
+            await vi.waitFor(() => expect(release).toBeDefined());
+          },
+          release: () => release!(),
+        };
+      }
+
+      it('an idle that arrives while a tick is in flight is evaluated right after it, so blocked shows at once', async () => {
+        arrange();
+        hook('start');
+        await drain();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+
+        const held = holdNextTick();
+        await held.start();
+        drawScreen(BLOCKED_SCREEN);
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+        held.release();
+        await drain();
+
+        expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, status: 'blocked' })]);
+        expect(diagnosticsRow()).toEqual(expect.objectContaining({ state: 'blocked', refinedBy: 'tier2_title' }));
+      });
+
+      it('an idle that arrives during a tick is held and marked, and a Stop after the grace does not complete it', async () => {
+        vi.useFakeTimers({ toFake: ['Date'] });
+        arrange();
+        hook('start');
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
+        await drain();
+
+        const held = holdNextTick();
+        await held.start();
+        monitor.recordMuxSignal('local', 'azito:agent-1', 'idle');
+        held.release();
+        await drain();
+        expect(diagnosticsRow()?.heldForStopHook).toBe(true);
+
+        vi.advanceTimersByTime(5_000);
+        await monitor.tick();
+        emit.mockClear();
+        vi.advanceTimersByTime(10);
+        hook('stop');
+        await drain();
+
         expect(completions()).toEqual([]);
       });
 
