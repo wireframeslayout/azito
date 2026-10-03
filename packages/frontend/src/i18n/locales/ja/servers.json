@@ -135,6 +135,8 @@
     "applySettings": "設定適用",
     "allInstalled": "すべて導入済",
     "missingCount": "未導入 {{count}}",
+    "offline": "オフライン",
+    "offlineNotice": "サーバーに到達できないため、導入状況を確認できません。",
     "reinstall": "再インストール",
     "reinstalling": "再インストール中...",
     "stateInstalling": "インストール中",

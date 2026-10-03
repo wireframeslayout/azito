@@ -72,7 +72,8 @@ export function getOverviewSummary(status: ServerStatus | null): SectionSummary 
   return { text: 'servers:status.error', tone: 'orange' };
 }
 
-export function getSetupSummary(installStatus: InstallStatusResponse | null): SectionSummary {
+export function getSetupSummary(installStatus: InstallStatusResponse | null, installStatusError: 'offline' | 'failed' | null = null): SectionSummary {
+  if (!installStatus && installStatusError === 'offline') return { text: 'servers:setup.offline', tone: 'orange' };
   if (!installStatus) return { text: 'servers:status.checking', tone: 'dim' };
   const items = [
     installStatus.tmux,

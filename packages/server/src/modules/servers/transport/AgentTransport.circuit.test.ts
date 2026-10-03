@@ -102,4 +102,59 @@ describe('AgentTransport circuit breaker', () => {
     await expect(t.fetchHealth()).rejects.toMatchObject({ reason: 'circuit_open' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+
+  it('shares one half-open /health probe between fetchHealth() and exec()', async () => {
+    const t = make();
+    fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
+    await expect(t.exec('a')).rejects.toBeInstanceOf(AgentUnreachableError);
+    vi.advanceTimersByTime(15_001);
+
+    let release: (r: Response) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((r) => { release = r; }));
+    await expect(Promise.allSettled([t.fetchHealth(), t.exec('b'), t.fetchHealth(), t.exec('c')])).resolves.toSatisfy(
+      (rs: PromiseSettledResult<unknown>[]) => rs.every((r) => r.status === 'rejected'),
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(String(fetchMock.mock.calls[1][0])).toBe('http://10.0.0.1:4021/health');
+
+    release(jsonResponse({ version: 'v' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.isCircuitOpen()).toBe(false);
+  });
+
+  it('ignores a stale failure from a request that started before the breaker was closed again', async () => {
+    const t = make();
+    let failStale: (e: unknown) => void = () => {};
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((_, rej) => { failStale = rej; }));
+    const stale = t.exec('slow').catch((e: unknown) => e);
+
+    fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
+    await expect(t.exec('b')).rejects.toBeInstanceOf(AgentUnreachableError);
+    vi.advanceTimersByTime(15_001);
+    fetchMock.mockResolvedValueOnce(jsonResponse({ version: 'v' }));
+    await expect(t.exec('c')).rejects.toMatchObject({ reason: 'circuit_open' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(t.isCircuitOpen()).toBe(false);
+
+    failStale(fetchFailure('ECONNREFUSED'));
+    expect(await stale).toBeInstanceOf(AgentUnreachableError);
+    expect(t.isCircuitOpen()).toBe(false);
+  });
+
+  it('converts a network error while reading the response body into AgentUnreachableError', async () => {
+    const t = make();
+    const res = new Response('x', { status: 200 });
+    vi.spyOn(res, 'text').mockRejectedValueOnce(new TypeError('terminated', { cause: { code: 'UND_ERR_SOCKET' } }));
+    fetchMock.mockResolvedValueOnce(res);
+    await expect(t.exec('x')).rejects.toBeInstanceOf(AgentUnreachableError);
+    expect(t.isCircuitOpen()).toBe(true);
+  });
+
+  it('converts an abort while reading the body into reason timeout, for /health too', async () => {
+    const t = make();
+    const res = new Response('x', { status: 200 });
+    vi.spyOn(res, 'text').mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
+    fetchMock.mockResolvedValueOnce(res);
+    await expect(t.fetchHealth()).rejects.toMatchObject({ reason: 'timeout' });
+  });
 });

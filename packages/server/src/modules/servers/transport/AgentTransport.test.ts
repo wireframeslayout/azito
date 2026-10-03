@@ -5,10 +5,9 @@ describe('AgentTransport', () => {
   let fetchSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ stdout: '', stderr: '', code: 0 }),
-    } as Response);
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => (
+      new Response(JSON.stringify({ stdout: '', stderr: '', code: 0 }), { status: 200 })
+    ));
   });
 
   afterEach(() => {

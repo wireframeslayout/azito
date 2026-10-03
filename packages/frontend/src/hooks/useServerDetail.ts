@@ -122,11 +122,23 @@ export function hasIsolationCleanupReportField(body: unknown): body is { isolati
   return !!body && typeof body === 'object' && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'isolationCleanupReport');
 }
 
+async function fetchInstallStatus(encodedName: string): Promise<{ status: InstallStatusResponse | null; error: 'offline' | 'failed' | null }> {
+  try {
+    const r = await api<InstallStatusResponse | { error: string }>(`/servers/${encodedName}/install-status`);
+    if ('error' in r) return { status: null, error: r.error === 'agent_unreachable' ? 'offline' : 'failed' };
+    return { status: r, error: null };
+  } catch {
+    return { status: null, error: 'failed' };
+  }
+}
+
 interface UseServerDetailResult {
   server: Server | null;
   servers: Server[];
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
+  /** install-status を取得できなかった理由。'offline' はハブが到達不能（503）と判定した場合。 */
+  installStatusError: 'offline' | 'failed' | null;
   sessions: Session[];
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
@@ -162,6 +174,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   // ここでは install-status とセッション一覧のみ、この画面固有に取得する。
   const { servers, statuses, refresh: refreshStatuses } = useServerStatuses();
   const [installStatus, setInstallStatus] = useState<InstallStatusResponse | null>(null);
+  const [installStatusError, setInstallStatusError] = useState<'offline' | 'failed' | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [allProjects, setAllProjects] = useState<Array<{ windows?: Window[] }>>([]);
   const [allTasks, setAllTasks] = useState<Array<{ id: number; title?: string; windows?: Window[] }>>([]);
@@ -198,6 +211,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     // non-isolated one would flash the old isolation warning against the
     // new server until the fetch resolves).
     setInstallStatus(null);
+    setInstallStatusError(null);
     setSessions([]);
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
@@ -225,8 +239,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       ]);
       const mainPromise = Promise.all([
         refreshStatuses(),
-        // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさない。null は「取得できなかった」を表す
-        api<InstallStatusResponse | { error: string }>(`/servers/${encoded}/install-status`).then((r) => ('error' in r ? null : r)).catch(() => null),
+        // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさず、失敗の種類を区別して返す
+        fetchInstallStatus(encoded),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
@@ -240,7 +254,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       // awaiting — discard this response rather than let it clobber the
       // newer one's state.
       if (fetchGenRef.current !== gen) return;
-      setInstallStatus(installRes);
+      setInstallStatus(installRes.status);
+      setInstallStatusError(installRes.error);
       setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
       let metaFailed = false;
       if (projResult.status === 'fulfilled' && Array.isArray(projResult.value)) {
@@ -328,7 +343,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   }, [allTasks]);
 
   return {
-    server, servers, status, installStatus, sessions,
+    server, servers, status, installStatus, installStatusError, sessions,
     windowById, taskById,
     muxDriverStatus,
     isolationReport, isolationReportUnavailable,

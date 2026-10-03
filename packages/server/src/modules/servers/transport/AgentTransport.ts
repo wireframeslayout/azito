@@ -95,6 +95,8 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   // Circuit breaker: epoch ms until which calls fail fast; 0 = closed.
   private unreachableUntil = 0;
   private probe: Promise<void> | null = null;
+  // Bumped on every breaker state change; see send().
+  private epoch = 0;
 
   constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string) {
     this.token = token;
@@ -169,10 +171,13 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   }
 
   markReachable(): void {
+    if (this.unreachableUntil === 0) return;
+    this.epoch++;
     this.unreachableUntil = 0;
   }
 
   markUnreachable(): void {
+    this.epoch++;
     this.unreachableUntil = Date.now() + CIRCUIT_OPEN_MS;
   }
 
@@ -182,34 +187,42 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   }
 
   /**
-   * GET /health with a short deadline, sharing the breaker. Inside the fail-fast window it throws
-   * `circuit_open` without fetching. Non-2xx responses mean the agent is reachable but unhealthy and throw a plain Error.
+   * GET /health with a short deadline, sharing the breaker (and its single half-open probe). While the breaker is
+   * open or half-open it throws `circuit_open` without fetching. Non-2xx responses mean the agent is reachable but
+   * unhealthy and throw a plain Error.
    */
   async fetchHealth(): Promise<unknown> {
-    if (this.isCircuitOpen()) throw new AgentUnreachableError(this.serverName, 'circuit_open');
+    this.assertCircuitClosed();
     return this.requestHealth();
   }
 
   private async requestHealth(): Promise<unknown> {
-    let res: Response;
+    const { status, text } = await this.send('/health', { method: 'GET' }, HEALTH_TIMEOUT_MS);
+    if (status < 200 || status >= 300) throw new Error(`Agent /health failed (${status})`);
+    return JSON.parse(text) as unknown;
+  }
+
+  /**
+   * One HTTP round trip including the body read, so a drop or deadline during body transfer is classified like any
+   * other network failure. The outcome updates the breaker only if nothing else changed it since this request
+   * started (a stale result must not reopen a breaker a newer success closed, or vice versa).
+   */
+  private async send(path: string, init: RequestInit, deadlineMs: number): Promise<{ status: number; text: string }> {
+    const startEpoch = this.epoch;
     try {
-      res = await fetch(`${this.baseUrl}/health`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) });
+      const res = await fetch(`${this.baseUrl}${path}`, { ...init, signal: AbortSignal.timeout(deadlineMs) });
+      const text = await res.text();
+      if (startEpoch === this.epoch) this.markReachable();
+      return { status: res.status, text };
     } catch (err) {
-      throw this.toUnreachable(err);
+      const reason = classifyFetchError(err);
+      if (!reason) throw err;
+      if (startEpoch === this.epoch) this.markUnreachable();
+      throw new AgentUnreachableError(this.serverName, reason);
     }
-    this.markReachable();
-    if (!res.ok) throw new Error(`Agent /health failed (${res.status})`);
-    return res.json();
   }
 
-  private toUnreachable(err: unknown): unknown {
-    const reason = classifyFetchError(err);
-    if (!reason) return err;
-    this.markUnreachable();
-    return new AgentUnreachableError(this.serverName, reason);
-  }
-
-  /** Fails fast while the breaker is open; once it expires, one background /health probe decides whether to close it. */
+  /** Fails fast while the breaker is open; once it expires, a single shared background /health probe decides whether to close it. */
   private assertCircuitClosed(): void {
     if (this.unreachableUntil === 0) return;
     if (!this.isCircuitOpen() && !this.probe) {
@@ -222,25 +235,15 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
 
   private async post(path: string, body: Record<string, unknown>, timeoutMs?: number): Promise<ExecResult> {
     this.assertCircuitClosed();
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: this.authHeader,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout((timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS) + HTTP_SLACK_MS),
-      });
-    } catch (err) {
-      throw this.toUnreachable(err);
-    }
-    this.markReachable();
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(`Agent ${path} failed (${res.status}): ${text}`);
-    }
-    return res.json() as Promise<ExecResult>;
+    const { status, text } = await this.send(path, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: this.authHeader,
+      },
+      body: JSON.stringify(body),
+    }, (timeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS) + HTTP_SLACK_MS);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status}): ${text}`);
+    return JSON.parse(text) as ExecResult;
   }
 }

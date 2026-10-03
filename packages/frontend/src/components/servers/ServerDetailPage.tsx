@@ -30,7 +30,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const {
-    server, servers, status, installStatus, sessions,
+    server, servers, status, installStatus, installStatusError, sessions,
     windowById, taskById, muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
@@ -74,6 +74,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
         currentServerName={serverName}
         status={status}
         installStatus={installStatus}
+        installStatusError={installStatusError}
         sessions={sessions}
       />
     );
@@ -117,7 +118,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
             />
           )}
           {activeSection === 'setup' && (
-            <SetupSection server={server} installStatus={installStatus} refresh={refresh} />
+            <SetupSection server={server} installStatus={installStatus} installStatusError={installStatusError} refresh={refresh} />
           )}
           {activeSection === 'windows' && (
             <WindowsSection server={server} sessions={sessions} refresh={refresh} windowById={windowById} taskById={taskById} windowMetaError={windowMetaError} />

@@ -10,6 +10,7 @@ import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { TmuxClient as TmuxClientImpl } from '../TmuxClient';
+import { mapAppError } from '../../../app/mapAppError';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
 
 function makeServerRepo(srv: ServerConfig): IServerRepository {
@@ -1060,7 +1061,8 @@ describe('unreachable agent server', () => {
     };
     const app = Fastify();
     app.setErrorHandler((err, _req, reply) => {
-      if (err instanceof AgentUnreachableError) return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason });
+      const mapped = mapAppError(err);
+      if (mapped) return reply.status(mapped.status).send(mapped.body);
       return reply.status(500).send({ error: (err as Error).message });
     });
     await app.register(sessionsRoutes, {

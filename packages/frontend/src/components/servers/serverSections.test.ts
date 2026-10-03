@@ -19,6 +19,11 @@ describe('getSetupSummary', () => {
     const status: InstallStatusResponse = { ...base, tmux: { installed: false } };
     expect(getSetupSummary(status).textParams).toEqual({ count: 1 });
   });
+
+  it('reports offline when install-status failed because the agent is unreachable', () => {
+    expect(getSetupSummary(null, 'offline')).toEqual({ text: 'servers:setup.offline', tone: 'orange' });
+    expect(getSetupSummary(null, null).text).toBe('servers:status.checking');
+  });
 });
 
 describe('describeMisaoItem', () => {

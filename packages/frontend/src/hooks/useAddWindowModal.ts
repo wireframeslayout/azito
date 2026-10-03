@@ -436,7 +436,6 @@ export function useAddWindowModal(
     setAwServer,
     setAwTarget,
     setAwLabel,
-    setAwSessionData,
     setAwSelectedSession,
     setAwNewSession,
     setAwNewWindowName,

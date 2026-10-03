@@ -134,6 +134,8 @@
     "agentLabel": "Agent",
     "applySettings": "Apply Settings",
     "allInstalled": "All installed",
+    "offline": "Offline",
+    "offlineNotice": "The server is unreachable, so the setup status cannot be checked.",
     "missingCount": "Missing {{count}}",
     "reinstall": "Reinstall",
     "reinstalling": "Reinstalling...",
