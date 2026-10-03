@@ -1,5 +1,5 @@
-import type { EventHandler, Subscription } from '@misao/sdk' with { 'resolution-mode': 'import' };
-import type { MisaoEventSource } from './MisaoConnection';
+import type { EventHandler } from '@misao/sdk' with { 'resolution-mode': 'import' };
+import type { EventRegistration, MisaoEventSource } from './MisaoConnection';
 
 /** Notifications are coalesced over this window: pane.title fires on every spinner frame of a busy agent. */
 export const CHANGE_COALESCE_MS = 200;
@@ -17,7 +17,7 @@ function isChangeEvent(type: string): boolean {
  */
 export class MisaoChangeEvents {
   private readonly servers = new Set<string>();
-  private subscription: Subscription | undefined;
+  private subscription: EventRegistration | undefined;
   private subscribing: Promise<void> | undefined;
   private flushTimer: NodeJS.Timeout | undefined;
 

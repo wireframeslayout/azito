@@ -44,11 +44,10 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('misao event consumers sharing one co
     if (dir) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it('starts both consumers in the hub start-up order (change hooks first) and feeds both from one subscription', async () => {
+  it('starts both consumers together, as the hub does at start-up, and feeds both from one subscription', async () => {
     const changeEvents = new MisaoChangeEvents(connection, onChange, { warn });
     const paneStates = new MisaoPaneStateEvents(connection, { handleState, handleSnapshot, handleDisconnected }, { warn });
-    await changeEvents.install('local');
-    await paneStates.start();
+    await Promise.all([changeEvents.install('local'), paneStates.start()]);
     expect(handleSnapshot).toHaveBeenCalledTimes(1);
 
     await connection.request('workspace.create', { name: 'azme-ws' });

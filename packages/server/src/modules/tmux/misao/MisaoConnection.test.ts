@@ -13,6 +13,8 @@ interface FakeClientControl {
   clients: FakeClient[];
   /** Errors returned by successive connect() calls; once empty, connect succeeds. */
   connectFailures: Error[];
+  /** Errors thrown by successive subscribeEvents() calls; once empty, subscribing succeeds. */
+  subscribeEventsFailures: Error[];
   /** Throws from subscribeLines when set. */
   subscribeLinesError?: () => never;
 }
@@ -53,16 +55,25 @@ class FakeClient {
   /** Like the SDK: one events subscription per connection. */
   async subscribeEvents(handler: (event: unknown) => void): Promise<{ unsubscribe(): void; cursor: { seq: number; epoch: string } }> {
     this.eventSubscribeCalls += 1;
+    const failure = this.control.subscribeEventsFailures.shift();
+    if (failure) throw failure;
     if (this.eventHandler) throw new Error('stream already registered: events');
     this.eventHandler = handler;
     return { unsubscribe: () => { this.eventHandler = undefined; this.eventUnsubscribeCalls += 1; }, cursor: { seq: 0, epoch: 'e' } };
+  }
+  /** An SDK reconnect: the events subscription is restored, or refused by the daemon (the SDK then drops it and reports it). */
+  reconnect(restore: 'restored' | 'refused'): void {
+    for (const cb of this.stateListeners) cb({ status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('lost') });
+    if (restore === 'refused') this.eventHandler = undefined;
+    for (const cb of this.stateListeners) cb({ status: 'connected' });
+    if (restore === 'refused') for (const cb of this.subscriptionErrorListeners) cb({ stream: { kind: 'events' }, error: new Error('refused') });
   }
   close(): void { this.closed = true; }
 }
 
 /** A stand-in for the ESM-only SDK module: only what MisaoConnection touches. */
 function createFakeSdk(): { sdk: MisaoSdk; control: FakeClientControl } {
-  const control: FakeClientControl = { clients: [], connectFailures: [] };
+  const control: FakeClientControl = { clients: [], connectFailures: [], subscribeEventsFailures: [] };
   const sdk = {
     MisaoClient: function MisaoClient() {
       const client = new FakeClient(control);
@@ -234,6 +245,88 @@ describe('MisaoConnection', () => {
       expect(a).toHaveBeenCalledTimes(1);
       expect(b).toHaveBeenCalledTimes(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    });
+
+    it('registers the same function twice independently', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      const handler = vi.fn();
+      const first = await connection.subscribeEvents(handler);
+      await connection.subscribeEvents(handler);
+      first.unsubscribe();
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(handler).toHaveBeenCalledTimes(1);
+      expect(control.clients[0].eventUnsubscribeCalls).toBe(0);
+    });
+
+    it('makes a new SDK subscription for every handler after the SDK refuses the re-subscribe on reconnect', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      await connection.start();
+      const a = vi.fn();
+      const b = vi.fn();
+      await connection.subscribeEvents(a);
+      await connection.subscribeEvents(b);
+      control.clients[0].reconnect('refused');
+      await vi.advanceTimersByTimeAsync(100);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      control.clients[0].eventHandler?.({ type: 'pane.state' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('retries a refused re-subscribe with backoff until it succeeds, and stops when the last handler leaves', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      await connection.start();
+      const handler = vi.fn();
+      const registration = await connection.subscribeEvents(handler);
+      control.clients[0].reconnect('refused');
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'), new FakeMisaoRpcError(-32000, 'busy'));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(control.clients[0].eventSubscribeCalls).toBe(3);
+      await vi.advanceTimersByTimeAsync(400);
+      expect(control.clients[0].eventSubscribeCalls).toBe(4);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(handler).toHaveBeenCalledTimes(1);
+
+      control.clients[0].reconnect('refused');
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'));
+      registration.unsubscribe();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(control.clients[0].eventSubscribeCalls).toBe(4);
+    });
+
+    it('keeps the handlers registered and retries in the background when the first subscribe fails while connected', async () => {
+      vi.useFakeTimers();
+      const { connection, control, warn } = setup();
+      await connection.start();
+      control.subscribeEventsFailures.push(new FakeMisaoRpcError(-32000, 'busy'));
+      const a = vi.fn();
+      const b = vi.fn();
+      await Promise.all([connection.subscribeEvents(a), connection.subscribeEvents(b)]);
+      expect(control.clients[0].eventSubscribeCalls).toBe(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('busy'));
+      await vi.advanceTimersByTimeAsync(100);
+      expect(control.clients[0].eventSubscribeCalls).toBe(2);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(a).toHaveBeenCalledTimes(1);
+      expect(b).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects every waiting handler when the daemon is unreachable (a connection error) and registers none', async () => {
+      const { connection, control } = setup();
+      await connection.start();
+      control.clients[0].reconnect('restored');
+      control.subscribeEventsFailures.push(new FakeMisaoConnectionError('down'));
+      const results = await Promise.allSettled([connection.subscribeEvents(vi.fn()), connection.subscribeEvents(vi.fn())]);
+      expect(results.map((r) => r.status)).toEqual(['rejected', 'rejected']);
+      const late = vi.fn();
+      await connection.subscribeEvents(late);
+      control.clients[0].eventHandler?.({ type: 'x' });
+      expect(late).toHaveBeenCalledTimes(1);
     });
 
     it('rejects every waiting handler when the subscription fails, and a later attempt can succeed', async () => {
