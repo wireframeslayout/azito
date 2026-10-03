@@ -20,7 +20,8 @@ import { useNotificationChannel } from '../hooks/useNotificationChannel';
 import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
-import { findWindowTerminalTab } from '../lib/retargetTab';
+import { planWindowReconnect } from '../lib/retargetTab';
+import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 
@@ -96,7 +97,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab, retargetTabPane, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab: retargetTabRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -243,6 +244,15 @@ function WorkspaceInner() {
   // would still fire pointlessly every render.
   const allTabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
   const layout = usePaneLayout('workspace-layout', allTabIds);
+  // A tab id rename must reach the split layout in the same batch as the tab list, or reconcile()
+  // would drop the old id from its pane and re-add the new one to whichever pane has focus.
+  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]) => {
+    layout.replaceTab(oldTabId, retargetTabRaw(oldTabId, serverName, windowId, sessions));
+  }, [layout.replaceTab, retargetTabRaw]);
+  const retargetTabPane = useCallback((oldTabId: string, pane: number) => {
+    const newTabId = retargetTabPaneRaw(oldTabId, pane);
+    if (newTabId) layout.replaceTab(oldTabId, newTabId);
+  }, [layout.replaceTab, retargetTabPaneRaw]);
   const paneRects = usePaneRects();
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
@@ -738,10 +748,15 @@ function WorkspaceInner() {
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
     showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, servers,
-    reconnectWindow: (win) => {
-      const open = findWindowTerminalTab(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
-      const ref: TerminalRef = open?.terminalRef ?? { kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 };
-      connectPane(ref, undefined, { reconnect: true });
+    reconnectWindow: async (win) => {
+      // `tabs` / `sessionData` are the pre-respawn view the tab's ref was built from; the ref
+      // itself is re-resolved against a post-respawn session list when it has to be replaced.
+      const plan = planWindowReconnect(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
+      if (plan.action === 'retarget') {
+        retargetTab(plan.tabId, win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
+      } else {
+        connectPane(plan.ref, undefined, { reconnect: true });
+      }
     },
   });
 

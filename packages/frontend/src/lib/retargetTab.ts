@@ -49,3 +49,21 @@ export function findWindowTerminalTab<T extends TerminalTabLike>(tabs: T[], serv
     return r.kind === 'windowId' ? r.windowId === windowId : r.ref === windowRef;
   });
 }
+
+export type WindowReconnectPlan =
+  | { action: 'reconnect'; ref: TerminalRef }
+  | { action: 'retarget'; tabId: string }
+  | { action: 'open'; ref: TerminalRef };
+
+/**
+ * What to do with a respawned window's terminal tab. `tabs` / `sessions` are the pre-respawn
+ * view, which is what the tab's ref was built from. A windowId tab only needs a reconnect; a
+ * ref-form tab holds the driver's old ref (a misao respawn mints a new one), so it is moved to
+ * windowId form; with no tab, pane 1 is opened.
+ */
+export function planWindowReconnect<T extends TerminalTabLike>(tabs: T[], serverName: string, windowId: number, sessions: Session[] | undefined): WindowReconnectPlan {
+  const tab = findWindowTerminalTab(tabs, serverName, windowId, sessions);
+  if (!tab?.terminalRef) return { action: 'open', ref: { kind: 'windowId', serverName, windowId, pane: 1 } };
+  if (tab.terminalRef.kind === 'ref') return { action: 'retarget', tabId: tab.id };
+  return { action: 'reconnect', ref: tab.terminalRef };
+}

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { stripPaneSuffix } from '@azito/shared';
 import { api } from '../api/client';
 import { applyRetargetTab } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
@@ -188,8 +189,12 @@ export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
     if (rawType === 'terminal' && (tab.id.includes('[object ') || (tab.terminalRef && !isValidTerminalRef(tab.terminalRef)))) {
       const target = tab.target;
       if (!target || target.includes('[object ') || !target.includes(':') || !tab.serverName) continue;
-      const repaired = terminalRefFromTarget(tab.serverName, target);
-      const repairedTab: PersistedTab = { ...tab, id: terminalTabId(repaired), terminalRef: repaired, label: terminalRefDisplayLabel(repaired) };
+      // Rebuilt as a legacy-form tab so migrateTerminalTabs resolves it against the server's
+      // sessions (windowId / the driver's own ref) instead of guessing a tmux ref here — a
+      // misao window's target has the same `<session>:<window>` shape.
+      const pane = tab.terminalRef?.pane ?? 1;
+      const { terminalRef: _broken, ...rest } = tab;
+      const repairedTab: PersistedTab = { ...rest, id: `terminal:${tab.serverName}/${stripPaneSuffix(target)}.${pane}`, label: stripPaneSuffix(target) };
       if (seenIds.has(repairedTab.id)) continue;
       seenIds.add(repairedTab.id);
       next.push(repairedTab);
@@ -471,24 +476,28 @@ export function useTabPersistence(storageKey?: string) {
     return tab ? tab.label : null;
   }, []);
 
-  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]) => {
+  /** Returns the id the tab now has, so the caller can update the split layout to match. */
+  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]): string => {
     const newRef = retargetedTerminalRef(oldTabId, serverName, windowId, sessions);
-    setTabs((prev) => applyRetargetTab({ tabs: prev, activeTabId: null }, oldTabId, newRef).tabs);
-    setActiveTabId((prev) => (prev === oldTabId ? terminalTabId(newRef) : prev));
+    const next = applyRetargetTab({ tabs: tabsRef.current, activeTabId: activeTabIdRef.current }, oldTabId, newRef);
+    setTabs(next.tabs);
+    setActiveTabId(next.activeTabId);
+    return terminalTabId(newRef);
   }, []);
 
   /** Points a terminal tab at another pane of the same window; when a tab for that pane is already open, that one is kept. */
-  const retargetTabPane = useCallback((oldTabId: string, pane: number) => {
+  const retargetTabPane = useCallback((oldTabId: string, pane: number): string | null => {
     const old = tabsRef.current.find((t) => t.id === oldTabId);
-    if (!old?.terminalRef) return;
+    if (!old?.terminalRef) return null;
     const newRef: TerminalRef = { ...old.terminalRef, pane };
     const newTabId = terminalTabId(newRef);
-    if (newTabId === oldTabId) return;
+    if (newTabId === oldTabId) return null;
     const duplicate = tabsRef.current.some((t) => t.id === newTabId);
     setTabs((prev) => duplicate
       ? prev.filter((t) => t.id !== oldTabId)
       : prev.map((t) => (t.id === oldTabId ? { ...t, id: newTabId, terminalRef: newRef } : t)));
     setActiveTabId((prev) => (prev === oldTabId ? newTabId : prev));
+    return newTabId;
   }, []);
 
   const openServer = useCallback((serverName: string) => {

@@ -231,8 +231,8 @@ export function terminalRefDisplayLabel(r: TerminalRef): string {
 }
 
 /**
- * Pane to show after a window was respawned: the old pane when the window (as currently listed)
- * still has it, otherwise pane 1 - a respawned window can come back with fewer panes, and an
+ * Pane to show after a window was respawned: the old pane when `sessions` (which must be fetched
+ * after the respawn) lists the window with that many panes, otherwise pane 1 - a respawned window can come back with fewer panes, and an
  * ordinal that no longer exists would surface as a generic "window gone" error.
  */
 export function resolveRespawnedPane(oldPane: number, sessions: Session[] | undefined, windowId: number): number {
@@ -243,7 +243,7 @@ export function resolveRespawnedPane(oldPane: number, sessions: Session[] | unde
 /**
  * The ref a terminal tab is re-pointed at after its window was respawned. Always windowId form:
  * a window's tmux_target / misao handle is not a MuxRef, so a `ref` tab built from it can never
- * connect. The old tab's pane ordinal is kept only when `sessions` still lists it for the window (else 1).
+ * connect. The old tab's pane ordinal is kept only when post-respawn `sessions` list it for the window (else 1).
  */
 export function retargetedTerminalRef(oldTabId: string, serverName: string, windowId: number, sessions?: Session[]): TerminalRef {
   const old = parseTerminalTabId(oldTabId);

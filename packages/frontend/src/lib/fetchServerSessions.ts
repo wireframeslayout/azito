@@ -38,3 +38,13 @@ export async function fetchSessionsForServers(
   });
   return { data, offline };
 }
+
+/** The server's current session list, or undefined when it cannot be read (callers fall back conservatively). */
+export async function fetchSessionsOrUndefined(serverName: string): Promise<Session[] | undefined> {
+  try {
+    const r = await api<Session[] | { error: string }>(`/servers/${encodeURIComponent(serverName)}/sessions`);
+    return Array.isArray(r) ? r : undefined;
+  } catch {
+    return undefined;
+  }
+}

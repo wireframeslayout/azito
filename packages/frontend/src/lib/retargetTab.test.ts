@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { applyRetargetTab, findWindowTerminalTab } from './retargetTab';
+import { applyRetargetTab, findWindowTerminalTab, planWindowReconnect } from './retargetTab';
 import { retargetedTerminalRef, resolveRespawnedPane, terminalTabId, isValidTerminalRef, type TerminalRef } from './terminalRef';
 import { normalizeLegacyTabs, type PersistedTab } from '../hooks/useTabPersistence';
 import type { Session } from '../pages/workspace/types';
@@ -70,15 +70,32 @@ describe('findWindowTerminalTab', () => {
   });
 });
 
+describe('planWindowReconnect', () => {
+  it('reconnects a windowId tab in place', () => {
+    const t = winTab(9, 2);
+    expect(planWindowReconnect([t], 'local', 9, undefined)).toEqual({ action: 'reconnect', ref: t.terminalRef });
+  });
+  it('moves a ref-form tab to windowId form (its ref changes on a misao respawn)', () => {
+    const t = refTab();
+    expect(planWindowReconnect([t], 'local', 9, sessions(9, 1))).toEqual({ action: 'retarget', tabId: t.id });
+  });
+  it('opens pane 1 when no tab shows the window', () => {
+    expect(planWindowReconnect([winTab(1)], 'local', 9, undefined)).toEqual({ action: 'open', ref: { kind: 'windowId', serverName: 'local', windowId: 9, pane: 1 } });
+  });
+});
+
 describe('persisted tabs broken by the raw-target retarget bug', () => {
   it('treats a non-MuxRef ref as invalid', () => {
     expect(isValidTerminalRef({ kind: 'ref', serverName: 'local', ref: 'azito:win', pane: 1 })).toBe(false);
   });
-  it('repairs a tmux tab from its target and drops one without a usable target', () => {
-    const broken: PersistedTab = { id: 'terminal:local::ref:azito%3Awin.1', type: 'terminal', label: 'azito:win', serverName: 'local', target: 'azito:win', terminalRef: { kind: 'ref', serverName: 'local', ref: 'azito:win', pane: 1 } };
-    const misao: PersistedTab = { id: 'terminal:local::ref:handle.1', type: 'terminal', label: 'h', serverName: 'local', target: 'handle', terminalRef: { kind: 'ref', serverName: 'local', ref: 'handle', pane: 1 } };
-    const out = normalizeLegacyTabs([broken, misao]);
-    expect(out).toHaveLength(1);
-    expect(isValidTerminalRef(out[0].terminalRef)).toBe(true);
+  it('rebuilds broken tabs in legacy form so sessions resolve them (tmux and misao targets alike)', () => {
+    const mk = (target: string): PersistedTab => ({ id: `terminal:local::ref:${encodeURIComponent(target)}.2`, type: 'terminal', label: target, serverName: 'local', target, terminalRef: { kind: 'ref', serverName: 'local', ref: target, pane: 2 } });
+    const out = normalizeLegacyTabs([mk('azito:win'), mk('s:w_01HZZZZZZZZZZZZZZZZZZZZZZZ')]);
+    expect(out.map((t) => t.id)).toEqual(['terminal:local/azito:win.2', 'terminal:local/s:w_01HZZZZZZZZZZZZZZZZZZZZZZZ.2']);
+    expect(out.every((t) => t.terminalRef === undefined)).toBe(true);
+  });
+  it('drops a broken tab whose target is not a window target', () => {
+    const t: PersistedTab = { id: 'terminal:local::ref:handle.1', type: 'terminal', label: 'h', serverName: 'local', target: 'handle', terminalRef: { kind: 'ref', serverName: 'local', ref: 'handle', pane: 1 } };
+    expect(normalizeLegacyTabs([t])).toHaveLength(0);
   });
 });

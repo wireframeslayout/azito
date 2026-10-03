@@ -29,7 +29,7 @@ interface WindowActionDeps {
   refreshSessions?: () => Promise<void>;
   togglePin?: (tabId: string) => void;
   /** Shows a respawned window again, forcing its terminal to reconnect. */
-  reconnectWindow?: (win: { serverName: string; windowId: number; tmuxTarget: string }) => void;
+  reconnectWindow?: (win: { serverName: string; windowId: number; tmuxTarget: string }) => void | Promise<void>;
   servers?: Server[];
 }
 
@@ -185,7 +185,7 @@ export function useWindowActions(
       refreshWorkspace();
       await refreshSessions?.();
       if (serverName) {
-        reconnectWindow?.({ serverName, windowId, tmuxTarget: result.tmuxTarget });
+        await reconnectWindow?.({ serverName, windowId, tmuxTarget: result.tmuxTarget });
       }
     } finally {
       setRespawningWindowIds((prev) => {

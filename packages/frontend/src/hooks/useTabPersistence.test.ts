@@ -123,8 +123,9 @@ describe('normalizeLegacyTabs — broken windowId tabs (rc.6 regression)', () =>
       terminalRef: { kind: 'windowId', serverName: 'server007', windowId: { id: 729 } as unknown as number, pane: 1 },
     });
     const [tab] = normalizeLegacyTabs([broken]);
-    expect(tab.terminalRef).toEqual({ kind: 'ref', serverName: 'server007', ref: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'win--qvp6' }), pane: 1 });
-    expect(tab.id.startsWith('terminal:server007::ref:')).toBe(true);
+    // Rebuilt in legacy form: migrateTerminalTabs resolves it against the server's sessions.
+    expect(tab.terminalRef).toBeUndefined();
+    expect(tab.id).toBe('terminal:server007/azito:win--qvp6.1');
   });
 
   it('leaves a healthy windowId tab alone', () => {

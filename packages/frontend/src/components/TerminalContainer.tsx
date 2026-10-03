@@ -23,6 +23,7 @@ import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
 import type { Project, Task, Session } from '../pages/workspace/types';
 import { resolveTerminalTarget, terminalRefFromTabTarget, type TerminalRef } from '../lib/terminalRef';
 import { resolveActivePane, checkWindowExists, resolveActivePaneByRef } from '../lib/tmuxPane';
+import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
 import type { PaneUnavailableReason } from '../lib/paneState';
 
@@ -233,14 +234,14 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
       setConnectFailed(false);
       setRespawnError(null);
       setXtermKey((k) => k + 1);
-      onRetargetTab?.(serverName, dbWindow.id, sessions);
+      onRetargetTab?.(serverName, dbWindow.id, await fetchSessionsOrUndefined(serverName));
       onWindowChanged?.();
     } catch (err) {
       setRespawnError(err instanceof Error ? err.message : 'Respawn failed');
     } finally {
       setRespawning(false);
     }
-  }, [dbWindow, serverName, sessions, onRetargetTab, onWindowChanged]);
+  }, [dbWindow, serverName, onRetargetTab, onWindowChanged]);
 
   // The pane-unavailable notice can open a pane in the window, which needs the window's MuxRef.
   const windowMuxRef = useMemo<string | null>(() => {
