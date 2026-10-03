@@ -43,21 +43,35 @@ export interface MisaoLineSource {
   onSubscriptionError(listener: (info: SubscriptionErrorInfo) => void): () => void;
 }
 
+type MisaoProtocolVersionErrorLike = InstanceType<MisaoSdk['MisaoProtocolVersionError']>;
+
 export interface MisaoConnectionOptions {
   socketPath: string;
   sdk: MisaoSdk;
   log: { warn(message: string): void };
 }
 
-type Status = 'idle' | 'connected' | 'disconnected' | 'closed';
+type Status = 'idle' | 'connected' | 'disconnected';
+
+/**
+ * Retry pacing while the daemon speaks an incompatible protocol: waiting does not fix it by itself, but the operator
+ * can reinstall the right daemon at any time, so keep trying at a gentle, capped interval instead of giving up.
+ */
+const INCOMPATIBLE_BACKOFF = { initialDelayMs: 1_000, maxDelayMs: 30_000, factor: 2 } as const;
 
 /**
  * The hub's single connection to the misao daemon. The SDK retries only after a first successful connect,
  * so the first connect is retried here with the SDK's own backoff until it succeeds or the connection is closed.
+ * An incompatible daemon protocol makes the SDK give up for good (and close its client); this class does not: it
+ * reports the cause through availability() and keeps retrying, with a fresh client where the SDK's is closed.
  */
 export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconnectSource, MisaoLineSource {
   private client: MisaoClient | undefined;
   private status: Status = 'idle';
+  /** True once close() was called: the only thing that ends the retrying. */
+  private disposed = false;
+  /** Set while the daemon's protocol is incompatible with this hub's SDK; cleared on the next successful connect. */
+  private incompatibility: MisaoProtocolVersionErrorLike | undefined;
   private retryTimer: NodeJS.Timeout | undefined;
   /** One entry per registration, so registering the same function twice stays two independent registrations. */
   private readonly eventHandlers = new Set<{ handler: EventHandler }>();
@@ -78,18 +92,23 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   /** Makes the first connect attempt; later attempts continue in the background. Never rejects on an unreachable daemon. */
   async start(): Promise<void> {
     if (this.client) throw new Error('MisaoConnection already started');
-    const { sdk } = this.options;
-    const client = new sdk.MisaoClient({ socketPath: this.options.socketPath });
+    const client = this.createClient();
+    await this.connectAttempt(client, 1);
+  }
+
+  availability(): MuxDriverAvailability {
+    if (this.status === 'connected') return { available: true };
+    return { available: false, reason: this.incompatibility ? 'protocol_incompatible' : 'daemon_unreachable' };
+  }
+
+  private createClient(): MisaoClient {
+    const client = new this.options.sdk.MisaoClient({ socketPath: this.options.socketPath });
     this.client = client;
     client.onStateChange((state) => this.handleState(state));
     client.onGap((gap) => { for (const listener of this.gapListeners) listener(gap); });
     client.onSubscriptionError((info) => this.handleSubscriptionError(info));
     client.onError((err) => this.options.log.warn(`[misao] callback error: ${err instanceof Error ? err.message : String(err)}`));
-    await this.connectAttempt(client, 1);
-  }
-
-  availability(): MuxDriverAvailability {
-    return this.status === 'connected' ? { available: true } : { available: false, reason: 'daemon_unreachable' };
+    return client;
   }
 
   async request<M extends MethodName>(method: M, params: MethodParams<M>): Promise<MethodResult<M>> {
@@ -134,7 +153,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     this.eventSubscribing ??= this.requireClient().subscribeEvents((event) => this.dispatchEvent(event))
       .then((subscription) => {
         // The last registration left (or the connection closed) while this was in flight: nobody wants it any more.
-        if (this.eventHandlers.size === 0 || this.status === 'closed') {
+        if (this.eventHandlers.size === 0 || this.disposed) {
           subscription.unsubscribe();
           return;
         }
@@ -155,7 +174,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   private scheduleEventRetry(): void {
-    if (this.eventRetryTimer || this.eventHandlers.size === 0 || this.status === 'closed') return;
+    if (this.eventRetryTimer || this.eventHandlers.size === 0 || this.disposed) return;
     this.eventRetryAttempt += 1;
     const { sdk } = this.options;
     this.eventRetryTimer = setTimeout(() => {
@@ -252,7 +271,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   close(): void {
-    this.status = 'closed';
+    this.disposed = true;
     this.clearEventRetry();
     if (this.retryTimer) clearTimeout(this.retryTimer);
     this.retryTimer = undefined;
@@ -269,35 +288,67 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   private handleState(state: ConnectionState): void {
-    if (this.status === 'closed') return;
+    if (this.disposed) return;
     if (state.status === 'connected') {
       this.status = 'connected';
+      this.incompatibility = undefined;
       this.retryEventSubscription();
       for (const listener of this.connectedListeners) listener();
     } else {
-      if (state.status === 'closed' && state.cause) {
-        this.options.log.warn(`[misao] connection closed permanently: ${state.cause.message}`);
-      }
       const wasConnected = this.status === 'connected';
-      this.status = state.status === 'closed' ? 'closed' : 'disconnected';
+      this.status = 'disconnected';
       if (wasConnected) for (const listener of this.disconnectedListeners) listener();
+      if (state.status === 'closed') this.handleClientClosed(state.cause);
     }
   }
 
-  private async connectAttempt(client: MisaoClient, attempt: number): Promise<void> {
-    if (this.status === 'closed') return;
+  /**
+   * The SDK gave up on its client (the daemon came back with an incompatible protocol): it will never reconnect, so
+   * start over with a new client. Everything that lived on the old one (events subscription) is re-made on connect.
+   */
+  private handleClientClosed(cause: unknown): void {
+    if (this.isProtocolVersionError(cause)) this.reportIncompatibility(cause);
+    else this.options.log.warn(`[misao] connection closed, starting over: ${cause instanceof Error ? cause.message : String(cause)}`);
+    this.eventSubscription = undefined;
+    this.eventSubscribing = undefined;
+    this.eventsInterrupted = this.eventHandlers.size > 0;
+    const client = this.createClient();
+    this.scheduleConnect(client, 1);
+  }
+
+  private isProtocolVersionError(err: unknown): err is MisaoProtocolVersionErrorLike {
+    return err instanceof this.options.sdk.MisaoProtocolVersionError;
+  }
+
+  private reportIncompatibility(err: MisaoProtocolVersionErrorLike): void {
+    // Logged when it first appears or its versions change, not on every retry.
+    if (this.incompatibility?.message !== err.message) this.options.log.warn(`[misao] ${err.message}; retrying in the background`);
+    this.incompatibility = err;
+  }
+
+  private scheduleConnect(client: MisaoClient, attempt: number): void {
+    if (this.disposed) return;
     const { sdk } = this.options;
+    const backoff = this.incompatibility ? INCOMPATIBLE_BACKOFF : sdk.DEFAULT_BACKOFF;
+    this.retryTimer = setTimeout(() => { void this.connectAttempt(client, attempt + 1); }, sdk.computeBackoffDelay(attempt, backoff));
+    this.retryTimer.unref();
+  }
+
+  private async connectAttempt(client: MisaoClient, attempt: number): Promise<void> {
+    if (this.disposed || client !== this.client) return;
     try {
       await client.connect();
     } catch (err) {
-      if (!(err instanceof sdk.MisaoConnectionError)) {
+      if (this.isProtocolVersionError(err)) {
+        this.reportIncompatibility(err);
+      } else if (err instanceof this.options.sdk.MisaoConnectionError) {
+        this.incompatibility = undefined;
+        if (attempt === 1) this.options.log.warn(`[misao] daemon not reachable, retrying in the background: ${err.message}`);
+      } else {
         this.options.log.warn(`[misao] giving up connecting: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
-      if (attempt === 1) this.options.log.warn(`[misao] daemon not reachable, retrying in the background: ${err.message}`);
-      const delayMs = sdk.computeBackoffDelay(attempt, sdk.DEFAULT_BACKOFF);
-      this.retryTimer = setTimeout(() => { void this.connectAttempt(client, attempt + 1); }, delayMs);
-      this.retryTimer.unref();
+      this.scheduleConnect(client, attempt);
     }
   }
 }

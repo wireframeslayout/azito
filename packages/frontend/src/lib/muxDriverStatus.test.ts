@@ -11,6 +11,10 @@ describe('parseMuxDriverStatus', () => {
     expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'misao_disabled' })).toBe('disabled');
   });
 
+  it('maps protocol_incompatible so the operator sees the cause, not just "cannot connect"', () => {
+    expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'protocol_incompatible' })).toBe('incompatible');
+  });
+
   it('is unknown for other reasons and malformed bodies', () => {
     expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'driver_not_registered' })).toBe('unknown');
     expect(parseMuxDriverStatus({ driverAvailable: false })).toBe('unknown');

@@ -38,8 +38,9 @@ function collectRunningTaskIds(running: RunningExecutions): Set<number> {
   return new Set(Object.values(running).flat().map((e) => e.taskId));
 }
 
+/** The daemon is not usable right now but the connection keeps retrying: the work waits for it instead of failing. */
 function isDaemonUnreachable(err: unknown): boolean {
-  return err instanceof MuxDriverUnavailableError && err.reason === 'daemon_unreachable';
+  return err instanceof MuxDriverUnavailableError && (err.reason === 'daemon_unreachable' || err.reason === 'protocol_incompatible');
 }
 
 export class RecoverStuckTasksUseCase {
@@ -201,7 +202,7 @@ export class RecoverStuckTasksUseCase {
       driver = this.muxDriverRegistry.resolve(server);
     } catch (err) {
       if (!(err instanceof MuxDriverUnavailableError)) throw err;
-      if (err.reason === 'daemon_unreachable') this.pendingForDaemon.add(task.id);
+      if (isDaemonUnreachable(err)) this.pendingForDaemon.add(task.id);
       this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
       return;
     }
