@@ -59,7 +59,8 @@ import { ISOLATION_HUB_SECRET_MASK, ISOLATION_MASKED_ENV } from '../../../shared
  * trust decision), so it must be evaluated independently of — and before —
  * that flag, not as a sub-case nested inside "scoped auth is on".
  *
- * When isolated, both keys are set to the empty string explicitly (not
+ * When isolated, every key of ISOLATION_HUB_SECRET_MASK (UI, agent and webhook
+ * token) is set to the empty string explicitly (not
  * simply omitted) for the same masking reason the scoped-auth branch below
  * already relies on: `tmux new-window -e KEY=...` only stops this call from
  * injecting a key, it does NOT stop the new pane from inheriting a key

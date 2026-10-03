@@ -12,9 +12,13 @@
 // — now reference this ONE constant so the masked key set can never drift
 // between them again.
 //
-// Every key AZITO's tmux panes are ever asked to carry that authenticates
-// something (hub UI, hub<->agent-server) belongs here. Adding a new
-// credential env var to either injection path means adding it here too.
+// `ISOLATION_MASKED_ENV` is the UI / agent mask shared by every caller that
+// masks: isolated servers AND non-isolated servers under scoped auth. A new
+// credential that must be blank in both cases belongs here. The hub webhook
+// token is deliberately NOT in it — a non-isolated pane needs the token the
+// mux driver injects (tui-supervisor reads it from the env) — so the full
+// mask of an ISOLATED server is `ISOLATION_HUB_SECRET_MASK` below, and a
+// credential that only an isolated server must blank belongs there.
 export const ISOLATION_MASKED_ENV: Readonly<Record<string, string>> = Object.freeze({
   AZITO_UI_TOKEN: '',
   AZITO_AGENT_TOKEN: '',

@@ -493,7 +493,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     // a `windowRow.taskId` pulled from the same `windows` table row that
     // references this task), but a task that no longer exists must not
     // fall back to a legacy/empty env — mask both credentials exactly as
-    // buildEnvForSecondaryWindow's else-branch does.
+    // buildEnvForSecondaryWindow's else-branch does. (The webhook token is not
+    // in this mask; on an isolated server the mux driver blanks it as well.)
     if (!task) return { ...ISOLATION_MASKED_ENV };
     return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
   };
