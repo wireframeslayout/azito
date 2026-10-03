@@ -89,6 +89,7 @@
     "adding": "追加中...",
     "server": "サーバー",
     "serverLabel": "サーバー:",
+    "serverOffline": "オフライン",
     "session": "セッション",
     "windowName": "ウィンドウ名（任意）",
     "windowNamePlaceholder": "例: dev",

@@ -225,7 +225,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       ]);
       const mainPromise = Promise.all([
         refreshStatuses(),
-        api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
+        // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさない。null は「取得できなかった」を表す
+        api<InstallStatusResponse | { error: string }>(`/servers/${encoded}/install-status`).then((r) => ('error' in r ? null : r)).catch(() => null),
         api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);

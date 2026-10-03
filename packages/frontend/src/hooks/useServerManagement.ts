@@ -129,8 +129,12 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const successfulServers = new Set<string>();
     const results = await Promise.allSettled(
       srvs.map(async (srv) => {
+        // エラー本文（503 agent_unreachable 等）は配列でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）
         const result = await api<Session[]>(`/servers/${srv.name}/sessions`);
-        return { name: srv.name, sessions: Array.isArray(result) ? result : [] };
+        if (!Array.isArray(result)) throw new Error(`sessions unavailable: ${srv.name}`);
+        // 遅いサーバー 1 台を待たず、取得できたサーバーから 1 台ずつ反映する
+        setSessions((prev) => ({ ...prev, [srv.name]: result }));
+        return { name: srv.name, sessions: result };
       }),
     );
     const newSessions: Record<string, Session[]> = {};
