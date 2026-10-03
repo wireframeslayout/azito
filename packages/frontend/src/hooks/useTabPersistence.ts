@@ -155,6 +155,12 @@ function normalizeLegacyTabId(id: string): string {
   return id;
 }
 
+/** The tab for a target the server resolves; its `target` keeps the pane so the WS connects to the right one. */
+export function serverResolvedTerminalTab(serverName: string, target: string, projectId?: number): PersistedTab {
+  const { windowPart, pane } = splitPaneSuffix(target);
+  return { id: `terminal:${serverName}/${windowPart}.${pane}`, type: 'terminal', label: windowPart, serverName, target: `${windowPart}.${pane}`, projectId, resolveOnServer: true };
+}
+
 /**
  * Strips the `dirty` flag from a hydrated tab. `dirty` is meant to be pure
  * in-memory editor state (see its field comment), but earlier code persisted
@@ -165,12 +171,6 @@ function normalizeLegacyTabId(id: string): string {
  * false "unsaved changes" warning for a tab whose actual editor was never
  * reopened dirty this session.
  */
-/** The tab for a target the server resolves; its `target` keeps the pane so the WS connects to the right one. */
-export function serverResolvedTerminalTab(serverName: string, target: string, projectId?: number): PersistedTab {
-  const { windowPart, pane } = splitPaneSuffix(target);
-  return { id: `terminal:${serverName}/${windowPart}.${pane}`, type: 'terminal', label: windowPart, serverName, target: `${windowPart}.${pane}`, projectId, resolveOnServer: true };
-}
-
 export function stripDirty(tab: PersistedTab): PersistedTab {
   if (!('dirty' in tab)) return tab;
   const { dirty: _dirty, ...rest } = tab;

@@ -393,3 +393,23 @@ export function refTabMatchesTarget(tabRef: string, target: string): boolean {
     return false;
   }
 }
+
+/**
+ * What `POST /tasks/:id/windows` is sent for one window. tmux keeps the name-based target alone; every other mux kind must
+ * identify the window by its ref (a name-only registration would be stored with a tmux-kind ref), and its target is the
+ * ref's `<workspace>:<window>`. A non-tmux window without a resolved ref cannot be registered (null).
+ */
+export function taskWindowRegistration(opts: {
+  muxKind: MuxDriverKind | undefined;
+  target: string;
+  ref: string | null | undefined;
+}): { target: string; ref?: string } | null {
+  const { muxKind, target, ref } = opts;
+  if (muxKind === 'tmux') return { target };
+  if (muxKind === undefined || !ref) return null;
+  try {
+    const parsed = parseMuxRef(ref);
+    if (parsed.kind !== muxKind) return null;
+    return { target: `${parsed.workspace}:${parsed.window}`, ref };
+  } catch { return null; }
+}

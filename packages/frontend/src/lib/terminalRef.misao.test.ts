@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, resolveTabTargetRef, findSessionWindowRef, resolveTerminalRefFromTarget, legacyTargetWsParams } from './terminalRef';
+import { taskWindowRegistration, resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, resolveTabTargetRef, findSessionWindowRef, resolveTerminalRefFromTarget, legacyTargetWsParams } from './terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 const MISAO_REF = '{"kind":"misao","workspace":"azito","window":"w_01M40229BC46M2RPATEBX4JN25"}';
@@ -158,5 +158,25 @@ describe('legacyTargetWsParams', () => {
   it('sends the window part and the pane apart', () => {
     expect(legacyTargetWsParams('s', 'ws:win.2', 80, 24)).toEqual({ server: 's', target: 'ws:win', pane: '2', cols: '80', rows: '24' });
     expect(legacyTargetWsParams('s', 'ws:win', 80, 24).pane).toBe('1');
+  });
+});
+
+describe('taskWindowRegistration', () => {
+  const misaoRef = JSON.stringify({ kind: 'misao', workspace: 'azito', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+  const tmuxRef = JSON.stringify({ kind: 'tmux', workspace: 'azito', window: 'win' });
+
+  it('keeps the name target and sends no ref for tmux', () => {
+    expect(taskWindowRegistration({ muxKind: 'tmux', target: 'azito:win', ref: tmuxRef })).toEqual({ target: 'azito:win' });
+  });
+
+  it('sends the ref and a ref-derived target for misao', () => {
+    expect(taskWindowRegistration({ muxKind: 'misao', target: 'azito:display', ref: misaoRef }))
+      .toEqual({ target: 'azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', ref: misaoRef });
+  });
+
+  it('is null for misao without a ref, with a tmux-kind ref, or an unknown server kind', () => {
+    expect(taskWindowRegistration({ muxKind: 'misao', target: 'azito:display', ref: null })).toBeNull();
+    expect(taskWindowRegistration({ muxKind: 'misao', target: 'azito:display', ref: tmuxRef })).toBeNull();
+    expect(taskWindowRegistration({ muxKind: undefined, target: 'azito:display', ref: misaoRef })).toBeNull();
   });
 });
