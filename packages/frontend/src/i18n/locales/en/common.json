@@ -193,7 +193,12 @@
       "opening": "Opening…",
       "killWindow": "Delete window",
       "killWindowConfirmTitle": "Delete window",
-      "killWindowConfirmMessage": "Delete window \"{{name}}\"?"
+      "killWindowConfirmMessage": "Delete window \"{{name}}\"?",
+      "closed": "This pane was closed. Pane numbers shift when one closes, so the terminal does not reconnect to another pane on its own.",
+      "resume": "Resume conversation",
+      "resuming": "Resuming…",
+      "openFirstPane": "Open the window's first pane",
+      "closeTab": "Close this tab"
     }
   },
   "resourceWarning": {

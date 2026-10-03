@@ -39,6 +39,8 @@ export const TERMINAL_CLOSE = {
   windowNotFound: { code: 4404, reason: 'window not found' },
   paneStopped: { code: 4410, reason: 'pane stopped' },
   windowEmpty: { code: 4412, reason: 'window empty' },
+  /** The pane the terminal was attached to was closed. The browser must not reconnect: pane numbers shift, so the same ordinal may now be another pane. */
+  paneClosed: { code: 4413, reason: 'pane closed' },
 } as const;
 
 export interface MuxPane {

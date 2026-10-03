@@ -84,12 +84,30 @@ describe('handleTerminalConnection driver selection', () => {
   it.each([
     ['PANE_STOPPED', 4410, 'pane stopped'],
     ['WINDOW_EMPTY', 4412, 'window empty'],
+    ['PANE_CLOSED', 4413, 'pane closed'],
   ])('maps %s to close code %i', async (message, code, reason) => {
     const f = fixtures();
     f.misaoOpen.mockRejectedValueOnce(new Error(message));
     const ws = fakeWs();
     connect(ws, misaoServer, f);
     await vi.waitFor(() => expect(ws.close).toHaveBeenCalledWith(code, reason));
+  });
+
+  it('closes the socket with the stream\'s own close code when it has one, and without a code otherwise', async () => {
+    const f = fixtures();
+    const ws = fakeWs();
+    connect(ws, misaoServer, f);
+    await vi.waitFor(() => expect(ws.listenerCount('message')).toBe(1));
+    Object.assign(f.stream, { closeCode: 4413, closeReason: 'pane closed' });
+    f.stream.emit('close');
+    expect(ws.close).toHaveBeenCalledWith(4413, 'pane closed');
+
+    const g = fixtures();
+    const plain = fakeWs();
+    connect(plain, misaoServer, g);
+    await vi.waitFor(() => expect(plain.listenerCount('message')).toBe(1));
+    g.stream.emit('close');
+    expect(plain.close).toHaveBeenCalledWith();
   });
 
   it('sends the message and closes when the misao driver is unavailable', async () => {

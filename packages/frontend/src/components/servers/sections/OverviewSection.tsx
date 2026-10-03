@@ -454,6 +454,7 @@ export default function OverviewSection({
                 : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
               {server.muxRuntime === 'misao' && muxDriverStatus === 'ok' && <Chip tone="green">{t('overview.misaoConnected')}</Chip>}
               {server.muxRuntime === 'misao' && muxDriverStatus === 'unreachable' && <Chip tone="orange">{t('overview.misaoUnreachableChip')}</Chip>}
+              {server.muxRuntime === 'misao' && muxDriverStatus === 'incompatible' && <Chip tone="orange">{t('overview.misaoIncompatibleChip')}</Chip>}
             </span>
           </KvRow>
           {isAgent && (

@@ -97,13 +97,21 @@ describe('MisaoTerminalStream', () => {
   });
 
   it('closes when its pane is closed, ignoring other panes and exits', async () => {
-    const { fake, closed } = await open();
+    const { fake, stream, closed } = await open();
     fake.event({ type: 'pane.closed', paneId: 'p_other' });
     fake.event({ type: 'pane.exited', paneId: 'p_1' });
     expect(closed).not.toHaveBeenCalled();
     fake.event({ type: 'pane.closed', paneId: 'p_1' });
     expect(closed).toHaveBeenCalledTimes(1);
     expect(fake.client.close).toHaveBeenCalledTimes(1);
+    expect(stream).toMatchObject({ closeCode: 4413, closeReason: 'pane closed' });
+  });
+
+  it('closes without a close code when the daemon connection is lost, so the browser reconnects', async () => {
+    const { fake, stream, closed } = await open();
+    fake.state({ status: 'reconnecting', attempt: 1, delayMs: 100, cause: new Error('x') });
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(stream.closeCode).toBeUndefined();
   });
 
   it('closes when the daemon connection is lost', async () => {

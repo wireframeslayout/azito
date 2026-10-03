@@ -371,6 +371,7 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
             if (e.code === TERMINAL_CLOSE.windowNotFound.code) { onWindowNotFound?.(); return; }
             if (e.code === TERMINAL_CLOSE.paneStopped.code) { onPaneUnavailable?.('pane_stopped'); return; }
             if (e.code === TERMINAL_CLOSE.windowEmpty.code) { onPaneUnavailable?.('window_empty'); return; }
+            if (e.code === TERMINAL_CLOSE.paneClosed.code) { onPaneUnavailable?.('pane_closed'); return; }
             if (firstDisconnect) {
               firstDisconnect = false;
               onDisconnect?.();

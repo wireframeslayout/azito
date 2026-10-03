@@ -715,7 +715,7 @@ describe('MisaoMuxClient openTerminal', () => {
     const { daemon, client } = setup({ connectAttachClient });
     const w = daemon.addWindow('proj', 'main');
     daemon.addPane(w);
-    await expect(client.openTerminal(server, refOf('proj', w), 2 as PaneOrdinal, 80, 24)).rejects.toThrow('out of range (1..1)');
+    await expect(client.openTerminal(server, refOf('proj', w), 2 as PaneOrdinal, 80, 24)).rejects.toThrow('PANE_CLOSED');
     expect(connectAttachClient).not.toHaveBeenCalled();
   });
 
