@@ -57,6 +57,8 @@ interface TerminalContainerProps {
   onCloseTab?: () => void;
   /** Called when the pane or window this terminal shows was deleted from the pane-unavailable notice (its ordinal is gone). Falls back to onCloseTab. */
   onTargetRemoved?: () => void;
+  /** Re-points this terminal at another pane of its window (a pane opened in an empty window is pane 1). */
+  onRetargetPane?: (pane: number) => void;
   onRetargetTab?: (serverName: string, newTarget: string) => void;
   reconnectKey?: number;
   /**
@@ -89,7 +91,7 @@ interface TerminalContainerProps {
   onViewModeChange?: (mode: WindowViewMode) => void;
 }
 
-export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
+export function TerminalContainer({ serverName, target: rawTarget, terminalRef: terminalRefProp, projectId, taskId, project, allTasks, sessions, onSplitPane, onOpenTask, onDisconnect, onWindowChanged, onCloseTab, onTargetRemoved, onRetargetPane, onRetargetTab, reconnectKey, leading, trailing, viewMode: viewModeProp, onViewModeChange }: TerminalContainerProps) {
   // Tabs opened through connectPane carry a TerminalRef and a `w<id>` placeholder target;
   // everything below that still keys off a tmux target (window-exists check, status dropdown,
   // pane-loading-state fallback) needs the real `<session>:<window>.<pane>`, resolved from
@@ -253,8 +255,10 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     setXtermKey((k) => k + 1);
     onWindowChanged?.();
     // A deleted pane shifts the ordinals after it and a deleted window is gone: this terminal's target no longer exists.
-    if (outcome !== 'pane_opened') (onTargetRemoved ?? onCloseTab)?.();
-  }, [onWindowChanged, onTargetRemoved, onCloseTab]);
+    if (outcome !== 'pane_opened') { (onTargetRemoved ?? onCloseTab)?.(); return; }
+    // The pane opened in an empty window is its only pane, so a terminal aimed at a later ordinal must move to it.
+    if (terminalRef && terminalRef.pane !== 1) onRetargetPane?.(1);
+  }, [onWindowChanged, onTargetRemoved, onCloseTab, onRetargetPane, terminalRef]);
 
   const sessionsUpdateCount = useRef(0);
   const everSeen = useRef(false);

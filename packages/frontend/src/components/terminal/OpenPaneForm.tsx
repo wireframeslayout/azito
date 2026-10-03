@@ -12,6 +12,8 @@ interface OpenPaneFormProps {
   /** Formatted MuxRef of the window the pane is opened in. */
   muxRef: string;
   onOpened: () => void;
+  /** Reports a request in flight, so the caller can hold its other actions on the same window meanwhile. */
+  onSubmittingChange: (submitting: boolean) => void;
 }
 
 interface ModelOption {
@@ -23,7 +25,7 @@ interface ModelOption {
  * Opens a shell pane in an existing window and, for an agent or a custom command, types the launch command into it.
  * The command choices are the ones the add-window dialog offers.
  */
-export function OpenPaneForm({ serverName, muxRef, onOpened }: OpenPaneFormProps) {
+export function OpenPaneForm({ serverName, muxRef, onOpened, onSubmittingChange }: OpenPaneFormProps) {
   const { t } = useTranslation('workspace');
   const { t: tc } = useTranslation('common');
   const { agents, loading: agentsLoading, error: agentsError } = useAgentDefinitions('worker');
@@ -58,6 +60,7 @@ export function OpenPaneForm({ serverName, muxRef, onOpened }: OpenPaneFormProps
       return;
     }
     setSubmitting(true);
+    onSubmittingChange(true);
     setError(null);
     try {
       const res = await api<unknown>(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(muxRef)}/panes/open`, {
@@ -74,6 +77,7 @@ export function OpenPaneForm({ serverName, muxRef, onOpened }: OpenPaneFormProps
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
+      onSubmittingChange(false);
     }
   }
 

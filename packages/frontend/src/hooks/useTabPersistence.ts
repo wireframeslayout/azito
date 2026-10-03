@@ -485,6 +485,20 @@ export function useTabPersistence(storageKey?: string) {
     setActiveTabId((prev) => prev === oldTabId ? newTabId : prev);
   }, []);
 
+  /** Points a terminal tab at another pane of the same window; when a tab for that pane is already open, that one is kept. */
+  const retargetTabPane = useCallback((oldTabId: string, pane: number) => {
+    const old = tabsRef.current.find((t) => t.id === oldTabId);
+    if (!old?.terminalRef) return;
+    const newRef: TerminalRef = { ...old.terminalRef, pane };
+    const newTabId = terminalTabId(newRef);
+    if (newTabId === oldTabId) return;
+    const duplicate = tabsRef.current.some((t) => t.id === newTabId);
+    setTabs((prev) => duplicate
+      ? prev.filter((t) => t.id !== oldTabId)
+      : prev.map((t) => (t.id === oldTabId ? { ...t, id: newTabId, terminalRef: newRef } : t)));
+    setActiveTabId((prev) => (prev === oldTabId ? newTabId : prev));
+  }, []);
+
   const openServer = useCallback((serverName: string) => {
     const tabId = `server:${serverName}`;
     openTab({ id: tabId, type: 'server', label: serverName, serverName });
@@ -621,5 +635,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTab, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

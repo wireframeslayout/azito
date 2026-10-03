@@ -35,6 +35,10 @@ describe('preferredPaneOrdinal', () => {
   it('picks the first pane for a driver that reports no state', () => {
     expect(preferredPaneOrdinal({ panes: [pane(1), pane(2)] })).toBe(1);
   });
+  it('returns the ordinal (position), not the index, on a tmux pane-base-index 0 window', () => {
+    expect(preferredPaneOrdinal({ panes: [pane(0), pane(1)] })).toBe(1);
+    expect(preferredPaneOrdinal({ panes: [pane(0, 'stopped'), pane(1, 'running')] })).toBe(2);
+  });
   it('returns null for an empty window', () => {
     expect(preferredPaneOrdinal({ panes: [] })).toBeNull();
   });

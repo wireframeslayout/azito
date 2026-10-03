@@ -219,6 +219,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
             sessions={sessions}
             onWindowChanged={refresh}
             onTargetRemoved={() => setSelectedRef(null)}
+            onRetargetPane={(pane) => setSelectedRef({ ...activeRef, pane })}
           />
         ) : (
           <div style={{ color: 'var(--text-dim)', padding: '14px 16px', fontSize: 'var(--font-xs)' }}>{t('windows.noWindowSelected')}</div>

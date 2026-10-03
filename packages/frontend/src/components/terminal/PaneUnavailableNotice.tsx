@@ -28,6 +28,7 @@ export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved 
   const [busy, setBusy] = useState<Busy>(null);
   const [error, setError] = useState<string | null>(null);
   const [openFormShown, setOpenFormShown] = useState(false);
+  const [openSubmitting, setOpenSubmitting] = useState(false);
 
   async function run(kind: Exclude<Busy, null>, outcome: PaneNoticeOutcome, path: string, method: 'DELETE' | 'POST'): Promise<void> {
     setBusy(kind);
@@ -55,12 +56,10 @@ export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved 
     void run('kill_window', 'window_deleted', path, method);
   }
 
-  const isBusy = busy !== null;
+  const isBusy = busy !== null || openSubmitting;
 
   return (
     <div
-      role="status"
-      aria-live="polite"
       style={{
         position: 'absolute',
         inset: 0,
@@ -74,7 +73,7 @@ export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved 
         padding: 16,
       }}
     >
-      <div style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)', maxWidth: 360, textAlign: 'center', lineHeight: 1.6 }}>
+      <div role="status" aria-live="polite" style={{ color: 'var(--text-dim)', fontSize: 'var(--font-base)', maxWidth: 360, textAlign: 'center', lineHeight: 1.6 }}>
         {reason === 'pane_stopped' ? t('terminal.paneUnavailable.stopped') : t('terminal.paneUnavailable.emptyWindow')}
       </div>
       {error && (
@@ -93,12 +92,12 @@ export function PaneUnavailableNotice({ reason, terminalRef, muxRef, onResolved 
             <Button variant="primary" size="sm" onClick={() => setOpenFormShown((shown) => !shown)} disabled={isBusy} aria-expanded={openFormShown}>
               {t('terminal.paneUnavailable.openPane')}
             </Button>
-            <Button size="sm" onClick={handleKillWindow} loading={busy === 'kill_window'} loadingLabel={t('terminal.paneUnavailable.deleting')}>
+            <Button size="sm" onClick={handleKillWindow} disabled={isBusy} loading={busy === 'kill_window'} loadingLabel={t('terminal.paneUnavailable.deleting')}>
               {t('terminal.paneUnavailable.killWindow')}
             </Button>
           </div>
           {openFormShown && (
-            <OpenPaneForm serverName={terminalRef.serverName} muxRef={muxRef} onOpened={() => onResolved('pane_opened')} />
+            <OpenPaneForm serverName={terminalRef.serverName} muxRef={muxRef} onOpened={() => onResolved('pane_opened')} onSubmittingChange={setOpenSubmitting} />
           )}
         </>
       )}
