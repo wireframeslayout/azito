@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
+import type { SqliteWindowRepository } from '../../windows/SqliteWindowRepository';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { TmuxClient } from '../TmuxClient';
@@ -59,6 +60,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
       uiToken: 'test-token', buildSecondaryWindowEnv: () => ({}),
       muxDriverRegistry: registry,
       serverIsolationMutex: new KeyedMutex(),
+      windowRepo: { findByServerAndRef: () => undefined, findByServerAndSession: () => [], findByServerAndTarget: () => undefined, now: () => '', remove: vi.fn(), removeByServerAndTarget: vi.fn() } as unknown as SqliteWindowRepository,
     });
     await app.ready();
   });
@@ -183,6 +185,8 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
       const after = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions` });
       const afterWindows = after.json().find((x: { name: string }) => x.name === PANES_WS).windows as ListedWindow[];
       expect(afterWindows.find((w) => w.ref === otherRef)!.panes.map((p) => p.handle)).toEqual([otherHandle]);
+
+      expect((await app.inject({ method: 'POST', url: `${mux(otherRef)}/kill` })).statusCode).toBe(200);
     });
 
     it('shows a pane restored after a daemon restart as stopped and deletes it', async () => {

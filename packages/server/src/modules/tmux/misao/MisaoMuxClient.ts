@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { type MuxCapabilities, type MuxDriverKind, type MuxPaneInfo, type MuxRef, type MuxWorkspace, type PaneHandle, type PaneOrdinal, asPaneHandle, isMisaoWindowId } from '@azito/shared';
 import type { ExecResult, ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { ServerConfig } from '../../servers/Server';
-import type { IMuxClient, PaneWindowLabels } from '../IMuxClient';
+import type { IMuxClient, PaneLocation, PaneWindowLabels } from '../IMuxClient';
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../MuxCapabilityError';
 import { splitPaneEnv } from '../../../shared/auth/paneSecretEnv';
 import { generateWindowName } from '../windowNameUtils';
@@ -188,12 +188,18 @@ export class MisaoMuxClient implements IMuxClient {
     return toMuxPaneInfos(workspaces, panes);
   }
 
-  async refFromPaneHandle(_server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null> {
+  async refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null> {
+    const location = await this.locatePane(server, handle);
+    return location.status === 'found' ? { ref: location.ref, ordinal: location.ordinal } : null;
+  }
+
+  /** The daemon answers `pane.list` or the request throws, so "absent" is only ever a verified answer. */
+  async locatePane(_server: ServerConfig, handle: PaneHandle): Promise<PaneLocation> {
     const panes = await this.rpc.request('pane.list', {});
     const pane = panes.find((p) => p.paneId === handle);
-    if (!pane) return null;
+    if (!pane) return { status: 'absent' };
     const ordinal = panesOfWindow(panes, pane.window.id).findIndex((p) => p.paneId === handle) + 1;
-    return { ref: misaoRef(pane.workspace, pane.window.id), ordinal };
+    return { status: 'found', ref: misaoRef(pane.workspace, pane.window.id), ordinal };
   }
 
   async probePane(_server: ServerConfig, handle: PaneHandle): Promise<{ alive: boolean; verified: boolean }> {

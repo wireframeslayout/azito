@@ -8,6 +8,11 @@ export interface PaneWindowLabels {
   taskId?: number;
 }
 
+export type PaneLocation =
+  | { status: 'found'; ref: MuxRef; ordinal: PaneOrdinal }
+  | { status: 'absent' }
+  | { status: 'unknown' };
+
 export interface IMuxClient {
   readonly kind: MuxDriverKind;
   readonly caps: MuxCapabilities;
@@ -36,6 +41,8 @@ export interface IMuxClient {
   listPanesByRef(server: ServerConfig, ref: MuxRef): Promise<Array<{ ordinal: PaneOrdinal; handle: PaneHandle; title: string; command: string; active: boolean }>>;
   listAllPanes(server: ServerConfig): Promise<MuxPaneInfo[]>;
   refFromPaneHandle(server: ServerConfig, handle: PaneHandle): Promise<{ ref: MuxRef; ordinal: PaneOrdinal } | null>;
+  /** Like `refFromPaneHandle`, but tells "the pane is not there" (`absent`) from "could not find out" (`unknown`, e.g. the transport failed). */
+  locatePane(server: ServerConfig, handle: PaneHandle): Promise<PaneLocation>;
   probePane(server: ServerConfig, handle: PaneHandle): Promise<{ alive: boolean; verified: boolean }>;
   splitPaneByHandle(server: ServerConfig, handle: PaneHandle, dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }>;
   /** Opens a new shell pane in an existing window and types `command` into it. Only the misao driver supports it. */

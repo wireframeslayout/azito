@@ -68,3 +68,12 @@ describe('TmuxClient.listSessionsForSecurityGate', () => {
     await expect(client.listSessionsForSecurityGate(srv)).rejects.toThrow(/ECONNREFUSED/);
   });
 });
+
+describe('session listing pane fields', () => {
+  it('reads the pane handle and keeps a title that contains the field separator', async () => {
+    const line = ['s', '1', '0', '0', '0', 'win', '1', '0', '1', 'bash', '80', '24', '1', '1234', '%7', 'a|||%9|||b'].join('|||');
+    const client = makeClient(async () => ({ stdout: line, stderr: '', code: 0 }));
+    const [session] = await client.listSessionsForSecurityGate(srv);
+    expect(session.windows[0].panes[0]).toMatchObject({ handle: '%7', title: 'a|||%9|||b', pid: 1234 });
+  });
+});

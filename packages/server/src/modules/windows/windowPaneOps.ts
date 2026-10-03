@@ -74,9 +74,14 @@ export async function closePaneInWindow(
       throw Object.assign(new Error('Invalid pane handle'), { statusCode: 400 });
     }
     handle = asPaneHandle(target.handle);
-    const members = await muxClient.listPanesByRef(server, ref).catch(() => []);
+    const location = await muxClient.locatePane(server, handle);
+    // Not being able to find out is not "already gone": the pane may well still be there.
+    if (location.status === 'unknown') {
+      throw Object.assign(new Error('Could not verify the pane'), { statusCode: 503 });
+    }
+    if (location.status === 'absent') return;
+    const members = await muxClient.listPanesByRef(server, ref);
     if (!members.some((pane) => pane.handle === handle)) {
-      if ((await muxClient.refFromPaneHandle(server, handle)) === null) return;
       throw Object.assign(new Error('Pane does not belong to this window'), { statusCode: 404 });
     }
   }
