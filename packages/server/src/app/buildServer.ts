@@ -633,7 +633,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled, misaoEnabled: wiring.misaoEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
-    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
+    transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo),
     windowSessionResolver,
     windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo),
     windowRepo,

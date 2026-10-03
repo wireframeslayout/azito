@@ -6,6 +6,7 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { MuxPaneInfo } from '@azito/shared';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
+import type { IWindowRepository } from '../windows/Window';
 
 const SID = '11111111-1111-1111-1111-111111111111';
 const LOCAL_SERVER: ServerConfig = {
@@ -31,6 +32,7 @@ function buildDeps(overrides: {
   sendKeysToHandle?: IMuxClient['sendKeysToHandle'];
   sendTextToHandle?: IMuxClient['sendTextToHandle'];
   servers?: ServerConfig[];
+  windows?: Array<{ serverName: string; workingDirectory: string | null }>;
 } = {}) {
   const claudeTranscriptSource = {
     getSessionCwd: overrides.getSessionCwd ?? (() => ({ cwd: null })),
@@ -51,14 +53,16 @@ function buildDeps(overrides: {
     findAll: () => overrides.servers ?? [LOCAL_SERVER],
   } as unknown as IServerRepository;
 
-  return { claudeTranscriptSource, muxDriverRegistry, serverRepo };
+  const windowRepo = { findAll: () => overrides.windows ?? [] } as unknown as IWindowRepository;
+
+  return { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo };
 }
 
 describe('TranscriptPaneService', () => {
   describe('listPaneCandidates', () => {
     it('returns null when the session is not found', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({ getSessionCwd: () => null });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({ getSessionCwd: () => null });
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       expect(await service.listPaneCandidates(SID)).toBeNull();
     });
 
@@ -67,11 +71,11 @@ describe('TranscriptPaneService', () => {
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
         { paneId: '%2', sessionName: 'main', windowIndex: 1, windowName: 'w2', paneIndex: 0, currentPath: '/home/user/other', currentCommand: 'bash' },
       ];
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/home/user/proj' }),
         listAllPanes: async () => panes,
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       const result = await service.listPaneCandidates(SID);
       expect(result).not.toBeNull();
       expect(result!.cwd).toBe('/home/user/proj');
@@ -83,51 +87,78 @@ describe('TranscriptPaneService', () => {
       const panes: MuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w1', paneIndex: 0, currentPath: '/home/user/proj', currentCommand: 'claude' },
       ];
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: null }),
         listAllPanes: async () => panes,
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       const result = await service.listPaneCandidates(SID);
       expect(result!.panes[0].cwdMatch).toBe(false);
     });
 
+    it('picks the local server whose window cwd matches when several local servers exist', async () => {
+      const second: ServerConfig = { ...LOCAL_SERVER, name: 'local2' };
+      const resolved: string[] = [];
+      const deps = buildDeps({
+        getSessionCwd: () => ({ cwd: '/work/b' }),
+        servers: [LOCAL_SERVER, second],
+        windows: [
+          { serverName: 'local', workingDirectory: '/work/a' },
+          { serverName: 'local2', workingDirectory: '/work/b' },
+        ],
+      });
+      const registry = { resolve: (s: ServerConfig) => { resolved.push(s.name); return deps.muxDriverRegistry.resolve(s); } } as unknown as MuxDriverRegistry;
+      const service = new TranscriptPaneService(deps.claudeTranscriptSource, registry, deps.serverRepo, deps.windowRepo);
+      await service.listPaneCandidates(SID);
+      expect(resolved).toEqual(['local2']);
+    });
+
+    it('throws when several local servers exist and no window matches the cwd', async () => {
+      const deps = buildDeps({
+        getSessionCwd: () => ({ cwd: '/work/none' }),
+        servers: [LOCAL_SERVER, { ...LOCAL_SERVER, name: 'local2' }],
+        windows: [{ serverName: 'local', workingDirectory: '/work/a' }],
+      });
+      const service = new TranscriptPaneService(deps.claudeTranscriptSource, deps.muxDriverRegistry, deps.serverRepo, deps.windowRepo);
+      await expect(service.listPaneCandidates(SID)).rejects.toThrow(/cwd/);
+    });
+
     it('throws when no local server is configured', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         servers: [],
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       await expect(service.listPaneCandidates(SID)).rejects.toThrow();
     });
   });
 
   describe('sendInput', () => {
     it('returns session_not_found when the session does not exist', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({ getSessionCwd: () => null });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({ getSessionCwd: () => null });
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       expect(await service.sendInput(SID, asPaneHandle('%1'), 'hello')).toBe('session_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         probePane: async () => ({ alive: false, verified: true }),
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       expect(await service.sendInput(SID, asPaneHandle('%1'), 'hello')).toBe('pane_not_found');
     });
 
     it('sends the text as literal, then Enter as a separate keypress, and returns ok', async () => {
       const sendKeysToHandle = vi.fn(async () => {});
       const sendTextToHandle = vi.fn(async () => {});
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         probePane: async () => ({ alive: true, verified: true }),
         sendKeysToHandle,
         sendTextToHandle,
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       const result = await service.sendInput(SID, asPaneHandle('%1'), 'hello world');
       expect(result).toBe('ok');
       expect(sendTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'hello world');
@@ -137,13 +168,13 @@ describe('TranscriptPaneService', () => {
     it('sends body text like "C-c" via the literal path, never as a special key', async () => {
       const sendKeysToHandle = vi.fn(async () => {});
       const sendTextToHandle = vi.fn(async () => {});
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         probePane: async () => ({ alive: true, verified: true }),
         sendKeysToHandle,
         sendTextToHandle,
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       const result = await service.sendInput(SID, asPaneHandle('%1'), 'C-c');
       expect(result).toBe('ok');
       expect(sendTextToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', 'C-c');
@@ -155,40 +186,40 @@ describe('TranscriptPaneService', () => {
 
   describe('sendSignal', () => {
     it('returns session_not_found when the given source has no such session', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({ getSessionCwd: () => null });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({ getSessionCwd: () => null });
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       expect(await service.sendSignal(claudeTranscriptSource, SID, asPaneHandle('%1'), 'Escape')).toBe('session_not_found');
     });
 
     it('returns pane_not_found when the pane no longer exists', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         probePane: async () => ({ alive: false, verified: true }),
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       expect(await service.sendSignal(claudeTranscriptSource, SID, asPaneHandle('%1'), 'Escape')).toBe('pane_not_found');
     });
 
     it('sends the given key via sendKeysToHandle (special-key path, not literal text) and returns ok', async () => {
       const sendKeysToHandle = vi.fn(async () => {});
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => ({ cwd: '/x' }),
         probePane: async () => ({ alive: true, verified: true }),
         sendKeysToHandle,
       });
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       const result = await service.sendSignal(claudeTranscriptSource, SID, asPaneHandle('%1'), 'C-c');
       expect(result).toBe('ok');
       expect(sendKeysToHandle).toHaveBeenCalledWith(LOCAL_SERVER, '%1', ['C-c']);
     });
 
     it('resolves the session via the passed-in source, not the constructor-injected one', async () => {
-      const { claudeTranscriptSource, muxDriverRegistry, serverRepo } = buildDeps({
+      const { claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo } = buildDeps({
         getSessionCwd: () => null,
         probePane: async () => ({ alive: true, verified: true }),
       });
       const otherSource = { getSessionCwd: () => ({ cwd: null }) } as unknown as TranscriptSource;
-      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
+      const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo, windowRepo);
       expect(await service.sendSignal(otherSource, SID, asPaneHandle('%1'), 'Escape')).toBe('ok');
     });
   });
