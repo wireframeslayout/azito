@@ -113,6 +113,7 @@
     "misaoUnreachableSub": "Check that the daemon is running and that MISAO_SOCKET is correct.",
     "misaoDisabled": "This runtime is only available with AZITO_EXPERIMENTAL_MISAO=1",
     "misaoDisabledSub": "Enable the flag, or switch the mux runtime back to system or managed from Edit.",
+    "misaoDriverNotRegistered": "The misao driver is not registered in the hub",
     "agentVersionLabel": "Agent version",
     "browserSupport": "Browser runtime",
     "supported": "Supported",

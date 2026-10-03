@@ -113,6 +113,7 @@
     "misaoUnreachableSub": "デーモンが起動しているか、MISAO_SOCKET が正しいかを確認してください。",
     "misaoDisabled": "この runtime は AZITO_EXPERIMENTAL_MISAO=1 のときだけ使えます",
     "misaoDisabledSub": "フラグを有効にするか、編集から mux runtime を system または managed に戻してください。",
+    "misaoDriverNotRegistered": "misao ドライバがハブに登録されていません",
     "agentVersionLabel": "agent バージョン",
     "browserSupport": "ブラウザ実行対応",
     "supported": "対応",
