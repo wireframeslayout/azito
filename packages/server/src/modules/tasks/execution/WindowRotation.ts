@@ -198,6 +198,11 @@ export async function confirmOldWindowGone(
  * command's own exit code). Callers must NOT persist the returned
  * `windowName` when this throws — the window was never actually created (or
  * its creation is not trustworthy), so there is nothing real to record.
+ *
+ * `create` reports `windowName` as the window's identity string (misao: the
+ * window id; tmux: the window name — what `task.tmuxWindow` stores) and, when
+ * the driver gives the window a display name distinct from that identity
+ * (misao), `label`.
  */
 export async function createRotatedWindow(
   paneEnvService: TaskPaneEnvironmentService,
@@ -205,7 +210,7 @@ export async function createRotatedWindow(
   server: ServerConfig,
   task: Task,
   reasonOnFailure: string,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
   enforceSnapshot = true,
   // Issue #29 Step 3a review, Important finding 2: optional hook run against
   // `freshServer` INSIDE this same lock, before any env/token is built — see
@@ -215,7 +220,7 @@ export async function createRotatedWindow(
   // (throws to abort); callers with nothing to re-check (trusted tasks,
   // manual/plain windows) simply omit it.
   preCheck?: (freshServer: ServerConfig) => void,
-): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef }> {
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef; label?: string }> {
   // Issue #29 review (7th pass), Important finding 1: the entire
   // env-resolution -> `create()` span now runs inside
   // `lock.serverIsolationMutex.withLock(server.name, ...)` — the SAME mutex
@@ -250,7 +255,7 @@ export async function createRotatedWindowInLock(
   freshServer: ServerConfig,
   task: Task,
   reasonOnFailure: string,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
   // Issue #29 Step 3a review, Important finding 2: invoked FIRST, against
   // `freshServer`, before any env/task-token is built or `create()` runs —
   // callers that queued for this lock before their own execution-gate
@@ -263,10 +268,10 @@ export async function createRotatedWindowInLock(
   // `createSecondaryWindowInLock`/`createPlainWindowInLock`, which take no
   // such hook since they never build an untrusted-task-owned env) omits it.
   preCheck?: (freshServer: ServerConfig) => void,
-): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef }> {
+): Promise<{ windowName: string; env: Record<string, string>; tokenId: number; server: ServerConfig; ref?: MuxRef; label?: string }> {
   preCheck?.(freshServer);
   const { env, tokenId } = paneEnvService.buildEnvForNewWindow(task, freshServer);
-  let created: { result: ExecResult; windowName: string; ref?: MuxRef };
+  let created: { result: ExecResult; windowName: string; ref?: MuxRef; label?: string };
   try {
     created = await create(freshServer, env);
   } catch (err) {
@@ -298,7 +303,7 @@ export async function createRotatedWindowInLock(
   // OWN subsequent tmux calls (resolvePaneId, splitPane, ...) should keep
   // using the exact connection info this window was actually created with
   // can do so instead of falling back to its now-possibly-stale argument.
-  return { windowName: created.windowName, env, tokenId, server: freshServer, ref: created.ref };
+  return { windowName: created.windowName, env, tokenId, server: freshServer, ref: created.ref, label: created.label };
 }
 
 /**
@@ -318,9 +323,9 @@ export async function createSecondaryWindow(
   lock: ServerIsolationLock,
   server: ServerConfig,
   task: Task,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
   enforceSnapshot = true,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef; label?: string }> {
   return withServerLock(lock, server, enforceSnapshot, (freshServer) => createSecondaryWindowInLock(paneEnvService, freshServer, task, create));
 }
 
@@ -329,11 +334,11 @@ export async function createSecondaryWindowInLock(
   paneEnvService: TaskPaneEnvironmentService,
   freshServer: ServerConfig,
   task: Task,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef; label?: string }> {
   const env = paneEnvService.buildEnvForSecondaryWindow(task, freshServer);
   const created = await create(freshServer, env);
-  return { windowName: created.windowName, env, server: freshServer, ref: created.ref };
+  return { windowName: created.windowName, env, server: freshServer, ref: created.ref, label: created.label };
 }
 
 /**
@@ -354,9 +359,9 @@ export async function createPlainWindow(
   uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   lock: ServerIsolationLock,
   server: ServerConfig,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
   enforceSnapshot = true,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef; label?: string }> {
   return withServerLock(lock, server, enforceSnapshot, (freshServer) => createPlainWindowInLock(uiTokenEnvFn, freshServer, create));
 }
 
@@ -364,11 +369,11 @@ export async function createPlainWindow(
 export async function createPlainWindowInLock(
   uiTokenEnvFn: (server: ServerConfig) => Record<string, string>,
   freshServer: ServerConfig,
-  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef }>,
-): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef }> {
+  create: (freshServer: ServerConfig, env: Record<string, string>) => Promise<{ result: ExecResult; windowName: string; ref?: MuxRef; label?: string }>,
+): Promise<{ windowName: string; env: Record<string, string>; server: ServerConfig; ref?: MuxRef; label?: string }> {
   const env = uiTokenEnvFn(freshServer);
   const created = await create(freshServer, env);
-  return { windowName: created.windowName, env, server: freshServer, ref: created.ref };
+  return { windowName: created.windowName, env, server: freshServer, ref: created.ref, label: created.label };
 }
 
 /**

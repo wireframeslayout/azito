@@ -150,6 +150,7 @@ function makeOpts(
     },
     muxDriverRegistry: (() => {
       const driver = {
+        kind: 'tmux' as const,
         closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
         windowExists: vi.fn(async () => true),
       };

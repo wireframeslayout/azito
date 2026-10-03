@@ -1,13 +1,17 @@
 import { readdirSync, unlinkSync } from 'fs';
 import type { Task } from './Task';
-import type { IServerRepository } from '../servers/Server';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
 import { resolveTaskServerName, resolveMuxWorkspace } from './execution/TaskExecutionEnv';
-import { muxRefFromTmuxTarget } from '@azito/shared';
+import { isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
+import { resolveKillOutcome } from '../tmux/killOutcome';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
+import { taskWindowRef } from '../tmux/windowIdentity';
 
 const WORKTREE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-]+\/\.worktrees\/task-\d+$/;
 
@@ -33,10 +37,37 @@ export interface TaskCleanupDeps {
   projectServerRepo: IProjectServerRepository;
   projectRepo: IProjectRepository;
   muxDriverRegistry: MuxDriverRegistry;
+  windowRepo: IWindowRepository;
 }
 
 export class TaskCleanupService {
   constructor(private deps: TaskCleanupDeps) {}
+
+  /**
+   * Closes the task's window by its identity: the primary window row's mux_ref, otherwise task.tmuxWindow.
+   * A mux daemon that is down, or a window that could not be confirmed closed, is a warning — cleanup
+   * (worktree and temp files) continues.
+   */
+  private async closeTaskWindow(task: Task, serverName: string, server: ServerConfig, log: { warn: (msg: string) => void }): Promise<void> {
+    const { projectServerRepo, windowRepo } = this.deps;
+    try {
+      const driver = this.deps.muxDriverRegistry.resolve(server);
+      const muxWorkspace = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
+      const primaryWin = windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
+      const ref = taskWindowRef(task, primaryWin, muxWorkspace, driver.kind);
+      if (!ref) return;
+      const outcome = await resolveKillOutcome(driver.closeWindow(server, ref));
+      if (!outcome.success) {
+        log.warn(`[task-cleanup] Failed to close window ${muxWindowTarget(ref)} of task ${task.id}: ${outcome.result.stderr || outcome.result.stdout}`);
+      }
+    } catch (e) {
+      if (e instanceof MuxDriverUnavailableError) {
+        log.warn(`[task-cleanup] Skipped closing the window of task ${task.id}: ${e.message}`);
+        return;
+      }
+      throw e;
+    }
+  }
 
   async cleanup(task: Task, log: { warn: (msg: string) => void }): Promise<void> {
     const { serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo } = this.deps;
@@ -45,12 +76,7 @@ export class TaskCleanupService {
     const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
 
     if (task.tmuxWindow && resolvedServerName && server) {
-      const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, projectServerRepo);
-      const driver = this.deps.muxDriverRegistry.resolve(server);
-      const ref = { ...muxRefFromTmuxTarget(`${muxWorkspace}:${task.tmuxWindow}`), kind: driver.kind };
-      driver.closeWindow(server, ref).catch((e) => {
-        log.warn(`[task-cleanup] Failed to kill tmux window ${muxWorkspace}:${task.tmuxWindow}: ${(e as Error).message}`);
-      });
+      await this.closeTaskWindow(task, resolvedServerName, server, log);
     }
 
     if (!server || !resolvedServerName) return;
