@@ -18,7 +18,10 @@ import { extractPhaseSummary } from '../extractPhaseSummary';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from '../execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
-import type { MuxRef, PaneHandle } from '@azito/shared';
+import type { PaneHandle } from '@azito/shared';
+import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Window';
+import { muxWindowTarget } from '../../tmux/muxWindowTarget';
+import { taskWindowRef } from '../../tmux/windowIdentity';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -48,6 +51,7 @@ export class RecoverStuckTasksUseCase {
     private turnRepo: SqliteAgentTurnRepository,
     private logger: RecoveryLogger,
     private unitTypeLoader: UnitTypeLoader,
+    private windowRepo: IWindowRepository,
   ) {}
 
   private isRunning = false;
@@ -157,14 +161,15 @@ export class RecoverStuckTasksUseCase {
     }
 
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
-    const windowName = task.tmuxWindow || `task-${task.id}`;
+    // The primary window row's mux_ref names the window (misao: its id); task.tmuxWindow is only the fallback.
+    const primaryWin = this.windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
+    const ref = taskWindowRef({ tmuxWindow: task.tmuxWindow || `task-${task.id}` }, primaryWin, muxWorkspace, driver.kind)!;
 
     let handle: PaneHandle;
     try {
-      const ref: MuxRef = { kind: driver.kind, workspace: muxWorkspace, window: windowName };
       handle = await driver.resolvePane(server, ref, 1);
     } catch {
-      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWorkspace}:${windowName})`);
+      this.logger.warn(`Recovery skip: pane dead for task ${task.id} (${muxWindowTarget(ref)})`);
       return;
     }
 

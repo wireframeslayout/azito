@@ -265,6 +265,7 @@ function createUseCase(mocks: Mocks, registry?: any): RecoverStuckTasksUseCase {
       ] };
       return { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) };
     })() as any,
+    { findByTask: vi.fn().mockReturnValue([]) } as any,
   );
 }
 

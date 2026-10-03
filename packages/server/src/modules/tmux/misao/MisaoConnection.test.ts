@@ -133,6 +133,41 @@ describe('MisaoConnection', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 
+  describe('waitUntilConnected', () => {
+    it('resolves true at once when already connected', async () => {
+      const { connection } = setup();
+      await connection.start();
+      await expect(connection.waitUntilConnected({ timeoutMs: 1000 })).resolves.toBe(true);
+    });
+
+    it('resolves true when the daemon appears within the timeout', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      control.connectFailures.push(new FakeMisaoConnectionError('down'));
+      await connection.start();
+      const waiting = connection.waitUntilConnected({ timeoutMs: 5000 });
+      await vi.advanceTimersByTimeAsync(100);
+      await expect(waiting).resolves.toBe(true);
+    });
+
+    it('resolves false once the timeout passes without a connection', async () => {
+      vi.useFakeTimers();
+      const { connection, control } = setup();
+      control.connectFailures.push(...Array.from({ length: 50 }, () => new FakeMisaoConnectionError('down')));
+      await connection.start();
+      const waiting = connection.waitUntilConnected({ timeoutMs: 50 });
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(waiting).resolves.toBe(false);
+    });
+
+    it('resolves false for a closed connection', async () => {
+      const { connection } = setup();
+      await connection.start();
+      connection.close();
+      await expect(connection.waitUntilConnected({ timeoutMs: 1000 })).resolves.toBe(false);
+    });
+  });
+
   it('stops retrying on a non-connection failure such as a protocol mismatch', async () => {
     vi.useFakeTimers();
     const { connection, control, warn } = setup();

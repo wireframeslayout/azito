@@ -48,6 +48,7 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
       { findLatestByTaskPhase: vi.fn().mockReturnValue(null), supersedeRunning: vi.fn(), findLatestEventByType: vi.fn().mockReturnValue(null) } as never,
       logger,
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
+      { findByTask: vi.fn().mockReturnValue([]) } as never,
     );
 
     await expect(useCase.run()).resolves.toBeUndefined();
@@ -56,5 +57,58 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
     expect(resumeStateMachine).toHaveBeenCalledWith(1, 21);
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('task 20'));
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('misao_disabled'));
+  });
+});
+
+describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
+  const WINDOW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
+
+  function build(taskRow: Record<string, unknown>, windows: unknown[]) {
+    vi.mocked(fs.readdirSync).mockReturnValue([]);
+    vi.mocked(fs.readFileSync).mockReturnValue('');
+    const misaoDriver = {
+      kind: 'misao',
+      resolvePane: vi.fn().mockResolvedValue('p_01M3XFD8H97JCPKS5Y5BH3JZQH'),
+      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
+    };
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', misaoDriver as unknown as IMuxClient);
+    const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
+    const logger = { info: vi.fn(), warn: vi.fn() };
+    const useCase = new RecoverStuckTasksUseCase(
+      { findByStatus: vi.fn((status: string) => (status === 'running' ? [taskRow] : [])), updateStatus: vi.fn(), updateCurrentPhase: vi.fn() } as never,
+      { findById: vi.fn().mockReturnValue({ id: 1, workerExecutionMode: 'tmux-pipe', unitType: 'devops' }) } as never,
+      { findByName: () => ({ name: 'misao-server', type: 'local', muxRuntime: 'misao' }) } as never,
+      { findById: vi.fn().mockReturnValue({ id: 1, defaultUnitId: null }) } as never,
+      { find: vi.fn().mockReturnValue(null), findByProject: vi.fn().mockReturnValue([]) } as never,
+      { findByTask: vi.fn().mockReturnValue([]), append: vi.fn() } as never,
+      registry,
+      { getRunning: vi.fn().mockReturnValue({}), resumeStateMachine, isPushCompleted: vi.fn().mockResolvedValue(false) } as never,
+      { findLatestByTaskPhase: vi.fn().mockReturnValue(null), supersedeRunning: vi.fn(), findLatestEventByType: vi.fn().mockReturnValue(null) } as never,
+      logger,
+      { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
+      { findByTask: vi.fn().mockReturnValue(windows) } as never,
+    );
+    return { useCase, misaoDriver, resumeStateMachine, logger };
+  }
+
+  it('resolves the pane from the primary window row\'s window id, not from a display name left in task.tmuxWindow', async () => {
+    const row = { isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } };
+    const { useCase, misaoDriver, resumeStateMachine } = build({ ...task(30, 'misao-server'), tmuxWindow: 'task-30--ab12' }, [row]);
+
+    await useCase.run();
+
+    expect(misaoDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), { kind: 'misao', workspace: 'azito', window: WINDOW_ID }, 1);
+    expect(resumeStateMachine).toHaveBeenCalledWith(1, 30);
+  });
+
+  it('falls back to task.tmuxWindow (a window id) when the task has no window row', async () => {
+    const { useCase, misaoDriver, resumeStateMachine } = build({ ...task(31, 'misao-server'), tmuxWindow: WINDOW_ID }, []);
+
+    await useCase.run();
+
+    expect(misaoDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'misao', window: WINDOW_ID }), 1);
+    expect(resumeStateMachine).toHaveBeenCalledWith(1, 31);
   });
 });

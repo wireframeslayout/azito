@@ -25,6 +25,8 @@ import { runUpdate } from './modules/system/updateScript';
 // ─── Graceful shutdown ───
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
+/** How long startup recovery waits for the misao daemon connection before running without it. */
+const MISAO_STARTUP_CONNECT_TIMEOUT_MS = 15_000;
 
 // ─── Bootstrap ───
 
@@ -209,8 +211,15 @@ async function main(): Promise<void> {
     wiring.agentTurnRepo,
     app.log,
     wiring.unitTypeLoader,
+    wiring.windowRepo,
   );
-  recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+  // misao tasks can only be recovered once the daemon connection is up: the first connect is made
+  // asynchronously above, and recovery would otherwise skip them all as `daemon_unreachable`.
+  const misaoReady = misao ? misao.connection.waitUntilConnected({ timeoutMs: MISAO_STARTUP_CONNECT_TIMEOUT_MS }) : Promise.resolve(true);
+  void misaoReady.then((connected) => {
+    if (!connected) app.log.warn(`misao daemon not connected after ${MISAO_STARTUP_CONNECT_TIMEOUT_MS}ms; misao tasks are skipped by startup recovery`);
+    return recoverStuckTasks.run();
+  }).catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
 
   setInterval(() => {
     recoverStuckTasks.runPeriodic(wiring.executeTaskUseCase.getRunning()).catch((err) => {
