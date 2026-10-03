@@ -91,7 +91,10 @@ export function useWorkspaceData(
     const serverNames = [...new Set([...projectServerNames, ...tabServerNames, ...taskWindowServerNames])];
     const results = await Promise.allSettled(serverNames.map(async (name) => {
       const r = await api<Session[]>(`/servers/${name}/sessions`);
-      return { name, sessions: Array.isArray(r) ? r : [] };
+      // A non-list reply (error body) is a failed fetch: left out so consumers wait instead of
+      // reading "no windows".
+      if (!Array.isArray(r)) throw new Error(`sessions of ${name} unavailable`);
+      return { name, sessions: r };
     }));
     if (projectIdRef.current !== requestedProjectId) return; // stale response, a newer project is now active
     const freshSessions: Record<string, Session[]> = {};

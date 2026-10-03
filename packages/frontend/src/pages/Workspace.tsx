@@ -242,9 +242,13 @@ function WorkspaceInner() {
   const retargetTabs = useCallback((oldTabIds: string[], serverName: string, windowId: number, sessions?: Session[]) => {
     for (const { oldId, newId } of retargetTabsRaw(oldTabIds, serverName, windowId, sessions)) layout.replaceTab(oldId, newId);
   }, [layout.replaceTab, retargetTabsRaw]);
-  const retargetTab = useCallback((oldTabId: string, serverName: string, windowId: number, sessions?: Session[]) => {
-    retargetTabs([oldTabId], serverName, windowId, sessions);
-  }, [retargetTabs]);
+  // Every open tab of the window follows a respawn (the pane tabs of one window, ref-form tabs
+  // of a driver that mints a new ref), plus `alsoTabId` — the tab the respawn was started from.
+  const retargetWindowTabs = useCallback((serverName: string, windowId: number, sessions: Session[] | undefined, alsoTabId?: string) => {
+    const ids = findWindowTerminalTabs(tabs, serverName, windowId, sessionData[serverName]).map((t) => t.id);
+    if (alsoTabId && !ids.includes(alsoTabId)) ids.push(alsoTabId);
+    retargetTabs(ids, serverName, windowId, sessions);
+  }, [tabs, sessionData, retargetTabs]);
   const retargetTabPane = useCallback((oldTabId: string, pane: number) => {
     const newTabId = retargetTabPaneRaw(oldTabId, pane);
     if (newTabId) layout.replaceTab(oldTabId, newTabId);
@@ -253,9 +257,10 @@ function WorkspaceInner() {
 
   // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
   // sessions of their servers are available (per server, so unfetched servers wait).
-  const isTmuxServer = useCallback((serverName: string) => {
+  // undefined while the server list has not reported this server yet (migration then waits).
+  const isTmuxServer = useCallback((serverName: string): boolean | undefined => {
     const server = servers.find((sv) => sv.name === serverName);
-    return !server || muxKindForRuntime(server.muxRuntime ?? 'system') === 'tmux';
+    return server ? muxKindForRuntime(server.muxRuntime ?? 'system') === 'tmux' : undefined;
   }, [servers]);
   useEffect(() => {
     const byServer = new Map<string, Session[]>(Object.entries(sessionData));
@@ -264,7 +269,7 @@ function WorkspaceInner() {
     // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
     idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData, migrateLegacyTerminalTabIds]);
+  }, [sessionData, migrateLegacyTerminalTabIds, isTmuxServer]);
 
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
@@ -768,9 +773,7 @@ function WorkspaceInner() {
         connectPane({ kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 }, undefined, { reconnect: true });
         return;
       }
-      // Every pane tab of the window follows it: the pane is re-resolved and a ref-form tab
-      // (a misao respawn mints a new ref) moves to windowId form.
-      retargetTabs(open.map((t) => t.id), win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
+      retargetWindowTabs(win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
     },
   });
 
@@ -1456,7 +1459,7 @@ function WorkspaceInner() {
           currentProjectId={currentProjectId}
           handleOpenTask={handleOpenTask}
           closeTab={closeTabFn}
-          retargetTab={retargetTab}
+          retargetWindowTabs={retargetWindowTabs}
           retargetTabPane={retargetTabPane}
           executeTask={executeTask}
           stopTask={stopTask}

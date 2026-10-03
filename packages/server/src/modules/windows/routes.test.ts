@@ -436,7 +436,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     server = makeServer();
   });
 
-  it('drops the server session cache after a successful respawn, and not after a failed one', async () => {
+  it('drops the server session cache after a respawn, also when it fails part-way', async () => {
     const invalidate = vi.fn();
     app = await setup(vi.fn(async () => ({ tmuxTarget: 'proj:win1' })), invalidate);
     await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
@@ -445,7 +445,7 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     const failing = vi.fn();
     const app2 = await setup(vi.fn(async () => { throw new Error('boom'); }), failing);
     await app2.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
-    expect(failing).not.toHaveBeenCalled();
+    expect(failing).toHaveBeenCalledWith(server.name);
   });
 
   it('translates ExecutionGatePendingApprovalError into 409 execution_pending_approval (not a generic 500)', async () => {

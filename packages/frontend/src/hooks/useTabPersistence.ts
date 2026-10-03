@@ -224,8 +224,8 @@ export function normalizeLegacyTabs(tabs: PersistedTab[]): PersistedTab[] {
 export function migrateTerminalTabs(
   tabs: PersistedTab[],
   sessionsByServer: Map<string, Session[]>,
-  isTmuxServer: (serverName: string) => boolean,
-): { tabs: PersistedTab[]; changed: boolean; idMap: Map<string, string> } {
+  isTmuxServer: (serverName: string) => boolean | undefined,
+): { tabs: PersistedTab[]; changed: boolean; idMap: Map<string, string>; dropped: Set<string> } {
   const idMap = new Map<string, string>();
   const migratedIds = new Set<string>();
   const dropped = new Set<string>();
@@ -240,9 +240,13 @@ export function migrateTerminalTabs(
     if (!sessions) continue;
     // A window that is not listed can only be given a tmux ref; on any other driver that ref is
     // wrong (and is what the broken-tab repair hands over), so the tab is dropped.
-    if (findSessionWindowRef(sessions, parsed.target) === null && !isTmuxServer(parsed.serverName)) {
-      dropped.add(tab.id);
-      continue;
+    if (findSessionWindowRef(sessions, parsed.target) === null) {
+      const tmux = isTmuxServer(parsed.serverName);
+      if (tmux === undefined) continue; // the server's runtime is not known yet: wait
+      if (!tmux) {
+        dropped.add(tab.id);
+        continue;
+      }
     }
     const ref = terminalRefFromLegacyTarget(parsed.serverName, parsed.target, sessions);
     const terminalRef: TerminalRef = { ...ref, pane: parsed.pane } as TerminalRef;
@@ -250,7 +254,7 @@ export function migrateTerminalTabs(
     migrated.set(tab.id, { ...tab, id: newId, terminalRef });
     migratedIds.add(tab.id);
   }
-  if (migrated.size === 0 && dropped.size === 0) return { tabs, changed: false, idMap };
+  if (migrated.size === 0 && dropped.size === 0) return { tabs, changed: false, idMap, dropped };
 
   // Same collision rule as applyRetargetTab: an already-present tab with the new id is kept
   // (reconnected) and the migrated one is folded into it.
@@ -266,7 +270,7 @@ export function migrateTerminalTabs(
     else result.push(next);
   }
   const final = result.map((t) => (bumped.has(t.id) ? { ...t, reconnectKey: (t.reconnectKey ?? 0) + 1 } : t));
-  return { tabs: final, changed: true, idMap };
+  return { tabs: final, changed: true, idMap, dropped };
 }
 
 export function useTabPersistence(storageKey?: string) {
@@ -362,12 +366,21 @@ export function useTabPersistence(storageKey?: string) {
    * sessions for their servers are known (Workspace calls this whenever sessionData changes;
    * it is a no-op when nothing is left to migrate). The active tab id follows the rename.
    */
-  const migrateLegacyTerminalTabIds = useCallback((sessionsByServer: Map<string, Session[]>, isTmuxServer: (serverName: string) => boolean): Map<string, string> => {
-    const { tabs: migrated, changed, idMap } = migrateTerminalTabs(tabsRef.current, sessionsByServer, isTmuxServer);
+  const migrateLegacyTerminalTabIds = useCallback((sessionsByServer: Map<string, Session[]>, isTmuxServer: (serverName: string) => boolean | undefined): Map<string, string> => {
+    const before = tabsRef.current;
+    const { tabs: migrated, changed, idMap, dropped } = migrateTerminalTabs(before, sessionsByServer, isTmuxServer);
     if (!changed) return idMap;
     setTabs(migrated);
     const active = activeTabIdRef.current;
     if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
+    else if (active && dropped.has(active)) {
+      // The active tab was dropped: move to the next surviving tab, else the previous one, else none.
+      const survivors = (id: string) => migrated.some((t) => t.id === id);
+      const from = before.findIndex((t) => t.id === active);
+      const next = before.slice(from + 1).find((t) => survivors(t.id))
+        ?? [...before.slice(0, from)].reverse().find((t) => survivors(t.id));
+      setActiveTabId(next?.id ?? null);
+    }
     return idMap;
   }, []);
 

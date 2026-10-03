@@ -160,6 +160,18 @@ describe('migrateTerminalTabs — id map, collisions and non-tmux servers', () =
     expect(r.tabs).toHaveLength(0);
   });
 
+  it('reports the dropped ids', () => {
+    const r = migrateTerminalTabs([legacy('s:w_01HZZ.1')], new Map([['local', sessions]]), () => false);
+    expect([...r.dropped]).toEqual(['terminal:local/s:w_01HZZ.1']);
+  });
+
+  it('waits (leaves the tab alone) while the server runtime is unknown', () => {
+    const tab = legacy('s:w_01HZZ.1');
+    const r = migrateTerminalTabs([tab], new Map([['local', sessions]]), () => undefined);
+    expect(r.changed).toBe(false);
+    expect(r.tabs[0]).toBe(tab);
+  });
+
   it('still falls back to a tmux ref on a tmux server', () => {
     const r = migrateTerminalTabs([legacy('azito:gone.1')], new Map([['local', sessions]]), () => true);
     expect(r.tabs[0].terminalRef?.kind).toBe('ref');
