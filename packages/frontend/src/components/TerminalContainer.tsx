@@ -290,6 +290,8 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   const everSeen = useRef(false);
   useEffect(() => {
     if (!sessions) return;
+    // A tab the server resolves is judged by the server's answer (the WS error), not by sessions that may not list it.
+    if (resolveOnServer && !terminalRef) return;
     sessionsUpdateCount.current += 1;
 
     const result = checkWindowExists(sessions, terminalRef, target);
@@ -303,7 +305,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
     setWindowMissing(false);
     setDisconnected(false);
     setConnectFailed(false);
-  }, [sessions, target, terminalRef]);
+  }, [sessions, target, terminalRef, resolveOnServer]);
 
   const activePane = useMemo(
     () => {

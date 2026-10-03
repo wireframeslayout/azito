@@ -165,6 +165,12 @@ function normalizeLegacyTabId(id: string): string {
  * false "unsaved changes" warning for a tab whose actual editor was never
  * reopened dirty this session.
  */
+/** The tab for a target the server resolves; its `target` keeps the pane so the WS connects to the right one. */
+export function serverResolvedTerminalTab(serverName: string, target: string, projectId?: number): PersistedTab {
+  const { windowPart, pane } = splitPaneSuffix(target);
+  return { id: `terminal:${serverName}/${windowPart}.${pane}`, type: 'terminal', label: windowPart, serverName, target: `${windowPart}.${pane}`, projectId, resolveOnServer: true };
+}
+
 export function stripDirty(tab: PersistedTab): PersistedTab {
   if (!('dirty' in tab)) return tab;
   const { dirty: _dirty, ...rest } = tab;
@@ -435,8 +441,7 @@ export function useTabPersistence(storageKey?: string) {
 
   /** Opens a terminal tab by target string only; the server resolves the window when the tab connects. */
   const connectTarget = useCallback((serverName: string, target: string, projectId?: number) => {
-    const { windowPart, pane } = splitPaneSuffix(target);
-    openTab({ id: `terminal:${serverName}/${windowPart}.${pane}`, type: 'terminal', label: windowPart, serverName, target: windowPart, projectId, resolveOnServer: true });
+    openTab(serverResolvedTerminalTab(serverName, target, projectId));
   }, [openTab]);
 
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {

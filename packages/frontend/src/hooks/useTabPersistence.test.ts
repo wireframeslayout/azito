@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { stripDirty, normalizeLegacyTabs, migrateTerminalTabs, nextActiveTabIdAfterDrop, type PersistedTab } from './useTabPersistence';
+import { stripDirty, normalizeLegacyTabs, migrateTerminalTabs, serverResolvedTerminalTab, nextActiveTabIdAfterDrop, type PersistedTab } from './useTabPersistence';
 import type { Session } from '../pages/workspace/types';
+import { legacyTargetWsParams } from '../lib/terminalRef';
 
 // useTabPersistence itself can't be unit-tested here (it's a React hook, and this
 // project's vitest config runs in a plain 'node' environment with no jsdom or
@@ -208,5 +209,14 @@ describe('nextActiveTabIdAfterDrop', () => {
     const dropped = makeTab({ id: 'b' });
     expect(nextActiveTabIdAfterDrop([a, dropped], [a], new Map(), 'b')).toBe('a');
     expect(nextActiveTabIdAfterDrop([dropped], [], new Map(), 'b')).toBeNull();
+  });
+});
+
+describe('serverResolvedTerminalTab', () => {
+  it('keeps the pane in target so the target-only connection reaches that pane', () => {
+    const tab = serverResolvedTerminalTab('misao', 'ws:ghost.2');
+    expect(tab).toMatchObject({ id: 'terminal:misao/ws:ghost.2', target: 'ws:ghost.2', resolveOnServer: true });
+    expect(legacyTargetWsParams('misao', tab.target!, 80, 24)).toMatchObject({ target: 'ws:ghost', pane: '2' });
+    expect(serverResolvedTerminalTab('misao', 'ws:ghost').target).toBe('ws:ghost.1');
   });
 });
