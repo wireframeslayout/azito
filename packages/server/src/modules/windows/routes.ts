@@ -172,7 +172,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const addedIds: number[] = [];
       for (const win of targetSession.windows) {
         const winTarget = `${session}:${win.name}`;
-        const existing = windowRepo.findByServerAndTarget(serverName, winTarget);
+        const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
           if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
           addedIds.push(existing.id);

@@ -5,7 +5,7 @@ import { api } from '../api/client';
 import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
-import { findSessionWindowRef, type TerminalRef } from '../lib/terminalRef';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, type TerminalRef } from '../lib/terminalRef';
 import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
 
@@ -269,14 +269,17 @@ export function useAddWindowModal(
           }
         }
       } else if (awMode === 'existing') {
-        const existingRef = findSessionWindowRef(awSessionData[awServer] ?? [], awTarget);
+        const existingRef = resolveWindowRegistrationRef({
+          muxKind: muxKindForRuntime((servers.find((s) => s.name === awServer)?.muxRuntime ?? 'system') as MuxRuntime),
+          target: awTarget,
+          sessions: awSessionData[awServer],
+        });
         if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
         const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
           await onTaskWindowAdded?.(awTaskId, awServer, awTarget, awLabel.trim(), true);
         } else {
-          const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: registered.id, pane: 1 };
-          onConnect?.(termRef, numericProjectId);
+          onConnect?.(registeredWindowTerminalRef(awServer, registered.id), numericProjectId);
         }
       } else {
         if (awAgent !== 'none') {

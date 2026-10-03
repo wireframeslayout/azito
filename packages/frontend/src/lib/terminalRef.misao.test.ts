@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, findSessionWindowRef } from './terminalRef';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, muxRefJson, terminalConnectionKey, refTabMatchesTarget, terminalRefFromTarget, terminalRefFromTabTarget, findSessionWindowRef } from './terminalRef';
 import type { Session } from '../pages/workspace/types';
 
 const MISAO_REF = '{"kind":"misao","workspace":"azito","window":"w_01M40229BC46M2RPATEBX4JN25"}';
@@ -64,5 +64,38 @@ describe('refTabMatchesTarget', () => {
 
   it('is false for an unparseable ref', () => {
     expect(refTabMatchesTarget('not-json', 'azito:win')).toBe(false);
+  });
+});
+
+describe('resolveWindowRegistrationRef', () => {
+  it('tmux keeps the target-derived ref even without sessions', () => {
+    expect(resolveWindowRegistrationRef({ muxKind: 'tmux', target: 'azito:win--abc.1' }))
+      .toBe('{"kind":"tmux","workspace":"azito","window":"win--abc"}');
+  });
+
+  it('misao uses the ref the terminal was opened with', () => {
+    expect(resolveWindowRegistrationRef({
+      muxKind: 'misao', target: 'azito:unregistered',
+      terminalRef: { kind: 'ref', serverName: 'local-misao', ref: UNREGISTERED_REF, pane: 1 },
+    })).toBe(UNREGISTERED_REF);
+  });
+
+  it('misao falls back to the ref in sessions, and is null (never a tmux ref) when unresolved', () => {
+    expect(resolveWindowRegistrationRef({ muxKind: 'misao', target: 'azito:unregistered', sessions })).toBe(UNREGISTERED_REF);
+    expect(resolveWindowRegistrationRef({ muxKind: 'misao', target: 'azito:unregistered' })).toBeNull();
+    expect(resolveWindowRegistrationRef({ muxKind: undefined, target: 'azito:unregistered' })).toBeNull();
+  });
+});
+
+describe('registeredWindowTerminalRef', () => {
+  it('opens a just-registered window by the id the API returned', () => {
+    expect(registeredWindowTerminalRef('local-misao', 844)).toEqual({ kind: 'windowId', serverName: 'local-misao', windowId: 844, pane: 1 });
+  });
+});
+
+describe('muxRefJson', () => {
+  it('normalises the MuxRef object a window row carries to the string sessions report', () => {
+    expect(muxRefJson({ kind: 'misao', workspace: 'azito', window: 'w_01M40229BC46M2RPATEBX4JN25' })).toBe(MISAO_REF);
+    expect(muxRefJson(undefined)).toBeUndefined();
   });
 });

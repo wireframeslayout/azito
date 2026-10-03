@@ -15,7 +15,8 @@ import { TerminalChatToggle } from './ui/TerminalChatToggle';
 import { MobileKeyboardOverlay } from './ui/MobileKeyboardOverlay';
 import { PaneUnavailableNotice, type PaneNoticeOutcome } from './terminal/PaneUnavailableNotice';
 import { api } from '../api/client';
-import { formatWindowId } from '@azito/shared';
+import { formatWindowId, muxKindForRuntime } from '@azito/shared';
+import { useServerStatuses } from '../hooks/useServerStatuses';
 import { isInsufficientResources } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { useWorkspaceTargets } from '../hooks/useWorkspaceTargets';
@@ -108,6 +109,10 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
   }, [rawTarget, terminalRef, sessions]);
 
   const { t } = useTranslation('common');
+  const { servers } = useServerStatuses();
+  const serverRuntime = servers.find((s) => s.name === serverName)?.muxRuntime;
+  // Unknown until the server list arrives: registration then waits instead of guessing a mux kind.
+  const muxKind = serverRuntime ? muxKindForRuntime(serverRuntime) : undefined;
   const [windowMissing, setWindowMissing] = useState(false);
   const [paneUnavailable, setPaneUnavailable] = useState<PaneUnavailableReason | null>(null);
   const [disconnected, setDisconnected] = useState(false);
@@ -352,6 +357,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             target={target}
             sessions={sessions}
             terminalRef={terminalRef}
+            muxKind={muxKind}
             project={project ?? null}
             allTasks={allTasks ?? []}
             taskId={taskId}

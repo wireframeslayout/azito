@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../api/client';
 import type { Window, Task, Project } from '../pages/workspace/types';
-import { findSessionWindowRef, type TerminalRef } from '../lib/terminalRef';
+import { resolveWindowRegistrationRef, muxRefJson, type TerminalRef } from '../lib/terminalRef';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Session } from '../pages/workspace/types';
 import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
@@ -14,6 +15,8 @@ interface WindowStatusDropdownProps {
   target: string;
   /** Sessions of this server — the source of the window's ref when registering. */
   sessions?: Session[];
+  /** Mux kind of the server (undefined while the server list is unknown); decides how a window is registered. */
+  muxKind?: MuxDriverKind;
   /** The terminal this dropdown sits on; finds the window row by windowId / ref (a ref-only misao row has no window-name target). */
   terminalRef?: TerminalRef;
   project: Project | null;
@@ -31,7 +34,7 @@ export function findWindow(serverName: string, target: string, project: Project 
     const matcher = (w: Window): boolean => {
       if (w.serverName !== serverName) return false;
       if (terminalRef.kind === 'windowId') return w.id === terminalRef.windowId;
-      return w.muxRef === terminalRef.ref;
+      return muxRefJson(w.muxRef) === terminalRef.ref;
     };
     const sources: Window[][] = [];
     if (project) sources.push(project.windows);
@@ -108,7 +111,7 @@ function ActionButton({ label, icon, onClick, loading, disabled, title }: { labe
   );
 }
 
-export function WindowStatusDropdown({ serverName, target, sessions, terminalRef, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
+export function WindowStatusDropdown({ serverName, target, sessions, muxKind, terminalRef, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -125,9 +128,8 @@ export function WindowStatusDropdown({ serverName, target, sessions, terminalRef
   ];
 
   const win = findWindow(serverName, target, project, allTasks, terminalRef);
-  // The ref to register with is the one the server reported for this window; it is never synthesised as a tmux ref
-  // (a misao window would be rejected as a kind mismatch).
-  const registerRef = sessions ? findSessionWindowRef(sessions, target) : null;
+  // tmux keeps its target-derived ref; other mux kinds use the ref the server reported (never a synthesised tmux ref).
+  const registerRef = resolveWindowRegistrationRef({ muxKind, target, terminalRef, sessions });
   const task = win ? findTaskForWindow(win, allTasks) : null;
 
   useEffect(() => {
@@ -301,7 +303,7 @@ export function WindowStatusDropdown({ serverName, target, sessions, terminalRef
                   >
                     {typeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
-                  <ActionButton icon={<Icon name="plus" size={16} />} label={`Register to ${taskId ? 'task' : 'project'}`} onClick={handleRegister} loading={actionLoading} disabled={!registerRef} title={registerRef ? undefined : 'Waiting for the window list to resolve this window'} />
+                  <ActionButton icon={<Icon name="plus" size={16} />} label={`Register to ${taskId ? 'task' : 'project'}`} onClick={handleRegister} loading={actionLoading} disabled={!registerRef} title={registerRef ? undefined : 'Waiting for the server to report this window'} />
                 </div>
               ) : (
                 <div style={{ paddingTop: 8, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>

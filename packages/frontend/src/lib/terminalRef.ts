@@ -1,4 +1,4 @@
-import { formatMuxRef, formatWindowId, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type MuxDriverKind, formatMuxRef, formatWindowId, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
 import type { Session, TmuxWindow } from '../pages/workspace/types';
 
 export type TerminalRef =
@@ -293,6 +293,38 @@ export function terminalRefFromTabTarget(serverName: string, target: string, ses
   if (m) return { kind: 'windowId', serverName, windowId: parseInt(m[1], 10), pane: m[2] ? parseInt(m[2], 10) : 1 };
   if (target.includes(':')) return terminalRefFromTarget(serverName, target, sessions);
   return null;
+}
+
+/**
+ * The ref to register an untracked window with. A tmux server keeps the original behaviour (the ref is built from the
+ * tmux target). Any other mux kind never gets a tmux ref synthesised: it uses the ref the terminal was opened with, or
+ * the one the server reported in sessions, and is null (not registrable yet) when neither is available.
+ */
+export function resolveWindowRegistrationRef(opts: {
+  muxKind: MuxDriverKind | undefined;
+  target: string;
+  terminalRef?: TerminalRef;
+  sessions?: Session[];
+}): string | null {
+  const { muxKind, target, terminalRef, sessions } = opts;
+  if (muxKind === 'tmux') {
+    try { return formatMuxRef(muxRefFromTmuxTarget(stripPaneSuffix(target))); } catch { return null; }
+  }
+  if (terminalRef?.kind === 'ref') return terminalRef.ref;
+  return sessions ? findSessionWindowRef(sessions, target) : null;
+}
+
+/** The tab a just-registered window opens as: the id the registration API returned, never a ref rebuilt from the target. */
+export function registeredWindowTerminalRef(serverName: string, windowId: number): TerminalRef {
+  return { kind: 'windowId', serverName, windowId, pane: 1 };
+}
+
+/**
+ * A window row's `muxRef` as the JSON string every ref consumer compares and sends. The server returns it as a MuxRef
+ * object, so it must be normalised before any `===` against a TerminalRef / TmuxWindow ref string.
+ */
+export function muxRefJson(ref: MuxRef | undefined): string | undefined {
+  return ref ? formatMuxRef(ref) : undefined;
 }
 
 /**
