@@ -73,38 +73,49 @@ if [[ -z "$AZITO_WEBHOOK_TOKEN" || -z "$AZITO_SERVER_NAME" ]]; then
   exit 0
 fi
 
-if [[ -z "${TMUX_PANE:-}" ]] || ! command -v tmux >/dev/null 2>&1; then
-  exit 0
-fi
-
-# AZITO creates a per-tab tmux *linked session* (`tmux new-session -t <src> -s
-# _azito_<src>_<ts>`, sharing the same window group). For a pane reached via a linked session,
-# #{session_name} resolves to that throwaway `_azito_*` name, not the canonical session the
-# `windows` table keys on — so the lookup would silently miss and the signal gets dropped.
-# #{session_group} resolves to the *original* session name in both linked and unlinked cases,
-# so prefer it whenever the pane's session is grouped.
-IDENT="$(tmux display-message -p -t "$TMUX_PANE" '#{?session_grouped,#{session_group},#{session_name}}|#{window_index}|#{window_name}|#{pane_index}' 2>/dev/null)" || exit 0
-[[ -n "$IDENT" ]] || exit 0
-
-IFS='|' read -r SESSION_NAME WINDOW_INDEX WINDOW_NAME PANE_INDEX <<< "$IDENT"
-
-# A window name containing `|` would shift the IFS split above and corrupt the numeric fields —
-# verify both indices are pure digits before sending.
-if [[ ! "$WINDOW_INDEX" =~ ^[0-9]+$ || ! "$PANE_INDEX" =~ ^[0-9]+$ ]]; then
-  exit 0
-fi
-
-# NOTE (v1): session/window names containing JSON-special characters (`"`, `\`) are a
-# theoretical gap — AZITO-generated tmux names never contain them, so this is intentionally out
-# of scope for now. As a minimal safety guard, skip sending rather than emit malformed JSON.
-for value in "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_NAME"; do
-  if [[ "$value" == *'"'* || "$value" == *'\'* ]]; then
+# A pane run by the misao daemon has no $TMUX_PANE; the daemon exports its own pane id as
+# $MISAO_PANE_ID, and the hub resolves the window from that id (webhook field `misaoPaneId`).
+# Only when $TMUX_PANE is absent, so a tmux pane takes exactly the path below as before.
+if [[ -z "${TMUX_PANE:-}" && "${MISAO_PANE_ID:-}" =~ ^p_[0-9A-Z]{26}$ ]]; then
+  if [[ "$AZITO_SERVER_NAME" == *'"'* || "$AZITO_SERVER_NAME" == *'\'* ]]; then
     exit 0
   fi
-done
+  PAYLOAD=$(printf '{"serverName":"%s","misaoPaneId":"%s","event":"open"}' \
+    "$AZITO_SERVER_NAME" "$MISAO_PANE_ID")
+else
+  if [[ -z "${TMUX_PANE:-}" ]] || ! command -v tmux >/dev/null 2>&1; then
+    exit 0
+  fi
 
-PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","muxPaneRef":"%s"}' \
-  "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "${TMUX_PANE:-}")
+  # AZITO creates a per-tab tmux *linked session* (`tmux new-session -t <src> -s
+  # _azito_<src>_<ts>`, sharing the same window group). For a pane reached via a linked session,
+  # #{session_name} resolves to that throwaway `_azito_*` name, not the canonical session the
+  # `windows` table keys on — so the lookup would silently miss and the signal gets dropped.
+  # #{session_group} resolves to the *original* session name in both linked and unlinked cases,
+  # so prefer it whenever the pane's session is grouped.
+  IDENT="$(tmux display-message -p -t "$TMUX_PANE" '#{?session_grouped,#{session_group},#{session_name}}|#{window_index}|#{window_name}|#{pane_index}' 2>/dev/null)" || exit 0
+  [[ -n "$IDENT" ]] || exit 0
+
+  IFS='|' read -r SESSION_NAME WINDOW_INDEX WINDOW_NAME PANE_INDEX <<< "$IDENT"
+
+  # A window name containing `|` would shift the IFS split above and corrupt the numeric fields —
+  # verify both indices are pure digits before sending.
+  if [[ ! "$WINDOW_INDEX" =~ ^[0-9]+$ || ! "$PANE_INDEX" =~ ^[0-9]+$ ]]; then
+    exit 0
+  fi
+
+  # NOTE (v1): session/window names containing JSON-special characters (`"`, `\`) are a
+  # theoretical gap — AZITO-generated tmux names never contain them, so this is intentionally out
+  # of scope for now. As a minimal safety guard, skip sending rather than emit malformed JSON.
+  for value in "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_NAME"; do
+    if [[ "$value" == *'"'* || "$value" == *'\'* ]]; then
+      exit 0
+    fi
+  done
+
+  PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","muxPaneRef":"%s"}' \
+    "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "${TMUX_PANE:-}")
+fi
 
 # ── content（任意）──
 # 質問文・選択肢は自由文字列（改行・引用符・非 ASCII を含みうる）なので、bash の文字列操作で
@@ -141,8 +152,14 @@ fi
 # 32KB 上限ガード: 巨大な質問（長い description 等）でハブ側のボディ上限や余計な転送コストに
 # 当たるくらいなら、content を落としてバナーに退化させる方が確実に届く。
 if [[ -n "$CONTENT_JSON" ]]; then
-  CANDIDATE=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","muxPaneRef":"%s","content":%s}' \
-    "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "${TMUX_PANE:-}" "$CONTENT_JSON")
+  if [[ -z "${TMUX_PANE:-}" ]]; then
+    # misao pane (the only way to get here without $TMUX_PANE; see the identity block above)
+    CANDIDATE=$(printf '{"serverName":"%s","misaoPaneId":"%s","event":"open","content":%s}' \
+      "$AZITO_SERVER_NAME" "$MISAO_PANE_ID" "$CONTENT_JSON")
+  else
+    CANDIDATE=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"open","muxPaneRef":"%s","content":%s}' \
+      "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "${TMUX_PANE:-}" "$CONTENT_JSON")
+  fi
   if [[ ${#CANDIDATE} -le 32768 ]]; then
     PAYLOAD="$CANDIDATE"
   fi

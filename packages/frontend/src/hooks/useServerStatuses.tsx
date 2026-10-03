@@ -57,7 +57,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   const probeInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
 
   const getServerFingerprint = (srv: Server): string =>
-    `${srv.name}|${srv.type}|${srv.host ?? ''}|${srv.agentPort ?? ''}|${srv.sshHost ?? ''}|${srv.muxRuntime ?? ''}|${srv.hasAgentToken ? '1' : '0'}`;
+    `${srv.name}|${srv.type}|${srv.host ?? ''}|${srv.agentPort ?? ''}|${srv.sshHost ?? ''}|${srv.defaultMux}|${srv.muxRuntime ?? ''}|${srv.hasAgentToken ? '1' : '0'}`;
 
   // 各サーバーのステータス探査（重い・遅いサーバーが混ざりうる）は fire-and-forget の
   // バックグラウンドで実行し、refresh() 自体の resolve を待たせない。

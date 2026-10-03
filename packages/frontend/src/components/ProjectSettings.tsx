@@ -532,7 +532,8 @@ export function SettingsContent({ settings }: { settings: ReturnType<typeof useP
         awLabel={addWindowModal.awLabel}
         setAwLabel={addWindowModal.setAwLabel}
         awSessionData={addWindowModal.awSessionData}
-        setAwSessionData={addWindowModal.setAwSessionData}
+        awOfflineServers={addWindowModal.awOfflineServers}
+        onLoadMissingSessions={addWindowModal.loadMissingSessions}
         awSelectedSession={addWindowModal.awSelectedSession}
         setAwSelectedSession={addWindowModal.setAwSelectedSession}
         awNewSession={addWindowModal.awNewSession}

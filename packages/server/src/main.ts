@@ -11,7 +11,10 @@ import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
+import { scheduleStartupRecovery } from './modules/tasks/recovery/scheduleStartupRecovery';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
+import { partitionByTmuxRuntime } from './modules/servers/tmuxServers';
+import { selectLocalMisaoServers } from './modules/tmux/misao/misaoDriver';
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
@@ -104,7 +107,7 @@ async function main(): Promise<void> {
 
   const localUrl = `http://127.0.0.1:${PORT}`;
   const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
-  const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
+  const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);
 
@@ -147,7 +150,25 @@ async function main(): Promise<void> {
 
   // ─── Startup: install tmux hooks + connect agent event streams ───
 
-  for (const srv of wiring.serverRepo.findAll()) {
+  const { tmux: tmuxServers, skipped: nonTmuxServers } = partitionByTmuxRuntime(wiring.serverRepo.findAll());
+  for (const srv of nonTmuxServers) {
+    app.log.info(`Skipping tmux startup hooks and linked-session GC for ${srv.name}: default mux '${srv.defaultMux}' is not tmux`);
+  }
+
+  // Not awaited: the daemon may come up later. Change events for a server installed while the daemon is down
+  // start flowing as soon as the connection is established.
+  const misao = wiring.misao;
+  const misaoServers = selectLocalMisaoServers(nonTmuxServers);
+  void misao.connection.start().then(() => Promise.all([
+    ...misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
+      app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
+    })),
+    misaoPaneStates.start().catch((err) => {
+      app.log.warn(`Activity events are not active yet (will start when the misao daemon is reachable): ${err}`);
+    }),
+  ]));
+
+  for (const srv of tmuxServers) {
     if (srv.type === 'local') {
       tmuxHookManager.install(srv).catch((err) => {
         app.log.warn(`Failed to install tmux hooks on ${srv.name}: ${err}`);
@@ -164,7 +185,7 @@ async function main(): Promise<void> {
 
   // ─── Startup GC: clean leaked linked sessions ───
 
-  for (const srv of wiring.serverRepo.findAll()) {
+  for (const srv of tmuxServers) {
     wiring.tmuxClient.cleanupLinkedSessions(srv).then((n) => {
       if (n > 0) app.log.info(`Startup GC: cleaned ${n} linked session(s) on ${srv.name}`);
     }).catch(() => {});
@@ -184,8 +205,17 @@ async function main(): Promise<void> {
     wiring.agentTurnRepo,
     app.log,
     wiring.unitTypeLoader,
+    wiring.windowRepo,
   );
-  recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+  // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect (only the tasks the first run skipped).
+  void scheduleStartupRecovery(
+    {
+      recover: () => recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); }),
+      recoverSkipped: () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
+      hasPending: () => recoverStuckTasks.hasPendingForDaemon(),
+    },
+    misao.connection,
+  );
 
   setInterval(() => {
     recoverStuckTasks.runPeriodic(wiring.executeTaskUseCase.getRunning()).catch((err) => {

@@ -2,6 +2,7 @@ import { lazy, Suspense } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { useServerDetail } from '../../hooks/useServerDetail';
+import { useHealth } from '../../hooks/useHealth';
 import { useServerEditForm } from '../../hooks/useServerEditForm';
 import { useIsMobile } from '../../hooks/useIsMobile';
 import { DEFAULT_SECTION, SERVER_SECTIONS } from './serverSections';
@@ -29,8 +30,8 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
   const { t } = useTranslation('servers');
   const isMobile = useIsMobile();
   const {
-    server, servers, status, installStatus, sessions,
-    windowById, taskById,
+    server, servers, status, installStatus, installStatusError, sessions,
+    windowById, taskById, muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     windowMetaError,
@@ -72,6 +73,7 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
         currentServerName={serverName}
         status={status}
         installStatus={installStatus}
+        installStatusError={installStatusError}
         sessions={sessions}
       />
     );
@@ -108,12 +110,13 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
               isolationReportUnavailable={isolationReportUnavailable}
               isolationCleanupReport={isolationCleanupReport}
               isolationCleanupReportUnavailable={isolationCleanupReportUnavailable}
+              muxDriverStatus={muxDriverStatus}
               refresh={refresh}
               onEdit={() => mgmt.openEditModal(server)}
             />
           )}
           {activeSection === 'setup' && (
-            <SetupSection server={server} installStatus={installStatus} refresh={refresh} />
+            <SetupSection server={server} installStatus={installStatus} installStatusError={installStatusError} refresh={refresh} />
           )}
           {activeSection === 'windows' && (
             <WindowsSection server={server} sessions={sessions} refresh={refresh} windowById={windowById} taskById={taskById} windowMetaError={windowMetaError} />
@@ -141,6 +144,8 @@ export default function ServerDetailPage({ serverName, section }: ServerDetailPa
       onTokenChange={mgmt.setEditToken}
       muxRuntime={mgmt.editMuxRuntime}
       onMuxRuntimeChange={mgmt.setEditMuxRuntime}
+      defaultMux={mgmt.editDefaultMux}
+      onDefaultMuxChange={mgmt.setEditDefaultMux}
       isolationIntent={mgmt.editIsolationIntent}
       onIsolationIntentChange={mgmt.setEditIsolationIntent}
     />

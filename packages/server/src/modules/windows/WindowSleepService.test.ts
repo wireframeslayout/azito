@@ -43,7 +43,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null,
     isolationCleanupReport: null,
-    muxRuntime: 'system',
+    defaultMux: 'tmux' as const, muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -132,6 +132,16 @@ describe('WindowSleepService', () => {
 
       expect(closeWindow).toHaveBeenCalledTimes(1);
       expect(closeWindow).toHaveBeenCalledWith(expect.objectContaining({ name: 'local-server' }), { kind: 'tmux', workspace: 'azito', window: 'task-1' });
+      expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
+    });
+
+    it('sleeps a window whose misao window is already gone (NotFound flagged alreadyGone)', async () => {
+      const win = makeWindow();
+      const { service, closeWindow, windowRepo } = buildService({ windows: [win] });
+      closeWindow.mockResolvedValueOnce({ stdout: '', stderr: 'window not found: w_1', code: 1, alreadyGone: true });
+
+      await service.sleep(win.id);
+
       expect(windowRepo.update).toHaveBeenCalledWith(win.id, { sleeping: true });
     });
 

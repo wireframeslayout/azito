@@ -4,8 +4,6 @@ import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
 import { FormInput, FormSelect, baseInputStyle, Button, ModelSelect } from '../ui';
-import { api } from '../../api/client';
-import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
 
 interface AddWindowModalProps {
@@ -22,7 +20,10 @@ interface AddWindowModalProps {
   awLabel: string;
   setAwLabel: (label: string) => void;
   awSessionData: Record<string, Session[]>;
-  setAwSessionData: (data: Record<string, Session[]>) => void;
+  /** オフライン（到達不能）と判定されたサーバー名。セッションは取得せず「オフライン」と表示する。 */
+  awOfflineServers: string[];
+  /** 未取得のサーバーのセッションを並列取得する（オフラインのサーバーはスキップ）。 */
+  onLoadMissingSessions: () => Promise<void>;
   awSelectedSession: string;
   setAwSelectedSession: (session: string) => void;
   awNewSession: string;
@@ -62,7 +63,7 @@ export default function AddWindowModal({
   awServer, setAwServer,
   awTarget, setAwTarget,
   awLabel, setAwLabel,
-  awSessionData, setAwSessionData,
+  awSessionData, awOfflineServers, onLoadMissingSessions,
   awSelectedSession, setAwSelectedSession,
   awNewSession,
   awNewWindowName, setAwNewWindowName,
@@ -91,12 +92,12 @@ export default function AddWindowModal({
                 const ps = projectServers.find((p) => p.serverName === e.target.value);
                 setAwWorkDir(ps?.workingDirectory || project?.workingDirectory || '');
               }}>
-                {(projectServers.length > 0 ? servers.filter((s) => projectServers.some((ps) => ps.serverName === s.name)) : servers).map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                {(projectServers.length > 0 ? servers.filter((s) => projectServers.some((ps) => ps.serverName === s.name)) : servers).map((s) => <option key={s.name} value={s.name}>{awOfflineServers.includes(s.name) ? `${s.name} (${t('addWindow.serverOffline')})` : s.name}</option>)}
               </FormSelect>
             </FormField>
           )}
           {projectServers.length <= 1 && awServer && (
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12 }}>{t('addWindow.serverLabel')}{awServer}</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12 }}>{t('addWindow.serverLabel')}{awServer}{awOfflineServers.includes(awServer) && ` (${t('addWindow.serverOffline')})`}</div>
           )}
           <FormField label={t('addWindow.session')}>
             <FormInput value={awNewSession} readOnly style={{ opacity: 0.7, cursor: 'default' }} />
@@ -105,8 +106,7 @@ export default function AddWindowModal({
             <FormInput value={awNewWindowName} onChange={(e) => setAwNewWindowName(e.target.value)} placeholder={t('addWindow.windowNamePlaceholder')} />
             {!awNewWindowName.trim() && (() => {
               const serverInfo = servers.find((s) => s.name === awServer);
-              const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
-              return muxKind !== 'tmux' ? (
+              return serverInfo && serverInfo.defaultMux !== 'tmux' ? (
                 <div style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                   {t('addWindow.windowNameAutoGenHint')}
                 </div>
@@ -222,14 +222,7 @@ export default function AddWindowModal({
           <div style={{ display: 'flex', gap: 4, marginTop: 8, marginBottom: 8 }}>
             {(['existing', 'session'] as const).map((m) => (
               <button key={m} onClick={async () => {
-                const missingServers = servers.filter((s) => !awSessionData[s.name]);
-                if (missingServers.length > 0) {
-                  const data = { ...awSessionData };
-                  for (const srv of missingServers) {
-                    try { const s = await api<Session[]>(`/servers/${srv.name}/sessions`); if (Array.isArray(s)) data[srv.name] = s; } catch {}
-                  }
-                  setAwSessionData(data);
-                }
+                await onLoadMissingSessions();
                 setAwMode(m);
               }}
                 style={{ flex: 1, padding: '6px 10px', fontSize: 'var(--font-sm)', fontWeight: 500, cursor: 'pointer', borderRadius: 'var(--radius-sm)',

@@ -10,6 +10,8 @@ export interface TmuxPane {
   height: number;
   active: boolean;
   pid: number;
+  /** tmux `%<n>` pane id: stable across sibling deletion, unlike `index`. */
+  handle?: string;
 }
 
 export interface TmuxWindow {
@@ -53,4 +55,16 @@ export interface TmuxPaneInfo {
   paneIndex: number;
   currentPath: string;
   currentCommand: string;
+}
+
+/** True when the pane belongs to the window `ref` addresses. misao compares window ids; a pane without a ref never matches. */
+export function paneInfoMatchesRef(pane: MuxPaneInfo, ref: MuxRef): boolean {
+  if (ref.kind === 'misao') return pane.ref?.kind === 'misao' && pane.ref.window === ref.window;
+  return pane.sessionName === ref.workspace && windowSpecMatches(ref.window, pane.windowIndex, pane.windowName);
+}
+
+/** True when `win` (already known to be in the ref's workspace) is the window `ref` addresses. */
+export function windowInfoMatchesRef(win: MuxWindowInfo, ref: MuxRef): boolean {
+  if (ref.kind === 'misao') return win.ref?.kind === 'misao' && win.ref.window === ref.window;
+  return windowSpecMatches(ref.window, win.index, win.name);
 }

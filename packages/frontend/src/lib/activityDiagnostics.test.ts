@@ -46,6 +46,10 @@ describe('activityDotState', () => {
     ])).toBe('active');
   });
 
+  it('mux（misao）の判定もイベント駆動として accent', () => {
+    expect(activityDotState([make('a', 'working', 'tier0_mux')])).toBe('active');
+  });
+
   it('フォールバック Tier だけなら dim', () => {
     expect(activityDotState([
       make('a', 'working', 'tier4_probe'),

@@ -1,11 +1,11 @@
 import type { FastifyPluginCallback } from 'fastify';
 import { randomUUID } from 'node:crypto';
-import type { IWindowRepository } from './Window';
-import { isPrimaryTaskWindow } from './Window';
+import type { IWindowRepository, Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
 import type { ITaskRepository } from '../tasks/Task';
 import type { ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IServerRepository } from '../servers/Server';
@@ -19,8 +19,11 @@ import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLa
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
-import { muxRefFromTmuxTarget, tmuxTargetFromMuxRef, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveWindowById, resolvePaneHandle, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
+import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
+import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -40,12 +43,36 @@ export interface WindowsRouteOptions {
   notificationBus?: NotificationBus;
   resourceGuard?: ResourceGuard;
   harnessPrefix?: string;
+  /** Drops the cached GET /sessions list of a server, so a client re-reading it after a respawn sees the new window. */
+  invalidateSessionCache?: (serverName: string) => void;
   destroyPrimaryTaskWindow?: KillWindowDeps['destroyPrimaryTaskWindow'];
+  /** Operator UI token a manual pane gets on a non-isolated server. */
+  uiToken: string;
+  /** Masked-only env of a secondary task-owned window; see SessionsRouteOptions. */
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
+  /** The shared per-server mutex (the same instance the sessions and servers routes receive). */
+  serverIsolationMutex: KeyedMutex;
 }
 
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
   const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
   const driverFor = (srv: ServerConfig): IMuxClient => opts.muxDriverRegistry.resolve(srv);
+  const muxUnavailableBody = (srv: ServerConfig): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
+    const availability = opts.muxDriverRegistry.availability(srv);
+    return availability.available ? null : { error: 'mux_driver_unavailable', kind: srv.defaultMux, reason: availability.reason };
+  };
+
+  // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
+  const labelOrRemoveWindow = (srv: ServerConfig, ref: MuxRef, windowId: number, taskId?: number): Promise<void> =>
+    labelAddedWindowOrRemove(driverFor(srv), srv, ref, { windowId, ...(taskId !== undefined ? { taskId } : {}) }, windowRepo);
+
+  // One physical window = one row. The ref is the window's identity (a unique index covers it), the tmux_target is
+  // only a display/legacy key that differs between `ws:w_<id>` (ref-only registration) and `ws:<name>`; so a given
+  // ref decides first and the target is consulted only when no ref was sent or no row carries it.
+  function findExistingWindow(serverName: string, tmuxTarget: string, givenRef: MuxRef | undefined): Window | undefined {
+    return (givenRef ? windowRepo.findByServerAndRef(serverName, givenRef) : undefined)
+      ?? windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+  }
 
   function notifyWindowsChanged(serverName: string): void {
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
@@ -74,19 +101,26 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
+      const srv = serverName ? serverRepo.findByName(serverName) : null;
       let givenRef: MuxRef | undefined;
       if (refJson) {
         try {
           givenRef = parseMuxRef(refJson);
-          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
+          if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
+          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
+      if (!givenRef && srv && srv.defaultMux !== 'tmux')
+        return reply.status(400).send({ error: 'ref required for this server' });
+      const unavailable = srv ? muxUnavailableBody(srv) : null;
+      if (unavailable) return reply.status(400).send(unavailable);
 
-      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
       if (existing) {
         if (existing.projectId !== id) {
           windowRepo.update(existing.id, { projectId: id });
@@ -119,6 +153,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName, workingDirectory);
       notifyWindowsChanged(serverName);
       return { ok: true, id: winId };
@@ -148,7 +183,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const addedIds: number[] = [];
       for (const win of targetSession.windows) {
         const winTarget = `${session}:${win.name}`;
-        const existing = windowRepo.findByServerAndTarget(serverName, winTarget);
+        const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
           if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
           addedIds.push(existing.id);
@@ -160,6 +195,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           taskId: null,
           serverName,
           tmuxTarget: winTarget,
+          ...(win.ref ? { muxRef: win.ref } : {}),
           label: win.name || null,
           isPrimary: false,
           windowType: 'terminal',
@@ -171,6 +207,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           paneLayout: null,
           sleeping: false,
         });
+        if (win.ref) await labelOrRemoveWindow(srv, win.ref, winId);
         addedIds.push(winId);
       }
       notifyWindowsChanged(serverName);
@@ -200,19 +237,26 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const serverName = body['server_name'] as string | undefined;
       let tmuxTarget = body['tmux_target'] as string | undefined;
       const refJson = body['ref'] as string | undefined;
+      const srv = serverName ? serverRepo.findByName(serverName) : null;
       let givenRef: MuxRef | undefined;
       if (refJson) {
         try {
           givenRef = parseMuxRef(refJson);
-          if (!tmuxTarget) tmuxTarget = tmuxTargetFromMuxRef(givenRef);
+          if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
+          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
       }
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
+      // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
+      if (!givenRef && srv && srv.defaultMux !== 'tmux')
+        return reply.status(400).send({ error: 'ref required for this server' });
+      const unavailable = srv ? muxUnavailableBody(srv) : null;
+      if (unavailable) return reply.status(400).send(unavailable);
 
-      const existing = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
+      const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
       if (existing) {
         // One physical window = one row (migration 068). The Add Window flow registers the
         // window as a project window first and then attaches it here; returning the row
@@ -226,9 +270,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           const label = (body['label'] as string) || undefined;
           const windowType = (body['window_type'] as string) === 'agent' ? 'agent' as const : undefined;
           if (label || windowType) windowRepo.update(existing.id, { ...(label ? { label } : {}), ...(windowType ? { windowType } : {}) });
-          return { ok: true, id: existing.id, adopted: true };
+          return { ok: true, id: existing.id, adopted: true, tmuxTarget: existing.tmuxTarget };
         }
-        return { ok: true, id: existing.id };
+        return { ok: true, id: existing.id, tmuxTarget: existing.tmuxTarget };
       }
 
       if (body['worker_model'] && !isValidModelId(body['worker_model'] as string)) {
@@ -254,9 +298,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         paneLayout: null,
         sleeping: false,
       });
+      if (givenRef && srv) await labelOrRemoveWindow(srv, givenRef, winId, id);
       sessionCaptureService.scheduleInitialScan(winId, workerType, serverName as string, workingDirectory);
       notifyWindowsChanged(serverName);
-      return { ok: true, id: winId };
+      return { ok: true, id: winId, tmuxTarget };
     },
   );
 
@@ -352,7 +397,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
       }
 
-      const supervised = shouldSupervise(srv.type, win.windowType);
+      const supervised = shouldSupervise(srv.type, win.windowType, srv.defaultMux);
       const paneHandle = await driverFor(srv).resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
@@ -402,6 +447,10 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.status(409).send({ error: 'session_already_running', windowId: err.windowId, message: err.message });
         }
         throw err;
+      } finally {
+        // respawn() can fail after it already switched the window (pane labelling), so the cached
+        // list is dropped whatever the outcome; only a clean finish is announced below.
+        opts.invalidateSessionCache?.(srv.name);
       }
       notifyWindowsChanged(srv.name);
       return { ok: true, tmuxTarget: result.tmuxTarget, windowId: id };
@@ -491,7 +540,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const win = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       const srv = serverRepo.findByName(serverName);
-      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType);
+      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType, srv.defaultMux);
 
       const entry = supervisorRegistry
         .snapshot()
@@ -556,28 +605,29 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   );
 
   // ── POST /api/windows/:id/panes ──
+  // The window and server rows, the primary/secondary task-window decision, the env and the split all run inside
+  // the per-server lock (see serverIsolationMutex's doc comment on SessionsRouteOptions), against rows fetched in it.
   fastify.post<{ Params: { id: string } }>(
     '/api/windows/:id/panes',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
-      const { window: win, ref } = resolveWindowById(windowRepo, id);
-      const srv = serverRepo.findByName(win.serverName);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const serverName = resolveWindowById(windowRepo, id).window.serverName;
+      return opts.serverIsolationMutex.withLock(serverName, async () => {
+        const { window: win, ref } = resolveWindowById(windowRepo, id);
+        const srv = serverRepo.findByName(win.serverName);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
-      if (win.taskId !== null && isPrimaryTaskWindow(win)) {
-        return reply.status(409).send({
-          error: 'primary_task_window_pane_add_unsupported',
-          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-        });
-      }
+        const paneEnv = resolvePaneAddEnv(win, srv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-      const body = request.body as { ordinal?: number; direction?: string };
-      const direction = (body.direction || 'v') as 'h' | 'v';
-      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).splitPaneByHandle(srv, handle, direction);
-      notifyWindowsChanged(win.serverName);
-      return { ok: true };
+        const body = request.body as { ordinal?: number; direction?: string };
+        const direction = (body.direction || 'v') as 'h' | 'v';
+        const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+        const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
+        await driverFor(srv).splitPaneByHandle(srv, handle, direction, paneEnv.extraEnv);
+        notifyWindowsChanged(win.serverName);
+        return { ok: true };
+      });
     },
   );
 
@@ -669,7 +719,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   );
 
   // ── DELETE /api/windows/:id/panes/:ordinal ──
-  fastify.delete<{ Params: { id: string; ordinal: string } }>(
+  fastify.delete<{ Params: { id: string; ordinal: string }; Querystring: { handle?: string } }>(
     '/api/windows/:id/panes/:ordinal',
     async (request, reply) => {
       const id = parseInt(request.params.id, 10);
@@ -677,8 +727,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const { window: win, ref } = resolveWindowById(windowRepo, id);
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).closePane(srv, handle);
+      await closePaneInWindow(driverFor(srv), srv, ref, { ordinal, handle: request.query.handle });
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },

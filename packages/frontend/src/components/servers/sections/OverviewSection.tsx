@@ -12,6 +12,8 @@ import { HealthDot, HEALTH_COLOR_VAR } from '../../statusbar/HealthDot';
 import { ResourceMeter } from '../../statusbar/ResourceMeter';
 import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown';
 import { Chip, Button, Notice, DocsLink } from '../../ui';
+import type { MuxDriverStatus } from '../../../lib/muxDriverStatus';
+import { MuxDriverNotice } from './MuxDriverNotice';
 
 // Issue #29 Step 2 C: display-side TTL for the isolation doctor's last
 // verification — purely advisory ("要再検証"), not a policy re-evaluation.
@@ -57,6 +59,8 @@ interface OverviewSectionProps {
   // instead of one clobbering the other.
   isolationCleanupReport: IsolationReport | null;
   isolationCleanupReportUnavailable: boolean;
+  /** Mux driver state from the detail API; only meaningful for a misao server. */
+  muxDriverStatus: MuxDriverStatus;
   refresh: () => void;
   onEdit: () => void;
 }
@@ -65,6 +69,7 @@ export default function OverviewSection({
   server, status, installStatus, sessions,
   isolationReport, isolationReportUnavailable,
   isolationCleanupReport, isolationCleanupReportUnavailable,
+  muxDriverStatus,
   refresh, onEdit,
 }: OverviewSectionProps) {
   const { t } = useTranslation('servers');
@@ -248,9 +253,15 @@ export default function OverviewSection({
 
         <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
           <Button size="sm" onClick={refresh}>{t('overview.reconnect')}</Button>
-          {server.type !== 'local' && <Button size="sm" onClick={onEdit}>{t('overview.edit')}</Button>}
+          <Button size="sm" onClick={onEdit}>{t('overview.edit')}</Button>
         </div>
       </div>
+
+      {server.defaultMux === 'misao' && (
+        <div style={{ marginBottom: 'var(--space-4)' }}>
+          <MuxDriverNotice status={muxDriverStatus} />
+        </div>
+      )}
 
       {isolationCleanupWarning && (
         <div style={{ marginBottom: 'var(--space-4)' }}>
@@ -434,9 +445,18 @@ export default function OverviewSection({
         </KvCard>
 
         <KvCard title={t('overview.runtimeTitle')}>
+          <KvRow label={t('overview.defaultMuxLabel')}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', flexWrap: 'wrap', gap: 'var(--space-2)', fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+              {server.defaultMux === 'misao' ? t('overview.defaultMuxMisao') : t('overview.defaultMuxTmux')}
+              {server.defaultMux === 'misao' && muxDriverStatus === 'ok' && <Chip tone="green">{t('overview.misaoConnected')}</Chip>}
+              {server.defaultMux === 'misao' && muxDriverStatus === 'unreachable' && <Chip tone="orange">{t('overview.misaoUnreachableChip')}</Chip>}
+              {server.defaultMux === 'misao' && muxDriverStatus === 'incompatible' && <Chip tone="orange">{t('overview.misaoIncompatibleChip')}</Chip>}
+            </span>
+          </KvRow>
           <KvRow label={t('overview.muxRuntimeLabel')}>
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
-              {server.muxRuntime === 'managed' ? t('overview.muxManaged')
+              {server.muxRuntime === 'managed'
+                ? t('overview.muxManaged')
                 : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
             </span>
           </KvRow>

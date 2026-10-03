@@ -15,6 +15,11 @@
 //                            選択プロンプトになる（= タイトルしか見ない supervisor は idle と報告する）。
 //   --silent <stateFile>  … タイトルも出力も一切出さない。Tier 2 を 'unknown' に倒し、
 //                            Tier 4 (プロセス実体 + transcript) を唯一の判定源にするため。
+//   --busy <stateFile>    … --titles と同じ状態追従に加え、working の間はスピナーグリフを回しながら
+//                            タイトルを毎秒更新し続ける。misao の稼働検知（title ルール）は「更新され続ける
+//                            スピナータイトル」だけを working とみなし、3 秒更新が無いとタイトルの意見を
+//                            失って出力量ルールの idle に落ちる。tmux 経路の supervisor はそうならないため
+//                            --titles のままで足りる（既存モードは不変）。
 //
 // 第3引数に <inputFile> を渡すと、ペインへ届いた入力（tmux send-keys のキーストローク）を
 // そのファイルへ追記する。チャットから送った AskUserQuestion の回答（選択肢番号の数字キー）が
@@ -26,12 +31,12 @@ const POLL_MS = 200;
 
 const [, , mode, stateFile, inputFile] = process.argv;
 
-if (mode !== '--titles' && mode !== '--silent') {
-  process.stderr.write('usage: claude (--titles|--silent) <stateFile> [inputFile]\n');
+if (mode !== '--titles' && mode !== '--silent' && mode !== '--busy') {
+  process.stderr.write('usage: claude (--titles|--busy|--silent) <stateFile> [inputFile]\n');
   process.exit(2);
 }
 if (!stateFile) {
-  process.stderr.write('usage: claude (--titles|--silent) <stateFile> [inputFile]\n');
+  process.stderr.write('usage: claude (--titles|--busy|--silent) <stateFile> [inputFile]\n');
   process.exit(2);
 }
 
@@ -73,7 +78,14 @@ function clearScreen() {
   process.stdout.write('\x1b[H\x1b[2J\x1b[3J');
 }
 
+/** --busy の working 中に回すスピナーグリフ（misao の title ルールが working とみなす文字）。 */
+const SPINNER_GLYPHS = ['◐', '◓', '◑', '◒'];
+const BUSY_TITLE_REFRESH_MS = 1000;
+const titleMode = mode === '--titles' || mode === '--busy';
+
 let lastTitle = null;
+let lastTitleAt = 0;
+let spinnerIndex = 0;
 let lastState = null;
 
 function tick() {
@@ -83,7 +95,7 @@ function tick() {
   }
   // 画面はタイトルより先に更新する。supervisor は blocked を idle として報告するので、
   // 「タイトルは idle・画面はまだ選択画面でない」瞬間があるとハブが完了と判定してしまう。
-  if (mode === '--titles' && state !== lastState) {
+  if (titleMode && state !== lastState) {
     if (state === 'blocked') {
       clearScreen();
       process.stdout.write(BLOCKED_SCREEN);
@@ -93,20 +105,23 @@ function tick() {
     }
     lastState = state;
   }
-  if (mode === '--titles') {
+  if (titleMode) {
     // 実 Claude Code のタイトル規約に合わせる: working は先頭がスピナーグリフ、idle は `✳ `。
     // blocked も `✳ ` のまま（実挙動: 選択中もタイトルは idle グリフ）。
-    const title = state === 'working' ? '◐ e2e fake agent' : '✳ e2e fake agent';
-    // 状態が変わったときだけ書く。毎周期書くと純粋なバイト量ヒューリスティック側を刺激してしまう。
-    if (title !== lastTitle) {
+    const busyRefresh = mode === '--busy' && state === 'working' && Date.now() - lastTitleAt >= BUSY_TITLE_REFRESH_MS;
+    if (busyRefresh) spinnerIndex = (spinnerIndex + 1) % SPINNER_GLYPHS.length;
+    const title = state === 'working' ? `${mode === '--busy' ? SPINNER_GLYPHS[spinnerIndex] : '◐'} e2e fake agent` : '✳ e2e fake agent';
+    // --titles は状態が変わったときだけ書く。毎周期書くと純粋なバイト量ヒューリスティック側を刺激してしまう。
+    if (title !== lastTitle || busyRefresh) {
       setTitle(title);
       lastTitle = title;
+      lastTitleAt = Date.now();
     }
   }
   setTimeout(tick, POLL_MS);
 }
 
-if (mode === '--titles') {
+if (titleMode) {
   // 起動直後に idle タイトルを出す（実エージェントの起動完了に相当）。
   setTitle('✳ e2e fake agent');
   lastTitle = '✳ e2e fake agent';

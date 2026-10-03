@@ -13,7 +13,7 @@ import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 
-function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
+export function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
     execFile(command, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err) return reject(err);

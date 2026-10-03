@@ -65,7 +65,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
-    muxRuntime: 'system',
+    defaultMux: 'tmux' as const, muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -210,6 +210,19 @@ describe('TaskPaneEnvironmentService.buildEnvForNewWindow', () => {
     for (const [key, value] of Object.entries(ISOLATION_MASKED_ENV)) {
       expect(env[key]).toBe(value);
     }
+  });
+
+  // The hub webhook token is injected by the mux driver into every pane of a non-isolated server (tui-supervisor reads it
+  // from the env). Scoped auth applies ISOLATION_MASKED_ENV to a non-isolated server's task pane too, so that mask must not
+  // touch it; only an isolated server blanks it.
+  it('leaves AZITO_WEBHOOK_TOKEN alone for a non-isolated server under scoped auth, and blanks it when isolated', () => {
+    const { service } = makeDeps(true);
+    const plain = service.buildEnvForNewWindow(makeTask(), makeServer()).env;
+    expect(plain.AZITO_UI_TOKEN).toBe('');
+    expect(plain.AZITO_AGENT_TOKEN).toBe('');
+    expect(plain).not.toHaveProperty('AZITO_WEBHOOK_TOKEN');
+    const isolated = service.buildEnvForNewWindow(makeTask(), makeServer({ isolationIntent: true })).env;
+    expect(isolated.AZITO_WEBHOOK_TOKEN).toBe('');
   });
 
   // Third-party review finding (Important): secrets must be read BEFORE the

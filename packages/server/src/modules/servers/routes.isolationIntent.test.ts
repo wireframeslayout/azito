@@ -59,7 +59,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null,
     isolationCleanupReport: null,
-    muxRuntime: 'system',
+    defaultMux: 'tmux' as const, muxRuntime: 'system',
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -84,6 +84,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
   };
   return {
     serverRepo,
+    misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     // Issue #29 review, Critical finding 1: no windows registered by
@@ -961,14 +962,14 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
   it('allows muxRuntime change alongside isolationIntent: false->true', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: false, muxRuntime: 'system' }),
+      makeServer({ type: 'agent', isolationIntent: false, defaultMux: 'tmux' as const, muxRuntime: 'system' }),
     );
     const app = await buildApp(opts);
 
     const res = await app.inject({
       method: 'PUT',
       url: '/api/servers/srv',
-      payload: { muxRuntime: 'managed', isolationIntent: true },
+      payload: { defaultMux: 'tmux' as const, muxRuntime: 'managed', isolationIntent: true },
     });
 
     expect(res.statusCode).toBe(200);
@@ -978,14 +979,14 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
   it('allows muxRuntime change on an already-isolated server', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, muxRuntime: 'system' }),
+      makeServer({ type: 'agent', isolationIntent: true, defaultMux: 'tmux' as const, muxRuntime: 'system' }),
     );
     const app = await buildApp(opts);
 
     const res = await app.inject({
       method: 'PUT',
       url: '/api/servers/srv',
-      payload: { muxRuntime: 'managed' },
+      payload: { defaultMux: 'tmux' as const, muxRuntime: 'managed' },
     });
 
     expect(res.statusCode).toBe(200);
@@ -995,14 +996,14 @@ describe('isolation_intent blocks a simultaneous connection-info change (Issue #
   it('allows muxRuntime change alongside isolationIntent: true->false in the same request', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', isolationIntent: true, muxRuntime: 'system' }),
+      makeServer({ type: 'agent', isolationIntent: true, defaultMux: 'tmux' as const, muxRuntime: 'system' }),
     );
     const app = await buildApp(opts);
 
     const res = await app.inject({
       method: 'PUT',
       url: '/api/servers/srv',
-      payload: { muxRuntime: 'managed', isolationIntent: false },
+      payload: { defaultMux: 'tmux' as const, muxRuntime: 'managed', isolationIntent: false },
     });
 
     expect(res.statusCode).toBe(200);
@@ -1258,7 +1259,7 @@ describe('POST /api/servers/:name/agent/install — serialized via serverIsolati
     const install = vi.fn(async () => ({ success: true, host: '5.6.7.8', port: 5000, token: 'newtok', version: '1.0.1', startMethod: 'nohup' }));
     const opts = makeOpts({ agentInstaller: makeAgentInstaller(install) });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(
-      makeServer({ type: 'agent', sshHost: 'user@host', muxRuntime: 'managed' }),
+      makeServer({ type: 'agent', sshHost: 'user@host', defaultMux: 'tmux' as const, muxRuntime: 'managed' }),
     );
     const app = await buildApp(opts);
 

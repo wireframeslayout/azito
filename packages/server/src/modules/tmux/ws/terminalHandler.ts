@@ -2,10 +2,23 @@ import type { WebSocket } from 'ws';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ITerminalStream, OpenTerminalOpts } from '../../servers/transport/ServerTransport';
-import type { MuxRef, PaneOrdinal } from '@azito/shared';
+import { TERMINAL_CLOSE, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 
 const PING_INTERVAL_MS = 15_000;
 const OPEN_TERMINAL_TIMEOUT_MS = 30_000;
+
+/** Errors a driver throws from openTerminal to say the pane cannot be attached, mapped to the close code the browser reacts to. */
+const OPEN_FAILURE_CLOSE = {
+  WINDOW_NOT_FOUND: TERMINAL_CLOSE.windowNotFound,
+  PANE_STOPPED: TERMINAL_CLOSE.paneStopped,
+  WINDOW_EMPTY: TERMINAL_CLOSE.windowEmpty,
+  PANE_CLOSED: TERMINAL_CLOSE.paneClosed,
+} as const;
+
+function isOpenFailureKey(message: string): message is keyof typeof OPEN_FAILURE_CLOSE {
+  return Object.hasOwn(OPEN_FAILURE_CLOSE, message);
+}
 
 export function handleTerminalConnection(
   ws: WebSocket,
@@ -15,6 +28,7 @@ export function handleTerminalConnection(
   cols: number,
   rows: number,
   transportFactory: TransportFactory,
+  muxDriverRegistry: MuxDriverRegistry,
   terminalOpts?: OpenTerminalOpts,
 ): void {
   let closed = false;
@@ -38,9 +52,10 @@ export function handleTerminalConnection(
 
   ws.on('close', cleanup);
 
-  const openPromise = transportFactory
-    .getTransport(server)
-    .openTerminal(ref, ordinal, cols, rows, terminalOpts);
+  // Resolving a driver/transport throws synchronously when it is unavailable; route it through the promise chain so the client gets the error message.
+  const openPromise = Promise.resolve().then(() => server.defaultMux === 'misao'
+    ? muxDriverRegistry.resolve(server).openTerminal(server, ref, ordinal, cols, rows)
+    : transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows, terminalOpts));
 
   openPromise.then((stream) => {
     if (closed) stream.close();
@@ -88,8 +103,9 @@ export function handleTerminalConnection(
       });
     })
     .catch((err: Error) => {
-      if (err.message === 'WINDOW_NOT_FOUND') {
-        ws.close(4404, 'window not found');
+      if (isOpenFailureKey(err.message)) {
+        const { code, reason } = OPEN_FAILURE_CLOSE[err.message];
+        ws.close(code, reason);
       } else {
         ws.send(`\r\n${err.message}\r\n`);
         ws.close();

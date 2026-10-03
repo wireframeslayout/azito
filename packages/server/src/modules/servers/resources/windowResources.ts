@@ -1,10 +1,14 @@
 import type { IServerTransport } from '../transport/ServerTransport';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { ServerConfig } from '../Server';
-import { tmuxTargetFromMuxRef } from '@azito/shared';
+import { formatMuxRef, type MuxRef } from '@azito/shared';
+import { muxWindowTarget } from '../../tmux/muxWindowTarget';
 
 export interface WindowResource {
+  /** Display key (`<workspace>:<window>`; misao: the window id). */
   target: string;
+  /** The window's `formatMuxRef` — what the ref-based window routes take, so a window can be acted on whatever its driver. */
+  ref: string;
   rssBytes: number;
 }
 
@@ -16,12 +20,12 @@ export async function measureWindowResources(transport: IServerTransport, muxCli
 
   if (psResult.code !== 0) return [];
 
-  const panePids = new Map<string, number[]>();
+  const panePids = new Map<string, { ref: MuxRef; pids: number[] }>();
   for (const entry of panePidEntries) {
-    const target = tmuxTargetFromMuxRef(entry.ref);
+    const target = muxWindowTarget(entry.ref);
     const existing = panePids.get(target);
-    if (existing) existing.push(entry.pid);
-    else panePids.set(target, [entry.pid]);
+    if (existing) existing.pids.push(entry.pid);
+    else panePids.set(target, { ref: entry.ref, pids: [entry.pid] });
   }
 
   if (panePids.size === 0) return [];
@@ -61,12 +65,12 @@ export async function measureWindowResources(transport: IServerTransport, muxCli
   };
 
   const results: WindowResource[] = [];
-  for (const [target, pids] of panePids) {
+  for (const [target, { ref, pids }] of panePids) {
     let totalRss = 0;
     for (const pid of pids) {
       totalRss += collectTreeRss(pid);
     }
-    results.push({ target, rssBytes: totalRss });
+    results.push({ target, ref: formatMuxRef(ref), rssBytes: totalRss });
   }
 
   results.sort((a, b) => b.rssBytes - a.rssBytes);

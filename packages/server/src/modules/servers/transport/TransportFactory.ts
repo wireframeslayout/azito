@@ -1,16 +1,41 @@
 import os from 'os';
+import type { MuxDriverKind } from '@azito/shared';
 import type { IServerTransport, IMuxTransport } from './ServerTransport';
 import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
+import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
+import type { MuxDriverAvailability, MuxProbeTarget } from '../../tmux/MuxDriverRegistry';
+import { MuxlessLocalTransport } from './MuxlessLocalTransport';
+
+type MuxAvailabilityFn = (kind: MuxDriverKind, server: MuxProbeTarget) => MuxDriverAvailability;
+
+export interface TransportFactoryOptions {
+  /** Reports whether the server's default mux driver is usable (MuxDriverRegistry.availability). */
+  muxAvailability: MuxAvailabilityFn;
+}
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport>();
 
-  constructor(private publicUrl: string) {}
+  private muxAvailability: MuxAvailabilityFn;
 
-  getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
+  constructor(private publicUrl: string, options: TransportFactoryOptions) {
+    this.muxAvailability = options.muxAvailability;
+  }
+
+  getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime' | 'defaultMux'>): IServerTransport & IMuxTransport {
+    // Exec is independent of the mux, so a non-tmux local server still gets a shell transport; its mux operations fail
+    // via the registry's availability instead of falling back to tmux. Checked before the cache so a stale tmux entry
+    // is never returned.
+    const kind = server.defaultMux;
+    if (kind !== 'tmux') {
+      if (server.type === 'local') return new MuxlessLocalTransport(kind, () => this.muxAvailability(kind, server));
+      const availability = this.muxAvailability(kind, server);
+      if (!availability.available) throw new MuxDriverUnavailableError(kind, availability.reason);
+      throw new Error(`Mux kind "${kind}" is not supported on ${server.type} servers`);
+    }
     const key = `${server.type}:${server.name}`;
     const existing = this.cache.get(key);
     if (existing && server.type === 'agent') {
@@ -28,12 +53,18 @@ export class TransportFactory {
     if (server.type === 'local') {
       transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, os.homedir()), this.publicUrl);
     } else if (server.type === 'agent') {
-      transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime);
+      transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name);
     } else {
       throw new Error(`Unsupported server type: ${server.type}`);
     }
     this.cache.set(key, transport);
     return transport;
+  }
+
+  /** The cached AgentTransport of an agent server, for health/breaker access. */
+  getAgentTransport(server: Parameters<TransportFactory['getTransport']>[0]): AgentTransport {
+    if (server.type !== 'agent') throw new Error(`Server "${server.name}" is not an agent server`);
+    return this.getTransport(server) as AgentTransport;
   }
 
   invalidate(serverName: string): void {

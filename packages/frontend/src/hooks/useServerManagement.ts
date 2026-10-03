@@ -7,7 +7,8 @@ import type { InstallStep } from '../components/ui';
 import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
-import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime } from '@azito/shared';
+import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
 
 export interface Server {
   name: string;
@@ -17,7 +18,8 @@ export interface Server {
   hasAgentToken?: boolean;
   agentVersion?: string;
   sshHost?: string;
-  muxRuntime?: 'system' | 'managed';
+  defaultMux: MuxDriverKind;
+  muxRuntime?: MuxRuntime;
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
   isolationIntent?: boolean;
@@ -27,11 +29,15 @@ export interface Server {
 
 export interface Pane {
   index: number;
+  /** Stable pane handle; unlike `index` it does not shift when a sibling pane is deleted. */
+  handle?: string;
   title: string;
   command: string;
   width: number;
   height: number;
   active: boolean;
+  /** Reported by the misao driver only; absent for tmux panes. */
+  processState?: MuxPaneProcessState;
 }
 
 export interface TmuxWindow {
@@ -76,7 +82,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
 
   const isTmux = useCallback((serverName: string): boolean => {
     const srv = servers.find((s) => s.name === serverName);
-    return muxKindForRuntime((srv?.muxRuntime ?? 'system') as MuxRuntime) === 'tmux';
+    return srv ? srv.defaultMux === 'tmux' : true;
   }, [servers]);
   const { showToast } = useToast();
   const confirm = useConfirm();
@@ -91,7 +97,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [addHost, setAddHost] = useState('');
   const [addPort, setAddPort] = useState('3002');
   const [addToken, setAddToken] = useState('');
-  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [addMuxRuntime, setAddMuxRuntime] = useState<MuxRuntime>('system');
   const [addInstallSteps, setAddInstallSteps] = useState<InstallStep[]>([]);
   const [addLoading, setAddLoading] = useState(false);
 
@@ -100,7 +106,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<MuxRuntime>('system');
+  const [editDefaultMux, setEditDefaultMux] = useState<MuxDriverKind>('tmux');
   // Issue #29 review (3rd pass), Important finding 4: mirrors
   // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
   // distinct from ServerDetailPage's).
@@ -126,8 +133,12 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const successfulServers = new Set<string>();
     const results = await Promise.allSettled(
       srvs.map(async (srv) => {
+        // エラー本文（503 agent_unreachable 等）は配列でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）
         const result = await api<Session[]>(`/servers/${srv.name}/sessions`);
-        return { name: srv.name, sessions: Array.isArray(result) ? result : [] };
+        if (!Array.isArray(result)) throw new Error(`sessions unavailable: ${srv.name}`);
+        // 遅いサーバー 1 台を待たず、取得できたサーバーから 1 台ずつ反映する
+        setSessions((prev) => ({ ...prev, [srv.name]: result }));
+        return { name: srv.name, sessions: result };
       }),
     );
     const newSessions: Record<string, Session[]> = {};
@@ -258,7 +269,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(srv.muxRuntime ?? 'system');
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
+    setEditDefaultMux(editableDefaultMux(srv.defaultMux, defaultMuxOptions(srv.type)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 
@@ -272,6 +284,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       type: editType,
       host: editHost.trim(),
       muxRuntime: editMuxRuntime,
+      defaultMux: editDefaultMux,
     };
     if (editType === 'agent') {
       body.agentPort = parseInt(editPort.trim(), 10);
@@ -312,7 +325,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     else if (res.isolationCleanup === 'skipped') showToast(t('overview.isolationCleanupToastSkipped'));
     setEditServer(null);
     refreshAll();
-  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, refreshAll, showToast, t]);
+  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editDefaultMux, editIsolationIntent, refreshAll, showToast, t]);
 
   const handleReinstall = useCallback(async (serverName: string) => {
     const ok = await confirm({ title: t('confirm.reinstallAgent'), message: t('confirm.reinstallAgentMessage', { name: serverName }) });
@@ -499,6 +512,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     editPort, setEditPort,
     editToken, setEditToken,
     editMuxRuntime, setEditMuxRuntime,
+    editDefaultMux, setEditDefaultMux,
     editIsolationIntent, setEditIsolationIntent,
     reinstalling,
     reinstallSteps,

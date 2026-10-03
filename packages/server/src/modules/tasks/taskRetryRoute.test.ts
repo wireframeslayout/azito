@@ -6,6 +6,8 @@ import type { Task } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
+import { mapAppError } from '../../app/mapAppError';
 
 /**
  * Wires `destroyPrimaryTaskWindow` (kill → reread-gated revoke → cleanup,
@@ -150,6 +152,7 @@ function makeOpts(
     },
     muxDriverRegistry: (() => {
       const driver = {
+        kind: 'tmux' as const,
         closeWindow: vi.fn(killWindowImpl ?? (async () => ({ stdout: '', stderr: '', code: 0 }))),
         windowExists: vi.fn(async () => true),
       };
@@ -157,7 +160,7 @@ function makeOpts(
     })() as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
       updateAgentVersion: vi.fn(),
@@ -254,6 +257,25 @@ describe('POST /api/tasks/:id/retry', () => {
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
   });
 
+  it('retries a task whose primary window is a misao window (ref carries no tmux target)', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: 'task-1' });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' };
+    const baseWindow = (opts.windowRepo.findByTask as any)(1)[0];
+    (opts.windowRepo.findByTask as any).mockReturnValue([{ ...baseWindow, muxRef: misaoRef }]);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/retry' });
+
+    expect(res.statusCode).toBe(200);
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'test-server' }),
+      misaoRef,
+    );
+    expect(opts.taskRepo.update).toHaveBeenCalledWith(1, { status: 'open', tmuxWindow: null });
+  });
+
   it('fails closed and leaves the task/execution untouched when the kill fails (still-live pane)', async () => {
     const opts = makeOpts(
       { status: 'failed', tmuxWindow: 'task-1' },
@@ -330,5 +352,152 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/999/retry' });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// The mux daemon being down must not take the task detail or the delete with it (the registry
+// throws MuxDriverUnavailableError for a misao server whose daemon is unreachable).
+describe('tasks routes while the mux daemon is down', () => {
+  const daemonDown = () => ({
+    resolve: vi.fn(() => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); }),
+  }) as unknown as TasksRouteOptions['muxDriverRegistry'];
+
+  it('GET /api/tasks/:id answers 200 with paneAlive null', async () => {
+    const opts = makeOpts({ status: 'in_progress', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toMatchObject({ id: 1, paneAlive: null });
+  });
+
+  // Fail closed: the window cannot be closed, and deleting the task and its window rows would
+  // leave the misao window with no identity to remove it by once the daemon is back.
+  function appWithErrorMapping() {
+    const app = Fastify();
+    app.setErrorHandler((err, _req, reply) => {
+      const mapped = mapAppError(err);
+      if (!mapped) throw err;
+      return reply.status(mapped.status).send(mapped.body);
+    });
+    return app;
+  }
+
+  it('DELETE /api/tasks/:id does not stop the running execution before answering 503', async () => {
+    const opts = makeOpts({ status: 'running', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(503);
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+    expect(opts.taskRepo.delete).not.toHaveBeenCalled();
+  });
+
+  it('archiving a pending_approval task whose approval was already resolved answers 409 and does not close the window or stop anything', async () => {
+    const opts = makeOpts({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: 'task-1' } as Partial<Task>);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(409);
+    expect((opts.muxDriverRegistry as any)._driver.closeWindow).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+  });
+
+  it('tmux: DELETE stops the execution first, then closes the window, then deletes the task (original order)', async () => {
+    const opts = makeOpts({ status: 'running', tmuxWindow: 'task-1' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(200);
+    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(order(opts.executeTaskUseCase.stopByTaskId)).toBeLessThan(order((opts.muxDriverRegistry as any)._driver.closeWindow));
+    expect(order((opts.muxDriverRegistry as any)._driver.closeWindow)).toBeLessThan(order(opts.taskRepo.delete));
+  });
+
+  it('tmux: archive stops the execution first, then closes the window, then archives (original order)', async () => {
+    const opts = makeOpts({ status: 'running', tmuxWindow: 'task-1' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(200);
+    const order = (fn: unknown) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    expect(order(opts.executeTaskUseCase.stopByTaskId)).toBeLessThan(order((opts.muxDriverRegistry as any)._driver.closeWindow));
+    expect(order((opts.muxDriverRegistry as any)._driver.closeWindow)).toBeLessThan(order(opts.windowRepo.remove));
+  });
+
+  it('archiving a pending_approval task answers 503 without consuming the approval or changing the task', async () => {
+    const opts = makeOpts({ status: 'pending_approval', pendingOperation: 'execute', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' } as Partial<Task>);
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(503);
+    expect(opts.taskRepo.consumePendingApproval).not.toHaveBeenCalled();
+    expect(opts.taskRepo.updateStatus).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.stopByTaskId).not.toHaveBeenCalled();
+    expect(opts.windowRepo.remove).not.toHaveBeenCalled();
+  });
+
+  it('DELETE /api/tasks/:id answers 503 and keeps the task and its window rows', async () => {
+    const opts = makeOpts({ status: 'open', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(503);
+    expect(JSON.parse(res.payload)).toMatchObject({ error: 'mux_driver_unavailable', reason: 'daemon_unreachable' });
+    expect(opts.taskRepo.delete).not.toHaveBeenCalled();
+    expect(opts.windowRepo.remove).not.toHaveBeenCalled();
+  });
+
+  it('POST /api/tasks/:id/archive answers 503 and leaves the task and its window rows as they were', async () => {
+    const opts = makeOpts({ status: 'open', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = appWithErrorMapping();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/archive' });
+
+    expect(res.statusCode).toBe(503);
+    expect(opts.windowRepo.remove).not.toHaveBeenCalled();
+    expect(opts.taskRepo.update).not.toHaveBeenCalledWith(1, expect.objectContaining({ status: 'archived' }));
+  });
+
+  it('POST /api/tasks/:id/recover-session reports the new window id the respawn moved the task to', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    (opts.respawnService.respawn as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9', tmuxTarget: 'azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9' });
   });
 });

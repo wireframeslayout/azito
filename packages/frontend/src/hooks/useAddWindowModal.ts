@@ -1,12 +1,15 @@
 import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { api } from '../api/client';
-import { muxRefFromTmuxTarget, formatMuxRef, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
-import type { TerminalRef } from '../lib/terminalRef';
-import { useAgentDefinitions } from './useAgentDefinitions';
+import { resolveWindowRegistrationRef, registeredWindowTerminalRef, taskWindowRegistration, type TerminalRef } from '../lib/terminalRef';
+import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions';
 import { useToast } from './useToast';
+import { useServerStatuses } from './useServerStatuses';
+import { fetchSessionsForServers } from '../lib/fetchServerSessions';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
 export function isInsufficientResources(res: unknown): res is { error: string; resources: ResourceStatus } {
@@ -21,6 +24,20 @@ export function isWindowExists(res: unknown): res is { error: string; windowName
 }
 
 export type AgentPreset = { command: string; label: string };
+
+/** 起動コマンド選択肢（シェルのみ / 起動可能な各エージェント / カスタム）。ウィンドウ追加とペイン追加で共通。 */
+export function buildAgentPresets(agentDefs: AgentDefinition[], t: TFunction<'workspace'>): Record<string, AgentPreset> {
+  const map: Record<string, AgentPreset> = {
+    none: { command: '', label: t('addWindow.noneShellOnly') },
+  };
+  for (const def of agentDefs) {
+    if (def.launchable) {
+      map[def.type] = { command: def.launchCommand ?? '', label: def.label };
+    }
+  }
+  map.custom = { command: '', label: t('addWindow.customCommand') };
+  return map;
+}
 
 /**
  * agent の起動コマンドを組み立てる。`baseCommand` はサーバー(AgentRegistry)由来の
@@ -60,6 +77,7 @@ export function useAddWindowModal(
   const [awTarget, setAwTarget] = useState('');
   const [awLabel, setAwLabel] = useState('');
   const [awSessionData, setAwSessionData] = useState<Record<string, Session[]>>({});
+  const [awOfflineServers, setAwOfflineServers] = useState<string[]>([]);
   const [awSelectedSession, setAwSelectedSession] = useState('');
   const [awNewSession, setAwNewSession] = useState('');
   const [awNewWindowName, setAwNewWindowName] = useState('');
@@ -83,19 +101,10 @@ export function useAddWindowModal(
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { showToast } = useToast();
+  const { statuses } = useServerStatuses();
+  const isServerOffline = useCallback((name: string) => statuses[name]?.status === 'offline', [statuses]);
 
-  const agentPresets = useMemo<Record<string, AgentPreset>>(() => {
-    const map: Record<string, AgentPreset> = {
-      none: { command: '', label: t('addWindow.noneShellOnly') },
-    };
-    for (const def of agentDefs) {
-      if (def.launchable) {
-        map[def.type] = { command: def.launchCommand ?? '', label: def.label };
-      }
-    }
-    map.custom = { command: '', label: t('addWindow.customCommand') };
-    return map;
-  }, [agentDefs, t]);
+  const agentPresets = useMemo(() => buildAgentPresets(agentDefs, t), [agentDefs, t]);
 
   const handleAgentChange = useCallback(async (agent: string) => {
     setAwAgent(agent);
@@ -128,11 +137,9 @@ export function useAddWindowModal(
     const availableServers = effectiveProjectServers.length > 0
       ? servers.filter((s) => effectiveProjectServers.some((ps) => ps.serverName === s.name))
       : servers;
-    const data: Record<string, Session[]> = {};
-    for (const srv of availableServers) {
-      try { const s = await api<Session[]>(`/servers/${srv.name}/sessions`); if (Array.isArray(s)) data[srv.name] = s; } catch {}
-    }
+    const { data, offline } = await fetchSessionsForServers(availableServers, isServerOffline);
     setAwSessionData(data);
+    setAwOfflineServers(offline);
     const firstServer = availableServers[0]?.name || '';
     setAwServer(firstServer);
     setAwTarget(''); setAwLabel(''); setAwMode('new');
@@ -144,7 +151,7 @@ export function useAddWindowModal(
     setAwAgent('none'); setAwAgentModel(''); setAwWorkerModels([]);
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
-  }, [servers, projectServers, project]);
+  }, [servers, projectServers, project, isServerOffline]);
 
   /**
    * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
@@ -172,12 +179,12 @@ export function useAddWindowModal(
     setAwAgentModel('');
     setAwWorkerModels([]);
     setAwSessionData({});
+    setAwOfflineServers([]);
     setAwQuickAddOpen(true);
     setAwQuickAddLoading(true);
 
     void (async () => {
-      const data: Record<string, Session[]> = {};
-      try { const s = await api<Session[]>(`/servers/${serverName}/sessions`); if (Array.isArray(s)) data[serverName] = s; } catch {}
+      const { data, offline } = await fetchSessionsForServers([{ name: serverName }], isServerOffline);
       let models: { id: string; label: string }[] = [];
       if (agent !== 'none') {
         try {
@@ -187,10 +194,11 @@ export function useAddWindowModal(
       }
       if (awQuickAddGenRef.current !== gen) return; // 自分より後の呼び出しがある場合は破棄
       setAwSessionData(data);
+      setAwOfflineServers(offline);
       setAwWorkerModels(models);
       setAwQuickAddLoading(false);
     })();
-  }, [projectServers, project]);
+  }, [projectServers, project, isServerOffline]);
 
   /**
    * クイック追加モーダルを閉じる。世代を進めて、走行中の取得（openQuickAddWindow 内の
@@ -200,6 +208,15 @@ export function useAddWindowModal(
     awQuickAddGenRef.current++;
     setAwQuickAddOpen(false);
   }, []);
+
+  /** 既存ウィンドウ/セッション取り込みモードへ切り替える前に、未取得でオフラインでもないサーバーのセッションを並列取得する。 */
+  const loadMissingSessions = useCallback(async (): Promise<void> => {
+    const missing = servers.filter((s) => !awSessionData[s.name] && !awOfflineServers.includes(s.name));
+    if (missing.length === 0) return;
+    const { data, offline } = await fetchSessionsForServers(missing, isServerOffline);
+    setAwSessionData((prev) => ({ ...prev, ...data }));
+    setAwOfflineServers((prev) => [...new Set([...prev, ...offline])]);
+  }, [servers, awSessionData, awOfflineServers, isServerOffline]);
 
   const getWindowTargets = useCallback((): { value: string; label: string }[] => {
     const sessions = awSessionData[awServer] || [];
@@ -243,29 +260,59 @@ export function useAddWindowModal(
     setAddWindowLoading(true);
     const effectiveProjectId = awEffectiveProjectId || projectId;
     const numericProjectId = effectiveProjectId ? parseInt(effectiveProjectId, 10) : undefined;
+    const muxKind = servers.find((s) => s.name === awServer)?.defaultMux ?? 'tmux';
+    // The window is already registered on the project when the task attachment fails; surface it instead of rejecting.
+    const failTaskWindow = (err: unknown): void => {
+      console.error('task window add failed', err);
+      showToast(t('addWindow.taskWindowAddFailed'));
+    };
     try {
       if (awMode === 'session') {
         await api(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: awSelectedSession }) });
         const sess = (awSessionData[awServer] || []).find((s) => s.name === awSelectedSession);
         if (sess && sess.windows.length > 0) {
           if (awTaskId != null) {
-            for (const [index, w] of sess.windows.entries()) {
-              await onTaskWindowAdded?.(awTaskId, awServer, `${awSelectedSession}:${w.name}`, w.name, index === 0);
+            try {
+              for (const [index, w] of sess.windows.entries()) {
+                const reg = taskWindowRegistration({ muxKind, target: `${awSelectedSession}:${w.name}`, ref: w.ref });
+                if (!reg) throw new Error(`window ref is not resolved for ${awSelectedSession}:${w.name}`);
+                await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
+              }
+            } catch (err) {
+              failTaskWindow(err);
+              return;
             }
           } else {
             const firstWin = sess.windows[0];
             const firstPane = firstWin.panes[0];
-            if (firstPane) onConnect?.(awServer, `${awSelectedSession}:${firstWin.name}.${firstPane.index}`, numericProjectId);
+            if (firstPane) {
+              // The server-reported windowId / ref identifies the window for every mux kind; no tmux ref is synthesised from the target.
+              const termRef: TerminalRef = firstWin.windowId !== null
+                ? { kind: 'windowId', serverName: awServer, windowId: firstWin.windowId, pane: firstPane.index }
+                : { kind: 'ref', serverName: awServer, ref: firstWin.ref, pane: firstPane.index };
+              onConnect?.(termRef, numericProjectId);
+            }
           }
         }
       } else if (awMode === 'existing') {
-        let existingRef: string | undefined;
-        try { existingRef = formatMuxRef(muxRefFromTmuxTarget(awTarget)); } catch { /* keep undefined */ }
-        await api(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ...(existingRef ? { ref: existingRef } : {}), label: awLabel.trim() }) });
+        const existingRef = resolveWindowRegistrationRef({
+          muxKind,
+          target: awTarget,
+          sessions: awSessionData[awServer],
+        });
+        if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
+        const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
-          await onTaskWindowAdded?.(awTaskId, awServer, awTarget, awLabel.trim(), true);
+          try {
+            const reg = taskWindowRegistration({ muxKind, target: awTarget, ref: existingRef });
+            if (!reg) throw new Error(`window ref is not resolved for ${awTarget}`);
+            await onTaskWindowAdded?.(awTaskId, awServer, reg.target, awLabel.trim(), true, reg.ref ? { ref: reg.ref } : undefined);
+          } catch (err) {
+            failTaskWindow(err);
+            return;
+          }
         } else {
-          onConnect?.(awServer, awTarget, numericProjectId);
+          onConnect?.(registeredWindowTerminalRef(awServer, registered.id), numericProjectId);
         }
       } else {
         if (awAgent !== 'none') {
@@ -279,13 +326,12 @@ export function useAddWindowModal(
         const beforeSessions = awSessionData[awServer] || [];
         const sessionExists = beforeSessions.some((s) => s.name === sessionName);
         const serverInfo = servers.find((s) => s.name === awServer);
-        const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
         const useMuxRoutes = muxKind !== 'tmux';
-        let createdWindowName: string;
+        let createdTarget: string;
         let createdRef: string | undefined;
         if (useMuxRoutes) {
           if (!sessionExists) {
-            const res = await api<{ ok: boolean; ref: string; windowName: string }>(`/servers/${awServer}/mux/workspaces`, {
+            const res = await api<{ ok: boolean; ref: string; target: string; windowName: string }>(`/servers/${awServer}/mux/workspaces`, {
               method: 'POST',
               body: JSON.stringify({ name: sessionName, windowName: awNewWindowName.trim() || undefined, force }),
             });
@@ -294,10 +340,10 @@ export function useAddWindowModal(
               return;
             }
             if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-            createdWindowName = res.windowName;
+            createdTarget = res.target;
             createdRef = res.ref;
           } else {
-            const res = await api<{ ok: boolean; ref: string; windowName: string }>(`/servers/${awServer}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, {
+            const res = await api<{ ok: boolean; ref: string; target: string; windowName: string }>(`/servers/${awServer}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, {
               method: 'POST',
               body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
             });
@@ -306,7 +352,7 @@ export function useAddWindowModal(
               return;
             }
             if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-            createdWindowName = res.windowName;
+            createdTarget = res.target;
             createdRef = res.ref;
           }
         } else {
@@ -319,7 +365,7 @@ export function useAddWindowModal(
               setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
               return;
             }
-            createdWindowName = res.windowName;
+            createdTarget = `${sessionName}:${res.windowName}`;
           } else {
             const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions/${sessionName}/windows`, {
               method: 'POST',
@@ -329,11 +375,11 @@ export function useAddWindowModal(
               setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
               return;
             }
-            createdWindowName = res.windowName;
+            createdTarget = `${sessionName}:${res.windowName}`;
           }
         }
 
-        const target = `${sessionName}:${createdWindowName}`;
+        const target = createdTarget;
         const label = awLabel.trim() || awNewWindowName.trim() || '';
         let newRef: string | undefined = createdRef;
         if (!newRef) { try { newRef = formatMuxRef(muxRefFromTmuxTarget(target)); } catch { /* keep undefined */ } }
@@ -392,6 +438,7 @@ export function useAddWindowModal(
     awTarget,
     awLabel,
     awSessionData,
+    awOfflineServers,
     awSelectedSession,
     awNewSession,
     awNewWindowName,
@@ -418,7 +465,6 @@ export function useAddWindowModal(
     setAwServer,
     setAwTarget,
     setAwLabel,
-    setAwSessionData,
     setAwSelectedSession,
     setAwNewSession,
     setAwNewWindowName,
@@ -435,6 +481,7 @@ export function useAddWindowModal(
     openAddWindow,
     openQuickAddWindow,
     closeQuickAddWindow,
+    loadMissingSessions,
     getWindowTargets,
     handleAddWindow,
   };

@@ -100,6 +100,7 @@ packages/
       modules/                     # Feature modules (1 module = 1 responsibility; routes+service+repository together)
         tmux/                      # [base] TmuxClient, PaneOutputStream/PaneStream(Factory), TmuxHookManager
           routes/, ws/             # HTTP routes (sessions, hooks) + WS handlers (terminal, agent-terminal)
+          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal), MisaoPaneStateEvents (the daemon's `pane.state` activity events, consumed by `operations/misaoActivityBridge.ts`), MisaoPaneStream (task output read from the daemon's line stream instead of pipe-pane; a gap is only logged as `pane_stream_gap` — completion/questions are detected from the signal file) — the driver is always registered (no feature flag; an absent daemon is `daemon_unreachable`), local servers only
         servers/                  # [base] Server entity, SqliteServerRepository, install status parsing
           transport/               # ServerTransport interface + Local/Ssh/Agent implementations, AgentPaneStream/EventStream
           ssh/                     # SshClient (persistent shell pool, marker-based exec)
@@ -132,9 +133,9 @@ packages/
         supervisors/              # [base] SupervisorRegistry/Launch/Path — tui-supervisor process management
         system/                   # [upper] SystemUpdateService, DeployModeDetector, UpdateChannelResolver,
                                   #         updateScript (out-of-process self-update), serviceControl
-        health/                   # [upper] GET /api/health
+        health/                   # [upper] GET /api/health (hub-wide flags: scopedAuthEnabled)
       shared/
-        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-072)
+        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-077)
   frontend/                        # React 19 + Vite + TypeScript
     src/
       components/                  # Layout, Terminal, Modal, FileExplorer, TaskLogView, etc.
@@ -280,7 +281,7 @@ packages/
 - SQLite (better-sqlite3) with WAL mode
 - Migration files in `packages/server/src/shared/db/migrations/`
 - DB path: `<project-root>/data.db`
-- Current migrations: 001-075 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants)
+- Current migrations: 001-077 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux)
 
 ### SSH (Tailscale)
 - Persistent shell pool with `\x02AGENTMGR_B/E` markers for command execution
@@ -386,8 +387,15 @@ packages/
 - Ref-based window operations (5-A): `/api/servers/:name/mux/windows/:ref/{kill,rename,panes,...}` — same operations via MuxRef for unregistered windows
 - `GET /api/windows/pane-loading-state` accepts `?windowId=` in addition to `?server_name=&tmux_target=`
 - Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target, windowId? }[]`; no operations table anymore)
+- misao windows (a local server whose `defaultMux` is `misao`; `servers.default_mux` is separate from `servers.mux_runtime`, which only selects the tmux binary `system`/`managed` — migration 077; the API still reads the legacy `muxRuntime: 'misao'` as `defaultMux: 'misao'` for one release): no tui-supervisor (`shouldSupervise(..., muxKind)` is false for
+  misao). The daemon's `pane.state` events (`MisaoPaneStateEvents` → `MisaoActivityBridge`, first pane of a window only) drive
+  `tier0_mux` through `recordMuxSignal()`; because the misao core never reports `blocked`, a `tier0_mux` working/idle row on a
+  misao window is confirmed against the window's first-pane screen (resolved from `mux_ref`, no title pre-check) and refined to
+  blocked with `refinedBy: 'tier2_title'`. The three hooks send `misaoPaneId` (from `$MISAO_PANE_ID`) instead of tmux fields when
+  `$TMUX_PANE` is absent; Diagnostics rows carry `mux: { status, decidedBy?, at }`.
+  See `docs/{ja,en}/activity-detection.md` §13
 - Activity diagnostics: `GET /api/debug/activity` (read-only Tier attribution per window — `decidedBy`
-  (`tier0_supervisor`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
+  (`tier0_supervisor`/`tier0_mux`/`tier1_hook`/`tier2_title`/`tier3_heuristic`/`tier4_probe`/`none`) plus the supervisor /
   hook / probe material and the last announced transition; rendered in Settings → System「稼働検知診断」).
   `refinedBy: 'tier2_title'` は「Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した」印
   （claude は AskUserQuestion 選択中もタイトルが idle グリフ `✳ ` のままで、タイトルしか見ない supervisor が
@@ -421,6 +429,14 @@ temp `AZITO_DATA_DIR`, random free port, and an isolated tmux server via `TMUX_T
 `npx playwright install chromium`. The server honours `AZITO_E2E_FAST_INTERVALS=1` to shorten the activity
 monitor's *observation* periods only (probe refresh / cache TTL); judgment thresholds are unchanged and the
 variable has no effect when unset.
+
+`e2e/specs/misao.spec.ts` covers the misao runtime (settings switch, window creation, terminal
+attach, task execution with the scripted `fake-agent/task-agent`, activity detection via `pane.state`,
+daemon-down notice). It starts its own `misao serve` from a temp dir (`e2e/fixtures/misaoDaemon.ts`, never the
+resident `~/.misao` daemon) and a hub with `MISAO_SOCKET` pointing at it (without `misaoSocket` the harness points it at a non-existent temp socket, so a hub never reaches the resident daemon)
+(`Harness.start({ misaoSocket })`, `fixtures/misaoTest.ts`). It needs a built misao checkout: `MISAO_CLI`
+(default `~/workspace/misao/packages/cli/dist/main.js`); without it the spec is skipped with a reason. The
+existing tmux specs and `fixtures/test.ts` are unaffected. Docs: `docs/{ja,en}/misao.md`.
 
 ### Adding a Migration
 1. Create `packages/server/src/shared/db/migrations/NNN_description.ts`

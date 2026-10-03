@@ -399,6 +399,7 @@ a:hover {
   transition: background 0.13s ease, color 0.13s ease;
 }
 .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+.icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .icon-btn:disabled { color: var(--text-dim); opacity: 0.4; cursor: not-allowed; }
 .icon-btn:disabled:hover { color: var(--text-dim); }
 
@@ -417,6 +418,16 @@ a:hover {
 button:hover .diff-open-btn,
 button:focus-within .diff-open-btn {
   opacity: 1 !important;
+}
+
+.window-row-hit {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  padding: 0; margin: 0; border: none; background: transparent; cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+.window-row-hit:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
 }
 
 .list-row:focus-visible {
