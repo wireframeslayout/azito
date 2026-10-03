@@ -888,8 +888,12 @@ export class ExecuteTaskUseCase {
           if (currentTask.tmuxWindow) {
             const killDriver = this.resolveDriver(freshServer);
             const preWorkspaces = await killDriver.listWorkspaces(freshServer);
-            const preWs = preWorkspaces.find((ws) => ws.name === muxWorkspace);
-            const oldWin = preWs?.windows.find((w) => w.name === currentTask.tmuxWindow || w.ref?.window === currentTask.tmuxWindow);
+            // misao stores the window id in tmuxWindow and windows can be renamed
+            // across workspaces: match the id exactly, in every workspace. tmux
+            // matches the window name inside the task's workspace only.
+            const oldWin = killDriver.kind === 'misao'
+              ? preWorkspaces.flatMap((ws) => ws.windows).find((w) => w.ref?.kind === 'misao' && w.ref.window === currentTask.tmuxWindow)
+              : preWorkspaces.find((ws) => ws.name === muxWorkspace)?.windows.find((w) => w.name === currentTask.tmuxWindow);
             await confirmOldWindowGone(
               killDriver,
               freshServer,

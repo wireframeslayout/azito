@@ -82,11 +82,11 @@ export class MisaoMuxClient implements IMuxClient {
     return { ref: misaoRef(workspace, windowId), result: OK, windowName };
   }
 
-  async closeWindow(_server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
+  async closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> {
     return this.closeResult(
       () => this.rpc.request('window.close', { windowId: ref.window }),
       MISAO_WINDOW_NOT_FOUND,
-      async () => !(await this.windowExists(_server, ref)),
+      async () => !(await this.windowExists(server, ref)),
     );
   }
 
