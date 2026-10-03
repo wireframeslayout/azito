@@ -7,18 +7,20 @@ import { WindowIdChip } from './WindowIdChip';
 import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
 import { isPaneLive } from '../../lib/paneState';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
-import { findSessionWindow } from '../../lib/windowMatch';
+import { planWindowRow } from '../../lib/windowRowPlan';
 import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
 import type { Session, TmuxWindow, Window } from '../../pages/workspace/types';
-import { stripPaneSuffix, type MuxRef } from '@azito/shared';
+import type { MuxRef } from '@azito/shared';
 
 export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'label' | 'taskId'> & { windowType?: string; workerType?: string; isPrimary?: boolean; sleeping?: boolean; muxRef?: MuxRef };
 
+export type EmptyWindowOutcome = Parameters<React.ComponentProps<typeof EmptyWindowActions>['onChanged']>[0];
+
 type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
 
-interface WindowPaneTreeProps {
+export interface WindowPaneTreeProps {
   windows: WindowItem[];
   sessionData: Record<string, Session[]>;
   isActive?: (serverName: string, target: string, level: 'window' | 'pane', windowId?: number) => boolean;
@@ -39,8 +41,11 @@ interface WindowPaneTreeProps {
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
   /** 行の主題（既定は w.label || tmux ウィンドウ名）を差し替える。null/undefined を返すと既定表示のまま */
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
-  /** 空の窓（ペインなし）で［ペインを開く］［窓を削除］が完了したときに呼ばれる。呼び出し元が窓一覧を再取得する */
-  onWindowsChanged?: () => void;
+  /**
+   * 指定すると、ペインのない窓（misao）の行に［ペインを開く］［窓を削除］を出し、完了時に呼ぶ。
+   * 呼び出し元は窓一覧の再取得と（削除時は）その窓のタブを閉じる。未指定なら行のクリック（端末の案内）だけにする
+   */
+  onWindowsChanged?: (outcome: EmptyWindowOutcome, w: WindowItem) => void;
 }
 
 export function WindowPaneTree({ windows, sessionData, isActive, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, respawningWindowIds, renderTaskBadge, renderSubtitle, renderTitle, onWindowsChanged }: WindowPaneTreeProps) {
@@ -120,7 +125,7 @@ interface WindowRowProps {
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   renderSubtitle?: (w: WindowItem) => React.ReactNode | null | undefined;
   renderTitle?: (w: WindowItem) => React.ReactNode | null | undefined;
-  onWindowsChanged?: () => void;
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
 }
 
 const SPINNER_KEYFRAMES_ID = 'window-pane-tree-spinner-keyframes';
@@ -305,7 +310,7 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
   extra?: React.ReactNode;
   activityClassName?: string;
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
-  onWindowsChanged?: () => void;
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
 }) {
   const { t } = useTranslation('servers');
   const bindLongPress = useLongPress();
@@ -314,7 +319,12 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
   return (
     <div>
       <div
+        role="button"
+        tabIndex={0}
         onClick={onPaneClick}
+        onKeyDown={(e) => {
+          if (e.target === e.currentTarget && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); onPaneClick(); }
+        }}
         onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, ctxExtra) : undefined}
         {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, ctxExtra)) : {})}
         className={`row-hover${(active || focused) ? ' row-selected' : ''}${activityClassName ? ` ${activityClassName}` : ''}`}
@@ -340,13 +350,15 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
         </div>
         {extra}
       </div>
-      <EmptyWindowActions
-        serverName={w.serverName}
-        windowId={sessionWindow.windowId}
-        muxRef={sessionWindow.ref}
-        windowLabel={plainTitle}
-        onChanged={onWindowsChanged}
-      />
+      {onWindowsChanged && (
+        <EmptyWindowActions
+          serverName={w.serverName}
+          windowId={w.id}
+          muxRef={sessionWindow.ref}
+          windowLabel={plainTitle}
+          onChanged={(outcome) => onWindowsChanged(outcome, w)}
+        />
+      )}
     </div>
   );
 }
@@ -355,30 +367,25 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const { t } = useTranslation('common');
   const { isFocusedWindow, isFocusedPane } = useGlobalFocus();
   const bindLongPress = useLongPress();
-  const sessions = sessionData[w.serverName] || [];
   const hasLongPress = !!(onContextMenu || onLongPress);
   const offlineActive = isActive?.(w.serverName, w.tmuxTarget, 'window', w.id) ?? false;
+  const plan = planWindowRow(w, sessionData[w.serverName] || []);
 
-  if (w.sleeping) {
+  if (plan.kind === 'sleeping') {
     return <SleepingRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
   }
 
-  const match = findSessionWindow(w, sessions);
-  if (!match) {
+  if (plan.kind === 'offline') {
     return <OfflineRow w={w} active={offlineActive} onPaneClick={onPaneClick} onContextMenu={onContextMenu} onLongPress={onLongPress} extra={extra} isRespawning={isRespawning} renderTaskBadge={renderTaskBadge} renderSubtitle={renderSubtitle} renderTitle={renderTitle} />;
   }
 
-  const { session, window: sw } = match;
-  const sessionName = session.name;
   // 行のターゲットは DB の値（w.tmuxTarget）にペイン番号を付けたもの。セッション一覧の窓名から組み立てると、
   // misao の表示名や改名後の窓で DB の値と食い違い、タブ ID・選択強調が外れる。
-  const baseTarget = stripPaneSuffix(w.tmuxTarget);
-  const paneTarget = (paneIndex: number): string => `${baseTarget}.${paneIndex}`;
-  const paneCount = sw.panes.length;
+  const { session, window: sw, panes, baseTarget, windowSpec } = plan;
+  const sessionName = session.name;
+  const paneCount = panes.length;
   const expandKey = `${w.id}-${sw.index}`;
   const isExpanded = expandedWindows.has(expandKey);
-  const isUniqueName = session.windows.filter((w2) => w2.name === sw.name).length === 1;
-  const windowSpec = isUniqueName ? sw.name : String(sw.index);
 
   // resolveWindowDisplay を先に計算し、idChip の重複を防ぐ
   const winDisplay = resolveWindowDisplay({ windowId: w.id, paneTitle: sw.panes[0]?.title, paneCommand: sw.panes[0]?.command, label: w.label, workerType: w.workerType, windowType: w.windowType, tmuxTarget: w.tmuxTarget });
@@ -387,7 +394,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
 
   if (paneCount === 0) {
     // misao は最後のペインが閉じても窓を残す。tmux ではこの状態にならない
-    const target = paneTarget(1);
+    const target = plan.clickTarget;
     const active = isActive?.(w.serverName, target, 'window', w.id) ?? false;
     const focused = !active && isFocusedWindow(w.serverName, target, w.id);
     return (
@@ -412,11 +419,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
 
   if (paneCount === 1) {
     const pane = sw.panes[0];
-    const target = paneTarget(pane.index);
+    const target = panes[0].target;
     const active = isActive?.(w.serverName, target, 'window', w.id) ?? false;
     const focused = !active && isFocusedWindow(w.serverName, target, w.id);
     const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-    const ctxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: `${sessionName}:${windowSpec}.${pane.index}`, paneTitle: paneLabel };
+    const ctxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
     const subtitle = renderSubtitle?.(w) ?? paneLabel;
     return (
       <div
@@ -459,7 +466,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   }
 
   const windowLabel = winTitle;
-  const windowHasActive = sw.panes.some((pane) => isActive?.(w.serverName, paneTarget(pane.index), 'window', w.id) ?? false);
+  const windowHasActive = panes.some((pane) => isActive?.(w.serverName, pane.target, 'window', w.id) ?? false);
   const windowHasFocus = !windowHasActive && isFocusedWindow(w.serverName, baseTarget, w.id);
   const windowCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name };
   const parentSubtitle = renderSubtitle?.(w) ?? null;
@@ -533,11 +540,12 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
       </div>
 
       {isExpanded && sw.panes.map((pane) => {
-        const target = paneTarget(pane.index);
+        const planned = panes.find((p) => p.index === pane.index)!;
+        const target = planned.target;
         const active = isActive?.(w.serverName, target, 'pane', w.id) ?? false;
         const focused = !active && isFocusedPane(w.serverName, target);
         const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-        const paneCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: `${sessionName}:${windowSpec}.${pane.index}`, paneTitle: paneLabel };
+        const paneCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel };
         return (
           <div
             key={`${w.id}-${sw.index}-${pane.index}`}

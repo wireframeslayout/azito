@@ -1142,7 +1142,7 @@ function WorkspaceInner() {
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
       respawningWindowIds={windowActions.respawningWindowIds}
-      onWindowsChanged={() => { void data.refreshSessions(); }}
+      onWindowsChanged={windowActions.handleEmptyWindowChanged}
       taskWindows={taskWindows}
       allProjects={allProjects}
       onAddWindowToProject={handleAddWindowToProject}

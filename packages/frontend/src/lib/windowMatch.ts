@@ -1,6 +1,6 @@
 import { stripPaneSuffix } from '@azito/shared';
 import type { Session, TmuxWindow, Window } from '../pages/workspace/types';
-import { muxRefJson, parseTerminalTabId } from './terminalRef';
+import { muxRefJson, parseTerminalTabId, refTabMatchesTarget } from './terminalRef';
 
 export interface SessionWindowMatch {
   session: Session;
@@ -50,8 +50,8 @@ function paneOrdinalOfTarget(target: string): number | null {
 
 /**
  * Whether the active terminal tab shows the row identified by (`serverName`, `target`, `windowId`).
- * A windowId-form tab is matched by windowId (and, at pane level, the pane ordinal in `target`);
- * any other tab form keeps the exact legacy `terminal:<server>/<target>` comparison.
+ * A windowId-form tab is matched by windowId and a ref-form tab by its ref (both, at pane level, also by the pane
+ * ordinal in `target`); a legacy tab keeps the exact `terminal:<server>/<target>` comparison.
  */
 export function isTerminalTabActive(
   activeTabId: string | null | undefined,
@@ -66,6 +66,10 @@ export function isTerminalTabActive(
     if (parsed.serverName !== serverName || windowId === undefined || parsed.windowId !== windowId) return false;
     if (level === 'window') return true;
     return parsed.pane === paneOrdinalOfTarget(target);
+  }
+  if (parsed?.kind === 'ref') {
+    if (parsed.serverName !== serverName || !refTabMatchesTarget(parsed.ref, target)) return false;
+    return level === 'window' || parsed.pane === paneOrdinalOfTarget(target);
   }
   return activeTabId === `terminal:${serverName}/${target}`;
 }

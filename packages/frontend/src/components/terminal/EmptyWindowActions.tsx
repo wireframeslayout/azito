@@ -5,18 +5,19 @@ import { OpenPaneForm } from './OpenPaneForm';
 import { api } from '../../api/client';
 import { errorMessageOf } from '../../lib/apiResult';
 import { useConfirm } from '../../hooks/useConfirm';
-import { terminalRefFromWindow, windowKillRequest } from '../../lib/terminalRef';
+import { windowKillRequest } from '../../lib/terminalRef';
+import type { PaneNoticeOutcome } from './PaneUnavailableNotice';
 
 interface EmptyWindowActionsProps {
   serverName: string;
-  /** The window's DB id as reported by the session listing; null for a window without a DB row. */
-  windowId: number | null;
+  /** The window's DB id: killing by id also removes its DB rows. */
+  windowId: number;
   /** Formatted MuxRef of the window, needed to open a pane in it. */
   muxRef: string;
   /** Name shown in the delete confirmation. */
   windowLabel: string;
   /** Called after a pane was opened or the window was deleted, so the caller can refresh its window list. */
-  onChanged?: () => void;
+  onChanged: (outcome: Extract<PaneNoticeOutcome, 'pane_opened' | 'window_deleted'>) => void;
 }
 
 /**
@@ -25,7 +26,6 @@ interface EmptyWindowActionsProps {
  */
 export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, onChanged }: EmptyWindowActionsProps) {
   const { t } = useTranslation('common');
-  const { t: ts } = useTranslation('servers');
   const confirm = useConfirm();
   const [openFormShown, setOpenFormShown] = useState(false);
   const [openSubmitting, setOpenSubmitting] = useState(false);
@@ -33,18 +33,18 @@ export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, 
   const [error, setError] = useState<string | null>(null);
 
   async function handleKillWindow(): Promise<void> {
-    const ok = await confirm({ title: ts('confirm.killWindow'), message: ts('confirm.killWindowMessage', { name: windowLabel }), danger: true });
+    const ok = await confirm({ title: t('terminal.paneUnavailable.killWindowConfirmTitle'), message: t('terminal.paneUnavailable.killWindowConfirmMessage', { name: windowLabel }), danger: true });
     if (!ok) return;
     setKilling(true);
     setError(null);
     try {
-      const { path, method } = windowKillRequest(terminalRefFromWindow(serverName, windowId, muxRef, 1));
+      const { path, method } = windowKillRequest({ kind: 'windowId', serverName, windowId, pane: 1 });
       const failure = errorMessageOf(await api<unknown>(path, { method }));
       if (failure) {
         setError(failure);
         return;
       }
-      onChanged?.();
+      onChanged('window_deleted');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -55,8 +55,8 @@ export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, 
   const isBusy = killing || openSubmitting;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '2px 12px 8px 40px' }}>
-      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', padding: 'var(--space-1) var(--space-3) var(--space-2) 40px' }}>
+      <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', flexWrap: 'wrap' }}>
         <Button variant="primary" size="sm" onClick={() => setOpenFormShown((shown) => !shown)} disabled={isBusy} aria-expanded={openFormShown}>
           {t('terminal.paneUnavailable.openPane')}
         </Button>
@@ -73,7 +73,7 @@ export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, 
         <OpenPaneForm
           serverName={serverName}
           muxRef={muxRef}
-          onOpened={() => { setOpenFormShown(false); onChanged?.(); }}
+          onOpened={() => { setOpenFormShown(false); onChanged('pane_opened'); }}
           onSubmittingChange={setOpenSubmitting}
         />
       )}

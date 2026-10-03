@@ -191,7 +191,9 @@
       "openPane": "ペインを開く",
       "open": "開く",
       "opening": "開いています…",
-      "killWindow": "ウィンドウを削除"
+      "killWindow": "ウィンドウを削除",
+      "killWindowConfirmTitle": "ウィンドウを削除",
+      "killWindowConfirmMessage": "ウィンドウ \"{{name}}\" を削除しますか？"
     }
   },
   "resourceWarning": {

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SidebarMode, Project, Session, Window, Task } from '../../pages/workspace/types';
+import type { WindowPaneTreeProps } from '../ui/WindowPaneTree';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
@@ -67,7 +68,7 @@ interface WorkspaceSidebarContentProps {
   projectSettings: { section: SettingsSection; setSection: (s: SettingsSection) => void };
   onOpenDiff: (serverName: string, path: string) => void;
   respawningWindowIds?: Set<number>;
-  onWindowsChanged?: () => void;
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
   taskWindows?: Array<{ tmuxTarget: string; taskId: number; serverName: string }>;
   allProjects?: Array<{ id: number; name: string; windows?: Array<{ serverName: string; tmuxTarget: string }> }>;
   onAddWindowToProject?: (projectId: number, serverName: string, tmuxTarget: string) => void;

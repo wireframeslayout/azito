@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
+import type { WindowPaneTreeProps } from '../ui/WindowPaneTree';
 import { isTerminalTabActive } from '../../lib/windowMatch';
 import { terminalRefFromTarget, muxRefJson, type TerminalRef } from '../../lib/terminalRef';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
@@ -83,7 +84,7 @@ interface ObjectsSidebarProps {
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
   /** 空の窓の［ペインを開く］［窓を削除］の後に窓一覧（セッション）を再取得する */
-  onWindowsChanged?: () => void;
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** オペレーションウィンドウ行の副題（サーバー · フェーズ · ブランチ）とタスクバッジのラベル解決に使う */
   tasks: Task[];
@@ -692,7 +693,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.active.length > 0 && (
@@ -706,7 +707,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -740,7 +741,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.idle.length > 0 && (
@@ -754,7 +755,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -788,7 +789,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                 </ObjectSection>
@@ -819,7 +820,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.offline.length > 0 && (
@@ -833,7 +834,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
-        onWindowsChanged={onWindowsChanged}
+                      onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -922,7 +923,7 @@ interface ServerGroupProps {
   extra?: (w: WindowItem) => React.ReactNode;
   activityClassName?: (w: WindowItem) => string | undefined;
   respawningWindowIds?: Set<number>;
-  onWindowsChanged?: () => void;
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
 }
 
 function ServerGroup({

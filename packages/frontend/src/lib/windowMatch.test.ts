@@ -102,6 +102,14 @@ describe('isTerminalTabActive', () => {
     expect(isTerminalTabActive('terminal:local/main:win.1', 'local', 'main:win.2', 'window', 12)).toBe(false);
   });
 
+  it('matches a ref tab by the ref its target names, at window and pane level', () => {
+    const refTab = `terminal:ws::ref:${encodeURIComponent(formatMuxRef(misaoRef))}.2`;
+    expect(isTerminalTabActive(refTab, 'ws', 'ws:w_01HZZZZZZZZZZZZZZZZZZZZZZZ.1', 'window')).toBe(true);
+    expect(isTerminalTabActive(refTab, 'ws', 'ws:w_01HZZZZZZZZZZZZZZZZZZZZZZZ.2', 'pane')).toBe(true);
+    expect(isTerminalTabActive(refTab, 'ws', 'ws:w_01HZZZZZZZZZZZZZZZZZZZZZZZ.1', 'pane')).toBe(false);
+    expect(isTerminalTabActive(refTab, 'ws', 'ws:w_OTHER.1', 'window')).toBe(false);
+  });
+
   it('is false without an active tab', () => {
     expect(isTerminalTabActive(null, 'local', 'main:win.1', 'window', 12)).toBe(false);
   });
