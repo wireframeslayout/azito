@@ -146,3 +146,8 @@ export function isPaneHandleLike(s: string, kind: MuxDriverKind): boolean {
   return (kind === 'misao' ? MISAO_PANE_ID_RE : TMUX_PANE_HANDLE_RE).test(s);
 }
 
+
+/** True when `s` has the shape of a pane handle of any known mux kind (tmux `%<n>`, misao `p_<ULID>`). */
+export function isPaneHandle(s: string): boolean {
+  return isPaneHandleLike(s, 'tmux') || isPaneHandleLike(s, 'misao');
+}

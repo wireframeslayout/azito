@@ -1196,3 +1196,43 @@ describe('POST /api/transcripts/window-signal', () => {
     await app.close();
   });
 });
+
+describe('window routes: pane handle format follows the window mux kind', () => {
+  const MISAO_PANE = 'p_01HZX3K9M2N4P5Q6R7S8T9V0WX';
+  const misaoWindow = { muxRef: { kind: 'misao', workspace: 'w', window: 'w_01HZX3K9M2N4P5Q6R7S8T9V0WX' } };
+  const tmuxWindow = { muxRef: { kind: 'tmux', workspace: 's', window: '0' } };
+
+  it.each([
+    ['window-input', { text: 'hi' }],
+    ['window-signal', { action: 'interrupt' }],
+  ])('%s accepts a misao pane handle for a misao window', async (route, extra) => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never } });
+    const res = await app.inject({ method: 'POST', url: `/api/transcripts/${route}`, payload: { windowId: 42, paneId: MISAO_PANE, ...extra } });
+    expect(res.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it.each([
+    ['window-input', { text: 'hi' }],
+    ['window-signal', { action: 'interrupt' }],
+  ])('%s rejects a misao pane handle for a tmux window', async (route, extra) => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => tmuxWindow as never } });
+    const res = await app.inject({ method: 'POST', url: `/api/transcripts/${route}`, payload: { windowId: 42, paneId: MISAO_PANE, ...extra } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a tmux pane handle for a misao window', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: '%5', text: 'hi' } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a malformed misao-looking handle', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: 'p_short', text: 'hi' } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
