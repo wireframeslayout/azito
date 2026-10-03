@@ -6,6 +6,7 @@ import type { Task } from './Task';
 import type { TaskStatus } from './TaskStatus';
 import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 
 /**
  * Wires `destroyPrimaryTaskWindow` (kill → reread-gated revoke → cleanup,
@@ -350,5 +351,52 @@ describe('POST /api/tasks/:id/retry', () => {
     const res = await app.inject({ method: 'POST', url: '/api/tasks/999/retry' });
 
     expect(res.statusCode).toBe(404);
+  });
+});
+
+// The mux daemon being down must not take the task detail or the delete with it (the registry
+// throws MuxDriverUnavailableError for a misao server whose daemon is unreachable).
+describe('tasks routes while the mux daemon is down', () => {
+  const daemonDown = () => ({
+    resolve: vi.fn(() => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); }),
+  }) as unknown as TasksRouteOptions['muxDriverRegistry'];
+
+  it('GET /api/tasks/:id answers 200 with paneAlive null', async () => {
+    const opts = makeOpts({ status: 'in_progress', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toMatchObject({ id: 1, paneAlive: null });
+  });
+
+  it('DELETE /api/tasks/:id skips closing the window and deletes the task', async () => {
+    const opts = makeOpts({ status: 'open', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    opts.muxDriverRegistry = daemonDown();
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'DELETE', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(opts.taskRepo.delete).toHaveBeenCalledWith(1);
+  });
+
+  it('POST /api/tasks/:id/recover-session reports the new window id the respawn moved the task to', async () => {
+    const opts = makeOpts({ status: 'failed', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    (opts.respawnService.respawn as ReturnType<typeof vi.fn>).mockResolvedValue({ tmuxTarget: 'azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9' });
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toEqual({ tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9', tmuxTarget: 'azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N9' });
   });
 });

@@ -551,7 +551,7 @@ describe('TaskRestoreService', () => {
     deps = makeDeps({
       ...deps,
       muxDriverRegistry: overrideDriver(deps, {
-        openWindow: vi.fn(async () => ({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1' })),
+        openWindow: vi.fn(async () => ({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-1--ab12' })),
       }),
     });
     service = new TaskRestoreService(deps);
@@ -559,7 +559,9 @@ describe('TaskRestoreService', () => {
     const result = await service.restore(task, log);
 
     expect(result.tmuxTarget).toBe('azito:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
-    expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ muxRef: misaoRef }));
+    // The window id is the identity (tmux_target, mux_ref, task.tmuxWindow); the display name is only the label.
+    expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ muxRef: misaoRef, label: 'task-1--ab12' }));
+    expect(deps.taskRepo.update).toHaveBeenCalledWith(task.id, expect.objectContaining({ tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' }));
   });
 
   it('throws when tmux window creation fails and task remains archived', async () => {
