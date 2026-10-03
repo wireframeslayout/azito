@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useState } from 'react';
 import { windowKey } from '@azito/shared';
+import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 
 interface WorkspaceTargetsContextValue {
-  onOpenInTerminal: ((serverName: string, target: string) => void) | null;
-  setOnOpenInTerminal: (cb: ((serverName: string, target: string) => void) | null) => void;
+  onOpenInTerminal: ((req: TerminalOpenTarget) => void) | null;
+  setOnOpenInTerminal: (cb: ((req: TerminalOpenTarget) => void) | null) => void;
   onOpenTask: ((taskId: number) => void) | null;
   setOnOpenTask: (cb: ((taskId: number) => void) | null) => void;
   activeTabId: string | null;
@@ -34,13 +35,13 @@ const WorkspaceTargetsContext = createContext<WorkspaceTargetsContextValue>(defa
 export { windowKey as activityKey };
 
 export function WorkspaceTargetsProvider({ children }: { children: React.ReactNode }) {
-  const [onOpenInTerminal, setOnOpenInTerminal] = useState<((serverName: string, target: string) => void) | null>(null);
+  const [onOpenInTerminal, setOnOpenInTerminal] = useState<((req: TerminalOpenTarget) => void) | null>(null);
   const [onOpenTask, setOnOpenTask] = useState<((taskId: number) => void) | null>(null);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [focusedTarget, setFocusedTarget] = useState<string | null>(null);
   const [onOpenTabSwitcher, setOnOpenTabSwitcher] = useState<(() => void) | null>(null);
 
-  const setOnOpenInTerminalCb = useCallback((cb: ((serverName: string, target: string) => void) | null) => {
+  const setOnOpenInTerminalCb = useCallback((cb: ((req: TerminalOpenTarget) => void) | null) => {
     setOnOpenInTerminal(() => cb);
   }, []);
 
