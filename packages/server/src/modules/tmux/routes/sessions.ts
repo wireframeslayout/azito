@@ -877,29 +877,37 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   // ── POST /api/servers/:name/mux/windows/:ref/panes ──
+  // The server row, the task-window classification and the env are resolved inside the per-server lock
+  // (see serverIsolationMutex's doc comment), like the legacy add-pane route and `panes/open`.
   fastify.post<{ Params: { name: string; ref: string } }>(
     '/api/servers/:name/mux/windows/:ref/panes',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefForServer(request.params.ref, srv);
-      const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, freshSrv);
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
 
-      if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-        return reply.status(409).send({
-          error: 'primary_task_window_pane_add_unsupported',
-          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-        });
-      }
+        if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
+          return reply.status(409).send({
+            error: 'primary_task_window_pane_add_unsupported',
+            message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
+          });
+        }
 
-      const body = request.body as { ordinal?: number; direction?: string };
-      const direction = (body.direction || 'v') as 'h' | 'v';
-      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
-      const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.splitPaneByHandle(srv, handle, direction);
-      notifySessionsChanged(request.params.name);
-      return { ok: true };
+        const body = request.body as { ordinal?: number; direction?: string };
+        const direction = (body.direction || 'v') as 'h' | 'v';
+        const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+        // Secondary task window: masked env (never the operator UI token); non-task window: the manual-window env.
+        const extraEnv = windowRow && windowRow.taskId !== null
+          ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
+          : uiTokenEnvForServer(opts.uiToken, freshSrv);
+        const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const handle = await resolvePaneHandle(muxClient, freshSrv, ref, ordinal);
+        await muxClient.splitPaneByHandle(freshSrv, handle, direction, extraEnv);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      });
     },
   );
 
@@ -1079,7 +1087,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
         }
         try {
-          const { ref } = await driver.openWorkspace(freshSrv, name, { windowName });
+          const { ref } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
         } catch (err: unknown) {
@@ -1106,7 +1114,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         try {
           const workspace = decodeURIComponent(request.params.workspace);
-          const created = await driver.openWindow(freshSrv, workspace, name);
+          const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv) });
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {

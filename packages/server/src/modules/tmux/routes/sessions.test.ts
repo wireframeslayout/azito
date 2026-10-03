@@ -1053,6 +1053,118 @@ describe('POST /api/servers/:name/mux/windows/:ref/panes/open', () => {
   });
 });
 
+describe('mux creation routes hand the new pane its env inside the per-server lock', () => {
+  const windowId = 'w_0123456789ABCDEFGHJKMNPQRS';
+  const ref = { kind: 'misao', workspace: 'ws-a', window: windowId } as const;
+  const refParam = encodeURIComponent(JSON.stringify(ref));
+  const MASKED = { AZITO_UI_TOKEN: '', AZITO_AGENT_TOKEN: '' };
+  let app: FastifyInstance;
+  let lockHeld = false;
+  const heldAtCall: boolean[] = [];
+
+  const openWorkspace = vi.fn(async () => { heldAtCall.push(lockHeld); return { ref, result: { stdout: '', stderr: '', code: 0 } }; });
+  const openWindow = vi.fn(async () => { heldAtCall.push(lockHeld); return { ref, result: { stdout: '', stderr: '', code: 0 }, windowName: 'main' }; });
+  const splitPaneByHandle = vi.fn(async () => { heldAtCall.push(lockHeld); return { handle: 'p_2', result: { stdout: '', stderr: '', code: 0 } }; });
+  const driver = {
+    openWorkspace, openWindow, splitPaneByHandle,
+    resolvePane: vi.fn(async () => 'p_1'),
+  } as unknown as IMuxClient;
+
+  async function build(server: ServerConfig, extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string> } = {}) {
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', driver);
+    const mutex = new KeyedMutex();
+    const withLock = mutex.withLock.bind(mutex);
+    mutex.withLock = (async (key: string, fn: () => Promise<unknown>) => withLock(key, async () => { lockHeld = true; try { return await fn(); } finally { lockHeld = false; } })) as typeof mutex.withLock;
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(server),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      muxDriverRegistry: registry,
+      notificationBus: { emit: vi.fn() } as never,
+      serverIsolationMutex: mutex,
+      ...extra,
+    });
+    await app.ready();
+  }
+
+  const normal = { name: 'misao1', type: 'local', muxRuntime: 'misao', isolationIntent: false } as ServerConfig;
+  const isolated = { ...normal, isolationIntent: true } as ServerConfig;
+
+  afterEach(async () => {
+    openWorkspace.mockClear(); openWindow.mockClear(); splitPaneByHandle.mockClear(); heldAtCall.length = 0;
+    await app.close();
+  });
+
+  it('POST /mux/workspaces passes the UI token env, inside the lock', async () => {
+    await build(normal);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a' } });
+    expect(res.statusCode).toBe(200);
+    expect(openWorkspace).toHaveBeenCalledWith(normal, 'ws-a', { windowName: undefined, extraEnv: { AZITO_UI_TOKEN: 'test-token' } });
+    expect(heldAtCall).toEqual([true]);
+  });
+
+  it('POST /mux/workspaces passes the mask env, never the UI token, to an isolated server', async () => {
+    await build(isolated);
+    await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces', payload: { name: 'ws-a' } });
+    expect(openWorkspace).toHaveBeenCalledWith(isolated, 'ws-a', { windowName: undefined, extraEnv: MASKED });
+  });
+
+  it('POST /mux/workspaces/:ws/windows passes the UI token env, inside the lock', async () => {
+    await build(normal);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: { name: 'main' } });
+    expect(res.statusCode).toBe(200);
+    expect(openWindow).toHaveBeenCalledWith(normal, 'ws-a', 'main', { extraEnv: { AZITO_UI_TOKEN: 'test-token' } });
+    expect(heldAtCall).toEqual([true]);
+  });
+
+  it('POST /mux/workspaces/:ws/windows passes the mask env to an isolated server', async () => {
+    await build(isolated);
+    await app.inject({ method: 'POST', url: '/api/servers/misao1/mux/workspaces/ws-a/windows', payload: {} });
+    expect(openWindow).toHaveBeenCalledWith(isolated, 'ws-a', undefined, { extraEnv: MASKED });
+  });
+
+  it('POST /mux/windows/:ref/panes (split) passes the UI token env, inside the lock', async () => {
+    await build(normal, { windowRepo: makeWindowRepo() });
+    const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: { direction: 'h' } });
+    expect(res.statusCode).toBe(200);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'h', { AZITO_UI_TOKEN: 'test-token' });
+    expect(heldAtCall).toEqual([true]);
+  });
+
+  it('POST /mux/windows/:ref/panes (split) passes the mask env to an isolated server', async () => {
+    await build(isolated, { windowRepo: makeWindowRepo() });
+    await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
+    expect(splitPaneByHandle).toHaveBeenCalledWith(isolated, 'p_1', 'v', MASKED);
+  });
+
+  it('POST /mux/windows/:ref/panes (split) gives a secondary task window its own masked env', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: false,
+    });
+    const taskEnv = { AZITO_TASK_ID: '42', ...MASKED };
+    const buildSecondaryWindowEnv = vi.fn(() => taskEnv);
+    await build(normal, { windowRepo, buildSecondaryWindowEnv });
+    const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
+    expect(res.statusCode).toBe(200);
+    expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, normal);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'v', taskEnv);
+  });
+
+  it('POST /mux/windows/:ref/panes (split) still refuses a task primary window', async () => {
+    const windowRepo = makeWindowRepo();
+    (windowRepo.findByServerAndRef as ReturnType<typeof vi.fn>).mockReturnValue({
+      id: 5, ownerType: 'task', taskId: 42, projectId: null, serverName: 'misao1', tmuxTarget: 'ws-a:main', isPrimary: true,
+    });
+    await build(normal, { windowRepo });
+    const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
+    expect(res.statusCode).toBe(409);
+    expect(splitPaneByHandle).not.toHaveBeenCalled();
+  });
+});
+
 describe('unreachable agent server', () => {
   it('rethrows AgentUnreachableError from GET /sessions so the app error handler can answer 503', async () => {
     const srv: ServerConfig = { name: 'srv1', type: 'agent' } as ServerConfig;
