@@ -14,6 +14,7 @@ const REF: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X6W5V4T
 async function buildApp(labelWindowPanes = vi.fn(async () => undefined)) {
   const windowRepo = {
     findByServerAndTarget: vi.fn(() => undefined),
+    findByServerAndRef: vi.fn(() => undefined),
     add: vi.fn(() => 42),
     remove: vi.fn(),
     update: vi.fn(),

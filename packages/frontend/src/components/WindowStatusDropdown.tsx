@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { Window, Task, Project } from '../pages/workspace/types';
 import { findSessionWindowRef, type TerminalRef } from '../lib/terminalRef';
@@ -15,6 +14,8 @@ interface WindowStatusDropdownProps {
   target: string;
   /** Sessions of this server — the source of the window's ref when registering. */
   sessions?: Session[];
+  /** The terminal this dropdown sits on; finds the window row by windowId / ref (a ref-only misao row has no window-name target). */
+  terminalRef?: TerminalRef;
   project: Project | null;
   allTasks: Task[];
   /** Owner context for registering an untracked window (task takes precedence). */
@@ -84,19 +85,21 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function ActionButton({ label, icon, onClick, loading }: { label: string; icon: React.ReactNode; onClick: () => void; loading?: boolean }) {
+function ActionButton({ label, icon, onClick, loading, disabled, title }: { label: string; icon: React.ReactNode; onClick: () => void; loading?: boolean; disabled?: boolean; title?: string }) {
+  const inactive = loading || disabled;
   return (
     <button
       onClick={onClick}
-      disabled={loading}
-      className={loading ? undefined : 'row-hover'}
+      disabled={inactive}
+      title={title}
+      className={inactive ? undefined : 'row-hover'}
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 10px', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-sm)',
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        color: loading ? 'var(--text-dim)' : 'var(--text)',
-        cursor: loading ? 'not-allowed' : 'pointer',
-        opacity: loading ? 0.6 : 1,
+        color: inactive ? 'var(--text-dim)' : 'var(--text)',
+        cursor: inactive ? 'not-allowed' : 'pointer',
+        opacity: inactive ? 0.6 : 1,
       }}
     >
       <span style={{ display: 'inline-flex', alignItems: 'center' }}>{icon}</span>
@@ -105,7 +108,7 @@ function ActionButton({ label, icon, onClick, loading }: { label: string; icon: 
   );
 }
 
-export function WindowStatusDropdown({ serverName, target, sessions, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
+export function WindowStatusDropdown({ serverName, target, sessions, terminalRef, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -121,7 +124,10 @@ export function WindowStatusDropdown({ serverName, target, sessions, project, al
     ...agentDefs.filter((d) => d.launchable).map((d) => ({ value: d.type, label: d.label })),
   ];
 
-  const win = findWindow(serverName, target, project, allTasks);
+  const win = findWindow(serverName, target, project, allTasks, terminalRef);
+  // The ref to register with is the one the server reported for this window; it is never synthesised as a tmux ref
+  // (a misao window would be rejected as a kind mismatch).
+  const registerRef = sessions ? findSessionWindowRef(sessions, target) : null;
   const task = win ? findTaskForWindow(win, allTasks) : null;
 
   useEffect(() => {
@@ -208,13 +214,10 @@ export function WindowStatusDropdown({ serverName, target, sessions, project, al
   const handleRegister = useCallback(async () => {
     setActionLoading(true);
     try {
-      const base = target.replace(/\.\d+$/, '');
-      let refJson: string | undefined;
-      refJson = sessions ? findSessionWindowRef(sessions, base) ?? undefined : undefined;
-      if (!refJson) try { refJson = formatMuxRef(muxRefFromTmuxTarget(base)); } catch { /* fall back to tmux_target */ }
+      if (!registerRef) throw new Error('window ref is not resolved yet');
       const body: Record<string, unknown> = {
         server_name: serverName,
-        ...(refJson ? { ref: refJson } : { tmux_target: base }),
+        ref: registerRef,
         window_type: selectedType === 'terminal' ? 'terminal' : 'agent',
         worker_type: selectedType === 'terminal' ? null : selectedType,
       };
@@ -227,7 +230,7 @@ export function WindowStatusDropdown({ serverName, target, sessions, project, al
     } finally {
       setActionLoading(false);
     }
-  }, [serverName, target, selectedType, taskId, projectId, showToast, onChanged]);
+  }, [serverName, registerRef, selectedType, taskId, projectId, showToast, onChanged]);
 
   const icon = win?.workerType ? <AgentIcon workerType={win.workerType} windowType="agent" size={13} /> : null;
   const label = win
@@ -298,7 +301,7 @@ export function WindowStatusDropdown({ serverName, target, sessions, project, al
                   >
                     {typeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
-                  <ActionButton icon={<Icon name="plus" size={16} />} label={`Register to ${taskId ? 'task' : 'project'}`} onClick={handleRegister} loading={actionLoading} />
+                  <ActionButton icon={<Icon name="plus" size={16} />} label={`Register to ${taskId ? 'task' : 'project'}`} onClick={handleRegister} loading={actionLoading} disabled={!registerRef} title={registerRef ? undefined : 'Waiting for the window list to resolve this window'} />
                 </div>
               ) : (
                 <div style={{ paddingTop: 8, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>

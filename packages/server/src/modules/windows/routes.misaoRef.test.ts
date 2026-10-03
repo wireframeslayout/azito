@@ -13,7 +13,7 @@ const MISAO_REF = formatMuxRef({ kind: 'misao', workspace: 'ws', window: 'w_01J9
 const URLS = ['/api/projects/1/windows', '/api/tasks/1/windows'];
 
 async function buildApp(muxRuntime: ServerConfig['muxRuntime'], misaoEnabled = false, registerMisao = false) {
-  const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), add: vi.fn(() => 7), create: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
+  const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined), add: vi.fn(() => 7), create: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
   const muxDriverRegistry = new MuxDriverRegistry({ misaoEnabled });
   muxDriverRegistry.register('tmux', { kind: 'tmux' } as unknown as IMuxClient);
   if (registerMisao) muxDriverRegistry.register('misao', { kind: 'misao', supportsPaneLabels: false } as unknown as IMuxClient);

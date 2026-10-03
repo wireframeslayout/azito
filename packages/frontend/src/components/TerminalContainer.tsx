@@ -351,6 +351,7 @@ export function TerminalContainer({ serverName, target: rawTarget, terminalRef: 
             serverName={serverName}
             target={target}
             sessions={sessions}
+            terminalRef={terminalRef}
             project={project ?? null}
             allTasks={allTasks ?? []}
             taskId={taskId}

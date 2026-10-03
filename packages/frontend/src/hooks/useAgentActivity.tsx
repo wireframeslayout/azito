@@ -1,8 +1,8 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import type { AgentActivityPayload } from '../types/notification';
-import { stripPaneSuffix, isSameWindowTarget, formatMuxRef, muxRefFromTmuxTarget, parseMuxRef } from '@azito/shared';
-import { parseTerminalTabId } from '../lib/terminalRef';
+import { stripPaneSuffix, isSameWindowTarget } from '@azito/shared';
+import { parseTerminalTabId, refTabMatchesTarget } from '../lib/terminalRef';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
 import {
@@ -233,15 +233,7 @@ export function AgentActivityProvider({ children }: { children: React.ReactNode 
         if (windowId != null && parsed.kind === 'windowId' && parsed.windowId === windowId) return true;
         if (parsed.kind === 'legacy' && isSameWindowTarget(parsed.target, target)) return true;
         if (parsed.kind === 'ref') {
-          try {
-            const tabRef = parseMuxRef(parsed.ref);
-            // misao windows have no tmux target: their row stores `<workspace>:<window id>` (muxWindowTarget).
-            if (tabRef.kind === 'misao') {
-              if (stripPaneSuffix(target) === `${tabRef.workspace}:${tabRef.window}`) return true;
-            } else if (parsed.ref === formatMuxRef(muxRefFromTmuxTarget(stripPaneSuffix(target)))) {
-              return true;
-            }
-          } catch { /* ref or target not parseable */ }
+          if (refTabMatchesTarget(parsed.ref, target)) return true;
         }
       }
     }

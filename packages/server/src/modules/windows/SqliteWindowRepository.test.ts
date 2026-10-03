@@ -1,4 +1,9 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import Fastify from 'fastify';
+import { formatMuxRef } from '@azito/shared';
+import windowsRoutes from './routes';
+import { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import type { IMuxClient } from '../tmux/IMuxClient';
 import Database from 'better-sqlite3';
 
 // Full migration chain must be replayed against a fresh in-memory DB — same approach as
@@ -299,5 +304,57 @@ describe('SqliteWindowRepository.adoptForTask', () => {
     expect(w.projectId).toBe(projectId);
     expect(repo.findByTask(taskA).map((x) => x.id)).toEqual([id]);
     expect(repo.findByServerAndTarget('local-server', 'azito:win--qvp6')?.id).toBe(id);
+  });
+});
+
+describe('window registration routes share one row per physical misao window (real repository)', () => {
+  const MISAO_REF = { kind: 'misao', workspace: 'azito', window: 'w_01M40229BC46M2RPATEBX4JN25' } as const;
+  const REF_ONLY_TARGET = 'azito:w_01M40229BC46M2RPATEBX4JN25';
+  const NAMED_TARGET = 'azito:test-window--nksu';
+
+  async function setup() {
+    const db = buildSeededDb();
+    const repo = new SqliteWindowRepository(db);
+    const projectId = insertProject(db, 'P');
+    const taskId = insertTask(db, projectId, 'T');
+    const registry = new MuxDriverRegistry({ misaoEnabled: true });
+    registry.register('misao', { kind: 'misao', supportsPaneLabels: false } as unknown as IMuxClient);
+    const app = Fastify();
+    await app.register(windowsRoutes, {
+      windowRepo: repo,
+      projectRepo: { findById: () => ({ id: projectId }) },
+      taskRepo: { findById: () => ({ id: taskId }) },
+      serverRepo: { findByName: () => ({ name: 'local-misao', muxRuntime: 'misao' }) },
+      muxDriverRegistry: registry,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() },
+    } as never);
+    await app.ready();
+    const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url, payload: { server_name: 'local-misao', ...payload } });
+    return { repo, projectId, taskId, post };
+  }
+
+  it('ref-only registration, then named tmux_target + ref, adopts the same row', async () => {
+    const { repo, projectId, taskId, post } = await setup();
+    const first = await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) });
+    expect(first.statusCode).toBe(200);
+    expect(repo.findByServerAndRef('local-misao', MISAO_REF)?.tmuxTarget).toBe(REF_ONLY_TARGET);
+
+    const second = await post(`/api/tasks/${taskId}/windows`, { tmux_target: NAMED_TARGET, ref: formatMuxRef(MISAO_REF) });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ id: first.json().id, adopted: true });
+  });
+
+  it('named tmux_target + ref registration, then ref-only, reuses the same row', async () => {
+    const { projectId, taskId, post } = await setup();
+    const first = await post(`/api/projects/${projectId}/windows`, { tmux_target: NAMED_TARGET, ref: formatMuxRef(MISAO_REF) });
+    expect(first.statusCode).toBe(200);
+
+    const second = await post(`/api/tasks/${taskId}/windows`, { ref: formatMuxRef(MISAO_REF) });
+    expect(second.statusCode).toBe(200);
+    expect(second.json()).toMatchObject({ id: first.json().id, adopted: true });
+
+    const again = await post(`/api/projects/${projectId}/windows`, { ref: formatMuxRef(MISAO_REF) });
+    expect(again.statusCode).toBe(200);
+    expect(again.json().id).toBe(first.json().id);
   });
 });

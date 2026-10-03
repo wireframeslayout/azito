@@ -259,18 +259,24 @@ export function useAddWindowModal(
           } else {
             const firstWin = sess.windows[0];
             const firstPane = firstWin.panes[0];
-            if (firstPane) onConnect?.(awServer, `${awSelectedSession}:${firstWin.name}.${firstPane.index}`, numericProjectId);
+            if (firstPane) {
+              // The server-reported windowId / ref identifies the window for every mux kind; no tmux ref is synthesised from the target.
+              const termRef: TerminalRef = firstWin.windowId !== null
+                ? { kind: 'windowId', serverName: awServer, windowId: firstWin.windowId, pane: firstPane.index }
+                : { kind: 'ref', serverName: awServer, ref: firstWin.ref, pane: firstPane.index };
+              onConnect?.(termRef, numericProjectId);
+            }
           }
         }
       } else if (awMode === 'existing') {
-        let existingRef: string | undefined;
-        existingRef = findSessionWindowRef(awSessionData[awServer] ?? [], awTarget) ?? undefined;
-        if (!existingRef) try { existingRef = formatMuxRef(muxRefFromTmuxTarget(awTarget)); } catch { /* keep undefined */ }
-        await api(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ...(existingRef ? { ref: existingRef } : {}), label: awLabel.trim() }) });
+        const existingRef = findSessionWindowRef(awSessionData[awServer] ?? [], awTarget);
+        if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
+        const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
           await onTaskWindowAdded?.(awTaskId, awServer, awTarget, awLabel.trim(), true);
         } else {
-          onConnect?.(awServer, awTarget, numericProjectId);
+          const termRef: TerminalRef = { kind: 'windowId', serverName: awServer, windowId: registered.id, pane: 1 };
+          onConnect?.(termRef, numericProjectId);
         }
       } else {
         if (awAgent !== 'none') {
