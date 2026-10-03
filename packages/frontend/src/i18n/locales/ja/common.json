@@ -182,6 +182,16 @@
       "ariaLabel": "クイックキー",
       "keyboardToggle": "キーボード操作パッドを表示",
       "tabSwitcher": "タブスイッチャーを開く"
+    },
+    "paneUnavailable": {
+      "stopped": "このペインは停止しています（misao デーモンの再起動で終了）。不要なら削除できます",
+      "emptyWindow": "このウィンドウにはペインがありません",
+      "deletePane": "ペインを削除",
+      "deleting": "削除中…",
+      "openPane": "ペインを開く",
+      "open": "開く",
+      "opening": "開いています…",
+      "killWindow": "ウィンドウを削除"
     }
   },
   "resourceWarning": {
@@ -226,5 +236,9 @@
     "custom": "その他（ID を入力）",
     "invalidId": "A-Z, a-z, 0-9, ., _, :, - のみ使用可（64文字以内）",
     "codexVersionNote": "gpt-6 系は Codex CLI 0.159 以降が必要です"
+  },
+  "paneState": {
+    "stopped": "停止中",
+    "exited": "終了"
   }
 }

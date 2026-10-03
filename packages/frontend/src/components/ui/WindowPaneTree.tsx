@@ -4,6 +4,8 @@ import { Icon } from './Icon';
 import { api } from '../../api/client';
 import { AgentIcon } from './AgentIcons';
 import { WindowIdChip } from './WindowIdChip';
+import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
+import { isPaneLive } from '../../lib/paneState';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
@@ -363,9 +365,10 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                   {winShowIdChip && <WindowIdChip id={w.id!} />}
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
                     {winTitle}
                   </span>
+                  <PaneStateChip pane={pane} />
                   {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
                 </div>
                 {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
@@ -480,10 +483,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
                     color: active ? 'var(--accent)' : 'inherit',
                   }}
                 >
-                  <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)' }}>
+                  <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
                     <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
                     {paneLabel}
                   </span>
+                  <PaneStateChip pane={pane} />
                 </div>
               );
             })}

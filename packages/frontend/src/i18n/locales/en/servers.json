@@ -176,7 +176,11 @@
     "split": "Split",
     "session": "Session",
     "metaFetchError": "Couldn't load window names.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "noPanes": "No panes",
+    "openPane": "Open a pane",
+    "killWindow": "Delete window",
+    "deletePane": "Delete pane {{name}}"
   },
   "danger": {
     "resetFingerprint": "Reset SSH Fingerprint",

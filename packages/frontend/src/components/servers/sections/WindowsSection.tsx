@@ -3,9 +3,13 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
-import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, paneApiPath, windowKillRequest, type TerminalRef } from '../../../lib/terminalRef';
 import { stripPaneSuffix, muxKindForRuntime } from '@azito/shared';
-import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { preferredPaneOrdinal } from '../../../lib/paneState';
+import { errorMessageOf } from '../../../lib/apiResult';
+import { useConfirm } from '../../../hooks/useConfirm';
+import { useToast } from '../../../hooks/useToast';
 import WindowTreePopover from '../WindowTreePopover';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
@@ -22,6 +26,8 @@ interface WindowsSectionProps {
 
 export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
+  const confirm = useConfirm();
+  const { showToast } = useToast();
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
   const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
@@ -29,7 +35,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   const firstRef = useMemo<TerminalRef | null>(() => {
     for (const sess of sessions) {
       for (const win of sess.windows) {
-        return terminalRefFromWindow(server.name, win.windowId, win.ref, 1);
+        return terminalRefFromWindow(server.name, win.windowId, win.ref, preferredPaneOrdinal(win) ?? 1);
       }
     }
     return null;
@@ -53,10 +59,12 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
         workerType: regWin?.workerType,
         windowType: regWin?.windowType,
         taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
-        tmuxTarget: sessWin ? `${sessions.find(s => s.windows.includes(sessWin!))?.name}:${sessWin.name}` : undefined,
+        tmuxTarget: sessWin ? sessionWindowLabel(sessions.find(s => s.windows.includes(sessWin!))!.name, sessWin) : undefined,
       });
       return formatWindowDisplayLabel(display);
     }
+    const sessWin = sessions.flatMap((s) => s.windows.map((w) => ({ sessionName: s.name, win: w }))).find(({ win }) => win.ref === activeRef.ref);
+    if (sessWin) return sessionWindowLabel(sessWin.sessionName, sessWin.win);
     const resolved = resolveTerminalTarget(activeRef, sessions);
     if (resolved) return stripPaneSuffix(resolved);
     return terminalRefDisplayLabel(activeRef);
@@ -102,6 +110,42 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     }
     refresh();
   }, [server.name, refresh, useMuxRoutes]);
+
+  // Deleting what is on screen leaves `selectedRef` pointing at a pane ordinal / window that is gone: fall back to the first window.
+  const handleDeletePane = useCallback(async (ref: TerminalRef, label: string) => {
+    const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: label }), danger: true });
+    if (!ok) return;
+    try {
+      const failure = errorMessageOf(await api<unknown>(paneApiPath(ref), { method: 'DELETE' }));
+      if (failure) {
+        showToast(failure);
+        return;
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setSelectedRef(null);
+    refresh();
+  }, [confirm, showToast, refresh, t]);
+
+  const handleKillWindow = useCallback(async (ref: TerminalRef, label: string) => {
+    const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: label }), danger: true });
+    if (!ok) return;
+    const { path, method } = windowKillRequest(ref);
+    try {
+      const failure = errorMessageOf(await api<unknown>(path, { method }));
+      if (failure) {
+        showToast(failure);
+        return;
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setSelectedRef(null);
+    refresh();
+  }, [confirm, showToast, refresh, t]);
 
   const metaErrorBar = windowMetaError ? (
     <div style={{ padding: '6px 12px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -174,6 +218,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
             terminalRef={activeRef}
             sessions={sessions}
             onWindowChanged={refresh}
+            onTargetRemoved={() => setSelectedRef(null)}
           />
         ) : (
           <div style={{ color: 'var(--text-dim)', padding: '14px 16px', fontSize: 'var(--font-xs)' }}>{t('windows.noWindowSelected')}</div>
@@ -190,6 +235,8 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
           onCreateSession={handleCreateSession}
           onAddWindow={handleAddWindow}
           onSplitPane={handleSplitPane}
+          onDeletePane={handleDeletePane}
+          onKillWindow={handleKillWindow}
           isMobile={isMobile}
           windowById={windowById}
           taskById={taskById}

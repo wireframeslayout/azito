@@ -182,6 +182,16 @@
       "ariaLabel": "Quick keys",
       "keyboardToggle": "Show keyboard controls",
       "tabSwitcher": "Open tab switcher"
+    },
+    "paneUnavailable": {
+      "stopped": "This pane is stopped (it ended when the misao daemon restarted). You can delete it if you no longer need it.",
+      "emptyWindow": "This window has no panes",
+      "deletePane": "Delete pane",
+      "deleting": "Deleting…",
+      "openPane": "Open a pane",
+      "open": "Open",
+      "opening": "Opening…",
+      "killWindow": "Delete window"
     }
   },
   "resourceWarning": {
@@ -226,5 +236,9 @@
     "custom": "Other (enter ID)",
     "invalidId": "Only A-Z, a-z, 0-9, ., _, :, - allowed (max 64 chars)",
     "codexVersionNote": "gpt-6 models require Codex CLI 0.159 or later"
+  },
+  "paneState": {
+    "stopped": "Stopped",
+    "exited": "Exited"
   }
 }
