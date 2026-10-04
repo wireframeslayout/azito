@@ -1,8 +1,9 @@
 import type { MuxDriverKind } from '@azito/shared';
 import { defaultMuxOptions } from './muxRuntimeForm';
 import type { UnavailableMuxKind } from './fetchServerSessions';
+import { errorMessageOf } from './apiResult';
 
-/** i18n keys (`workspace:addWindow.muxReason.*`) of why a kind cannot be picked right now. */
+/** i18n keys  of why a kind cannot be picked right now. */
 export type MuxKindReason = 'misaoUnreachable' | 'misaoIncompatible' | 'misaoNotRegistered' | 'tmuxMissing' | 'unavailable';
 
 export interface MuxKindAvailability {
@@ -23,9 +24,9 @@ export function selectableMuxKinds(server: { type: string }): MuxDriverKind[] {
   return defaultMuxOptions(server.type);
 }
 
-/** Why `kind` is down, as the hub reported it. A reason this UI does not know reads as a generic "unavailable". */
+/** Why `kind` is down, as the hub reported it. Only a reason that says the binary is missing reads as "tmux is not installed"; any other reason this UI does not know reads as a generic "unavailable". */
 export function muxKindReason(kind: MuxDriverKind, hubReason: string): MuxKindReason {
-  if (kind === 'tmux') return 'tmuxMissing';
+  if (kind === 'tmux') return hubReason === 'binary_missing' ? 'tmuxMissing' : 'unavailable';
   switch (hubReason) {
     case 'daemon_unreachable': return 'misaoUnreachable';
     case 'protocol_incompatible': return 'misaoIncompatible';
@@ -91,4 +92,19 @@ export function isMuxKindUnavailable(res: unknown): res is { error: 'mux_kind_un
   if (typeof res !== 'object' || res === null) return false;
   const r = res as Record<string, unknown>;
   return r['error'] === 'mux_kind_unavailable' && (r['kind'] === 'tmux' || r['kind'] === 'misao') && typeof r['reason'] === 'string';
+}
+
+/** Translates `key` (i18n options are strings only here). */
+export type MuxTranslate = (key: string, options?: Record<string, string>) => string;
+
+/**
+ * The text to show for a failed mux create call (`api()` resolves with the error body whatever the status), or null
+ * when the body is not an error. The 409 for an unusable kind reads "cannot create in <kind> (<reason>)"; any other
+ * error shows its own message. `t` translates against the `workspace` namespace.
+ */
+export function muxCreateFailureText(res: unknown, t: MuxTranslate): string | null {
+  if (isMuxKindUnavailable(res)) {
+    return t('addWindow.muxKindUnavailable', { kind: t(`muxKind.${res.kind}`), reason: t(`muxKind.reason.${muxKindReason(res.kind, res.reason)}`) });
+  }
+  return errorMessageOf(res);
 }

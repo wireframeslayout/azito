@@ -3,6 +3,7 @@ import {
   effectiveMuxKind,
   initialMuxKind,
   isMuxKindUnavailable,
+  muxCreateFailureText,
   muxKindAvailability,
   muxKindReason,
   muxKindSelectModel,
@@ -20,7 +21,8 @@ describe('muxKindReason', () => {
     expect(muxKindReason('misao', 'protocol_incompatible')).toBe('misaoIncompatible');
     expect(muxKindReason('misao', 'driver_not_registered')).toBe('misaoNotRegistered');
     expect(muxKindReason('misao', 'driver_error')).toBe('unavailable');
-    expect(muxKindReason('tmux', 'driver_error')).toBe('tmuxMissing');
+    expect(muxKindReason('tmux', 'binary_missing')).toBe('tmuxMissing');
+    expect(muxKindReason('tmux', 'driver_error')).toBe('unavailable');
   });
 });
 
@@ -96,5 +98,21 @@ describe('isMuxKindUnavailable', () => {
     expect(isMuxKindUnavailable({ error: 'window_exists', windowName: 'x' })).toBe(false);
     expect(isMuxKindUnavailable({ error: 'mux_kind_unavailable', kind: 'zellij', reason: 'x' })).toBe(false);
     expect(isMuxKindUnavailable(null)).toBe(false);
+  });
+});
+
+describe('muxCreateFailureText', () => {
+  const t = (key: string, options?: Record<string, string>): string => `${key}${options ? JSON.stringify(options) : ''}`;
+
+  it('words the 409 for an unusable kind with the kind and the reason', () => {
+    const text = muxCreateFailureText({ error: 'mux_kind_unavailable', kind: 'tmux', reason: 'binary_missing' }, t);
+    expect(text).toContain('addWindow.muxKindUnavailable');
+    expect(text).toContain('muxKind.reason.tmuxMissing');
+    expect(text).not.toContain('mux_kind_unavailable');
+  });
+
+  it('shows another error as its own message and returns null for a success body', () => {
+    expect(muxCreateFailureText({ error: 'create failed: duplicate session' }, t)).toBe('create failed: duplicate session');
+    expect(muxCreateFailureText({ ok: true, ref: 'x' }, t)).toBeNull();
   });
 });

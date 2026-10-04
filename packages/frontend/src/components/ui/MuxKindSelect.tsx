@@ -18,7 +18,7 @@ interface MuxKindSelectProps {
   disabled?: boolean;
 }
 
-const textStyle = { fontSize: 'var(--font-xs)', color: 'var(--text-dim)', lineHeight: 1.5 } as const;
+const textStyle = { fontSize: 'var(--font-xs)', color: 'var(--text-dim)' } as const;
 
 /**
  * 窓を開くターミナル方式（misao / tmux）の切り替え。使えない方式は disabled にして理由を画面に出す。
@@ -42,7 +42,7 @@ export function MuxKindSelect({ value, onChange, kinds, availability, loading = 
   });
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 6, minWidth: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', minWidth: 0 }}>
       <SegmentedToggle
         options={options}
         value={value}
@@ -51,9 +51,9 @@ export function MuxKindSelect({ value, onChange, kinds, availability, loading = 
         ariaLabel={t('muxKind.label')}
         disabled={disabled || loading}
       />
-      <div id={reasonId} role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+      <div id={reasonId} role="status" aria-live="polite" style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-1)', minWidth: 0 }}>
         {loading && (
-          <span style={{ ...textStyle, display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ ...textStyle, display: 'inline-flex', alignItems: 'center', gap: 'var(--space-2)' }}>
             <Spinner size={10} />
             {t('muxKind.checking')}
           </span>

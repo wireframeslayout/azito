@@ -9,7 +9,7 @@ import { stripPaneSuffix } from '@azito/shared';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { preferredPaneOrdinal } from '../../../lib/paneState';
 import { refUsesMuxRoutes } from '../../../lib/sessionKind';
-import { isMuxKindUnavailable, muxKindReason } from '../../../lib/muxKindChoice';
+import { muxCreateFailureText } from '../../../lib/muxKindChoice';
 import { errorMessageOf } from '../../../lib/apiResult';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useToast } from '../../../hooks/useToast';
@@ -83,12 +83,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
 
   // Creation always goes through the mux routes with an explicit kind: a new session in the kind the user picked,
   // a new window in the kind of the session it is added to. A refusal comes back as a body, shown as text.
-  const failureText = useCallback((res: unknown): string | null => {
-    if (isMuxKindUnavailable(res)) {
-      return tw('addWindow.muxKindUnavailable', { kind: tw(`muxKind.${res.kind}`), reason: tw(`muxKind.reason.${muxKindReason(res.kind, res.reason)}`) });
-    }
-    return errorMessageOf(res);
-  }, [tw]);
+  const failureText = useCallback((res: unknown): string | null => muxCreateFailureText(res, tw), [tw]);
 
   const handleCreateSession = useCallback(async (name: string, kind: MuxDriverKind): Promise<string | null> => {
     const res = await api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) });

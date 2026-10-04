@@ -11,8 +11,7 @@ import { useToast } from './useToast';
 import { useServerStatuses } from './useServerStatuses';
 import { fetchSessionsForServers } from '../lib/fetchServerSessions';
 import { findSessionByKey, sessionKindOf, windowTargetSelectOptions } from '../lib/sessionKind';
-import { isMuxKindUnavailable, muxKindReason, muxKindSelectModel } from '../lib/muxKindChoice';
-import { errorMessageOf } from '../lib/apiResult';
+import { muxCreateFailureText, muxKindSelectModel } from '../lib/muxKindChoice';
 import { useMuxKindAvailability } from './useMuxKindAvailability';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
@@ -358,11 +357,7 @@ export function useAddWindowModal(
           return;
         }
         if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-        if (isMuxKindUnavailable(res)) {
-          showToast(t('addWindow.muxKindUnavailable', { kind: t(`muxKind.${res.kind}`), reason: t(`muxKind.reason.${muxKindReason(res.kind, res.reason)}`) }));
-          return;
-        }
-        const failure = errorMessageOf(res);
+        const failure = muxCreateFailureText(res, t);
         if (failure !== null) { showToast(failure); return; }
         const createdWindow = res as MuxCreateResponse;
         const createdTarget = createdWindow.target;

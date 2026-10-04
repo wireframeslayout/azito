@@ -11,7 +11,7 @@ import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime } from '@azito/shar
 import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
 import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
 import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
-import { errorMessageOf } from '../lib/apiResult';
+import { muxCreateFailureText } from '../lib/muxKindChoice';
 
 export interface Server {
   name: string;
@@ -80,6 +80,7 @@ interface UseServerManagementParams {
 
 export function useServerManagement({ tabs, closeTab }: UseServerManagementParams) {
   const { t } = useTranslation('servers');
+  const { t: tw } = useTranslation('workspace');
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const closeTabRef = useRef(closeTab);
@@ -413,13 +414,13 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
 
   const handleAddWindow = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
     const res = await api<unknown>(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind: kind ?? defaultKindOf(serverName) }) });
-    const failure = errorMessageOf(res);
+    const failure = muxCreateFailureText(res, tw);
     if (failure !== null) {
       showToast(failure);
       return;
     }
     refreshAll();
-  }, [refreshAll, defaultKindOf, showToast]);
+  }, [refreshAll, defaultKindOf, showToast, tw]);
 
   const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {

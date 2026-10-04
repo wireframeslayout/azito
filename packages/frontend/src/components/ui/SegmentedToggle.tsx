@@ -1,5 +1,6 @@
 import type { KeyboardEvent } from 'react';
 import { Icon, type IconName } from './Icon';
+import { nextEnabledOption } from './segmentedToggleLogic';
 
 export interface SegmentedToggleOption<T extends string> {
   value: T;
@@ -35,11 +36,9 @@ export function SegmentedToggle<T extends string>({ options, value, onChange, si
 
   // 左右キーで有効な隣の選択肢へ移る（tablist の標準操作）。
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
-    if (disabled || (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft')) return;
-    const enabled = options.filter((o) => !o.disabled);
-    const at = enabled.findIndex((o) => o.value === value);
-    if (at < 0 || enabled.length < 2) return;
-    const next = enabled[(at + (e.key === 'ArrowRight' ? 1 : enabled.length - 1)) % enabled.length];
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    const next = nextEnabledOption(options, value, e.key === 'ArrowRight' ? 1 : -1, disabled);
+    if (!next) return;
     e.preventDefault();
     onChange(next.value);
     const buttons = e.currentTarget.querySelectorAll<HTMLButtonElement>('button[role="tab"]');

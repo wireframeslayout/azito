@@ -2,7 +2,7 @@ import { muxKindOfPaneHandle, type MuxCapabilities, type MuxDriverKind, type Mux
 import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient, PaneLocation, PaneWindowLabels } from './IMuxClient';
-import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from './MuxCapabilityError';
+import { MuxDriverUnavailableError, MUX_BINARY_MISSING, isMissingBinaryError, type MuxDriverUnavailableReason } from './MuxCapabilityError';
 
 /** What the routing driver needs from the registry. */
 export interface RoutingMuxDeps {
@@ -18,6 +18,7 @@ export interface RoutingMuxDeps {
 
 function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
   if (err instanceof MuxDriverUnavailableError) return { kind, reason: err.reason, detail: err.message };
+  if (isMissingBinaryError(err)) return { kind, reason: MUX_BINARY_MISSING, detail: err instanceof Error ? err.message : String(err) };
   return { kind, reason: 'driver_error', detail: err instanceof Error ? err.message : String(err) };
 }
 

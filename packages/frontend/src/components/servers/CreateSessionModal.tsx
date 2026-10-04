@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { MuxDriverKind } from '@azito/shared';
 import Modal from '../Modal';
@@ -18,6 +18,7 @@ interface CreateSessionModalProps {
 /** New session on a server. Mounted only while open, so its fields start fresh every time. */
 export default function CreateSessionModal({ server, onClose, onCreate }: CreateSessionModalProps) {
   const { t } = useTranslation(['servers', 'common']);
+  const nameId = useId();
   const [name, setName] = useState('');
   const [choice, setChoice] = useState<MuxDriverKind | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -51,8 +52,11 @@ export default function CreateSessionModal({ server, onClose, onCreate }: Create
       }
     >
       <MuxKindField model={model} onChange={setChoice} disabled={submitting} />
-      <FormField label={t('windows.sessionName')} error={error ?? undefined}>
+      <FormField label={t('windows.sessionName')} error={error ?? undefined} htmlFor={nameId}>
         <FormInput
+          id={nameId}
+          aria-invalid={error !== null}
+          aria-describedby={error !== null ? `${nameId}-error` : undefined}
           value={name}
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
