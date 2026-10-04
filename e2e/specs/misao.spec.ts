@@ -100,6 +100,30 @@ test.describe('misao ドライバ', () => {
     expect(windows.find((w) => w.id === windowId)?.muxRef?.kind).toBe('misao');
   });
 
+  test('窓作成: 1 台のサーバーに kind を指定して tmux の窓と misao の窓を並べて作れる（#312）', async ({ harness }) => {
+    interface Created { ok: boolean; ref: string }
+    const create = (kind: string, name: string): Promise<Created> => harness.api<Created>('/servers/local/mux/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name, windowName: 'main', kind }),
+    });
+    // 既定は misao（前のシナリオで切り替え済み）。kind=tmux を指定した窓だけが tmux に作られる。
+    const tmuxWin = await create('tmux', 'e2e-kind-tmux');
+    const misaoWin = await create('misao', 'e2e-kind-misao');
+    expect(JSON.parse(tmuxWin.ref).kind).toBe('tmux');
+    expect(JSON.parse(misaoWin.ref).kind).toBe('misao');
+
+    const listing = await harness.api<{ sessions: Array<{ name: string; kind: string }>; unavailable: unknown[] }>('/servers/local/sessions?detail=1');
+    expect(listing.unavailable).toEqual([]);
+    expect(listing.sessions.filter((s) => s.name.startsWith('e2e-kind-')).map((s) => [s.name, s.kind]).sort())
+      .toEqual([['e2e-kind-misao', 'misao'], ['e2e-kind-tmux', 'tmux']]);
+
+    // 種別として不正な値は 400（使えない kind の 409 は、サーバーの単体テストで理由まで確認している）。
+    await expect(harness.api('/servers/local/mux/workspaces', {
+      method: 'POST',
+      body: JSON.stringify({ name: 'e2e-kind-bad', kind: 'zellij' }),
+    })).rejects.toThrow(/400.*Invalid kind/);
+  });
+
   test('端末 attach: ブラウザ端末への入力が misao のペインへ届き、出力が返る', async ({ app, harness }) => {
     const { label } = await createRegisteredWindow(harness, projectId, 'attach');
 

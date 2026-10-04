@@ -1427,3 +1427,178 @@ describe('mux workspace routes pick the mux by `kind` (#311)', () => {
     expect(bad.statusCode).toBe(400);
   });
 });
+
+describe('mux create routes take `kind` and refuse one the server cannot use (#312)', () => {
+  const ref = (kind: 'tmux' | 'misao') => ({ kind, workspace: 'dev', window: kind === 'misao' ? 'w_0123456789ABCDEFGHJKMNPQRS' : 'main' }) as const;
+  const localSrv = { name: 'mixed', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+  const agentSrv = { name: 'agent1', type: 'agent', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+  let app: FastifyInstance;
+
+  async function build(srv: ServerConfig, misaoUp = true) {
+    const make = (kind: 'tmux' | 'misao') => ({
+      openWorkspace: vi.fn(async () => ({ ref: ref(kind), result: { code: 0 }, windowName: 'main' })),
+      openWindow: vi.fn(async () => ({ ref: ref(kind), result: { code: 0 }, windowName: 'main' })),
+    });
+    const tmuxDriver = make('tmux');
+    const misaoDriver = make('misao');
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', tmuxDriver as unknown as IMuxClient);
+    registry.register('misao', misaoDriver as unknown as IMuxClient,
+      (s) => (s.type !== undefined && s.type !== 'local' ? { available: false, reason: 'remote_unsupported' }
+        : misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(srv),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo: makeWindowRepo(),
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+    return { tmuxDriver, misaoDriver };
+  }
+
+  afterEach(async () => { await app.close(); });
+
+  it('passes an explicit kind to the routing driver on both routes', async () => {
+    const { misaoDriver } = await build(localSrv);
+    const ws = await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces', payload: { name: 'dev', kind: 'misao' } });
+    const win = await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces/dev/windows', payload: { kind: 'misao' } });
+    expect(ws.statusCode).toBe(200);
+    expect(win.statusCode).toBe(200);
+    expect(misaoDriver.openWorkspace).toHaveBeenCalledTimes(1);
+    expect(misaoDriver.openWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the default mux when kind is omitted', async () => {
+    const { tmuxDriver, misaoDriver } = await build(localSrv);
+    await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces', payload: { name: 'dev' } });
+    expect(tmuxDriver.openWorkspace).toHaveBeenCalledTimes(1);
+    expect(misaoDriver.openWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 with the reason when the daemon of the asked kind is down', async () => {
+    const { misaoDriver } = await build(localSrv, false);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces', payload: { name: 'dev', kind: 'misao' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'daemon_unreachable' });
+    expect(misaoDriver.openWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 remote_unsupported for misao on an agent server, and 400 for an unknown kind', async () => {
+    await build(agentSrv);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/agent1/mux/workspaces/dev/windows', payload: { kind: 'misao' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'remote_unsupported' });
+    const bad = await app.inject({ method: 'POST', url: '/api/servers/agent1/mux/workspaces', payload: { name: 'dev', kind: 'zellij' } });
+    expect(bad.statusCode).toBe(400);
+  });
+});
+
+describe('mux create routes answer failures of the mux call (#312 review)', () => {
+  const ref = (kind: 'tmux' | 'misao') => ({ kind, workspace: 'dev', window: kind === 'misao' ? 'w_0123456789ABCDEFGHJKMNPQRS' : 'main' }) as const;
+  const localTmux = { name: 'srv', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+  const localMisao = { name: 'srv', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
+  const agentSrv = { name: 'srv', type: 'agent', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+  const fail = (stderr: string, code = 1) => ({ stdout: '', stderr, code });
+  let app: FastifyInstance;
+
+  interface Behaviour { tmux?: () => unknown; misao?: () => unknown }
+
+  async function build(srv: ServerConfig, behaviour: Behaviour, up: { tmux?: boolean; misao?: boolean } = {}) {
+    const make = (kind: 'tmux' | 'misao', run?: () => unknown) => ({
+      openWorkspace: vi.fn(async () => (run ? run() : { ref: ref(kind), result: { stdout: '', stderr: '', code: 0 }, windowName: 'main' })),
+      openWindow: vi.fn(async () => (run ? run() : { ref: ref(kind), result: { stdout: '', stderr: '', code: 0 }, windowName: 'main' })),
+    });
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', make('tmux', behaviour.tmux) as unknown as IMuxClient,
+      () => (up.tmux === false ? { available: false, reason: 'driver_not_registered' } : { available: true }));
+    registry.register('misao', make('misao', behaviour.misao) as unknown as IMuxClient,
+      () => (up.misao === false ? { available: false, reason: 'daemon_unreachable' } : { available: true }));
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(srv),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo: makeWindowRepo(),
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+  }
+
+  afterEach(async () => { await app.close(); });
+
+  const post = (url: string, payload: Record<string, unknown>) => app.inject({ method: 'POST', url: `/api/servers/srv/mux/workspaces${url}`, payload });
+
+  it('answers 500 with the remote error when an agent/ssh transport resolves a non-zero code (both routes)', async () => {
+    await build(agentSrv, { tmux: () => ({ ref: ref('tmux'), result: fail('duplicate session: dev'), windowName: 'main' }) });
+    const ws = await post('', { name: 'dev', kind: 'tmux' });
+    const win = await post('/dev/windows', { kind: 'tmux' });
+    for (const res of [ws, win]) {
+      expect(res.statusCode).toBe(500);
+      expect(res.json().error).toContain('duplicate session');
+    }
+  });
+
+  it('answers 409 binary_missing for a local spawn ENOENT, and for an SSH shell "command not found" (an agent server reports a missing tmux as code 1, so it stays a 500)', async () => {
+    const enoent = Object.assign(new Error('spawn tmux ENOENT'), { code: 'ENOENT' });
+    await build(localTmux, { tmux: () => { throw enoent; } });
+    const res = await post('', { name: 'dev', kind: 'tmux' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'tmux', reason: 'binary_missing' });
+    await app.close();
+
+    // The transport's result is what matters, not the server row: this is the shape an SSH shell returns.
+    await build(agentSrv, { tmux: () => ({ ref: ref('tmux'), result: fail('sh: tmux: command not found', 127), windowName: 'main' }) });
+    const remote = await post('/dev/windows', { kind: 'tmux' });
+    expect(remote.statusCode).toBe(409);
+    expect(remote.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'tmux', reason: 'binary_missing' });
+  });
+
+  it('keeps a missing tmux server socket a 500: "No such file or directory" is not a missing binary', async () => {
+    const socket = 'error connecting to /tmp/tmux-1000/default (No such file or directory)';
+    await build(localTmux, { tmux: () => { throw new Error(socket); } });
+    const thrown = await post('', { name: 'dev', kind: 'tmux' });
+    expect(thrown.statusCode).toBe(500);
+    await app.close();
+
+    await build(agentSrv, { tmux: () => ({ ref: ref('tmux'), result: fail(socket), windowName: 'main' }) });
+    const resolved = await post('/dev/windows', { kind: 'tmux' });
+    expect(resolved.statusCode).toBe(500);
+  });
+
+  it('does not read a misao ENOENT as a missing tmux', async () => {
+    await build(localMisao, { misao: () => { throw Object.assign(new Error('connect ENOENT /run/misao.sock'), { code: 'ENOENT' }); } });
+    const res = await post('', { name: 'dev', kind: 'misao' });
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('answers 409 with the daemon reason when misao drops during the call', async () => {
+    await build(localMisao, { misao: () => { throw new MuxDriverUnavailableError('misao', 'daemon_unreachable'); } });
+    const res = await post('', { name: 'dev' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'daemon_unreachable' });
+  });
+
+  it('checks the default mux when kind is omitted: 409 when it is down, even if the other kind is usable', async () => {
+    await build(localMisao, {}, { misao: false });
+    const res = await post('', { name: 'dev' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'daemon_unreachable' });
+  });
+
+  it('answers 409 for the default mux when every mux is down', async () => {
+    await build(localMisao, {}, { misao: false, tmux: false });
+    const res = await post('/dev/windows', {});
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'mux_kind_unavailable', kind: 'misao' });
+  });
+
+  it('treats an empty kind as invalid, not as omitted', async () => {
+    await build(localTmux, {});
+    const res = await post('', { name: 'dev', kind: '' });
+    expect(res.statusCode).toBe(400);
+  });
+});

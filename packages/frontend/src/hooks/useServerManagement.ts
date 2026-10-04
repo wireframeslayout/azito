@@ -11,6 +11,7 @@ import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime } from '@azito/shar
 import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
 import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
 import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
+import { muxCreateFailureText } from '../lib/muxKindChoice';
 
 export interface Server {
   name: string;
@@ -79,6 +80,7 @@ interface UseServerManagementParams {
 
 export function useServerManagement({ tabs, closeTab }: UseServerManagementParams) {
   const { t } = useTranslation('servers');
+  const { t: tw } = useTranslation('workspace');
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const closeTabRef = useRef(closeTab);
@@ -411,13 +413,14 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   }, [refreshAll, tabs, closeTab, confirm, t, sessionUsesMuxRoutes]);
 
   const handleAddWindow = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
-    if (!sessionUsesMuxRoutes(serverName, kind)) {
-      await api(`/servers/${serverName}/sessions/${sessionName}/windows`, { method: 'POST' });
-    } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) });
+    const res = await api<unknown>(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind: kind ?? defaultKindOf(serverName) }) });
+    const failure = muxCreateFailureText(res, tw);
+    if (failure !== null) {
+      showToast(failure);
+      return;
     }
     refreshAll();
-  }, [refreshAll, sessionUsesMuxRoutes]);
+  }, [refreshAll, defaultKindOf, showToast, tw]);
 
   const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {

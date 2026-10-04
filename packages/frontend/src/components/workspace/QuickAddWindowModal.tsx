@@ -4,6 +4,9 @@ import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
 import { baseInputStyle, Button, ModelSelect } from '../ui';
+import type { MuxDriverKind } from '@azito/shared';
+import type { MuxKindSelectModel } from '../../lib/muxKindChoice';
+import MuxKindField from './MuxKindField';
 
 interface QuickAddWindowModalProps {
   open: boolean;
@@ -19,6 +22,8 @@ interface QuickAddWindowModalProps {
   onAgentModelChange: (model: string) => void;
   workerModels: { id: string; label: string }[];
   workerType?: string;
+  muxKind: MuxKindSelectModel | null;
+  onMuxKindChange: (kind: MuxDriverKind) => void;
 }
 
 /**
@@ -32,6 +37,7 @@ export default function QuickAddWindowModal({
   workDir, onWorkDirChange,
   agentModel, onAgentModelChange, workerModels,
   workerType,
+  muxKind, onMuxKindChange,
 }: QuickAddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [modelInvalid, setModelInvalid] = useState(false);
@@ -49,6 +55,7 @@ export default function QuickAddWindowModal({
         </Button>
       }
     >
+      <MuxKindField model={muxKind} onChange={onMuxKindChange} disabled={loading} />
       <FormField label={t('addWindow.workingDir')}>
         <DirectoryInput
           value={workDir}

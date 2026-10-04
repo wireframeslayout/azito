@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { api } from '../api/client';
-import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Project, Server, Session } from '../pages/workspace/types';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { resolveWindowRegistrationRef, registeredWindowTerminalRef, taskWindowRegistration, type TerminalRef } from '../lib/terminalRef';
@@ -11,6 +11,8 @@ import { useToast } from './useToast';
 import { useServerStatuses } from './useServerStatuses';
 import { fetchSessionsForServers } from '../lib/fetchServerSessions';
 import { findSessionByKey, sessionKindOf, windowTargetSelectOptions } from '../lib/sessionKind';
+import { muxCreateFailureText, muxKindSelectModel } from '../lib/muxKindChoice';
+import { useMuxKindAvailability } from './useMuxKindAvailability';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
 export function isInsufficientResources(res: unknown): res is { error: string; resources: ResourceStatus } {
@@ -23,6 +25,9 @@ export function isWindowExists(res: unknown): res is { error: string; windowName
   return typeof res === 'object' && res !== null
     && (res as Record<string, unknown>)['error'] === 'window_exists';
 }
+
+/** The 201 body of `POST /mux/workspaces[/:ws/windows]`. */
+interface MuxCreateResponse { ok: boolean; ref: string; target: string; windowName: string }
 
 export type AgentPreset = { command: string; label: string };
 
@@ -74,7 +79,9 @@ export function useAddWindowModal(
 ) {
   const [addWindowOpen, setAddWindowOpen] = useState(false);
   const [awMode, setAwMode] = useState<'existing' | 'session' | 'new'>('existing');
-  const [awServer, setAwServer] = useState('');
+  const [awServer, setAwServerState] = useState('');
+  // The mux the user picked for a new window; null until they pick (the server's default applies).
+  const [awMuxChoice, setAwMuxChoice] = useState<MuxDriverKind | null>(null);
   const [awTarget, setAwTarget] = useState('');
   const [awLabel, setAwLabel] = useState('');
   const [awSessionData, setAwSessionData] = useState<Record<string, Session[]>>({});
@@ -104,6 +111,16 @@ export function useAddWindowModal(
   const { showToast } = useToast();
   const { statuses } = useServerStatuses();
   const isServerOffline = useCallback((name: string) => statuses[name]?.status === 'offline', [statuses]);
+
+  const awServerInfo = servers.find((s) => s.name === awServer);
+  const muxAvailability = useMuxKindAvailability(awServerInfo, addWindowOpen || awQuickAddOpen);
+  const muxKindModel = awServerInfo ? muxKindSelectModel(awServerInfo, muxAvailability, awMuxChoice) : null;
+
+  /** Switching the server drops the mux pick: it was made against the previous server's availability. */
+  const setAwServer = useCallback((name: string) => {
+    setAwServerState(name);
+    setAwMuxChoice(null);
+  }, []);
 
   const agentPresets = useMemo(() => buildAgentPresets(agentDefs, t), [agentDefs, t]);
 
@@ -152,7 +169,7 @@ export function useAddWindowModal(
     setAwAgent('none'); setAwAgentModel(''); setAwWorkerModels([]);
     setAwTaskId(taskId ?? null);
     setAddWindowOpen(true);
-  }, [servers, projectServers, project, isServerOffline]);
+  }, [servers, projectServers, project, isServerOffline, setAwServer]);
 
   /**
    * ServerGroup のクイック追加アイコン（claude/codex/terminal）用。サーバー・エージェント種別は
@@ -199,7 +216,7 @@ export function useAddWindowModal(
       setAwWorkerModels(models);
       setAwQuickAddLoading(false);
     })();
-  }, [projectServers, project, isServerOffline]);
+  }, [projectServers, project, isServerOffline, setAwServer]);
 
   /**
    * クイック追加モーダルを閉じる。世代を進めて、走行中の取得（openQuickAddWindow 内の
@@ -253,8 +270,8 @@ export function useAddWindowModal(
     setAddWindowLoading(true);
     const effectiveProjectId = awEffectiveProjectId || projectId;
     const numericProjectId = effectiveProjectId ? parseInt(effectiveProjectId, 10) : undefined;
-    // A new session/window is created in the server's default mux; an existing one is registered in its own mux.
-    const defaultKind = servers.find((s) => s.name === awServer)?.defaultMux ?? 'tmux';
+    // A new session/window is created in the mux the user picked (the server's default unless changed); an existing one is registered in its own mux.
+    const newKind: MuxDriverKind = muxKindModel?.value ?? 'tmux';
     // The window is already registered on the project when the task attachment fails; surface it instead of rejecting.
     const failTaskWindow = (err: unknown): void => {
       console.error('task window add failed', err);
@@ -323,66 +340,34 @@ export function useAddWindowModal(
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
         // Only a session of the mux the window is created in counts (a same-named session of the other mux does not).
-        const sessionExists = beforeSessions.some((s) => s.name === sessionName && sessionKindOf(s) === defaultKind);
-        const serverInfo = servers.find((s) => s.name === awServer);
-        const useMuxRoutes = defaultKind !== 'tmux';
-        let createdTarget: string;
-        let createdRef: string | undefined;
-        if (useMuxRoutes) {
-          if (!sessionExists) {
-            const res = await api<{ ok: boolean; ref: string; target: string; windowName: string }>(`/servers/${awServer}/mux/workspaces`, {
-              method: 'POST',
-              body: JSON.stringify({ name: sessionName, windowName: awNewWindowName.trim() || undefined, force }),
-            });
-            if (isInsufficientResources(res)) {
-              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
-              return;
-            }
-            if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-            createdTarget = res.target;
-            createdRef = res.ref;
-          } else {
-            const res = await api<{ ok: boolean; ref: string; target: string; windowName: string }>(`/servers/${awServer}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, {
-              method: 'POST',
-              body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
-            });
-            if (isInsufficientResources(res)) {
-              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
-              return;
-            }
-            if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
-            createdTarget = res.target;
-            createdRef = res.ref;
-          }
-        } else {
-          if (!sessionExists) {
-            const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions`, {
-              method: 'POST',
-              body: JSON.stringify({ name: sessionName, command: awNewCommand.trim() || undefined, windowName: awNewWindowName.trim() || undefined, force }),
-            });
-            if (isInsufficientResources(res)) {
-              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
-              return;
-            }
-            createdTarget = `${sessionName}:${res.windowName}`;
-          } else {
-            const res = await api<{ ok: boolean; windowName: string }>(`/servers/${awServer}/sessions/${sessionName}/windows`, {
-              method: 'POST',
-              body: JSON.stringify({ name: awNewWindowName.trim() || undefined, force }),
-            });
-            if (isInsufficientResources(res)) {
-              setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
-              return;
-            }
-            createdTarget = `${sessionName}:${res.windowName}`;
-          }
+        const sessionExists = beforeSessions.some((s) => s.name === sessionName && sessionKindOf(s) === newKind);
+        const windowName = awNewWindowName.trim() || undefined;
+        const serverPath = `/servers/${encodeURIComponent(awServer)}/mux/workspaces`;
+        const res = await api<MuxCreateResponse | { error: string }>(
+          sessionExists ? `${serverPath}/${encodeURIComponent(sessionName)}/windows` : serverPath,
+          {
+            method: 'POST',
+            body: JSON.stringify(sessionExists
+              ? { name: windowName, kind: newKind, force }
+              : { name: sessionName, windowName, kind: newKind, force }),
+          },
+        );
+        if (isInsufficientResources(res)) {
+          setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
+          return;
         }
+        if (isWindowExists(res)) { showToast(t('addWindow.windowExistsError')); return; }
+        const failure = muxCreateFailureText(res, t);
+        if (failure !== null) { showToast(failure); return; }
+        const createdWindow = res as MuxCreateResponse;
+        const createdTarget = createdWindow.target;
+        const createdRef: string = createdWindow.ref;
 
         const target = createdTarget;
         const label = awLabel.trim() || awNewWindowName.trim() || '';
-        let newRef: string | undefined = createdRef;
-        if (!newRef) { try { newRef = formatMuxRef(muxRefFromTmuxTarget(target)); } catch { /* keep undefined */ } }
-        const windowBody: Record<string, unknown> = { server_name: awServer, ...(useMuxRoutes ? { ref: newRef } : { tmux_target: target, ...(newRef ? { ref: newRef } : {}) }), label };
+        const newRef = createdRef;
+        // tmux keeps its target on the registered row; a misao window is identified by its ref alone.
+        const windowBody: Record<string, unknown> = { server_name: awServer, ...(newKind === 'tmux' ? { tmux_target: target } : {}), ref: newRef, label };
         if (awAgent !== 'none') {
           windowBody['window_type'] = 'agent';
           windowBody['worker_type'] = awAgent === 'custom' ? 'generic' : awAgent;
@@ -403,11 +388,8 @@ export function useAddWindowModal(
         if (awWorkDir.trim()) {
           if (created.id) {
             await api(`/windows/${created.id}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
-          } else if (newRef) {
-            await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
           } else {
-            const paneTarget = `${target}.1`;
-            await api(`/servers/${awServer}/panes/${encodeURIComponent(paneTarget)}/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
+            await api(`/servers/${encodeURIComponent(awServer)}/mux/windows/${encodeURIComponent(newRef)}/panes/1/send-keys`, { method: 'POST', body: JSON.stringify({ keys: [`cd ${awWorkDir.trim()}`, 'Enter'] }) });
           }
           await new Promise((r) => setTimeout(r, 500));
         }
@@ -427,7 +409,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow]);
 
   return {
     // State
@@ -456,12 +438,14 @@ export function useAddWindowModal(
     awQuickAddOpen,
     awQuickAddAgent,
     awQuickAddLoading,
+    muxKindModel,
 
     // Setters
     setAddWindowOpen,
     setAwQuickAddOpen,
     setAwMode,
     setAwServer,
+    setAwMuxChoice,
     setAwTarget,
     setAwLabel,
     setAwSelectedSession,

@@ -123,7 +123,8 @@
     "agentCommandUnavailable": "起動コマンドを取得できませんでした。エージェント定義の読み込み完了後に再度お試しいただくか、コマンドを入力してください。",
     "window": "ウィンドウ",
     "sessionWindowCount_one": "{{name}} ({{count}} ウィンドウ)",
-    "sessionWindowCount_other": "{{name}} ({{count}} ウィンドウ)"
+    "sessionWindowCount_other": "{{name}} ({{count}} ウィンドウ)",
+    "muxKindUnavailable": "{{kind}} では作成できません（{{reason}}）"
   },
   "serverModals": {
     "addTitle": "サーバーを追加",
@@ -158,7 +159,8 @@
     "isolationIntent": "隔離実行",
     "isolationIntentLabel": "このサーバーへ運用者の資格情報を配布しない",
     "isolationIntentHint": "有効化時に配布済みの操作トークンの掃除を試みます。実際に資格情報が残っていないかは、サーバー詳細画面の「隔離を検証」で確認できます。",
-    "isolationRequiresScopedAuth": "隔離を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは無効化のみ行えます。"
+    "isolationRequiresScopedAuth": "隔離を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは無効化のみ行えます。",
+    "muxRuntimeHint": "tmux を使うときだけ有効です。misao では使われません。"
   },
   "menu": {
     "windows": "オブジェクト",
@@ -308,5 +310,19 @@
     "pinTab": "タブをピン止め",
     "addWindowChip": "ウィンドウ",
     "addBrowserChip": "ブラウザ"
+  },
+  "muxKind": {
+    "label": "ターミナル方式",
+    "misao": "misao",
+    "tmux": "tmux",
+    "checking": "利用できる方式を確認中…",
+    "checkFailed": "利用できる方式を確認できませんでした。作成時に判定されます。",
+    "reason": {
+      "misaoUnreachable": "misao デーモンに接続できません",
+      "misaoIncompatible": "misao デーモンのバージョンがこのハブと合いません",
+      "misaoNotRegistered": "misao が有効になっていません",
+      "tmuxMissing": "tmux が入っていません",
+      "unavailable": "利用できません"
+    }
   }
 }
