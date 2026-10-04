@@ -1,4 +1,5 @@
-import { type MuxRef, type MuxDriverKind, formatMuxRef, formatWindowId, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef, type MuxDriverKind, formatMuxRef, formatWindowId, isMisaoWindowId, muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, tmuxTargetFromMuxRef } from '@azito/shared';
+import { sessionKindOf } from './sessionKind';
 import type { Session, TmuxWindow } from '../pages/workspace/types';
 
 export type TerminalRef =
@@ -104,7 +105,7 @@ export function splitPaneSuffix(target: string): { windowPart: string; pane: num
 export function resolveTerminalRefFromTarget(serverName: string, target: string, ctx: TerminalTargetContext = {}): TargetResolution {
   const { windowPart, pane } = splitPaneSuffix(target);
   // A tmux server keeps its first-match naming; any other mux must name one window, or the server decides.
-  const found = ctx.sessions ? findSessionWindowByTarget(ctx.sessions, windowPart, ctx.muxKind !== 'tmux') : null;
+  const found = ctx.sessions ? findSessionWindowByTarget(ctx.sessions, windowPart, ctx.muxKind !== 'tmux', ctx.muxKind) : null;
   if (found === 'ambiguous') return { status: 'unresolved' };
   const win = found;
   if (win) {
@@ -137,16 +138,22 @@ export function terminalRefFromTarget(serverName: string, target: string, ctx: T
  * The session window a `<session>:<window id | index | name>` target (no pane suffix) names, as reported by the server.
  * An id or index matches exactly; a name must match one window when `strictNames` ('ambiguous' otherwise), so a
  * duplicated name never connects to an arbitrary one of them.
+ *
+ * A server can list a tmux and a misao session of the same name. A misao window id names its window in any session;
+ * an index or a name is read in the sessions of `kind` only (the mux a bare target means: the server's default),
+ * so it never lands on the other mux's window of the same index or name. Without `kind` every session is searched.
  */
-function findSessionWindowByTarget(sessions: Session[], windowPart: string, strictNames = false): TmuxWindow | 'ambiguous' | null {
+function findSessionWindowByTarget(sessions: Session[], windowPart: string, strictNames = false, kind?: MuxDriverKind): TmuxWindow | 'ambiguous' | null {
   const colonIdx = windowPart.indexOf(':');
   if (colonIdx < 0) return null;
   const sessionName = windowPart.slice(0, colonIdx);
   const winSpec = windowPart.slice(colonIdx + 1);
   for (const sess of sessions) {
     if (sess.name !== sessionName) continue;
+    const ofKind = kind === undefined || sessionKindOf(sess) === kind;
     const byId = sess.windows.find((w) => refWindowId(w.ref) === winSpec);
-    if (byId) return byId;
+    if (byId && (ofKind || isMisaoWindowId(winSpec))) return byId;
+    if (!ofKind) continue;
     const byIndex = sess.windows.find((w) => String(w.index) === winSpec);
     if (byIndex) return byIndex;
     const byName = sess.windows.filter((w) => w.name === winSpec);

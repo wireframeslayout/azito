@@ -1,12 +1,15 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Session } from '../../hooks/useServerManagement';
+import { hasMixedKinds, sessionKey, sessionKindOf } from '../../lib/sessionKind';
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
 import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
 import { Icon } from '../ui/Icon';
 import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
+import { Chip } from '../ui/Chip';
 import { PaneStateChip, DIMMED_PANE_OPACITY } from '../ui/PaneStateChip';
 
 interface WindowTreePopoverProps {
@@ -16,7 +19,8 @@ interface WindowTreePopoverProps {
   onSelect: (ref: TerminalRef) => void;
   onClose: () => void;
   onCreateSession: () => void;
-  onAddWindow: (sessionName: string) => void;
+  /** `kind`: the mux of the session (a tmux and a misao session can share a name). */
+  onAddWindow: (sessionName: string, kind: MuxDriverKind) => void;
   onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
   /** Deletes one pane (a stopped or exited one, from its row). `label` names it in the confirmation. */
   onDeletePane: (ref: TerminalRef, label: string, handle?: string) => void;
@@ -33,17 +37,19 @@ export default function WindowTreePopover({
   windowById, taskById,
 }: WindowTreePopoverProps) {
   const { t } = useTranslation('servers');
-  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(() => new Set(sessions.map((s) => s.name)));
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(() => new Set(sessions.map(sessionKey)));
 
-  const toggleSession = (name: string) => {
+  const toggleSession = (key: string) => {
     setExpandedSessions((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   };
 
   const totalWindows = sessions.reduce((sum, s) => sum + s.windows.length, 0);
+  // Only when two muxes are listed is the mux named on each session (it is what tells same-named sessions apart).
+  const showKind = hasMixedKinds(sessions);
   const selectedId = selectedRef ? terminalTabId(selectedRef) : null;
 
   const content = (
@@ -59,24 +65,27 @@ export default function WindowTreePopover({
       </div>
 
       {sessions.map((sess) => {
-        const expanded = expandedSessions.has(sess.name);
+        const key = sessionKey(sess);
+        const kind = sessionKindOf(sess);
+        const expanded = expandedSessions.has(key);
         return (
-          <div key={sess.name}>
+          <div key={key}>
             <TreeRow
               indent={0}
-              onClick={() => toggleSession(sess.name)}
+              onClick={() => toggleSession(key)}
               selected={false}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                 <Icon name="chevron-right" size={14} rotate={expanded ? 90 : 0} />
               </span>
               <span style={{ fontFamily: 'var(--mono)' }}>{sess.name}</span>
+              {showKind && <Chip>{t(kind === 'misao' ? 'overview.defaultMuxMisao' : 'overview.defaultMuxTmux')}</Chip>}
               <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
                 {sess.windows.length} windows
               </span>
               <span
                 style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); onAddWindow(sess.name); }}
+                onClick={(e) => { e.stopPropagation(); onAddWindow(sess.name, kind); }}
               >
                 <Icon name="plus" size={14} />Window
               </span>

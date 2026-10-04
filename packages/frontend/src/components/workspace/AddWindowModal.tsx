@@ -5,6 +5,7 @@ import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
 import { FormInput, FormSelect, baseInputStyle, Button, ModelSelect } from '../ui';
 import type { Server, Session } from '../../pages/workspace/types';
+import { findSessionByKey, hasMixedKinds, sessionKey, sessionOptionLabel, windowTargetSelectOptions } from '../../lib/sessionKind';
 
 interface AddWindowModalProps {
   open: boolean;
@@ -46,15 +47,9 @@ interface AddWindowModalProps {
   project: { workingDirectory?: string } | null;
 }
 
+/** tmux windows keep their `<session>:<index>` value; a misao window is offered by its id (an ordinal shifts, M-022). */
 function getWindowTargets(awSessionData: Record<string, Session[]>, awServer: string): { value: string; label: string }[] {
-  const sessions = awSessionData[awServer] || [];
-  const targets: { value: string; label: string }[] = [];
-  for (const s of sessions) {
-    for (const w of s.windows) {
-      targets.push({ value: `${s.name}:${w.index}`, label: `${s.name} / ${w.index}: ${w.name} (${w.panes.length} panes)` });
-    }
-  }
-  return targets;
+  return windowTargetSelectOptions(awSessionData[awServer] || []);
 }
 
 export default function AddWindowModal({
@@ -190,13 +185,13 @@ export default function AddWindowModal({
           <FormField label={t('addWindow.session')} hint={t('addWindow.sessionHint')}>
             <FormSelect value={awSelectedSession} onChange={(e) => setAwSelectedSession(e.target.value)}>
               <option value="">{t('addWindow.selectSession')}</option>
-              {(awSessionData[awServer] || []).map((s) => (
-                <option key={s.name} value={s.name}>{t('addWindow.sessionWindowCount', { name: s.name, count: s.windows.length })}</option>
+              {(awSessionData[awServer] || []).map((s, _i, all) => (
+                <option key={sessionKey(s)} value={sessionKey(s)}>{t('addWindow.sessionWindowCount', { name: sessionOptionLabel(s, hasMixedKinds(all)), count: s.windows.length })}</option>
               ))}
             </FormSelect>
           </FormField>
           {awSelectedSession && (() => {
-            const sess = (awSessionData[awServer] || []).find((s) => s.name === awSelectedSession);
+            const sess = findSessionByKey(awSessionData[awServer] || [], awSelectedSession);
             if (!sess) return null;
             return (
               <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-md)' }}>

@@ -9,6 +9,7 @@ import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
 import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime } from '@azito/shared';
 import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
+import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
 
 export interface Server {
   name: string;
@@ -51,6 +52,8 @@ export interface TmuxWindow {
 
 export interface Session {
   name: string;
+  /** The mux the session lives in (a tmux and a misao session can share a name). See lib/sessionKind.ts. */
+  kind?: MuxDriverKind;
   attached: boolean;
   windowCount: number;
   windows: TmuxWindow[];
@@ -80,10 +83,15 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
 
   const { servers, refresh: refreshStatuses } = useServerStatuses();
 
-  const isTmux = useCallback((serverName: string): boolean => {
+  // What a call without a kind means: the server's default mux (where a new session is created).
+  const defaultKindOf = useCallback((serverName: string): MuxDriverKind => {
     const srv = servers.find((s) => s.name === serverName);
-    return srv ? srv.defaultMux === 'tmux' : true;
+    return srv ? srv.defaultMux : 'tmux';
   }, [servers]);
+  // A session-level call acts on the session of `kind` (sessions of two muxes can share a name); omitted = default mux.
+  const sessionUsesMuxRoutes = useCallback((serverName: string, kind?: MuxDriverKind): boolean =>
+    usesMuxRoutes(kind ?? defaultKindOf(serverName)), [defaultKindOf]);
+  const kindQuery = (kind?: MuxDriverKind): string => (kind ? `?kind=${kind}` : '');
   const { showToast } = useToast();
   const confirm = useConfirm();
 
@@ -365,104 +373,104 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const createSession = useCallback(async (serverName: string) => {
     const name = prompt('New session name:');
     if (!name) return;
-    if (isTmux(serverName)) {
+    if (!sessionUsesMuxRoutes(serverName)) {
       const command = prompt('Initial command (optional):', '');
       await api(`/servers/${serverName}/sessions`, { method: 'POST', body: JSON.stringify({ name, command: command || undefined }) });
     } else {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll, sessionUsesMuxRoutes]);
 
-  const handleRenameSession = useCallback(async (serverName: string, sessionName: string) => {
+  const handleRenameSession = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
     const newName = prompt('Rename session:', sessionName);
     if (!newName || newName === sessionName) return;
-    if (isTmux(serverName)) {
+    if (!sessionUsesMuxRoutes(serverName, kind)) {
       await api(`/servers/${serverName}/sessions/${sessionName}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName, kind }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll, sessionUsesMuxRoutes]);
 
-  const handleKillSession = useCallback(async (serverName: string, sessionName: string) => {
+  const handleKillSession = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
     const ok = await confirm({ title: t('confirm.killSession'), message: t('confirm.killSessionMessage', { name: sessionName }), danger: true });
     if (!ok) return;
-    if (isTmux(serverName)) {
+    if (!sessionUsesMuxRoutes(serverName, kind)) {
       await api(`/servers/${serverName}/sessions/${sessionName}`, { method: 'DELETE' });
     } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}`, { method: 'DELETE' });
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}${kindQuery(kind)}`, { method: 'DELETE' });
     }
     tabs.filter((t) => t.id.startsWith(`terminal:${serverName}/${sessionName}:`)).forEach((t) => closeTab(t.id));
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
+  }, [refreshAll, tabs, closeTab, confirm, t, sessionUsesMuxRoutes]);
 
-  const handleAddWindow = useCallback(async (serverName: string, sessionName: string) => {
-    if (isTmux(serverName)) {
+  const handleAddWindow = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
+    if (!sessionUsesMuxRoutes(serverName, kind)) {
       await api(`/servers/${serverName}/sessions/${sessionName}/windows`, { method: 'POST' });
     } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll, sessionUsesMuxRoutes]);
 
   const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {
       await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else if (ref && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     } else {
       await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll]);
 
   const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string, windowId?: number, ref?: string) => {
     const newName = prompt('Rename window:', currentName);
     if (!newName || newName === currentName) return;
     if (windowId != null) {
       await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
-    } else if (ref && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     } else {
       await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll]);
 
   const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
     if (windowId != null && paneOrdinal != null) {
       await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
-    } else if (ref && paneOrdinal != null && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref) && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else {
       await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll]);
 
   const handleKillWindow = useCallback(async (serverName: string, target: string, windowId?: number, ref?: string) => {
     const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: target }), danger: true });
     if (!ok) return;
     if (windowId != null) {
       await api(`/windows/${windowId}/kill`, { method: 'DELETE' });
-    } else if (ref && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/kill`, { method: 'POST' });
     } else {
       await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
     }
     tabs.filter((t) => t.type === 'terminal' && t.serverName === serverName && t.target && (t.target === target || t.target.startsWith(`${target}.`))).forEach((t) => closeTab(t.id));
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
+  }, [refreshAll, tabs, closeTab, confirm, t]);
 
   const handleKillPane = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: target }), danger: true });
     if (!ok) return;
     if (windowId != null && paneOrdinal != null) {
       await api(`/windows/${windowId}/panes/${paneOrdinal}`, { method: 'DELETE' });
-    } else if (ref && paneOrdinal != null && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref) && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}`, { method: 'DELETE' });
     } else {
       await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
@@ -475,7 +483,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const matchingTab = tabs.find(matchTarget);
     if (matchingTab) closeTab(matchingTab.id);
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
+  }, [refreshAll, tabs, closeTab, confirm, t]);
 
   return {
     sessions,
