@@ -6,8 +6,9 @@ import type { IServerRepository, ServerConfig } from './Server';
 import { parseMuxInput } from './muxInput';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
-import { type MuxWorkspace } from '@azito/shared';
+import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { supportedMuxKinds } from './muxKinds';
+import type { MuxCapabilities, MuxDriverKind, MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -111,14 +112,30 @@ function redactSecrets(message: string): string {
 
 const MISAO_LOCAL_ONLY_ERROR = 'defaultMux "misao" is only supported on local servers';
 
-function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<string, unknown> {
-  const kind = srv.defaultMux;
+interface MuxKindStatus {
+  kind: MuxDriverKind;
+  driverAvailable: boolean;
+  caps: MuxCapabilities | null;
+  reason?: MuxDriverUnavailableReason;
+}
+
+function describeMuxKind(registry: MuxDriverRegistry, srv: ServerConfig, kind: MuxDriverKind): MuxKindStatus {
   try {
-    return { runtime: srv.muxRuntime, kind, driverAvailable: true, caps: registry.resolve(srv).caps };
+    return { kind, driverAvailable: true, caps: registry.resolveKind(kind, srv).caps };
   } catch (err) {
     if (!(err instanceof MuxDriverUnavailableError)) throw err;
-    return { runtime: srv.muxRuntime, kind, driverAvailable: false, caps: null, reason: err.reason };
+    return { kind, driverAvailable: false, caps: null, reason: err.reason };
   }
+}
+
+/**
+ * `kind`/`driverAvailable`/`caps`/`reason` describe the default mux. A server that can host more than one mux (a local
+ * server) also gets `kinds`, one entry per mux; a tmux-only server keeps its former shape.
+ */
+function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<string, unknown> {
+  const kinds = supportedMuxKinds(srv).map((kind) => describeMuxKind(registry, srv, kind));
+  const { kind, driverAvailable, caps, reason } = kinds.find((k) => k.kind === srv.defaultMux)!;
+  return { runtime: srv.muxRuntime, kind, driverAvailable, caps, ...(reason ? { reason } : {}), ...(kinds.length > 1 ? { kinds } : {}) };
 }
 
 export interface ServersRouteOptions {
@@ -1213,9 +1230,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         throw err;
       }
 
-      const isMisao = srv.defaultMux === 'misao';
-      const [muxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
-        isMisao ? checkMisao() : checkTmux(),
+      // One row per mux the server can use: its default mux always (missing = to be set up), another mux only when
+      // its driver serves the server now and the check finds it (it is optional, so its absence is not a setup gap).
+      const checkMux = (kind: MuxDriverKind) => (kind === 'misao' ? checkMisao() : checkTmux());
+      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || muxDriverRegistry.availabilityFor(kind, srv).available);
+      const [muxResults, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
+        Promise.all(muxKinds.map(checkMux)),
         checkNode(),
         checkHarness(),
         isRemote ? checkTailscale() : null,
@@ -1223,11 +1243,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         checkChromium(osName),
       ]);
 
-      const result: Record<string, unknown> = {
-        [isMisao ? 'misao' : 'tmux']: muxResult,
-        node: nodeResult,
-        aztHarness: harnessResult,
-      };
+      const result: Record<string, unknown> = {};
+      muxKinds.forEach((kind, i) => {
+        if (kind === srv.defaultMux || muxResults[i].installed) result[kind] = muxResults[i];
+      });
+      result.node = nodeResult;
+      result.aztHarness = harnessResult;
       if (tailscaleResult) result.tailscale = tailscaleResult;
       if (agentResult) result.agent = agentResult;
       if (chromiumResult) result.chromium = chromiumResult;

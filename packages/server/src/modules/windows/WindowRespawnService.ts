@@ -3,7 +3,7 @@ import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { muxRefFromTmuxTarget, type MuxRef, type PaneHandle } from '@azito/shared';
+import { muxRefFromTmuxTarget, type MuxDriverKind, type MuxRef, type PaneHandle } from '@azito/shared';
 import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IUnitRepository } from '../units/Unit';
@@ -40,7 +40,7 @@ import type { KeyedMutex } from '../../shared/keyedMutex';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { labelRegisteredWindow } from '../tmux/labelRegisteredWindow';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
-import { windowDisplayName, windowRefOf } from '../tmux/windowIdentity';
+import { windowDisplayName, windowKindOf, windowRefOf } from '../tmux/windowIdentity';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
@@ -264,7 +264,7 @@ export class WindowRespawnService {
     const allowedRoot = this.resolveAllowedRoot(win, server.name);
     const resolvedCwds = await this.resolveAllCwds(server, win, allowedRoot);
 
-    const supervise = shouldSupervise(server.type, win.windowType, server.defaultMux);
+    const supervise = shouldSupervise(server.type, win.windowType, windowKindOf(win));
     // task/unitId already resolved above for the execution gate — reused
     // here instead of re-querying the repositories a second time.
     const supervision: SupervisionContext = { supervise, taskId: win.taskId, unitId, windowId };
@@ -334,7 +334,9 @@ export class WindowRespawnService {
       if (!windowPart) throw new Error(`Invalid tmuxTarget: ${currentWin.tmuxTarget}`);
       // The name the re-created window is opened with. tmux: the window part is the name. misao: it is the
       // window id, which a new window cannot reuse — the row's label (its display name) is carried over.
-      const openName = server.defaultMux === 'misao'
+      // The window is re-created in the mux it lived in (its row's kind), not the server's default mux.
+      const windowKind = windowKindOf(currentWin);
+      const openName = windowKind === 'misao'
         ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}` : 'win'))
         : windowPart;
 
@@ -420,12 +422,13 @@ export class WindowRespawnService {
 
         const driver = this.resolveDriver(freshServer);
         const workspaces = await driver.listWorkspaces(freshServer);
-        const workspaceExists = workspaces.some((s) => s.name === sessionName);
-        const workspace = workspaces.find((s) => s.name === sessionName);
-        const oldRef = windowRefOf(currentWin, driver.kind);
+        // Only a workspace of the window's own mux counts (a same-named session of the other mux is another one).
+        const workspace = workspaces.find((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
+        const workspaceExists = workspace !== undefined;
+        const oldRef = windowRefOf(currentWin, windowKind);
         // misao: the window id (mux_ref) decides, in whichever workspace the window is now; the
         // window part of tmux_target is an id there, not a name. tmux matches the name in its session.
-        const windowAlive = driver.kind === 'misao'
+        const windowAlive = windowKind === 'misao'
           ? await driver.windowExists(freshServer, oldRef)
           : workspaceExists && (workspace?.windows.some((w: { name: string }) => w.name === windowPart) ?? false);
 
@@ -440,13 +443,13 @@ export class WindowRespawnService {
         const doCreate = async (fs: ServerConfig, env: Record<string, string>) => {
           const createDriver = this.resolveDriver(fs);
           const freshWorkspaces = await createDriver.listWorkspaces(fs);
-          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName);
+          const freshWorkspaceExists = freshWorkspaces.some((s) => s.name === sessionName && (s.kind ?? windowKind) === windowKind);
           createdViaNewSession = !freshWorkspaceExists;
           if (!freshWorkspaceExists) {
-            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env });
+            const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind });
             return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: openName };
           }
-          const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env });
+          const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind });
           return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? openName };
         };
 
@@ -475,7 +478,7 @@ export class WindowRespawnService {
       await sleep(createdViaNewSession ? 500 : 300);
 
       const restoreDriver = this.resolveDriver(respawnServer);
-      const newRef: MuxRef = ref ?? { kind: restoreDriver.kind, workspace: sessionName, window: newName };
+      const newRef: MuxRef = ref ?? { kind: windowKind, workspace: sessionName, window: newName };
       // tmux_target, mux_ref and (primary window) task.tmuxWindow all name the new window by the same
       // identity — for misao its window id, never the display name carried in the label.
       const baseTarget = muxWindowTarget(newRef);
@@ -572,7 +575,7 @@ export class WindowRespawnService {
     taskId: number,
     agentSessionId: string,
     serverName: string,
-  ): Promise<{ windowId: number; tmuxTarget: string } | null> {
+  ): Promise<{ windowId: number; tmuxTarget: string; kind: MuxDriverKind } | null> {
     const windows = this.windowRepo.findByTask(taskId);
     const server = this.serverRepo.findByName(serverName);
     if (!server) return null;
@@ -611,7 +614,7 @@ export class WindowRespawnService {
       if (rootPids.length === 0) continue;
 
       if (argsContainSessionId(psEntries, rootPids, agentSessionId)) {
-        return { windowId: win.id, tmuxTarget: win.tmuxTarget };
+        return { windowId: win.id, tmuxTarget: win.tmuxTarget, kind: windowKindOf(win) };
       }
     }
 
@@ -875,7 +878,7 @@ export class WindowRespawnService {
       try {
         const paneId = await legacyDriver.resolvePane(server, legacyRef, 1);
         const resumeCommand = `claude --resume ${task.agentSessionId} --dangerously-skip-permissions --strict-mcp-config`;
-        const isSupervised = shouldSupervise(server.type, 'agent', server.defaultMux);
+        const isSupervised = shouldSupervise(server.type, 'agent', legacyRef.kind);
         if (isSupervised) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }

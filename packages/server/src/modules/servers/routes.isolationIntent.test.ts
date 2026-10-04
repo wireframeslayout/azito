@@ -104,13 +104,14 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // isolation flow unchanged. The dedicated C-1 describe block below
     // overrides this to false per-test.
     scopedAuthEnabled: true,
-    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspacesStrict: vi.fn(async () => []), caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
+    muxDriverRegistry: makeMuxRegistry(vi.fn(async () => [])),
     ...overrides,
   };
 }
 
 function makeMuxRegistry(listWorkspacesStrict: (...args: unknown[]) => Promise<unknown[]>): ServersRouteOptions['muxDriverRegistry'] {
-  return { resolve: vi.fn(() => ({ listWorkspacesStrict, caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
+  const driver = { listWorkspacesStrict, caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } };
+  return { resolve: vi.fn(() => driver), resolveKind: vi.fn(() => driver), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
 }
 
 async function buildApp(opts: ServersRouteOptions) {

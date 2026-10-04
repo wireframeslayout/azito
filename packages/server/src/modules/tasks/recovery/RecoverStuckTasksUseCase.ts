@@ -21,7 +21,7 @@ import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
 import type { PaneHandle } from '@azito/shared';
 import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Window';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
-import { taskWindowRef } from '../../tmux/windowIdentity';
+import { taskWindowRef, windowKindOf } from '../../tmux/windowIdentity';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -197,20 +197,30 @@ export class RecoverStuckTasksUseCase {
     if (!server) return;
     if (server.type !== 'local' && !usesHttpSignalPath(unit.workerExecutionMode)) return;
 
+    const skipUnavailable = (err: MuxDriverUnavailableError): void => {
+      if (isWaitingForDaemon(err)) this.pendingForDaemon.add(task.id);
+      this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
+    };
     let driver: IMuxClient;
     try {
       driver = this.muxDriverRegistry.resolve(server);
     } catch (err) {
       if (!(err instanceof MuxDriverUnavailableError)) throw err;
-      if (isWaitingForDaemon(err)) this.pendingForDaemon.add(task.id);
-      this.logger.warn(`Recovery skip: mux driver unavailable for task ${task.id} on server ${resolvedServerName} (${err.kind}: ${err.reason})`);
+      skipUnavailable(err);
       return;
     }
 
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     // The primary window row's mux_ref names the window (misao: its id); task.tmuxWindow is only the fallback.
+    // The window lives in its row's mux (no row: the server's default mux), which must be the one that is available.
     const primaryWin = this.windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
-    const ref = taskWindowRef({ tmuxWindow: task.tmuxWindow || `task-${task.id}` }, primaryWin, muxWorkspace, driver.kind)!;
+    const windowKind = primaryWin ? windowKindOf(primaryWin) : server.defaultMux;
+    const kindAvailability = this.muxDriverRegistry.availabilityFor(windowKind, server);
+    if (!kindAvailability.available) {
+      skipUnavailable(new MuxDriverUnavailableError(windowKind, kindAvailability.reason));
+      return;
+    }
+    const ref = taskWindowRef({ tmuxWindow: task.tmuxWindow || `task-${task.id}` }, primaryWin, muxWorkspace, windowKind)!;
 
     let handle: PaneHandle;
     try {

@@ -8,6 +8,7 @@ import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
 import { openDatabase } from '../shared/db/Database';
 import { open } from '../shared/crypto/SecretBox';
+import { parseMuxRef } from '@azito/shared';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import type { ServerConfig, MuxRuntime } from '../modules/servers/Server';
@@ -402,8 +403,8 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
     db = openDatabase(paths.db);
 
     const taskWindows = db
-      .prepare("SELECT task_id AS taskId, server_name AS serverName, tmux_target AS tmuxTarget FROM windows WHERE owner_type = 'task'")
-      .all() as { taskId: number; serverName: string; tmuxTarget: string }[];
+      .prepare("SELECT task_id AS taskId, server_name AS serverName, tmux_target AS tmuxTarget, mux_ref AS muxRef FROM windows WHERE owner_type = 'task'")
+      .all() as { taskId: number; serverName: string; tmuxTarget: string; muxRef: string | null }[];
     if (taskWindows.length === 0) {
       return { ok: true, label, detail: 'タスク所有ウィンドウの登録がありません（ハブ管理下の全サーバー）' };
     }
@@ -455,7 +456,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       return config;
     }
 
-    const tmux = new TmuxClient(new TransportFactory('', { muxAvailability: () => ({ available: false, reason: 'driver_not_registered' }) }), '', '', '', '');
+    const tmux = new TmuxClient(new TransportFactory(''), '', '', '', '');
 
     const alive: string[] = [];
     const unverifiable: string[] = [];
@@ -477,8 +478,9 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       }
       // Only tmux panes can be probed here; a window of another mux must never be judged by `tmux list-panes`
       // ("can't find" there says nothing about it). Checking it through IMuxClient is future work.
-      if (config.defaultMux !== 'tmux') {
-        unverifiable.push(`${descriptor}（${config.defaultMux} 窓は未検査）`);
+      const windowKind = w.muxRef ? parseMuxRef(w.muxRef).kind : 'tmux';
+      if (windowKind !== 'tmux') {
+        unverifiable.push(`${descriptor}（${windowKind} 窓は未検査）`);
         continue;
       }
       const { alive: isAlive, verified } = await tmux.checkPaneLiveness(config, w.tmuxTarget);

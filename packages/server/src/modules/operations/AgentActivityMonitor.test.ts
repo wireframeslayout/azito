@@ -71,7 +71,8 @@ function mockRegistry(
   captureScreen: ReturnType<typeof vi.fn>,
   resolvePane: ReturnType<typeof vi.fn> = vi.fn().mockResolvedValue('resolved-pane'),
 ): MuxDriverRegistry {
-  return { resolve: () => ({ listWorkspaces, captureScreen, resolvePane }) } as unknown as MuxDriverRegistry;
+  const listWorkspacesDetailed = async (server: unknown) => ({ workspaces: await (listWorkspaces as (s: unknown) => Promise<unknown>)(server), unavailable: [] });
+  return { resolve: () => ({ listWorkspaces, listWorkspacesDetailed, captureScreen, resolvePane }) } as unknown as MuxDriverRegistry;
 }
 
 describe('AgentActivityMonitor', () => {
@@ -2691,15 +2692,15 @@ describe('AgentActivityMonitor', () => {
       expect(monitor.snapshot()).toEqual([expect.objectContaining({ running: true, status: 'blocked' })]);
     });
 
-    it('does not guess a tmux pane for a misao window without a mux_ref', async () => {
+    it('reads a row without a mux_ref as a tmux window, not through the misao path, on a misao-default server', async () => {
       arrange({ muxRef: undefined });
       screen = BLOCKED_SCREEN;
       monitor.recordMuxSignal('local', 'azito:agent-1', 'working');
       await drain();
 
-      expect(resolvePane).not.toHaveBeenCalled();
+      // The window's own kind decides (#311): rows that predate mux_ref are tmux, whatever the server's default mux.
+      for (const [, ref] of resolvePane.mock.calls) expect(ref).toMatchObject({ kind: 'tmux' });
       expect(monitor.snapshot()[0]).toEqual(expect.objectContaining({ running: true }));
-      expect(monitor.snapshot()[0].status).toBeUndefined();
     });
 
     it('exposes the mux material (status, rule name, time) in diagnostics', async () => {

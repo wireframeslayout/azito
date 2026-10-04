@@ -66,7 +66,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
   ) {}
 
   async launch(ctx: WorkerLaunchContext): Promise<string> {
-    const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.server.defaultMux)
+    const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.windowKind)
       ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
           server: ctx.server,
           target: ctx.supervisorTarget,

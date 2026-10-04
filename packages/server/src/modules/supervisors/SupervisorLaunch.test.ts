@@ -7,22 +7,27 @@ import { resolveSupervisorCommand } from './SupervisorPath';
 
 describe('shouldSupervise', () => {
   it('is true for agent windows on local servers', () => {
-    expect(shouldSupervise('local', 'agent')).toBe(true);
+    expect(shouldSupervise('local', 'agent', 'tmux')).toBe(true);
   });
 
   it('is true for agent windows on agent servers', () => {
-    expect(shouldSupervise('agent', 'agent')).toBe(true);
+    expect(shouldSupervise('agent', 'agent', 'tmux')).toBe(true);
   });
 
   it('is false for terminal windows on local servers', () => {
-    expect(shouldSupervise('local', 'terminal')).toBe(false);
+    expect(shouldSupervise('local', 'terminal', 'tmux')).toBe(false);
   });
 
   it('is false for terminal windows on agent servers', () => {
-    expect(shouldSupervise('agent', 'terminal')).toBe(false);
+    expect(shouldSupervise('agent', 'terminal', 'tmux')).toBe(false);
   });
 
   it('is false for agent windows on a misao mux', () => {
+    expect(shouldSupervise('local', 'agent', 'misao')).toBe(false);
+  });
+
+  it('is decided by the window kind, so a tmux window stays supervised wherever the server default points', () => {
+    expect(shouldSupervise('local', 'agent', 'tmux')).toBe(true);
     expect(shouldSupervise('local', 'agent', 'misao')).toBe(false);
   });
 

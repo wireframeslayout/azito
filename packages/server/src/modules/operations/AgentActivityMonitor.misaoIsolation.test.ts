@@ -25,7 +25,9 @@ function server(name: string, defaultMux: ServerConfig['defaultMux']): ServerCon
 describe('AgentActivityMonitor with a misao server whose driver is unavailable', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('keeps tracking the tmux server, never throws, and warns once about the misao server', async () => {
+  // #311: a local misao-default server also hosts tmux, so its tmux side is still listed; only its misao windows are
+  // unreadable, and that is warned about once.
+  it('keeps tracking the tmux windows, never throws, and warns once about the misao side', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
     const listWorkspaces = vi.fn().mockResolvedValue([]);
@@ -55,7 +57,7 @@ describe('AgentActivityMonitor with a misao server whose driver is unavailable',
       payload: expect.objectContaining({ serverName: 'local', target: 'azito:task-10', running: true, source: 'operation' }),
     }));
     expect(listWorkspaces).toHaveBeenCalledWith(servers.local);
-    expect(listWorkspaces).not.toHaveBeenCalledWith(servers.misao1);
+    expect(listWorkspaces).toHaveBeenCalledWith(servers.misao1);
     const misaoWarnings = warn.mock.calls.filter((c) => String(c[0]).includes('misao1'));
     expect(misaoWarnings).toHaveLength(1);
     expect(String(misaoWarnings[0][0])).toContain('driver_not_registered');

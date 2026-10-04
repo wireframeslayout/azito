@@ -4607,7 +4607,7 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     const waker = (useCase as any).primaryWindowWaker;
     // Session is running in a DIFFERENT window (id=99).
     (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue({
-      windowId: 99, tmuxTarget: 'azito:task-7-alt',
+      windowId: 99, tmuxTarget: 'azito:task-7-alt', kind: 'tmux',
     });
 
     // The target window's workspace must exist so resolvePane works.
@@ -4736,7 +4736,7 @@ describe('ExecuteTaskUseCase.followUp — primary window wake (Issue #274)', () 
     const waker = (useCase as any).primaryWindowWaker;
     // Session IS running in window 88.
     (waker.findRunningSession as ReturnType<typeof vi.fn>).mockResolvedValue({
-      windowId: 88, tmuxTarget: 'azito:task-10-orphan',
+      windowId: 88, tmuxTarget: 'azito:task-10-orphan', kind: 'tmux',
     });
 
     (tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue([{

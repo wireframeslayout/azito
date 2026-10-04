@@ -23,6 +23,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
+import { windowKindOf } from '../tmux/windowIdentity';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -57,9 +58,10 @@ export interface WindowsRouteOptions {
 const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts, done) => {
   const { windowRepo, projectRepo, taskRepo, tmux, serverRepo, respawnService, sessionStrategyFactory, sessionCaptureService, supervisorRegistry, windowActivityStatusService } = opts;
   const driverFor = (srv: ServerConfig): IMuxClient => opts.muxDriverRegistry.resolve(srv);
-  const muxUnavailableBody = (srv: ServerConfig): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
-    const availability = opts.muxDriverRegistry.availability(srv);
-    return availability.available ? null : { error: 'mux_driver_unavailable', kind: srv.defaultMux, reason: availability.reason };
+  /** The registered window's mux (its ref's kind) must be able to serve the server right now. */
+  const muxUnavailableBody = (srv: ServerConfig, kind: MuxDriverKind): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
+    const availability = opts.muxDriverRegistry.availabilityFor(kind, srv);
+    return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
   };
 
   // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
@@ -117,7 +119,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
       if (!givenRef && srv && srv.defaultMux !== 'tmux')
         return reply.status(400).send({ error: 'ref required for this server' });
-      const unavailable = srv ? muxUnavailableBody(srv) : null;
+      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? srv.defaultMux) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
@@ -253,7 +255,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
       if (!givenRef && srv && srv.defaultMux !== 'tmux')
         return reply.status(400).send({ error: 'ref required for this server' });
-      const unavailable = srv ? muxUnavailableBody(srv) : null;
+      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? srv.defaultMux) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
@@ -397,7 +399,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         }
       }
 
-      const supervised = shouldSupervise(srv.type, win.windowType, srv.defaultMux);
+      const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));
       const paneHandle = await driverFor(srv).resolvePane(srv, win.muxRef ?? muxRefFromTmuxTarget(win.tmuxTarget), 1);
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
@@ -540,7 +542,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const win = windowRepo.findByServerAndTarget(serverName, tmuxTarget);
       const srv = serverRepo.findByName(serverName);
-      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType, srv.defaultMux);
+      const isSupervised = win !== undefined && srv !== null && shouldSupervise(srv.type, win.windowType, windowKindOf(win));
 
       const entry = supervisorRegistry
         .snapshot()

@@ -8,14 +8,24 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef } from '@azito/shared';
+import { windowKey, asPaneHandle, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
+import { serverSupportsMux } from '../servers/muxKinds';
 
-function workspacesToTmuxSessions(workspaces: MuxWorkspace[]): TmuxSession[] {
+/** The `sessionErrors` entry of one mux of a server that could not be listed while the server's other muxes were. */
+function kindSessionErrorKey(serverName: string, kind: MuxDriverKind): string {
+  return `${serverName}\u0000${kind}`;
+}
+
+/** A listed session plus the mux it lives in (stamped by the routing driver; a tmux and a misao session can share a name). */
+type LiveSession = TmuxSession & { kind?: MuxDriverKind };
+
+function workspacesToTmuxSessions(workspaces: MuxWorkspace[]): LiveSession[] {
   return workspaces.map(ws => ({
+    kind: ws.kind,
     name: ws.name,
     attached: ws.attached,
     windowCount: ws.windowCount,
@@ -79,7 +89,7 @@ function extractPaneIndex(windowSpec: string, windowIndex: number, windowName: s
  * Falls back to the legacy `parseWindowTarget` → session name → windowSpec
  * path when no `muxRef` is given or the ref-based search finds nothing.
  */
-export function findLiveWindow(sessions: TmuxSession[], target: string, muxRef?: MuxRef): TmuxWindow | null {
+export function findLiveWindow(sessions: LiveSession[], target: string, muxRef?: MuxRef): TmuxWindow | null {
   if (muxRef) {
     for (const s of sessions) {
       for (const w of s.windows) {
@@ -87,8 +97,10 @@ export function findLiveWindow(sessions: TmuxSession[], target: string, muxRef?:
       }
     }
   }
+  // Name matching only within the window's own mux (rows without a ref are tmux).
+  const kind = muxRef?.kind ?? 'tmux';
   const { sessionName, windowSpec } = parseWindowTarget(target);
-  const session = sessions.find((s) => s.name === sessionName);
+  const session = sessions.find((s) => s.name === sessionName && (s.kind === undefined || s.kind === kind));
   if (!session) return null;
   return session.windows.find((w) => windowSpecMatches(windowSpec, w.index, w.name)) ?? null;
 }
@@ -348,8 +360,9 @@ async function runWithConcurrency(tasks: Array<() => Promise<void>>, limit: numb
   await Promise.all(workers);
 }
 
-function isMisaoServer(server: ServerConfig): boolean {
-  return server.defaultMux === 'misao';
+/** Whether the window lives in the misao mux: told by the window's own ref, not by the server's default mux. */
+function isMisaoWindow(w: Pick<AgentWindow, 'muxRef'>): boolean {
+  return w.muxRef?.kind === 'misao';
 }
 
 /**
@@ -359,11 +372,10 @@ function isMisaoServer(server: ServerConfig): boolean {
  * unreadable (null), never guessed from a tmux target.
  */
 function screenTargetFor(
-  server: ServerConfig,
   w: AgentWindow,
   paneIndex: number | null,
 ): { ref: MuxRef; ordinal: number } | null {
-  if (isMisaoServer(server)) return w.muxRef ? { ref: w.muxRef, ordinal: 1 } : null;
+  if (isMisaoWindow(w)) return w.muxRef ? { ref: w.muxRef, ordinal: 1 } : null;
   return { ref: w.muxRef ?? muxRefFromTmuxTarget(w.tmuxTarget), ordinal: paneIndex ?? 1 };
 }
 
@@ -662,7 +674,7 @@ export class AgentActivityMonitor {
 
   // Last MuxDriverUnavailableError reason logged per server, so a server whose driver is
   // unavailable is reported once (and again only if the reason changes) instead of every tick.
-  private unavailableDriverReasons = new Map<string, MuxDriverUnavailableReason>();
+  private unavailableDriverReasons = new Map<string, string>();
 
   constructor(
     private executeTaskUseCase: ExecuteTaskUseCase,
@@ -1201,14 +1213,12 @@ export class AgentActivityMonitor {
       }
     }
 
-    // Filter candidates whose mux_ref.kind doesn't match the server's runtime.
-    // These are stale rows whose mux_ref.kind doesn't match the server's runtime.
+    // Filter candidates whose mux_ref.kind is a kind the server cannot host (stale rows).
     const filteredCandidates = candidates.filter((w) => {
       if (!w.muxRef) return true;
       const server = servers.get(w.serverName);
       if (!server) return true;
-      const serverKind = server.defaultMux;
-      if (w.muxRef.kind !== serverKind) {
+      if (!serverSupportsMux(server, w.muxRef.kind)) {
         const key = windowKey(w.serverName, w.tmuxTarget);
         reasons.set(key, 'offline');
         decide(key, w.serverName, w.tmuxTarget, 'none', 'offline', w.taskId ?? undefined);
@@ -1220,7 +1230,7 @@ export class AgentActivityMonitor {
     // One listWorkspaces call per server (not one per candidate/operation window),
     // queried in parallel so one slow/offline server cannot stretch the tick past
     // the poll interval.
-    const sessionsByServer = new Map<string, TmuxSession[]>();
+    const sessionsByServer = new Map<string, LiveSession[]>();
     // Servers whose listing *failed*, as opposed to legitimately returning no
     // sessions. Only the Tier 0 idle refinement reads this, to tell "this pane
     // is gone" apart from "this tick could not look" (see refinedStatusFor).
@@ -1229,9 +1239,14 @@ export class AgentActivityMonitor {
       if (!server) { sessionsByServer.set(serverName, []); return; }
       try {
         const driver = this.muxDriverRegistry.resolve(server);
-        const workspaces = await driver.listWorkspaces(server);
+        const { workspaces, unavailable } = await driver.listWorkspacesDetailed(server);
         sessionsByServer.set(serverName, workspacesToTmuxSessions(workspaces));
-        this.unavailableDriverReasons.delete(serverName);
+        // A mux that could not be listed leaves its windows unreadable this tick, not gone.
+        for (const u of unavailable) {
+          sessionErrors.add(kindSessionErrorKey(serverName, u.kind));
+          this.warnKindUnavailableOnChange(serverName, u.kind, u.reason);
+        }
+        if (unavailable.length === 0) this.unavailableDriverReasons.delete(serverName);
       } catch (err) {
         sessionsByServer.set(serverName, []);
         sessionErrors.add(serverName);
@@ -1256,7 +1271,7 @@ export class AgentActivityMonitor {
       if (!window) continue;
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const pi = extractPaneIndex(windowSpec, window.index, window.name);
-      const blocked = isMisaoServer(server)
+      const blocked = isMisaoWindow(w)
         ? await this.isMisaoScreenBlocked(server, w, window, key)
         : await this.classifyCandidateState(server, w, window, pi, key) === 'blocked';
       if (blocked) {
@@ -1349,7 +1364,7 @@ export class AgentActivityMonitor {
             const muxServer = servers.get(w.serverName);
             // The Stop hook completion is recorded here and dropped again by the screen check
             // below when the pane turns out to be blocked, so blocked keeps priority.
-            const isMisaoMux = !!muxServer && isMisaoServer(muxServer);
+            const isMisaoMux = !!muxServer && isMisaoWindow(w);
             const muxHook = this.hookStates.get(key);
             if (isMisaoMux && muxState.status === 'idle' && muxHook?.status === 'running'
               && Date.now() - muxState.at < MISAO_STOP_HOOK_GRACE_MS) {
@@ -1384,7 +1399,7 @@ export class AgentActivityMonitor {
               stopConfirmed ? 'tier1_hook_stop' : undefined);
             // A misao pane whose process exited cannot be waiting on the user, so its screen is not
             // consulted: a blocked verdict would drop the completion recorded above.
-            if (muxState.status === 'done' && muxServer && isMisaoServer(muxServer)) continue;
+            if (muxState.status === 'done' && muxServer && isMisaoWindow(w)) continue;
             tier0IdlePending.set(key, {
               window: w,
               entry: {
@@ -1410,7 +1425,7 @@ export class AgentActivityMonitor {
             if (server) {
               const sessions = sessionsByServer.get(w.serverName) ?? [];
               const muxWindow = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
-              if (muxWindow && isMisaoServer(server)) {
+              if (muxWindow && isMisaoWindow(w)) {
                 // The misao core never reports blocked; only the screen can.
                 if (await this.isMisaoScreenBlocked(server, w, muxWindow, key)) {
                   effectiveMuxStatus = 'blocked';
@@ -1743,7 +1758,7 @@ export class AgentActivityMonitor {
     const activityAdvanced = prevHistory !== undefined && window.activity > prevHistory.lastActivity;
     if (!activityAdvanced) return 'unknown';
 
-    const target = screenTargetFor(server, w, paneIndex);
+    const target = screenTargetFor(w, paneIndex);
     if (!target) return 'unknown';
     const screenTail = await this.captureScreenTail(server, target.ref, target.ordinal);
     if (screenTail === null) return 'unknown';
@@ -1835,7 +1850,7 @@ export class AgentActivityMonitor {
     if (!server) return null;
     // The snapshot this tick's window lookup would use is missing, so "window
     // not found" below would be a lie — treat it as unreadable.
-    if (sessionErrors.has(w.serverName)) return this.heldStatusOnUnknown(key);
+    if (sessionErrors.has(w.serverName) || sessionErrors.has(kindSessionErrorKey(w.serverName, w.muxRef?.kind ?? 'tmux'))) return this.heldStatusOnUnknown(key);
     // A successful listing that does not contain the window means the pane is
     // genuinely gone; nothing is waiting on the user there.
     const window = findLiveWindow(sessionsByServer.get(w.serverName) ?? [], w.tmuxTarget, w.muxRef);
@@ -1917,7 +1932,7 @@ export class AgentActivityMonitor {
     paneIndex: number | null,
   ): Promise<ScreenVerdict> {
     if (!(CLASSIFIABLE_AGENT_TYPES as readonly string[]).includes(w.workerType)) return 'unknown';
-    const target = screenTargetFor(server, w, paneIndex);
+    const target = screenTargetFor(w, paneIndex);
     if (!target) return 'unknown';
     const screenTail = await this.captureScreenTail(server, target.ref, target.ordinal);
     if (screenTail === null) return 'unknown';
@@ -2009,6 +2024,14 @@ export class AgentActivityMonitor {
     const paneTitle = getRelevantPaneTitle(window.panes, paneIndex);
     const titleOnly = classifyPaneState({ paneTitle, agentType: w.workerType });
     return titleOnly === 'working' || titleOnly === 'idle';
+  }
+
+  /** Like warnDriverUnavailableOnChange, for one mux of a server whose other muxes were listed. */
+  private warnKindUnavailableOnChange(serverName: string, kind: MuxDriverKind, reason: string): void {
+    const warned = `${kind}: ${reason}`;
+    if (this.unavailableDriverReasons.get(serverName) === warned) return;
+    this.unavailableDriverReasons.set(serverName, warned);
+    console.warn(`[agent-activity] mux driver unavailable for server ${serverName} (${warned}); skipping its ${kind} windows`);
   }
 
   private warnDriverUnavailableOnChange(serverName: string, err: unknown): void {

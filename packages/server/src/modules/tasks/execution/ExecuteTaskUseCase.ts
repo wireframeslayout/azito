@@ -53,9 +53,9 @@ import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
-import { type MuxRef, type PaneHandle } from '@azito/shared';
+import { type MuxDriverKind, type MuxRef, type PaneHandle } from '@azito/shared';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
-import { isSameWindow, taskWindowRef, windowRefOf } from '../../tmux/windowIdentity';
+import { isSameWindow, taskWindowRef, windowKindOf, windowRefOf } from '../../tmux/windowIdentity';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -890,21 +890,23 @@ export class ExecuteTaskUseCase {
           if (currentTask.tmuxWindow) {
             const killDriver = this.resolveDriver(freshServer);
             const preWorkspaces = await killDriver.listWorkspaces(freshServer);
+            // The old window lives in the mux its primary row says (rows without one are tmux; no row = the default mux).
+            const primaryRow = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
+            const oldKind = primaryRow ? windowKindOf(primaryRow) : killDriver.kind;
             // misao stores the window id in tmuxWindow (and the primary row's mux_ref) and windows
             // can be renamed across workspaces: match the id exactly, in every workspace. tmux
-            // matches the window name inside the task's workspace only.
+            // matches the window name inside the task's (tmux) workspace only.
             const findMisaoOldWindow = () => {
-              const primaryRow = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
-              const oldRef = taskWindowRef(currentTask, primaryRow, muxWorkspace, killDriver.kind);
+              const oldRef = taskWindowRef(currentTask, primaryRow, muxWorkspace, oldKind);
               return preWorkspaces.flatMap((ws) => ws.windows).find((w) => oldRef !== null && w.ref !== undefined && isSameWindow(w.ref, oldRef));
             };
-            const oldWin = killDriver.kind === 'misao'
+            const oldWin = oldKind === 'misao'
               ? findMisaoOldWindow()
-              : preWorkspaces.find((ws) => ws.name === muxWorkspace)?.windows.find((w) => w.name === currentTask.tmuxWindow);
+              : preWorkspaces.find((ws) => ws.name === muxWorkspace && (ws.kind ?? oldKind) === oldKind)?.windows.find((w) => w.name === currentTask.tmuxWindow);
             await confirmOldWindowGone(
               killDriver,
               freshServer,
-              oldWin ? { kind: 'window' as const, ref: oldWin.ref ?? { kind: killDriver.kind, workspace: muxWorkspace, window: String(oldWin.index) } } : null,
+              oldWin ? { kind: 'window' as const, ref: oldWin.ref ?? { kind: oldKind, workspace: muxWorkspace, window: String(oldWin.index) } } : null,
               task.id,
             );
             if (oldWin) await sleep(300);
@@ -1393,13 +1395,14 @@ export class ExecuteTaskUseCase {
         }
       }
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
-      if (shouldSupervise(server.type, windowType, server.defaultMux)) {
+      if (shouldSupervise(server.type, windowType, ref.kind)) {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
       const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
       try {
         const actualCommand = await runtime.launch({
           server, handle, driver: executeDriver, supervisorTarget: windowTarget, taskId, unitId,
+          windowKind: ref.kind,
           windowId: launchPrimaryWin?.id,
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
@@ -1585,7 +1588,7 @@ export class ExecuteTaskUseCase {
 
     let wakeResult: { tmuxTarget: string } | null = null;
     // Track if we found the session running in a different window.
-    let runningInWindow: { windowId: number; tmuxTarget: string } | null = null;
+    let runningInWindow: { windowId: number; tmuxTarget: string; kind: MuxDriverKind } | null = null;
 
     // 1. Duplicate session detection: check regardless of whether a primary
     //    window record exists (Finding 4 — a task can have agentSessionId
@@ -1675,6 +1678,8 @@ export class ExecuteTaskUseCase {
     // specific generation to revoke — see that branch's comment); stays null
     // when the `windowExists` result is true, since nothing was rotated.
     let windowName: string;
+    // The mux the follow-up's window lives in (an existing window keeps its own; a new one is in the default mux).
+    let windowKind: MuxDriverKind;
     let windowExists: boolean;
     let tokenId: number | null;
     let createdServer: ServerConfig;
@@ -1686,13 +1691,13 @@ export class ExecuteTaskUseCase {
       // the lock, and re-checking tmux for it there too, means the decision
       // is always made against the latest state any prior queued rotation
       // for this task (execute()/followUp()/respawn()) actually persisted.
-      ({ windowName, windowExists, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
+      ({ windowName, windowKind, windowExists, tokenId, server: createdServer } = await runExclusiveForTask(taskId, async () => {
         // Issue #274: if a running session was found in a different window,
         // use that window directly.
         if (runningInWindow) {
           const parts = runningInWindow.tmuxTarget.split(':');
           const runningWindowName = parts[1]?.split('.')[0] || runningInWindow.tmuxTarget;
-          return { windowName: runningWindowName, windowExists: true, tokenId: null, server };
+          return { windowName: runningWindowName, windowKind: runningInWindow.kind, windowExists: true, tokenId: null, server };
         }
 
         // Issue #274: if we woke a sleeping primary window, re-read the
@@ -1702,7 +1707,7 @@ export class ExecuteTaskUseCase {
           if (freshWin && !freshWin.sleeping) {
             // Verify the woken window actually exists in tmux.
             const wakeDriver = this.resolveDriver(server);
-            const wakeRef = windowRefOf(freshWin, wakeDriver.kind);
+            const wakeRef = windowRefOf(freshWin, windowKindOf(freshWin));
             let wokenAlive = false;
             try {
               wokenAlive = await wakeDriver.windowExists(server, wakeRef);
@@ -1717,7 +1722,7 @@ export class ExecuteTaskUseCase {
 
               const wokenWindowName = wakeRef.window;
               this.taskRepo.update(taskId, { tmuxWindow: wokenWindowName } as Partial<Task>);
-              return { windowName: wokenWindowName, windowExists: false, tokenId: null, server };
+              return { windowName: wokenWindowName, windowKind: wakeRef.kind, windowExists: false, tokenId: null, server };
             }
           }
           // Wake result is stale — fall through to the standard path.
@@ -1731,18 +1736,19 @@ export class ExecuteTaskUseCase {
         // is respawned or renamed independently.
         const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
         const fuDriver = this.resolveDriver(server);
-        const candidateRef = taskWindowRef(currentTask, freshPrimary, muxWorkspace, fuDriver.kind, { tmuxPrefersPrimary: true })
-          ?? { kind: fuDriver.kind, workspace: muxWorkspace, window: `task-${task.id}` };
+        const candidateKind = freshPrimary ? windowKindOf(freshPrimary) : fuDriver.kind;
+        const candidateRef = taskWindowRef(currentTask, freshPrimary, muxWorkspace, candidateKind, { tmuxPrefersPrimary: true })
+          ?? { kind: candidateKind, workspace: muxWorkspace, window: `task-${task.id}` };
         const candidateWindowName = candidateRef.window;
         let exists = false;
-        if (fuDriver.kind === 'misao') {
+        if (candidateRef.kind === 'misao') {
           // The window id is the identity: ask the daemon about that id. A failure to ask
           // (daemon down) must not read as "absent" — that would open a second window for the same conversation.
           exists = await fuDriver.windowExists(server, candidateRef);
         } else {
           try {
             const workspaces = await fuDriver.listWorkspaces(server);
-            const ws = workspaces.find((w) => w.name === muxWorkspace);
+            const ws = workspaces.find((w) => w.name === muxWorkspace && (w.kind ?? candidateRef.kind) === candidateRef.kind);
             if (ws) exists = ws.windows.some((w) => w.name === candidateWindowName);
           } catch {}
         }
@@ -1751,7 +1757,7 @@ export class ExecuteTaskUseCase {
           if (currentTask.tmuxWindow !== candidateWindowName) {
             this.taskRepo.update(taskId, { tmuxWindow: candidateWindowName } as Partial<Task>);
           }
-          return { windowName: candidateWindowName, windowExists: true, tokenId: null, server };
+          return { windowName: candidateWindowName, windowKind: candidateRef.kind, windowExists: true, tokenId: null, server };
         }
 
         // Window generation point for a follow-up that has no window to
@@ -1810,7 +1816,8 @@ export class ExecuteTaskUseCase {
           if (created.ref) await labelAddedWindowOrRemove(this.resolveDriver(created.server), created.server, created.ref, { windowId: followUpWindowId, taskId }, this.windowRepo);
         }
 
-        return { windowName: created.windowName, windowExists: false, tokenId: created.tokenId, server: created.server };
+        if (!created.ref) throw new Error(`Follow-up window for task ${taskId} was created without a ref`);
+        return { windowName: created.windowName, windowKind: created.ref.kind, windowExists: false, tokenId: created.tokenId, server: created.server };
       }));
     } catch (err) {
       if (this.failOnServerSnapshotMismatch(err, taskId, unitId)) throw err;
@@ -1831,7 +1838,7 @@ export class ExecuteTaskUseCase {
     this.appendLog(taskId, unitId, 'user_comment', { text: comment });
 
     const fuMainDriver = this.resolveDriver(server);
-    const ref: MuxRef = { kind: fuMainDriver.kind, workspace: muxWorkspace, window: windowName };
+    const ref: MuxRef = { kind: windowKind, workspace: muxWorkspace, window: windowName };
     const windowTarget = muxWindowTarget(ref);
     const handle = await fuMainDriver.resolvePane(server, ref, 1);
 
@@ -1906,12 +1913,13 @@ export class ExecuteTaskUseCase {
         const runtime = this.runtimeRegistry.get(unit.workerRuntime);
         const primaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
         const followUpWindowType = primaryWin?.windowType ?? 'terminal';
-        if (shouldSupervise(server.type, followUpWindowType, server.defaultMux)) {
+        if (shouldSupervise(server.type, followUpWindowType, ref.kind)) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }
         try {
           const actualCommand = await runtime.resume({
             server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId,
+            windowKind: ref.kind,
             windowId: primaryWin?.id,
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
@@ -2227,7 +2235,7 @@ export class ExecuteTaskUseCase {
       windowName = task.tmuxWindow || `task-${task.id}`;
     }
     const resumeDriver = this.resolveDriver(server);
-    const ref: MuxRef = { kind: resumeDriver.kind, workspace: muxWorkspace, window: windowName };
+    const ref: MuxRef = { kind: primaryWindow ? windowKindOf(primaryWindow) : resumeDriver.kind, workspace: muxWorkspace, window: windowName };
     const windowTarget = muxWindowTarget(ref);
     const handle = await resumeDriver.resolvePane(server, ref, 1);
 

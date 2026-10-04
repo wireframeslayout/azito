@@ -229,7 +229,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
-  const transportFactory = new TransportFactory(publicUrl, { muxAvailability: (kind, server) => muxDriverRegistry.availabilityFor(kind, server) });
+  const transportFactory = new TransportFactory(publicUrl);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();

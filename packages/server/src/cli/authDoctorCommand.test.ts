@@ -390,11 +390,10 @@ describe('authDoctorCommand', () => {
     it('reports a misao window as unverifiable and never probes it with tmux (a tmux "can\'t find" says nothing about it)', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
       const db = openDatabase(path.join(tmpDir, 'data.db'));
-      db.prepare("UPDATE servers SET default_mux = 'misao' WHERE name = 'local'").run();
       db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
       db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
       db.prepare(
-        "INSERT INTO windows (owner_type, task_id, server_name, tmux_target) VALUES ('task', 1, 'local', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8')",
+        "INSERT INTO windows (owner_type, task_id, server_name, tmux_target, mux_ref) VALUES ('task', 1, 'local', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', '{\"kind\":\"misao\",\"workspace\":\"ws\",\"window\":\"w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8\"}')",
       ).run();
       db.close();
       execFileMock.mockClear();

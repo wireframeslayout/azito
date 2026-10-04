@@ -56,7 +56,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
   function attach(target: MuxRef, cols: number, rows: number): FakeWs {
     const ws = fakeWs();
     open.push(ws);
-    handleTerminalConnection(ws as unknown as WebSocket, server, target, 1 as PaneOrdinal, cols, rows, transportFactory, registry);
+    handleTerminalConnection(ws as unknown as WebSocket, server, target, 1 as PaneOrdinal, cols, rows, registry);
     return ws;
   }
 
@@ -178,7 +178,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
     // Ordinal 2 no longer names a pane: the hub says so instead of failing generically.
     const stale = fakeWs();
     open.push(stale);
-    handleTerminalConnection(stale as unknown as WebSocket, server, twoPanes, 2 as PaneOrdinal, 80, 24, transportFactory, registry);
+    handleTerminalConnection(stale as unknown as WebSocket, server, twoPanes, 2 as PaneOrdinal, 80, 24, registry);
     await vi.waitFor(() => expect(stale.close).toHaveBeenCalledWith(4413, 'pane closed'), { timeout: 10000, interval: 50 });
   });
 });

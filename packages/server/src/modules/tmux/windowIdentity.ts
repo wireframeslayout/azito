@@ -14,6 +14,11 @@ export interface WindowRowIdentity {
  * (and, for liveness, `driver.windowExists(ref)`), never by comparing display names.
  */
 
+/** The mux kind a window row lives in: its `mux_ref` kind (rows that predate `mux_ref` are tmux). */
+export function windowKindOf(win: Pick<WindowRowIdentity, 'muxRef'>): MuxDriverKind {
+  return win.muxRef?.kind ?? 'tmux';
+}
+
 /** The ref of a window row: its `mux_ref`, or the one derived from `tmux_target` for rows that predate `mux_ref`. */
 export function windowRefOf(win: Pick<WindowRowIdentity, 'muxRef' | 'tmuxTarget'>, kind: MuxDriverKind): MuxRef {
   return win.muxRef ?? { ...muxRefFromTmuxTarget(win.tmuxTarget), kind };

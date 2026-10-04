@@ -8,13 +8,21 @@ import type { Window, IWindowRepository } from './Window';
 const TMUX_REF: MuxRef = { kind: 'tmux', workspace: 'sess', window: 'win' };
 const MISAO_REF: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' };
 
+const LOCAL_TMUX = { type: 'local' as const, defaultMux: 'tmux' as const };
+const LOCAL_MISAO = { type: 'local' as const, defaultMux: 'misao' as const };
+const AGENT_TMUX = { type: 'agent' as const, defaultMux: 'tmux' as const };
+
 describe('isRefKindCompatible', () => {
-  it('matches the ref kind against the server runtime', () => {
-    expect(isRefKindCompatible(TMUX_REF, { defaultMux: 'tmux' as const })).toBe(true);
-    expect(isRefKindCompatible(TMUX_REF, { defaultMux: 'tmux' as const })).toBe(true);
-    expect(isRefKindCompatible(MISAO_REF, { defaultMux: 'tmux' as const })).toBe(false);
-    expect(isRefKindCompatible(MISAO_REF, { defaultMux: 'misao' as const })).toBe(true);
-    expect(isRefKindCompatible(TMUX_REF, { defaultMux: 'misao' as const })).toBe(false);
+  it('accepts every kind a local server can host, whichever mux it defaults to', () => {
+    expect(isRefKindCompatible(TMUX_REF, LOCAL_TMUX)).toBe(true);
+    expect(isRefKindCompatible(MISAO_REF, LOCAL_TMUX)).toBe(true);
+    expect(isRefKindCompatible(MISAO_REF, LOCAL_MISAO)).toBe(true);
+    expect(isRefKindCompatible(TMUX_REF, LOCAL_MISAO)).toBe(true);
+  });
+
+  it('accepts only tmux refs on an agent server', () => {
+    expect(isRefKindCompatible(TMUX_REF, AGENT_TMUX)).toBe(true);
+    expect(isRefKindCompatible(MISAO_REF, AGENT_TMUX)).toBe(false);
   });
 
   it('accepts only tmux refs when the server is unknown', () => {
@@ -25,12 +33,13 @@ describe('isRefKindCompatible', () => {
 
 describe('resolveRefForServer', () => {
   it('returns a compatible ref', () => {
-    expect(resolveRefForServer(encodeURIComponent(formatMuxRef(TMUX_REF)), { defaultMux: 'tmux' as const })).toEqual(TMUX_REF);
+    expect(resolveRefForServer(encodeURIComponent(formatMuxRef(TMUX_REF)), LOCAL_TMUX)).toEqual(TMUX_REF);
+    expect(resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), LOCAL_TMUX)).toEqual(MISAO_REF);
   });
 
-  it('rejects a misao ref on a tmux server with a 400', () => {
+  it('rejects a misao ref on an agent server with a 400', () => {
     try {
-      resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), { defaultMux: 'tmux' as const });
+      resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), AGENT_TMUX);
       expect.unreachable();
     } catch (err) {
       expect((err as Error).message).toBe('Invalid ref parameter');

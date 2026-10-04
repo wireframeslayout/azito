@@ -146,17 +146,35 @@ describe('GET /api/servers/:name mux detail', () => {
   it('reports the registry reason when the misao driver is not registered', async () => {
     const opts = makeOpts(makeServer({ defaultMux: 'misao' }));
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv' });
-    expect(res.json().mux).toEqual({ runtime: 'system', kind: 'misao', driverAvailable: false, caps: null, reason: 'driver_not_registered' });
+    expect(res.json().mux).toEqual({
+      runtime: 'system', kind: 'misao', driverAvailable: false, caps: null, reason: 'driver_not_registered',
+      kinds: [
+        { kind: 'misao', driverAvailable: false, caps: null, reason: 'driver_not_registered' },
+        { kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS },
+      ],
+    });
   });
 
   it('shows the tmux runtime next to the misao kind', async () => {
     const opts = makeOpts(makeServer({ defaultMux: 'misao', muxRuntime: 'managed' }), true);
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv' });
-    expect(res.json().mux).toEqual({ runtime: 'managed', kind: 'misao', driverAvailable: true, caps: TMUX_CAPS });
+    expect(res.json().mux).toMatchObject({ runtime: 'managed', kind: 'misao', driverAvailable: true, caps: TMUX_CAPS });
   });
 
-  it('keeps the tmux server detail shape unchanged', async () => {
+  it('lists every mux a local tmux server can host next to its default', async () => {
     const opts = makeOpts(makeServer());
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv' });
+    expect(res.json().mux).toEqual({
+      runtime: 'system', kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS,
+      kinds: [
+        { kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS },
+        { kind: 'misao', driverAvailable: false, caps: null, reason: 'driver_not_registered' },
+      ],
+    });
+  });
+
+  it('keeps the tmux-only (agent) server detail shape unchanged', async () => {
+    const opts = makeOpts(makeServer({ type: 'agent' }), true);
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv' });
     expect(res.json().mux).toEqual({ runtime: 'system', kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS });
   });
@@ -208,10 +226,10 @@ describe('GET /api/servers/:name/install-status', () => {
     return { exec, opts: { ...opts, transportFactory } };
   }
 
-  it('reports the misao daemon instead of tmux for a misao server', async () => {
+  it('reports the misao daemon for a misao server, and tmux only when it is installed (it is optional there)', async () => {
     const stored = makeServer({ defaultMux: 'misao' });
     const misaoDaemonStatus = vi.fn(async () => ({ installed: true, version: '0.2.0' }));
-    const { exec, opts } = withTransport({ ...makeOpts(stored), misaoDaemonStatus });
+    const { opts } = withTransport({ ...makeOpts(stored), misaoDaemonStatus });
 
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
 
@@ -219,7 +237,17 @@ describe('GET /api/servers/:name/install-status', () => {
     expect(body.misao).toEqual({ installed: true, version: '0.2.0' });
     expect(body).not.toHaveProperty('tmux');
     expect(body).toHaveProperty('node');
-    expect(exec.mock.calls.map(([cmd]) => cmd).filter((cmd) => cmd.includes('tmux'))).toEqual([]);
+  });
+
+  it('adds the misao row to a local tmux server while its daemon serves it', async () => {
+    const stored = makeServer();
+    const misaoDaemonStatus = vi.fn(async () => ({ installed: true, version: '0.2.0' }));
+    const { opts } = withTransport({ ...makeOpts(stored, true), misaoDaemonStatus });
+
+    const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
+
+    expect(res.json()).toHaveProperty('tmux');
+    expect(res.json().misao).toEqual({ installed: true, version: '0.2.0' });
   });
 
   it('reports an unreachable daemon as not installed', async () => {
