@@ -15,7 +15,10 @@ export interface ServerAlias {
  * migration 079.
  */
 export interface IServerAliasRepository {
-  /** The server an old name was merged into, or the name itself when it is not an alias. */
+  /**
+   * The server an old name was merged into, or the name itself when it is not an alias. A server that exists under
+   * the name always wins: a server created later with an old name takes the name over from its alias.
+   */
   resolve(name: string): string;
   findAll(): ServerAlias[];
 }
@@ -25,8 +28,8 @@ export class SqliteServerAliasRepository implements IServerAliasRepository {
   private listStmt;
 
   constructor(db: SqliteDatabase) {
-    this.resolveStmt = db.prepare('SELECT new_name FROM server_aliases WHERE old_name = ?');
-    this.listStmt = db.prepare('SELECT old_name, new_name FROM server_aliases ORDER BY old_name');
+    this.resolveStmt = db.prepare('SELECT new_name FROM server_aliases WHERE old_name = ? AND old_name NOT IN (SELECT name FROM servers)');
+    this.listStmt = db.prepare('SELECT old_name, new_name FROM server_aliases WHERE old_name NOT IN (SELECT name FROM servers) ORDER BY old_name');
   }
 
   resolve(name: string): string {

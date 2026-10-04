@@ -26,7 +26,7 @@ describe('SqliteServerAliasRepository', () => {
     expect(aliases.findAll()).toEqual([{ oldName: 'local-misao', newName: 'local' }]);
   });
 
-  it('drops an alias when a new server takes the old name', () => {
+  it('lets a server created later under the old name win over the alias', () => {
     servers.create('local-misao', 'local');
     expect(aliases.resolve('local-misao')).toBe('local-misao');
     expect(aliases.findAll()).toEqual([]);
