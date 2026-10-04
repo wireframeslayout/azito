@@ -8,6 +8,7 @@ import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { supportedMuxKinds } from './muxKinds';
+import { checkIsolationBlockers as checkIsolationBlockersFor } from './isolationBlockers';
 import type { MuxCapabilities, MuxDriverKind, MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
@@ -318,48 +319,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // call sites now share this single implementation instead of the gate
   // living inline in only one of them, which is what let the retry path
   // silently skip it in the first place.
-  async function checkIsolationBlockers(
-    serverName: string,
-    srv: ServerConfig,
-  ): Promise<{ status: number; body: Record<string, unknown> } | null> {
-    const riskyWindows = windowRepo
-      .findByServer(serverName)
-      .filter((w) => w.windowType === 'agent' || w.taskId !== null);
-    if (riskyWindows.length > 0) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_windows',
-          message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
-          windowCount: riskyWindows.length,
-        },
-      };
-    }
-    const driver = muxDriverRegistry.resolve(srv);
-    let liveWorkspaces: MuxWorkspace[];
-    try {
-      liveWorkspaces = await driver.listWorkspacesStrict(srv);
-    } catch (err: unknown) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_session_check_failure',
-          message: `隔離対象サーバーのワークスペース一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
-        },
-      };
-    }
-    if (liveWorkspaces.length > 0) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_live_sessions',
-          message: `${liveWorkspaces.length} 件の稼働中ワークスペースがこのサーバー上に存在するため隔離を有効化できません。ワークスペースを終了してから再度有効化してください。`,
-          sessionCount: liveWorkspaces.length,
-        },
-      };
-    }
-    return null;
-  }
+  const checkIsolationBlockers = (serverName: string, srv: ServerConfig) =>
+    checkIsolationBlockersFor({ windowRepo, muxDriverRegistry }, serverName, srv);
 
   // ── GET /api/servers ──
   fastify.get('/api/servers', async () => {

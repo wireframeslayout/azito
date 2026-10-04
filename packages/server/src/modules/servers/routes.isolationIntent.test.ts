@@ -111,7 +111,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
 
 function makeMuxRegistry(listWorkspacesStrict: (...args: unknown[]) => Promise<unknown[]>): ServersRouteOptions['muxDriverRegistry'] {
   const driver = { listWorkspacesStrict, caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } };
-  return { resolve: vi.fn(() => driver), resolveKind: vi.fn(() => driver), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
+  return { resolve: vi.fn(() => driver), resolveKind: vi.fn(() => driver), downKinds: vi.fn(() => []), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'];
 }
 
 async function buildApp(opts: ServersRouteOptions) {
