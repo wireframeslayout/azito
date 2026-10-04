@@ -122,13 +122,21 @@ const WIN_B = 'w_01HZY0000000000000000000BB';
 const misao = (workspace: string, window: string): string => JSON.stringify({ kind: 'misao', workspace, window });
 const tmux = (workspace: string, window: string): string => JSON.stringify({ kind: 'tmux', workspace, window });
 
-function insertWindow(db: Database.Database, serverName: string, tmuxTarget: string, muxRef: string | null): number {
+function insertWindow(db: Database.Database, serverName: string, tmuxTarget: string, muxRef: string | null, task?: { id: number; primary?: boolean }): number {
   return Number(
     db.prepare(
       `INSERT INTO windows (owner_type, project_id, task_id, server_name, tmux_target, mux_ref, is_primary, window_type, sleeping)
-       VALUES ('project', 1, NULL, ?, ?, ?, 0, 'terminal', 0)`,
-    ).run(serverName, tmuxTarget, muxRef).lastInsertRowid,
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'terminal', 0)`,
+    ).run(task ? 'task' : 'project', task ? null : 1, task?.id ?? null, serverName, tmuxTarget, muxRef, task?.primary ? 1 : 0).lastInsertRowid,
   );
+}
+
+function insertTask(db: Database.Database): number {
+  return Number(db.prepare(`INSERT INTO tasks (project_id, title) VALUES (1, 't')`).run().lastInsertRowid);
+}
+
+function windowExists(db: Database.Database, id: number): boolean {
+  return db.prepare('SELECT 1 FROM windows WHERE id = ?').get(id) !== undefined;
 }
 
 function readWindow(db: Database.Database, id: number): { tmux_target: string; mux_ref: string | null } {
@@ -175,12 +183,50 @@ describe('migration 078: normalize misao window rows', () => {
     expect(readWindow(db, plainTmux)).toEqual({ tmux_target: 'dev:editor', mux_ref: tmux('dev', 'editor') });
   });
 
-  it('leaves a row whose normalized target is already taken, instead of failing the migration', () => {
-    const keeper = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A));
-    const duplicate = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A));
+  it('merges a duplicate row not bound to a task into the task row of the same misao window', () => {
+    const taskId = insertTask(db);
+    const plain = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A));
+    const taskRow = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A), { id: taskId, primary: true });
+    db.prepare(`UPDATE tasks SET pending_operation_window_id = ? WHERE id = ?`).run(plain, taskId);
     run();
-    expect(readWindow(db, keeper)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
-    expect(readWindow(db, duplicate)).toEqual({ tmux_target: 'ws:main', mux_ref: tmux('ws', WIN_A) });
+    expect(windowExists(db, plain)).toBe(false);
+    expect(readWindow(db, taskRow)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
+    expect(db.prepare('SELECT pending_operation_window_id AS w FROM tasks WHERE id = ?').get(taskId)).toEqual({ w: taskRow });
+  });
+
+  it('keeps one row of several plain duplicates', () => {
+    const first = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A));
+    const second = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A));
+    run();
+    expect(readWindow(db, first)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
+    expect(windowExists(db, second)).toBe(false);
+  });
+
+  it('fixes the kind even when the window-id target is held by another row, keeping the old target', () => {
+    insertWindow(db, 'local', `ws:${WIN_A}`, tmux('ws', 'odd'));
+    const row = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A));
+    run();
+    expect(readWindow(db, row)).toEqual({ tmux_target: 'ws:main', mux_ref: misao('ws', WIN_A) });
+  });
+
+  it('keeps two task rows of one misao window in different workspaces, both with the misao kind', () => {
+    const t1 = insertTask(db);
+    const t2 = insertTask(db);
+    const a = insertWindow(db, 'local', 'old:main', tmux('old', WIN_A), { id: t1, primary: true });
+    const b = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: t2, primary: true });
+    run();
+    expect(readWindow(db, a)).toEqual({ tmux_target: `old:${WIN_A}`, mux_ref: misao('old', WIN_A) });
+    expect(readWindow(db, b)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
+  });
+
+  it('merges two task rows that would carry the same misao ref (it is UNIQUE), keeping the primary one', () => {
+    const t1 = insertTask(db);
+    const t2 = insertTask(db);
+    const secondary = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: t1 });
+    const primary = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A), { id: t2, primary: true });
+    run();
+    expect(windowExists(db, secondary)).toBe(false);
+    expect(readWindow(db, primary)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
   });
 
   it('is idempotent', () => {
