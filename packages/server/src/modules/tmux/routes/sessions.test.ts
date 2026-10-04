@@ -1427,3 +1427,71 @@ describe('mux workspace routes pick the mux by `kind` (#311)', () => {
     expect(bad.statusCode).toBe(400);
   });
 });
+
+describe('mux create routes take `kind` and refuse one the server cannot use (#312)', () => {
+  const ref = (kind: 'tmux' | 'misao') => ({ kind, workspace: 'dev', window: kind === 'misao' ? 'w_0123456789ABCDEFGHJKMNPQRS' : 'main' }) as const;
+  const localSrv = { name: 'mixed', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+  const agentSrv = { name: 'agent1', type: 'agent', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
+  let app: FastifyInstance;
+
+  async function build(srv: ServerConfig, misaoUp = true) {
+    const make = (kind: 'tmux' | 'misao') => ({
+      openWorkspace: vi.fn(async () => ({ ref: ref(kind), result: { code: 0 }, windowName: 'main' })),
+      openWindow: vi.fn(async () => ({ ref: ref(kind), result: { code: 0 }, windowName: 'main' })),
+    });
+    const tmuxDriver = make('tmux');
+    const misaoDriver = make('misao');
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', tmuxDriver as unknown as IMuxClient);
+    registry.register('misao', misaoDriver as unknown as IMuxClient,
+      (s) => (s.type !== undefined && s.type !== 'local' ? { available: false, reason: 'remote_unsupported' }
+        : misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(srv),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo: makeWindowRepo(),
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+    return { tmuxDriver, misaoDriver };
+  }
+
+  afterEach(async () => { await app.close(); });
+
+  it('passes an explicit kind to the routing driver on both routes', async () => {
+    const { misaoDriver } = await build(localSrv);
+    const ws = await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces', payload: { name: 'dev', kind: 'misao' } });
+    const win = await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces/dev/windows', payload: { kind: 'misao' } });
+    expect(ws.statusCode).toBe(200);
+    expect(win.statusCode).toBe(200);
+    expect(misaoDriver.openWorkspace).toHaveBeenCalledTimes(1);
+    expect(misaoDriver.openWindow).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the default mux when kind is omitted', async () => {
+    const { tmuxDriver, misaoDriver } = await build(localSrv);
+    await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces', payload: { name: 'dev' } });
+    expect(tmuxDriver.openWorkspace).toHaveBeenCalledTimes(1);
+    expect(misaoDriver.openWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 with the reason when the daemon of the asked kind is down', async () => {
+    const { misaoDriver } = await build(localSrv, false);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/mixed/mux/workspaces', payload: { name: 'dev', kind: 'misao' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'daemon_unreachable' });
+    expect(misaoDriver.openWorkspace).not.toHaveBeenCalled();
+  });
+
+  it('answers 409 remote_unsupported for misao on an agent server, and 400 for an unknown kind', async () => {
+    await build(agentSrv);
+    const res = await app.inject({ method: 'POST', url: '/api/servers/agent1/mux/workspaces/dev/windows', payload: { kind: 'misao' } });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'remote_unsupported' });
+    const bad = await app.inject({ method: 'POST', url: '/api/servers/agent1/mux/workspaces', payload: { name: 'dev', kind: 'zellij' } });
+    expect(bad.statusCode).toBe(400);
+  });
+});

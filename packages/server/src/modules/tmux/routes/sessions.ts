@@ -185,6 +185,28 @@ function requestedMuxKind(value: unknown, srv: ServerConfig): MuxDriverKind | un
   return serverSupportsMux(srv, value) ? value : null;
 }
 
+/**
+ * The mux kind a create request asks for. `undefined` = not given (the server's default mux). An explicit kind the
+ * server cannot use right now is a 409 with the reason; a value that is not a kind at all is a 400.
+ */
+type CreationKind =
+  | { ok: true; kind: MuxDriverKind | undefined }
+  | { ok: false; status: 400 | 409; body: { error: string; kind?: MuxDriverKind; reason?: string } };
+
+function creationMuxKind(value: unknown, srv: ServerConfig, registry: MuxDriverRegistry | undefined): CreationKind {
+  if (value === undefined || value === '') return { ok: true, kind: undefined };
+  if (value !== 'tmux' && value !== 'misao') return { ok: false, status: 400, body: { error: 'Invalid kind' } };
+  const availability = registry?.availabilityFor(value, srv);
+  if (!serverSupportsMux(srv, value)) {
+    const reason = availability && !availability.available ? availability.reason : 'remote_unsupported';
+    return { ok: false, status: 409, body: { error: 'mux_kind_unavailable', kind: value, reason } };
+  }
+  if (availability && !availability.available) {
+    return { ok: false, status: 409, body: { error: 'mux_kind_unavailable', kind: value, reason: availability.reason } };
+  }
+  return { ok: true, kind: value };
+}
+
 // ─── Session cache (30 s TTL) ───
 
 /** A listed session, stamped with the mux it lives in (a tmux and a misao session can share a name). */
@@ -1057,8 +1079,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const kind = requestedMuxKind(kindParam, freshSrv);
-        if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });
+        const requested = creationMuxKind(kindParam, freshSrv, opts.muxDriverRegistry);
+        if (!requested.ok) return reply.status(requested.status).send(requested.body);
+        const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
@@ -1086,8 +1109,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const kind = requestedMuxKind(kindParam, freshSrv);
-        if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });
+        const requested = creationMuxKind(kindParam, freshSrv, opts.muxDriverRegistry);
+        if (!requested.ok) return reply.status(requested.status).send(requested.body);
+        const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
