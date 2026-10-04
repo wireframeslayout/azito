@@ -156,6 +156,21 @@ describe('migration 079: merge duplicate local servers', () => {
       expect(db.prepare('SELECT server_name AS s FROM windows WHERE id = ?').get(other)).toEqual({ s: 'local' });
     });
 
+    it('judges each source against the ones admitted: a source blocked only by an excluded one is merged', () => {
+      addServer(db, 'local-a', 'misao');
+      addServer(db, 'local-b', 'misao');
+      addServer(db, 'local-c', 'misao');
+      const ref = (kind: string, window: string): string => JSON.stringify({ kind, workspace: 'ws', window });
+      addWindow(db, 'local', 'ws:w_X', { muxRef: ref('tmux', 'w_X') });
+      addWindow(db, 'local-a', 'ws:w_X', { muxRef: ref('misao', 'w_X') });   // clashes with the target: stays out
+      addWindow(db, 'local-b', 'ws:w_Y', { muxRef: ref('misao', 'w_Y') });   // clashes only with local-a's other window name
+      addWindow(db, 'local-a', 'ws:w_Y', { muxRef: ref('tmux', 'w_Y') });
+      addWindow(db, 'local-c', 'ws:w_Y', { muxRef: ref('misao', 'w_Y') });   // same window as local-b: admitted with it
+      run(db);
+      expect(names(db)).toEqual(['local', 'local-a']);
+      expect(aliases(db)).toEqual([{ old_name: 'local-b', new_name: 'local' }, { old_name: 'local-c', new_name: 'local' }]);
+    });
+
     it('merges a ref-less tmux row with the tmux-ref row of the same target, but not with a misao-ref row', () => {
       addServer(db, 'local-misao', 'misao');
       addWindow(db, 'local', 'azito:1', { muxRef: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: '1' }) });
@@ -213,7 +228,7 @@ describe('migration 079: merge duplicate local servers', () => {
       run(db);
       expect(launches(db)).toEqual([
         { l: 'old', w: keeper, status: 'replaced', s: 'local' },
-        { l: 'new', w: null, status: 'active', s: 'local' },
+        { l: 'new', w: keeper, status: 'active', s: 'local' },
         { l: 'elsewhere', w: null, status: 'active', s: 'local' },
       ]);
     });

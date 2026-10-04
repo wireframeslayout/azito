@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { MuxRef } from '@azito/shared';
-import { isSameWindow, kindOfWindowName, kindOfWindowTarget, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
+import { isSameWindow, kindOfRawTarget, kindOfStoredWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
 
 const ID_A = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ID_B = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
@@ -67,17 +67,29 @@ describe('windowDisplayName', () => {
   });
 });
 
-describe('kindOfWindowName / kindOfWindowTarget (the mux of a ref-less string, never the server default)', () => {
-  it('reads a misao window id as misao and anything else as tmux', () => {
-    expect(kindOfWindowName(ID_A)).toBe('misao');
-    expect(kindOfWindowName('task-12')).toBe('tmux');
-    expect(kindOfWindowName('w_notAnId')).toBe('tmux');
+describe('kindOfStoredWindow (stored data: the ref decides, else tmux)', () => {
+  it('uses the ref kind and reads data without a ref as tmux, even when its name has the misao id form', () => {
+    expect(kindOfStoredWindow({ muxRef: misao('ws', ID_A) })).toBe('misao');
+    expect(kindOfStoredWindow({ muxRef: tmux('ws', ID_A) })).toBe('tmux');
+    expect(kindOfStoredWindow({})).toBe('tmux');
+    expect(kindOfStoredWindow(undefined)).toBe('tmux');
+  });
+});
+
+describe('kindOfRawTarget (a raw target string from a client)', () => {
+  const local = { type: 'local' as const, defaultMux: 'tmux' as const };
+  const misaoLocal = { type: 'local' as const, defaultMux: 'misao' as const };
+  const agent = { type: 'agent' as const, defaultMux: 'tmux' as const };
+
+  it('is misao only on a server that can host misao and for a window id form (pane suffix ignored)', () => {
+    expect(kindOfRawTarget(`ws:${ID_A}`, local)).toBe('misao');
+    expect(kindOfRawTarget(`ws:${ID_A}`, misaoLocal)).toBe('misao');
+    expect(kindOfRawTarget(`ws:${ID_A}.2`, local)).toBe('misao');
+    expect(kindOfRawTarget('azito:3', misaoLocal)).toBe('tmux');
+    expect(kindOfRawTarget('azito:main.1', local)).toBe('tmux');
   });
 
-  it('reads the window part of a target, without its pane suffix', () => {
-    expect(kindOfWindowTarget(`ws:${ID_A}`)).toBe('misao');
-    expect(kindOfWindowTarget(`ws:${ID_A}.2`)).toBe('misao');
-    expect(kindOfWindowTarget('azito:3')).toBe('tmux');
-    expect(kindOfWindowTarget('azito:main.1')).toBe('tmux');
+  it('is tmux on a tmux-only server even for a tmux window named like a misao id', () => {
+    expect(kindOfRawTarget(`ws:${ID_A}`, agent)).toBe('tmux');
   });
 });

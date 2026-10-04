@@ -55,7 +55,7 @@ import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labe
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { type MuxDriverKind, type MuxRef, type PaneHandle } from '@azito/shared';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
-import { isSameWindow, kindOfWindowName, taskWindowRef, windowKindOf, windowRefOf } from '../../tmux/windowIdentity';
+import { isSameWindow, kindOfStoredWindow, taskWindowRef, windowKindOf, windowRefOf } from '../../tmux/windowIdentity';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -890,9 +890,9 @@ export class ExecuteTaskUseCase {
           if (currentTask.tmuxWindow) {
             const killDriver = this.resolveDriver(freshServer);
             const preWorkspaces = await killDriver.listWorkspaces(freshServer);
-            // The old window lives in the mux its primary row says (rows without one are tmux; no row = the shape of task.tmuxWindow).
+            // The old window lives in the mux its primary row says (rows without one are tmux; no row = tmux).
             const primaryRow = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
-            const oldKind = primaryRow ? windowKindOf(primaryRow) : kindOfWindowName(currentTask.tmuxWindow);
+            const oldKind = kindOfStoredWindow(primaryRow);
             // misao stores the window id in tmuxWindow (and the primary row's mux_ref) and windows
             // can be renamed across workspaces: match the id exactly, in every workspace. tmux
             // matches the window name inside the task's (tmux) workspace only.
@@ -1736,7 +1736,7 @@ export class ExecuteTaskUseCase {
         // is respawned or renamed independently.
         const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
         const fuDriver = this.resolveDriver(server);
-        const candidateKind = freshPrimary ? windowKindOf(freshPrimary) : currentTask.tmuxWindow ? kindOfWindowName(currentTask.tmuxWindow) : fuDriver.kind;
+        const candidateKind = kindOfStoredWindow(freshPrimary);
         const candidateRef = taskWindowRef(currentTask, freshPrimary, muxWorkspace, candidateKind, { tmuxPrefersPrimary: true })
           ?? { kind: candidateKind, workspace: muxWorkspace, window: `task-${task.id}` };
         const candidateWindowName = candidateRef.window;
@@ -2235,7 +2235,7 @@ export class ExecuteTaskUseCase {
       windowName = task.tmuxWindow || `task-${task.id}`;
     }
     const resumeDriver = this.resolveDriver(server);
-    const ref: MuxRef = { kind: primaryWindow ? windowKindOf(primaryWindow) : resumeDriver.kind, workspace: muxWorkspace, window: windowName };
+    const ref: MuxRef = { kind: kindOfStoredWindow(primaryWindow), workspace: muxWorkspace, window: windowName };
     const windowTarget = muxWindowTarget(ref);
     const handle = await resumeDriver.resolvePane(server, ref, 1);
 

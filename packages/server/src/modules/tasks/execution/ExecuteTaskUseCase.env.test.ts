@@ -1961,6 +1961,25 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     });
   });
 
+  it('resumeStateMachine(): on a misao-default local server, a task without a window row is a tmux task (#313), also when its name has the misao id form', async () => {
+    for (const tmuxWindow of ['task-47', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH']) {
+      const server = makeServer({ defaultMux: 'misao' });
+      const task = makeTask({ id: 47, serverName: server.name, unitId: 36, tmuxWindow, workingDirectory: '/srv/repo' });
+      const { useCase, tmux } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' })],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+        server,
+      });
+      (tmux as { kind: string }).kind = 'misao'; // the routing driver of a misao-default server reports its default kind
+
+      await useCase.resumeStateMachine(36, 47);
+
+      expect(tmux.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tmux', window: tmuxWindow }), 1);
+    }
+  });
+
   describe('misao window identity (task.tmuxWindow = window id, label = display name)', () => {
     const OLD_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
     const NEW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';

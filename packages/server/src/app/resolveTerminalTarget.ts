@@ -2,7 +2,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, type MuxRef } from 
 import type { IServerRepository, ServerConfig } from '../modules/servers/Server';
 import type { IWindowRepository } from '../modules/windows/Window';
 import { isRefKindCompatible } from '../modules/windows/windowPaneOps';
-import { kindOfWindowTarget } from '../modules/tmux/windowIdentity';
+import { kindOfRawTarget } from '../modules/tmux/windowIdentity';
 
 export interface TerminalTargetParams {
   serverName: string | null;
@@ -20,8 +20,8 @@ export interface TerminalTargetDeps {
 
 /**
  * Terminal WS: windowId → ref → target (fallback). A ref (given, or stored on the window row) whose kind does not match
- * the server's mux is rejected. A `target` is read by its shape (not the server's default mux, a local server hosts both):
- * a misao window id goes through the driver (rejected, null, when it cannot be resolved), anything else is a tmux target.
+ * the server's mux is rejected. A raw `target` carries no kind (`kindOfRawTarget`): on a server that can host misao a misao window id goes
+ * through the driver (rejected, null, when it cannot be resolved), anything else is a tmux target.
  */
 export async function resolveTerminalTarget(params: TerminalTargetParams, deps: TerminalTargetDeps): Promise<{ server: ServerConfig; ref: MuxRef } | null> {
   let server = params.serverName ? deps.serverRepo.findByName(params.serverName) : null;
@@ -42,7 +42,7 @@ export async function resolveTerminalTarget(params: TerminalTargetParams, deps: 
       if (isRefKindCompatible(parsed, server)) ref = parsed;
     } catch { /* invalid ref */ }
   } else if (params.target) {
-    if (server && kindOfWindowTarget(params.target) === 'misao') {
+    if (server && kindOfRawTarget(params.target, server) === 'misao') {
       // The pane comes from the `pane` param, so a `.N` suffix on the target is not part of the window.
       ref = await deps.resolveDriverRef(server, stripPaneSuffix(params.target));
     } else {

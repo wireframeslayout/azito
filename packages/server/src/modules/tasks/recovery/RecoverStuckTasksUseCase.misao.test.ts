@@ -112,12 +112,13 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
     expect(resumeStateMachine).toHaveBeenCalledWith(1, 30);
   });
 
-  it('falls back to task.tmuxWindow (a window id) when the task has no window row', async () => {
-    const { useCase, misaoDriver, resumeStateMachine } = build({ ...task(31, 'misao-server'), tmuxWindow: WINDOW_ID }, []);
+  it('reads task.tmuxWindow as a tmux window when the task has no window row, even if it has the misao id form (stored data without a ref is tmux)', async () => {
+    const { useCase, misaoDriver, tmuxDriver, resumeStateMachine } = build({ ...task(31, 'misao-server'), tmuxWindow: WINDOW_ID }, []);
 
     await useCase.run();
 
-    expect(misaoDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'misao', window: WINDOW_ID }), 1);
+    expect(misaoDriver.resolvePane).not.toHaveBeenCalled();
+    expect(tmuxDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tmux', window: WINDOW_ID }), 1);
     expect(resumeStateMachine).toHaveBeenCalledWith(1, 31);
   });
 
@@ -173,7 +174,8 @@ describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
       { findLatestByTaskPhase: vi.fn().mockReturnValue(null), supersedeRunning: vi.fn(), findLatestEventByType: vi.fn().mockReturnValue(null) } as never,
       { info: vi.fn(), warn: vi.fn() },
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
-      { findByTask: vi.fn().mockReturnValue([]) } as never,
+      // The misao task's primary window row carries its misao ref (stored data without a ref is tmux).
+      { findByTask: vi.fn((id: number) => (id === 40 ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
     );
 
     await useCase.run();
@@ -221,7 +223,8 @@ describe('RecoverStuckTasksUseCase keeps a task pending while the daemon keeps d
       { findLatestByTaskPhase: vi.fn().mockReturnValue(null), supersedeRunning: vi.fn(), findLatestEventByType: vi.fn().mockReturnValue(null) } as never,
       logger,
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
-      { findByTask: vi.fn().mockReturnValue([]) } as never,
+      // The misao task's primary window row carries its misao ref (stored data without a ref is tmux).
+      { findByTask: vi.fn((id: number) => (true ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
     );
 
     await useCase.run();

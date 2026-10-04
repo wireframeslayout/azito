@@ -86,6 +86,13 @@ describe('resolveTerminalTarget', () => {
     expect(resolveDriverRef).toHaveBeenCalledWith(servers.misaosrv, `ws:${MISAO_REF.window}`);
   });
 
+  it('reads a misao-id-shaped target as a tmux target on a tmux-only (agent) server', async () => {
+    resolveDriverRef.mockClear();
+    const result = await resolveTerminalTarget(params({ serverName: 'agentsrv', target: `ws:${MISAO_REF.window}.1` }), deps);
+    expect(result).toEqual({ server: servers.agentsrv, ref: { kind: 'tmux', workspace: 'ws', window: MISAO_REF.window } });
+    expect(resolveDriverRef).not.toHaveBeenCalled();
+  });
+
   it('reads a name target as a tmux target even on a misao-default server (a local server hosts both)', async () => {
     resolveDriverRef.mockClear();
     expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'sess:win.1' }), deps)).toEqual({ server: servers.misaosrv, ref: TMUX_REF });

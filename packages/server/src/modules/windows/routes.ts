@@ -23,7 +23,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { kindOfWindowTarget, windowKindOf } from '../tmux/windowIdentity';
+import { kindOfRawTarget, windowKindOf } from '../tmux/windowIdentity';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -119,9 +119,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
-      if (!givenRef && srv && kindOfWindowTarget(tmuxTarget) !== 'tmux')
+      if (!givenRef && srv && kindOfRawTarget(tmuxTarget, srv) !== 'tmux')
         return reply.status(400).send({ error: 'ref required for this server' });
-      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? kindOfWindowTarget(tmuxTarget)) : null;
+      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? kindOfRawTarget(tmuxTarget, srv)) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
@@ -263,9 +263,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
-      if (!givenRef && srv && kindOfWindowTarget(tmuxTarget) !== 'tmux')
+      if (!givenRef && srv && kindOfRawTarget(tmuxTarget, srv) !== 'tmux')
         return reply.status(400).send({ error: 'ref required for this server' });
-      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? kindOfWindowTarget(tmuxTarget)) : null;
+      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? kindOfRawTarget(tmuxTarget, srv)) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);

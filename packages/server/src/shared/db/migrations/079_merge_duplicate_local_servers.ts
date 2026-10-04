@@ -78,28 +78,26 @@ const windowsOf = (db: Database.Database, names: string[]): WindowRow[] =>
   ).all(...names) as WindowRow[];
 
 /**
- * The servers that cannot join the merge without a UNIQUE(server_name, tmux_target) clash between two windows that
- * are NOT the same window (a tmux and a misao window with one name). Nothing is deleted for them: the source stays
- * a server of its own with its rows.
+ * Admits the sources one by one (in rowid order) into the merge: a source whose windows would clash on
+ * `(server_name, tmux_target)` with a DIFFERENT window (a tmux and a misao window with one name) of the target or of an
+ * already admitted source stays out. Nothing is deleted for it: it stays a server of its own with its rows. A later
+ * source is judged only against what was admitted, so a source blocked by an excluded one is not blocked itself.
  */
 function findBlockedSources(db: Database.Database, target: string, sources: string[]): Set<string> {
   const blocked = new Set<string>();
-  for (let changed = true; changed;) {
-    changed = false;
-    const names = [target, ...sources.filter((s) => !blocked.has(s))];
-    const rows = windowsOf(db, names);
+  const admitted: string[] = [];
+  for (const source of sources) {
+    const rows = windowsOf(db, [target, ...admitted, source]);
     const component = new Map<number, number>();
     for (const [root, members] of windowComponents(rows)) members.forEach((m) => component.set(m.id, root));
-    const byTarget = new Map<string, WindowRow[]>();
-    for (const row of rows) byTarget.set(row.tmux_target, [...(byTarget.get(row.tmux_target) ?? []), row]);
-    for (const group of byTarget.values()) {
-      if (new Set(group.map((r) => component.get(r.id))).size < 2) continue;
-      // The target (then the earlier source) keeps its place; the other servers in this clash stay out.
-      const keep = names.find((n) => group.some((r) => r.server_name === n))!;
-      for (const row of group) {
-        if (row.server_name !== keep && !blocked.has(row.server_name)) { blocked.add(row.server_name); changed = true; }
-      }
+    const takenBy = new Map<string, Set<number | undefined>>();
+    for (const row of rows) {
+      if (row.server_name === source) continue;
+      takenBy.set(row.tmux_target, (takenBy.get(row.tmux_target) ?? new Set()).add(component.get(row.id)));
     }
+    const clashes = rows.some((row) => row.server_name === source && takenBy.has(row.tmux_target) && !takenBy.get(row.tmux_target)!.has(component.get(row.id)));
+    if (clashes) blocked.add(source);
+    else admitted.push(source);
   }
   return blocked;
 }
@@ -163,15 +161,21 @@ function mergeCollidingWindows(db: Database.Database, names: string[], target: s
 
 /**
  * Once the server names are equal, at most one pending/active launch may stand per (server_name, target) (a new launch
- * supersedes the earlier ones): the newest stays, the others are `replaced`.
+ * supersedes the earlier ones): the newest stays (tied to its window when that is unique), the others are `replaced`.
  */
 function supersedeDuplicateLaunches(db: Database.Database, server: string): void {
-  const live = db.prepare("SELECT id, target FROM supervisor_launches WHERE server_name = ? AND status IN ('pending', 'active') ORDER BY id DESC").all(server) as Array<{ id: number; target: string }>;
+  const live = db.prepare("SELECT id, target, window_id FROM supervisor_launches WHERE server_name = ? AND status IN ('pending', 'active') ORDER BY id DESC").all(server) as Array<{ id: number; target: string; window_id: number | null }>;
   const seen = new Set<string>();
   const replace = db.prepare("UPDATE supervisor_launches SET status = 'replaced' WHERE id = ?");
+  const windowsOfTarget = db.prepare('SELECT id FROM windows WHERE server_name = ? AND tmux_target = ?');
+  const attach = db.prepare('UPDATE supervisor_launches SET window_id = ? WHERE id = ?');
   for (const launch of live) {
-    if (seen.has(launch.target)) replace.run(launch.id);
-    else seen.add(launch.target);
+    if (seen.has(launch.target)) { replace.run(launch.id); continue; }
+    seen.add(launch.target);
+    // The launch that stays is found through its window (`findActiveByWindow`): attach it when the window is unique.
+    if (launch.window_id !== null) continue;
+    const windows = windowsOfTarget.all(server, launch.target) as Array<{ id: number }>;
+    if (windows.length === 1) attach.run(windows[0].id, launch.id);
   }
 }
 

@@ -68,8 +68,9 @@ export function renameServerInTabs<T extends AliasableTab>(
     if (next.id !== tab.id) { idMap.set(tab.id, next.id); renamedIds.add(tab.id); }
     return next;
   });
-  const sameServer = (a: T, b: T): boolean => a.serverName === b.serverName && a.terminalRef?.serverName === b.terminalRef?.serverName;
-  const changed = renamed.some((tab, i) => tab.id !== tabs[i].id || !sameServer(tab, tabs[i]) || tab.label !== tabs[i].label);
+  const sameJson = (a: T, b: T): boolean => JSON.stringify([a.serverName, a.terminalRef, a.diffData, a.browserData, a.openerTabId, a.label])
+    === JSON.stringify([b.serverName, b.terminalRef, b.diffData, b.browserData, b.openerTabId, b.label]);
+  const changed = renamed.some((tab, i) => tab.id !== tabs[i].id || !sameJson(tab, tabs[i]));
   if (!changed) return { tabs, changed: false, idMap };
 
   const seen = new Map<string, number>();

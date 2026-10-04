@@ -49,4 +49,13 @@ describe('renameServerInTabs', () => {
     expect(result.tabs[0]).toMatchObject({ id: 'terminal:local::w5.1', reconnectKey: 1 });
     expect(result.idMap.get('terminal:local-misao::w5.1')).toBe('terminal:local::w5.1');
   });
+
+  it('renames a tab whose only reference to the old server is its opener, or its diff / browser data', () => {
+    const opener = renameServerInTabs([tab({ id: 'task:3', type: 'task', openerTabId: 'terminal:local-misao::w5.1' })], aliases);
+    expect(opener.changed).toBe(true);
+    expect(opener.tabs[0].openerTabId).toBe('terminal:local::w5.1');
+    const data = renameServerInTabs([tab({ id: 'x', type: 'diff', diffData: { serverName: 'local-misao' } }), tab({ id: 'y', type: 'browser', browserData: { serverName: 'local-misao' } })], aliases);
+    expect(data.changed).toBe(true);
+    expect(data.tabs.map((t) => t.diffData?.serverName ?? t.browserData?.serverName)).toEqual(['local', 'local']);
+  });
 });
