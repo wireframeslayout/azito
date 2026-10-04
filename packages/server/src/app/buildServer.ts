@@ -279,6 +279,17 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   });
   const misaoPaneStates = new MisaoPaneStateEvents(wiring.misao.connection, misaoActivityBridge, app.log);
 
+  // The daemon connecting or dropping changes what a misao-capable server lists (its misao sessions, or misao
+  // reported unavailable): drop those cached listings and let clients refetch.
+  const refreshMisaoServerListings = (): void => {
+    for (const srv of selectServersSupportingMux(serverRepo.findAll(), 'misao')) {
+      invalidateSessionCache(srv.name);
+      notificationBus.emit({ type: 'sessions:updated', payload: { serverName: srv.name } });
+    }
+  };
+  wiring.misao.connection.onConnected(refreshMisaoServerListings);
+  wiring.misao.connection.onDisconnected(refreshMisaoServerListings);
+
   notificationBus.on((event) => {
     if (event.type === 'sessions:updated') {
       paneHandleResolver.invalidate(event.payload.serverName);

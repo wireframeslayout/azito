@@ -2,7 +2,7 @@ import { muxKindOfPaneHandle, type MuxCapabilities, type MuxDriverKind, type Mux
 import type { ExecResult, ITerminalStream, OpenTerminalOpts } from '../servers/transport/ServerTransport';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient, PaneLocation, PaneWindowLabels } from './IMuxClient';
-import { MuxDriverUnavailableError } from './MuxCapabilityError';
+import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from './MuxCapabilityError';
 
 /** What the routing driver needs from the registry. */
 export interface RoutingMuxDeps {
@@ -10,12 +10,11 @@ export interface RoutingMuxDeps {
   driver(kind: MuxDriverKind): IMuxClient;
   /** The driver of a kind for a server; throws `MuxDriverUnavailableError` when it cannot serve that server right now. */
   resolveKind(kind: MuxDriverKind, server: ServerConfig): IMuxClient;
-  /** The kinds a server can serve, the server's default kind first. */
+  /** The kinds a server can serve now, the server's default kind first. */
   usableKinds(server: ServerConfig): MuxDriverKind[];
+  /** The kinds the server hosts that cannot be called now (non-default ones; the default is always called). */
+  downKinds(server: ServerConfig): Array<{ kind: MuxDriverKind; reason: MuxDriverUnavailableReason }>;
 }
-
-/** Last merged-listing outcome per server, shared by the routing clients of one registry. */
-export type RoutingUnavailableState = Map<string, MuxUnavailableKind[]>;
 
 function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
   if (err instanceof MuxDriverUnavailableError) return { kind, reason: err.reason, detail: err.message };
@@ -26,40 +25,38 @@ function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableK
  * An `IMuxClient` that sends each call to the tmux or misao driver that owns its argument: a `MuxRef` by `ref.kind`,
  * a pane handle by its shape, and a server-wide call to every kind the server can serve.
  *
- * `kind`/`caps`/`supportsPaneLabels` are those of the server's default mux (`kind`): they describe where a call with
- * no `kind` goes. Callers that need another kind's caps resolve that driver with `registry.resolveKind`.
+ * `kind`/`caps` are those of the server's default mux (`kind`): they describe where a call with no `kind` goes.
+ * A per-window or per-pane decision must not read them: it resolves the driver of the window's / pane's own kind
+ * (`registry.resolveKind`). Pane labels are decided per window here (`labelWindowPanes`).
  *
- * A server with a single usable kind is passed straight through: same driver, same errors, no merging.
+ * A server with a single usable kind is passed straight through: same driver, same errors, no merging. A kind the
+ * server hosts but that cannot be called now is still reported as unavailable by the merged listings.
  */
 export class RoutingMuxClient implements IMuxClient {
   constructor(
     private readonly deps: RoutingMuxDeps,
     readonly kind: MuxDriverKind,
-    private readonly unavailableState: RoutingUnavailableState = new Map(),
   ) {}
 
   get caps(): MuxCapabilities { return this.deps.driver(this.kind).caps; }
-  get supportsPaneLabels(): boolean { return this.deps.driver(this.kind).supportsPaneLabels; }
-
-  /** The kinds the server could not serve in its last merged listing (empty after a call that served them all). */
-  unavailableKinds(server: Pick<ServerConfig, 'name'>): MuxUnavailableKind[] {
-    return this.unavailableState.get(server.name) ?? [];
-  }
+  /** Always true: `labelWindowPanes` labels a window whose mux keeps pane labels and leaves any other window alone. */
+  readonly supportsPaneLabels = true;
 
   private forRef(server: ServerConfig, ref: MuxRef): IMuxClient { return this.deps.resolveKind(ref.kind, server); }
   private forHandle(server: ServerConfig, handle: PaneHandle): IMuxClient { return this.deps.resolveKind(muxKindOfPaneHandle(handle), server); }
   private forKind(server: ServerConfig, kind: MuxDriverKind | undefined): IMuxClient { return this.deps.resolveKind(kind ?? this.kind, server); }
 
   /**
-   * Runs `op` on every usable kind in parallel. A kind that fails is reported through `unavailableKinds` and the rest
-   * are returned; when every kind fails the first error (the default kind's) is thrown.
+   * Runs `op` on every usable kind in parallel. A kind that fails, or that the server hosts but cannot be called now,
+   * is returned in `unavailable` with the rest of the items; when every usable kind fails the first error (the
+   * default kind's) is thrown.
    */
   private async gather<T>(server: ServerConfig, op: (driver: IMuxClient, kind: MuxDriverKind) => Promise<T[]>): Promise<{ items: T[]; unavailable: MuxUnavailableKind[] }> {
     const kinds = this.deps.usableKinds(server);
+    const down: MuxUnavailableKind[] = this.deps.downKinds(server).map(({ kind, reason }) => ({ kind, reason }));
     if (kinds.length === 1) {
       const items = await op(this.deps.resolveKind(kinds[0], server), kinds[0]);
-      this.unavailableState.delete(server.name);
-      return { items, unavailable: [] };
+      return { items, unavailable: down };
     }
     const settled = await Promise.allSettled(kinds.map((kind) => Promise.resolve().then(() => op(this.deps.resolveKind(kind, server), kind))));
     const items: T[] = [];
@@ -72,8 +69,7 @@ export class RoutingMuxClient implements IMuxClient {
       const first = settled.find((o): o is PromiseRejectedResult => o.status === 'rejected')!;
       throw first.reason;
     }
-    this.unavailableState.set(server.name, unavailable);
-    return { items, unavailable };
+    return { items, unavailable: [...unavailable, ...down] };
   }
 
   /** Runs `op` on every usable kind; any failure is thrown after all kinds have finished (nothing is hidden). */
@@ -97,8 +93,10 @@ export class RoutingMuxClient implements IMuxClient {
     return (await this.listWorkspacesDetailed(server)).workspaces;
   }
 
-  /** Strict contract: every usable kind must answer, or the call fails. */
+  /** Strict contract: every kind the server hosts must answer, or the call fails (a kind that is down fails it too). */
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> {
+    const down = this.deps.downKinds(server)[0];
+    if (down) throw new MuxDriverUnavailableError(down.kind, down.reason);
     const perKind = await this.eachKind(server, async (driver, kind) => (await driver.listWorkspacesStrict(server)).map((ws) => ({ ...ws, kind })));
     return perKind.flat();
   }
@@ -118,7 +116,11 @@ export class RoutingMuxClient implements IMuxClient {
   async windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean> { return this.forRef(server, ref).windowExists(server, ref); }
   async focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult> { return this.forRef(server, ref).focusWindow(server, ref); }
   async resolveRef(server: ServerConfig, target: string, opts?: { kind?: MuxDriverKind }): Promise<MuxRef | null> { return this.forKind(server, opts?.kind).resolveRef(server, target); }
-  async labelWindowPanes(server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void> { return this.forRef(server, ref).labelWindowPanes(server, ref, labels); }
+  async labelWindowPanes(server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void> {
+    const driver = this.forRef(server, ref);
+    if (!driver.supportsPaneLabels) return;
+    await driver.labelWindowPanes(server, ref, labels);
+  }
 
   // ─── Pane ───
 

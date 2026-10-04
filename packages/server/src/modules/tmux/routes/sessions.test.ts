@@ -1329,16 +1329,16 @@ describe('GET /api/servers/:name/sessions merges the muxes a server can use (#31
     expect(misaoList).not.toHaveBeenCalled();
   });
 
-  it('lists a local tmux server whose misao daemon is down exactly as before', async () => {
+  it('lists the tmux sessions of a local tmux server whose misao daemon is down, and reports misao as unavailable (not absent)', async () => {
     const local = { name: 'local1', type: 'local', defaultMux: 'tmux' } as ServerConfig;
     const misaoList = vi.fn();
-    const tmuxClient = await build(local, { tmux: {}, misao: { listWorkspaces: misaoList }, misaoAvailable: false });
+    const tmuxClient = await build(local, { tmux: { listWorkspaces: vi.fn(async () => [tmuxSession]) }, misao: { listWorkspaces: misaoList }, misaoAvailable: false });
 
     const res = await app.inject({ method: 'GET', url: '/api/servers/local1/sessions?detail=1' });
 
-    expect(res.json()).toMatchObject({ sessions: [{ name: 'dev', kind: 'tmux' }], unavailable: [] });
-    expect(tmuxClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(res.json()).toMatchObject({ sessions: [{ name: 'dev', kind: 'tmux' }], unavailable: [{ kind: 'misao', reason: 'daemon_unreachable' }] });
     expect(misaoList).not.toHaveBeenCalled();
+    expect(tmuxClient.cleanupLinkedSessions).toHaveBeenCalledTimes(1);
   });
 
   it('returns same-named tmux and misao sessions side by side, each with its kind', async () => {

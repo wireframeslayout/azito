@@ -7,7 +7,7 @@ export type MuxKindServer = Pick<ServerConfig, 'type' | 'defaultMux'>;
 /**
  * The mux kinds a server can host, whatever the state of their daemons: tmux on every server, misao on local servers
  * only (an agent server's misao is not supported). The server's default kind comes first. Which of them answer right
- * now is the registry's business (`MuxDriverRegistry.usableKinds`).
+ * now is the registry's business (`MuxDriverRegistry.usableKinds` / `downKinds`).
  */
 export function supportedMuxKinds(server: MuxKindServer): MuxDriverKind[] {
   const others: MuxDriverKind[] = server.defaultMux === 'tmux' ? ['misao'] : ['tmux'];

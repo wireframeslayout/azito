@@ -110,6 +110,20 @@ describe('MuxDriverRegistry (usable kinds)', () => {
     expect(registry.usableKinds({ defaultMux: 'misao', type: 'local' })).toEqual(['misao', 'tmux']);
   });
 
+  it('keeps a hosted kind that is down in supportedKinds and reports it, with its reason, in downKinds', () => {
+    let connected = false;
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', driver('tmux'));
+    registry.register('misao', driver('misao'), probeOf(() => connected));
+    const local = { defaultMux: 'tmux' as const, type: 'local' as const };
+    expect(registry.supportedKinds(local)).toEqual(['tmux', 'misao']);
+    expect(registry.downKinds(local)).toEqual([{ kind: 'misao', reason: 'daemon_unreachable' }]);
+    connected = true;
+    expect(registry.downKinds(local)).toEqual([]);
+    expect(registry.supportedKinds({ defaultMux: 'tmux', type: 'agent' })).toEqual(['tmux']);
+    expect(registry.downKinds({ defaultMux: 'tmux', type: 'agent' })).toEqual([]);
+  });
+
   it('never lists misao for an agent or ssh server, whatever the daemon state', () => {
     const registry = new MuxDriverRegistry();
     registry.register('tmux', driver('tmux'));

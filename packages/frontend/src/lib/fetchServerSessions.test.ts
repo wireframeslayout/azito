@@ -3,7 +3,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('../api/client', () => ({ api: vi.fn() }));
 
 import { api } from '../api/client';
-import { fetchSessionsForServers } from './fetchServerSessions';
+import { fetchSessionListing, fetchSessionsForServers, keepUnavailableKinds } from './fetchServerSessions';
+import type { Session } from '../pages/workspace/types';
 
 const apiMock = vi.mocked(api);
 const session = { name: 's', windows: [] };
@@ -42,5 +43,29 @@ describe('fetchSessionsForServers', () => {
     });
     const res = await fetchSessionsForServers([{ name: 'dead' }, { name: 'broken' }, { name: 'ok' }], () => false);
     expect(res).toEqual({ data: { ok: [session] }, offline: ['dead'] });
+  });
+});
+
+describe('fetchSessionListing / keepUnavailableKinds (#311)', () => {
+  beforeEach(() => apiMock.mockReset());
+
+  const misaoRef = JSON.stringify({ kind: 'misao', workspace: 'dev', window: 'w_01M40229BC46M2RPATEBX4JN25' });
+  const tmuxDev: Session = { name: 'dev', kind: 'tmux', windows: [] };
+  const misaoDev: Session = { name: 'dev', kind: 'misao', windows: [{ index: 0, name: 'main', panes: [], ref: misaoRef, windowId: 5 }] };
+
+  it('asks for the detailed listing and refuses an error body', async () => {
+    respondByPath(async (path) => (path.endsWith('?detail=1') ? { sessions: [tmuxDev], unavailable: [] } : { error: 'x' }));
+    expect(await fetchSessionListing('local')).toEqual({ sessions: [tmuxDev], unavailable: [] });
+    respondByPath(async () => ({ error: 'agent_unreachable' }));
+    await expect(fetchSessionListing('local')).rejects.toThrow();
+  });
+
+  it('keeps the previous sessions of a mux that could not be listed, so its windows do not read as deleted', () => {
+    const listing = { sessions: [tmuxDev], unavailable: [{ kind: 'misao' as const, reason: 'daemon_unreachable' }] };
+    expect(keepUnavailableKinds([tmuxDev, misaoDev], listing)).toEqual([tmuxDev, misaoDev]);
+  });
+
+  it('takes the listing as is when every mux answered', () => {
+    expect(keepUnavailableKinds([tmuxDev, misaoDev], { sessions: [tmuxDev], unavailable: [] })).toEqual([tmuxDev]);
   });
 });

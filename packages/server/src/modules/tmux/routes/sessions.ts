@@ -249,7 +249,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       };
 
       const registry = opts.muxDriverRegistry;
-      const kinds: MuxDriverKind[] = registry ? registry.usableKinds(srv) : ['tmux'];
+      const kinds: MuxDriverKind[] = registry ? registry.supportedKinds(srv) : ['tmux'];
       const tmuxOnly = kinds.length === 1 && kinds[0] === 'tmux';
       // Resolved before the cache is read so a lost daemon is a 503 (global handler), not a stale 200 list.
       const routing = registry && !tmuxOnly ? registry.resolve(srv) : undefined;

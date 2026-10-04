@@ -188,9 +188,16 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('one local server with a tmux and a m
     expect(body.unavailable).toEqual([expect.objectContaining({ kind: 'misao', reason: 'daemon_unreachable' })]);
   });
 
+  it('reports misao as unavailable (not absent) on the tmux-default server too while the daemon is down', async () => {
+    expect(registry.supportedKinds(server)).toEqual(['tmux', 'misao']);
+    expect(registry.downKinds(server)).toEqual([{ kind: 'misao', reason: 'daemon_unreachable' }]);
+    invalidateSessionCache(server.name);
+    const res = await app.inject({ method: 'GET', url: `/api/servers/${server.name}/sessions?detail=1` });
+    expect(res.json()).toMatchObject({ unavailable: [{ kind: 'misao', reason: 'daemon_unreachable' }] });
+  });
+
   it('closes the tmux window through the routing driver, leaving no tmux session behind', async () => {
     const routing = registry.resolve(server);
-    expect(registry.usableKinds(server)).toEqual(['tmux']);
     const closed = await routing.closeWindow(server, tmuxRef);
     expect(closed.code).toBe(0);
     const left = await routing.listWorkspaces(server);

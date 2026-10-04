@@ -100,9 +100,23 @@ describe('RoutingMuxClient delegation', () => {
   it('reports the default kind as its own kind and caps', () => {
     const misaoDefault = setup({ defaultMux: 'misao' });
     expect(misaoDefault.routing.kind).toBe('misao');
-    expect(misaoDefault.routing.supportsPaneLabels).toBe(true);
     expect(misaoDefault.routing.caps).toBe(misaoDefault.misao.caps);
   });
+});
+
+describe('RoutingMuxClient pane labels are decided per window, not by the default mux', () => {
+  const labels = { windowId: 7, taskId: 3 };
+  for (const defaultMux of ['tmux', 'misao'] as const) {
+    it(`labels a misao window and leaves a tmux window alone on a ${defaultMux}-default server`, async () => {
+      const tmux = fakeDriver('tmux', { labelWindowPanes: vi.fn(async () => { throw new Error('tmux keeps no pane labels'); }) });
+      const { routing, srv, misao } = setup({ tmux, defaultMux });
+      expect(routing.supportsPaneLabels).toBe(true);
+      await routing.labelWindowPanes(srv, misaoRef, labels);
+      await expect(routing.labelWindowPanes(srv, tmuxRef, labels)).resolves.toBeUndefined();
+      expect(misao.labelWindowPanes).toHaveBeenCalledWith(srv, misaoRef, labels);
+      expect(tmux.labelWindowPanes).not.toHaveBeenCalled();
+    });
+  }
 });
 
 describe('RoutingMuxClient merging', () => {
@@ -114,7 +128,6 @@ describe('RoutingMuxClient merging', () => {
     const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
     expect(workspaces.map((w) => `${w.kind}:${w.name}`)).toEqual(['tmux:same', 'misao:same', 'misao:m']);
     expect(unavailable).toEqual([]);
-    expect(routing.unavailableKinds(srv)).toEqual([]);
   });
 
   it('returns the other kind when one fails, and says which failed and why', async () => {
@@ -125,29 +138,24 @@ describe('RoutingMuxClient merging', () => {
     const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
     expect(workspaces.map((w) => w.name)).toEqual(['t']);
     expect(unavailable).toEqual([{ kind: 'misao', reason: 'daemon_unreachable', detail: expect.any(String) }]);
-    expect(routing.unavailableKinds(srv)).toEqual(unavailable);
   });
 
-  it('records a non-availability failure as driver_error', async () => {
+  it('records a non-availability failure as driver_error, and still returns the other kind', async () => {
     const { routing, srv } = setup({
-      tmux: fakeDriver('tmux', { listAllPanes: vi.fn(async () => { throw new Error('tmux exploded'); }) }),
-      misao: fakeDriver('misao', { listAllPanes: vi.fn(async () => [{ paneId: `p_${ULID}` }]) }),
+      tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => { throw new Error('tmux exploded'); }), listAllPanes: vi.fn(async () => { throw new Error('tmux exploded'); }) }),
+      misao: fakeDriver('misao', { listWorkspaces: vi.fn(async () => [workspace('m')]), listAllPanes: vi.fn(async () => [{ paneId: `p_${ULID}` }]) }),
     });
     expect(await routing.listAllPanes(srv)).toEqual([{ paneId: `p_${ULID}` }]);
-    expect(routing.unavailableKinds(srv)).toEqual([{ kind: 'tmux', reason: 'driver_error', detail: 'tmux exploded' }]);
+    expect((await routing.listWorkspacesDetailed(srv)).unavailable).toEqual([{ kind: 'tmux', reason: 'driver_error', detail: 'tmux exploded' }]);
   });
 
-  it('clears the unavailable list once every kind answers again', async () => {
-    let failing = true;
-    const { routing, srv } = setup({
-      misao: fakeDriver('misao', { measurePanePids: vi.fn(async () => { if (failing) throw new Error('down'); return []; }) }),
-      tmux: fakeDriver('tmux', { measurePanePids: vi.fn(async () => [{ ref: tmuxRef, pid: 1 }]) }),
-    });
-    await routing.measurePanePids(srv);
-    expect(routing.unavailableKinds(srv)).toHaveLength(1);
-    failing = false;
-    await routing.measurePanePids(srv);
-    expect(routing.unavailableKinds(srv)).toEqual([]);
+  it('reports a hosted kind that cannot be called now (stopped daemon) as unavailable, never as absent', async () => {
+    const { routing, srv, misao } = setup({ misaoAvailable: false, tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => [workspace('t')]) }) });
+    const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
+    expect(workspaces.map((w) => w.name)).toEqual(['t']);
+    expect(unavailable).toEqual([{ kind: 'misao', reason: 'daemon_unreachable' }]);
+    expect(misao.listWorkspaces).not.toHaveBeenCalled();
+    await expect(routing.listWorkspacesStrict(srv)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
   });
 
   it('propagates the error (the default kind\'s first) when every kind fails, instead of an empty list', async () => {
@@ -194,7 +202,7 @@ describe('RoutingMuxClient on a tmux-only server', () => {
     expect(misao.measurePanePids).not.toHaveBeenCalled();
     expect(misao.installChangeHooks).not.toHaveBeenCalled();
     expect(tmux.listAllPanes).toHaveBeenCalledTimes(1);
-    expect(routing.unavailableKinds(agentServer)).toEqual([]);
+    expect((await routing.listWorkspacesDetailed(agentServer)).unavailable).toEqual([]);
   });
 
   it('propagates the tmux driver\'s own error untouched (no wrapping, no empty fallback)', async () => {
@@ -205,11 +213,11 @@ describe('RoutingMuxClient on a tmux-only server', () => {
     await expect(routing.measurePanePids(agentServer)).rejects.toBe(failure);
   });
 
-  it('serves a local tmux server without a reachable daemon exactly like the tmux driver alone', async () => {
+  it('lists a local tmux server without a reachable daemon through the tmux driver alone, reporting misao as unavailable', async () => {
     const { routing, srv, tmux } = setup({ misaoAvailable: false, tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => [workspace('t')]) }) });
     const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
     expect(workspaces.map((w) => w.name)).toEqual(['t']);
-    expect(unavailable).toEqual([]);
+    expect(unavailable).toEqual([{ kind: 'misao', reason: 'daemon_unreachable' }]);
     expect(tmux.listWorkspaces).toHaveBeenCalledWith(srv);
   });
 

@@ -1457,6 +1457,15 @@ export class AgentActivityMonitor {
         // mapped === null → unknown: fall through to lower tiers.
       }
 
+      // A listing that could not read this window's mux (that mux is down, or the whole server could not be listed)
+      // says nothing about the window: keep its previous state and never announce it as deleted (#311).
+      if (sessionErrors.has(w.serverName) || sessionErrors.has(kindSessionErrorKey(w.serverName, w.muxRef?.kind ?? 'tmux'))) {
+        const previous = this.state.get(key);
+        if (previous) next.set(key, previous);
+        if (this.previousLiveKeys.has(key)) liveKeys.add(key);
+        decide(key, w.serverName, w.tmuxTarget, 'none', previous?.running ? (previous.status ?? 'working') : 'none', w.taskId ?? undefined);
+        continue;
+      }
       const sessions = sessionsByServer.get(w.serverName) ?? [];
       const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
       // null (window gone, i.e. a stale DB row) → idle. Reset both the

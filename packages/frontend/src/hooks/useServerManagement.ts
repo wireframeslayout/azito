@@ -10,6 +10,7 @@ import { useConfirm } from './useConfirm';
 import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime } from '@azito/shared';
 import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
 import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
+import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
 
 export interface Server {
   name: string;
@@ -96,6 +97,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const confirm = useConfirm();
 
   const [sessions, setSessions] = useState<Record<string, Session[]>>({});
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
 
   const [addServerModal, setAddServerModal] = useState(false);
@@ -141,9 +144,9 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const successfulServers = new Set<string>();
     const results = await Promise.allSettled(
       srvs.map(async (srv) => {
-        // エラー本文（503 agent_unreachable 等）は配列でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）
-        const result = await api<Session[]>(`/servers/${srv.name}/sessions`);
-        if (!Array.isArray(result)) throw new Error(`sessions unavailable: ${srv.name}`);
+        // エラー本文（503 agent_unreachable 等）は一覧でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）。
+        // 一覧できなかった mux（misao デーモン停止など）のセッションは直前の状態を保つ（削除扱いにしない）
+        const result = keepUnavailableKinds(sessionsRef.current[srv.name], await fetchSessionListing<Session>(srv.name));
         // 遅いサーバー 1 台を待たず、取得できたサーバーから 1 台ずつ反映する
         setSessions((prev) => ({ ...prev, [srv.name]: result }));
         return { name: srv.name, sessions: result };
