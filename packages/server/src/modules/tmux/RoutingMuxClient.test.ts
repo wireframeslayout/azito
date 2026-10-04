@@ -150,12 +150,14 @@ describe('RoutingMuxClient merging', () => {
   });
 
   it('reports a hosted kind that cannot be called now (stopped daemon) as unavailable, never as absent', async () => {
-    const { routing, srv, misao } = setup({ misaoAvailable: false, tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => [workspace('t')]) }) });
+    const { routing, srv, misao } = setup({ misaoAvailable: false, tmux: fakeDriver('tmux', { listWorkspaces: vi.fn(async () => [workspace('t')]), listWorkspacesStrict: vi.fn(async () => [workspace('t')]) }) });
     const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
     expect(workspaces.map((w) => w.name)).toEqual(['t']);
     expect(unavailable).toEqual([{ kind: 'misao', reason: 'daemon_unreachable' }]);
     expect(misao.listWorkspaces).not.toHaveBeenCalled();
-    await expect(routing.listWorkspacesStrict(srv)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+    // Strict lists the usable kinds only: a stopped non-default mux does not fail it.
+    await routing.listWorkspacesStrict(srv);
+    expect(misao.listWorkspacesStrict).not.toHaveBeenCalled();
   });
 
   it('propagates the error (the default kind\'s first) when every kind fails, instead of an empty list', async () => {

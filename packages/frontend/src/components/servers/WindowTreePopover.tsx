@@ -78,8 +78,10 @@ export default function WindowTreePopover({
               <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                 <Icon name="chevron-right" size={14} rotate={expanded ? 90 : 0} />
               </span>
-              <span style={{ fontFamily: 'var(--mono)' }}>{sess.name}</span>
+              <span style={{ fontFamily: 'var(--mono)', opacity: sess.stale ? DIMMED_PANE_OPACITY : undefined }}>{sess.name}</span>
               {showKind && <Chip>{t(kind === 'misao' ? 'overview.defaultMuxMisao' : 'overview.defaultMuxTmux')}</Chip>}
+              {/* Kept from an earlier listing: its mux cannot be listed right now. */}
+              {sess.stale && <Chip>{t('status.offline')}</Chip>}
               <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
                 {sess.windows.length} windows
               </span>

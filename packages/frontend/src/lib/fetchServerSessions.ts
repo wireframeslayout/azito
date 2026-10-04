@@ -4,7 +4,7 @@ import type { Session } from '../pages/workspace/types';
 import { sessionKindOf } from './sessionKind';
 
 /** What `keepUnavailableKinds` reads of a listed session (both session shapes the frontend keeps satisfy it). */
-interface ListedSession { name: string; kind?: MuxDriverKind; windows: ReadonlyArray<{ ref: string }> }
+interface ListedSession { name: string; kind?: MuxDriverKind; stale?: boolean; windows: ReadonlyArray<{ ref: string }> }
 
 export interface ServerSessionsResult {
   /** 取得できたサーバーのセッション。失敗・オフラインのサーバーは含まない。 */
@@ -82,10 +82,10 @@ export async function fetchSessionListing<S extends Session | ListedSession = Se
 /**
  * The sessions to show after a listing: the listed ones, plus the previous sessions of every mux that could not be
  * listed. A mux that is down says nothing about its windows, so they keep their last known state instead of reading as
- * deleted (which would close their tabs and mark them missing).
+ * deleted (which would close their tabs and mark them missing). Those kept sessions are marked `stale: true`.
  */
 export function keepUnavailableKinds<S extends ListedSession>(previous: readonly S[] | undefined, listing: SessionListing<S>): S[] {
   if (listing.unavailable.length === 0 || !previous) return listing.sessions;
   const down = new Set(listing.unavailable.map((u) => u.kind));
-  return [...listing.sessions, ...previous.filter((s) => down.has(sessionKindOf(s)))];
+  return [...listing.sessions, ...previous.filter((s) => down.has(sessionKindOf(s))).map((s) => ({ ...s, stale: true }))];
 }

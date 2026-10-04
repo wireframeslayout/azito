@@ -55,6 +55,8 @@ export interface Session {
   name: string;
   /** The mux the session lives in (a tmux and a misao session can share a name). See lib/sessionKind.ts. */
   kind?: MuxDriverKind;
+  /** Kept from an earlier listing because its mux could not be listed now (see keepUnavailableKinds). */
+  stale?: boolean;
   attached: boolean;
   windowCount: number;
   windows: TmuxWindow[];

@@ -165,7 +165,8 @@ export interface Server {
 export interface Pane { index: number; /** Stable pane handle; unlike `index` it does not shift when a sibling pane is deleted. */ handle?: string; title: string; command: string; width: number; height: number; active: boolean; /** Reported by the misao driver only; absent for tmux panes. */ processState?: MuxPaneProcessState; }
 export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; ref: string; windowId: number | null; }
 /** `kind`: the mux the session lives in (a tmux and a misao session can share a name). See lib/sessionKind.ts. */
-export interface Session { name: string; kind?: MuxDriverKind; windows: TmuxWindow[]; }
+/** `stale`: kept from an earlier listing because its mux could not be listed now (see keepUnavailableKinds). */
+export interface Session { name: string; kind?: MuxDriverKind; stale?: boolean; windows: TmuxWindow[]; }
 export interface LogEntry { type: string; content: string; createdAt: string; unitId?: number; }
 
 export const VALID_SIDEBAR_MODES: SidebarMode[] = ['windows', 'tasks', 'files', 'repos', 'storage', 'settings'];

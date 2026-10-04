@@ -62,7 +62,7 @@ describe('fetchSessionListing / keepUnavailableKinds (#311)', () => {
 
   it('keeps the previous sessions of a mux that could not be listed, so its windows do not read as deleted', () => {
     const listing = { sessions: [tmuxDev], unavailable: [{ kind: 'misao' as const, reason: 'daemon_unreachable' }] };
-    expect(keepUnavailableKinds([tmuxDev, misaoDev], listing)).toEqual([tmuxDev, misaoDev]);
+    expect(keepUnavailableKinds([tmuxDev, misaoDev], listing)).toEqual([tmuxDev, { ...misaoDev, stale: true }]);
   });
 
   it('takes the listing as is when every mux answered', () => {

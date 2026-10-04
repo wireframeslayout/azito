@@ -93,10 +93,11 @@ export class RoutingMuxClient implements IMuxClient {
     return (await this.listWorkspacesDetailed(server)).workspaces;
   }
 
-  /** Strict contract: every kind the server hosts must answer, or the call fails (a kind that is down fails it too). */
+  /**
+   * Strict contract: every usable kind must answer, or the call fails. A non-default kind that is down is not called and
+   * does not fail it: it may be a mux the server merely could host (misao not installed on a local server).
+   */
   async listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]> {
-    const down = this.deps.downKinds(server)[0];
-    if (down) throw new MuxDriverUnavailableError(down.kind, down.reason);
     const perKind = await this.eachKind(server, async (driver, kind) => (await driver.listWorkspacesStrict(server)).map((ws) => ({ ...ws, kind })));
     return perKind.flat();
   }
