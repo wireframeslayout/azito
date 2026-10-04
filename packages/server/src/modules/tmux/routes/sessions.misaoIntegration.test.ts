@@ -29,7 +29,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
   let socketPath: string;
   let connection: MisaoConnection;
   let app: FastifyInstance;
-  const tmux = { listSessions: vi.fn(), killSession: vi.fn(), renameSession: vi.fn() };
+  const tmux = { listSessions: vi.fn(), killSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })), renameSession: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) };
   const warn = vi.fn();
 
   async function listNames(): Promise<string[]> {
@@ -97,13 +97,14 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
     expect(JSON.parse(session.windows[0].ref)).toMatchObject({ kind: 'misao', workspace: WORKSPACE });
   });
 
-  it('refuses the tmux-only session routes without calling tmux', async () => {
+  // #311: a local server also hosts tmux, so the name-based tmux session routes act on the tmux session of that name;
+  // the same-named misao workspace is not touched by them.
+  it('sends the name-based session routes to tmux, never to the same-named misao workspace', async () => {
     const rename = await app.inject({ method: 'PUT', url: `/api/servers/${server.name}/sessions/${WORKSPACE}/rename`, payload: { name: RENAMED } });
     const kill = await app.inject({ method: 'DELETE', url: `/api/servers/${server.name}/sessions/${WORKSPACE}` });
-    expect([rename.statusCode, kill.statusCode]).toEqual([409, 409]);
-    expect(rename.json()).toEqual({ error: 'tmux_only_route' });
-    expect(tmux.killSession).not.toHaveBeenCalled();
-    expect(tmux.renameSession).not.toHaveBeenCalled();
+    expect([rename.statusCode, kill.statusCode]).toEqual([200, 200]);
+    expect(tmux.renameSession).toHaveBeenCalledWith(server, WORKSPACE, RENAMED);
+    expect(tmux.killSession).toHaveBeenCalledWith(server, WORKSPACE);
     expect(await listNames()).toEqual([WORKSPACE]);
   });
 

@@ -694,7 +694,8 @@ export class WindowSessionResolver {
     const ref = resolveWindowRef(window);
     const driver = this.muxDriverRegistry.resolve(server);
     const workspaces = await driver.listWorkspaces(server);
-    const ws = workspaces.find((s) => s.name === ref.workspace);
+    // Same-named workspaces can exist in tmux and misao: only the ref's own mux is searched.
+    const ws = workspaces.find((s) => s.name === ref.workspace && (s.kind ?? ref.kind) === ref.kind);
     if (!ws) return null;
     const win = ws.windows.find((w) => windowInfoMatchesRef(w, ref));
     if (!win) return null;

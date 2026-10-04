@@ -92,7 +92,7 @@ describe('SqliteWindowRepository.findByServerAndSession', () => {
     repo.add(baseWindow({ ownerType: 'task', projectId: null, taskId: taskA, tmuxTarget: 'azito:task-1' }));
     repo.add(baseWindow({ projectId, tmuxTarget: 'azito:extra' }));
 
-    const found = repo.findByServerAndSession('local-server', 'azito');
+    const found = repo.findByServerAndSession('local-server', 'azito', 'tmux');
     expect(found).toHaveLength(2);
     expect(found.map((w) => w.tmuxTarget).sort()).toEqual(['azito:extra', 'azito:task-1']);
   });
@@ -100,19 +100,65 @@ describe('SqliteWindowRepository.findByServerAndSession', () => {
   it('does not match a different session sharing a name prefix', () => {
     repo.add(baseWindow({ projectId, tmuxTarget: 'azito-other:win1' }));
 
-    const found = repo.findByServerAndSession('local-server', 'azito');
+    const found = repo.findByServerAndSession('local-server', 'azito', 'tmux');
     expect(found).toHaveLength(0);
   });
 
   it('does not match windows on a different server', () => {
     repo.add(baseWindow({ projectId, serverName: 'other-server', tmuxTarget: 'azito:win1' }));
 
-    const found = repo.findByServerAndSession('local-server', 'azito');
+    const found = repo.findByServerAndSession('local-server', 'azito', 'tmux');
     expect(found).toHaveLength(0);
   });
 
   it('returns an empty array when the session has no windows', () => {
-    expect(repo.findByServerAndSession('local-server', 'azito')).toEqual([]);
+    expect(repo.findByServerAndSession('local-server', 'azito', 'tmux')).toEqual([]);
+  });
+
+  it('tells a tmux session from a same-named misao workspace by the row kind', () => {
+    repo.add(baseWindow({ projectId, tmuxTarget: 'azito:win1' }));
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01HZY0000000000000000000AA' };
+    repo.add(baseWindow({ projectId, tmuxTarget: 'azito:w_01HZY0000000000000000000AA', muxRef: misaoRef }));
+
+    expect(repo.findByServerAndSession('local-server', 'azito', 'tmux').map((w) => w.tmuxTarget)).toEqual(['azito:win1']);
+    expect(repo.findByServerAndSession('local-server', 'azito', 'misao').map((w) => w.muxRef)).toEqual([misaoRef]);
+  });
+});
+
+describe('SqliteWindowRepository misao tmux_target normalization', () => {
+  let db: Database.Database;
+  let repo: SqliteWindowRepository;
+  let projectId: number;
+  const misaoRef = { kind: 'misao' as const, workspace: 'ws', window: 'w_01HZY0000000000000000000AA' };
+
+  beforeEach(() => {
+    db = buildSeededDb();
+    repo = new SqliteWindowRepository(db);
+    projectId = insertProject(db, 'Test Project');
+  });
+
+  it('stores a misao window as <workspace>:<window id> whatever target it is added with', () => {
+    const byOrdinal = repo.add(baseWindow({ projectId, tmuxTarget: 'ws:0', muxRef: misaoRef }));
+    expect(repo.findById(byOrdinal)?.tmuxTarget).toBe('ws:w_01HZY0000000000000000000AA');
+  });
+
+  it('keeps a tmux window target as given', () => {
+    const id = repo.add(baseWindow({ projectId, tmuxTarget: 'ws:0' }));
+    expect(repo.findById(id)?.tmuxTarget).toBe('ws:0');
+    expect(repo.findById(id)?.muxRef).toEqual({ kind: 'tmux', workspace: 'ws', window: '0' });
+  });
+
+  it('derives the target of a misao ref update from the ref (it used to throw)', () => {
+    const id = repo.add(baseWindow({ projectId, tmuxTarget: 'ws:a' }));
+    repo.update(id, { muxRef: misaoRef });
+    expect(repo.findById(id)).toMatchObject({ tmuxTarget: 'ws:w_01HZY0000000000000000000AA', muxRef: misaoRef });
+  });
+
+  it('keeps a misao row misao on a target-only update', () => {
+    const id = repo.add(baseWindow({ projectId, tmuxTarget: 'ws:w_01HZY0000000000000000000AA', muxRef: misaoRef }));
+    repo.update(id, { tmuxTarget: 'renamed:w_01HZY0000000000000000000AA' });
+    expect(repo.findById(id)?.muxRef).toEqual({ ...misaoRef, workspace: 'renamed' });
+    expect(() => repo.update(id, { tmuxTarget: 'renamed:display-name' })).toThrow(/window id/);
   });
 });
 

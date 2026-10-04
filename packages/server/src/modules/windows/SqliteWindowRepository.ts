@@ -1,7 +1,21 @@
 import type { Database as SqliteDatabase } from 'better-sqlite3';
 import type { Window, PaneLayout, IWindowRepository } from './Window';
 import { isSameWindowTarget } from '@azito/shared';
-import { type MuxRef, formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxDriverKind, type MuxRef, formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, isMisaoWindowId } from '@azito/shared';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
+
+/**
+ * The `tmux_target` a row stores. A misao window's is always `<workspace>:<window id>` whatever the caller passed (a
+ * display name or an ordinal there would collide with — or be mistaken for — a tmux window of the same server).
+ */
+function storedTarget(tmuxTarget: string, muxRef: MuxRef | undefined): string {
+  return muxRef?.kind === 'misao' ? muxWindowTarget(muxRef) : tmuxTarget;
+}
+
+/** The mux kind a stored row lives in: its `mux_ref` kind (rows without one are tmux). */
+function rowKind(row: Pick<WindowRow, 'mux_ref'>): MuxDriverKind {
+  return row.mux_ref ? parseMuxRef(row.mux_ref).kind : 'tmux';
+}
 
 // Re-exported so tmux/routes/sessions.ts (base layer — dependency-cruiser's
 // `base-tmux-limited-upward` rule only allow-lists this file, not Window.ts
@@ -77,7 +91,8 @@ export class SqliteWindowRepository implements IWindowRepository {
     return (this.nowStmt.get() as { ts: string }).ts;
   }
 
-  add(window: Omit<Window, 'id' | 'createdAt'>): number {
+  add(input: Omit<Window, 'id' | 'createdAt'>): number {
+    const window = { ...input, tmuxTarget: storedTarget(input.tmuxTarget, input.muxRef) };
     if (window.tmuxTarget && /\.\d+$/.test(window.tmuxTarget)) {
       throw new Error(`tmuxTarget must not contain pane suffix: ${window.tmuxTarget}`);
     }
@@ -178,10 +193,10 @@ export class SqliteWindowRepository implements IWindowRepository {
     return row ? this.toWindow(row) : undefined;
   }
 
-  findByServerAndSession(serverName: string, sessionName: string): Window[] {
+  findByServerAndSession(serverName: string, sessionName: string, kind: MuxDriverKind): Window[] {
     const rows = this.findByServerStmt.all(serverName) as WindowRow[];
     const prefix = `${sessionName}:`;
-    return rows.filter((r) => r.tmux_target.startsWith(prefix)).map((r) => this.toWindow(r));
+    return rows.filter((r) => r.tmux_target.startsWith(prefix) && rowKind(r) === kind).map((r) => this.toWindow(r));
   }
 
   adoptForTask(id: number, taskId: number): void {
@@ -195,16 +210,16 @@ export class SqliteWindowRepository implements IWindowRepository {
     const values: unknown[] = [];
 
     if (data.projectId !== undefined) { fields.push('project_id = ?'); values.push(data.projectId); }
-    if (data.tmuxTarget !== undefined) {
-      if (/\.\d+$/.test(data.tmuxTarget)) {
-        throw new Error(`tmuxTarget must not contain pane suffix: ${data.tmuxTarget}`);
-      }
-      fields.push('tmux_target = ?'); values.push(data.tmuxTarget);
-      if (!data.muxRef) { fields.push('mux_ref = ?'); values.push(formatMuxRef(muxRefFromTmuxTarget(data.tmuxTarget))); }
+    if (data.tmuxTarget !== undefined && /\.\d+$/.test(data.tmuxTarget)) {
+      throw new Error(`tmuxTarget must not contain pane suffix: ${data.tmuxTarget}`);
     }
-    if (data.muxRef !== undefined) {
-      fields.push('mux_ref = ?'); values.push(formatMuxRef(data.muxRef));
-      if (!data.tmuxTarget) { fields.push('tmux_target = ?'); values.push(tmuxTargetFromMuxRef(data.muxRef)); }
+    // The target and the ref are kept in step, and a row keeps its mux kind: a target-only update of a misao row
+    // re-derives a misao ref (it must name a window id), never a tmux one.
+    const muxRef = data.muxRef ?? (data.tmuxTarget !== undefined ? this.refForTargetUpdate(id, data.tmuxTarget) : undefined);
+    if (muxRef !== undefined) {
+      fields.push('mux_ref = ?'); values.push(formatMuxRef(muxRef));
+      const target = muxRef.kind === 'misao' ? muxWindowTarget(muxRef) : (data.tmuxTarget ?? tmuxTargetFromMuxRef(muxRef));
+      fields.push('tmux_target = ?'); values.push(target);
     }
     if (data.label !== undefined) { fields.push('label = ?'); values.push(data.label); }
     if (data.agentSessionId !== undefined) { fields.push('agent_session_id = ?'); values.push(data.agentSessionId); }
@@ -219,6 +234,14 @@ export class SqliteWindowRepository implements IWindowRepository {
     if (fields.length === 0) return;
     values.push(id);
     this.db.prepare(`UPDATE windows SET ${fields.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  private refForTargetUpdate(id: number, tmuxTarget: string): MuxRef {
+    const row = this.findByIdStmt.get(id) as WindowRow | undefined;
+    if (!row || rowKind(row) !== 'misao') return muxRefFromTmuxTarget(tmuxTarget);
+    const { workspace, window } = muxRefFromTmuxTarget(tmuxTarget);
+    if (!isMisaoWindowId(window)) throw new Error(`A misao window's tmuxTarget must name its window id: ${tmuxTarget}`);
+    return { kind: 'misao', workspace, window };
   }
 
   updateAgentSessionIdByWindow(serverName: string, tmuxTarget: string, sessionId: string): void {

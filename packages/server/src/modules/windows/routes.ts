@@ -109,7 +109,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         try {
           givenRef = parseMuxRef(refJson);
           if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
-          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
+          // A misao window is stored as `<workspace>:<window id>`: a display name or an ordinal sent as the target
+          // would name another window once windows are renamed or closed (and could collide with a tmux window).
+          if (!tmuxTarget || givenRef.kind === 'misao') tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }
@@ -176,15 +178,21 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         return reply.status(400).send({ error: 'server_name and session required' });
       const srv = serverRepo.findByName(serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      // A tmux and a misao session can share a name: `kind` picks one (omitted = the server's default mux).
+      const kindParam = body['kind'];
+      if (kindParam !== undefined && kindParam !== 'tmux' && kindParam !== 'misao')
+        return reply.status(400).send({ error: 'Invalid kind' });
+      const kind: MuxDriverKind = kindParam ?? srv.defaultMux;
 
       const sessions = await driverFor(srv).listWorkspaces(srv);
-      const targetSession = sessions.find((s) => s.name === session);
+      const targetSession = sessions.find((s) => s.name === session && (s.kind ?? srv.defaultMux) === kind);
       if (!targetSession)
         return reply.status(404).send({ error: `Session '${session}' not found on server '${serverName}'` });
 
       const addedIds: number[] = [];
       for (const win of targetSession.windows) {
-        const winTarget = `${session}:${win.name}`;
+        // tmux: the window name; misao: the window id (a display name is not an identity, M-023).
+        const winTarget = win.ref?.kind === 'misao' ? muxWindowTarget(win.ref) : `${session}:${win.name}`;
         const existing = findExistingWindow(serverName, winTarget, win.ref);
         if (existing) {
           if (existing.projectId !== id) windowRepo.update(existing.id, { projectId: id });
@@ -245,7 +253,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         try {
           givenRef = parseMuxRef(refJson);
           if (!isRefKindCompatible(givenRef, srv)) throw new Error('ref kind does not match server');
-          if (!tmuxTarget) tmuxTarget = muxWindowTarget(givenRef);
+          // A misao window is stored as `<workspace>:<window id>`: a display name or an ordinal sent as the target
+          // would name another window once windows are renamed or closed (and could collide with a tmux window).
+          if (!tmuxTarget || givenRef.kind === 'misao') tmuxTarget = muxWindowTarget(givenRef);
         } catch {
           return reply.status(400).send({ error: 'Invalid ref' });
         }

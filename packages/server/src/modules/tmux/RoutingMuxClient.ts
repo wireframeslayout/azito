@@ -88,7 +88,7 @@ export class RoutingMuxClient implements IMuxClient {
   // ─── Workspace / Window ───
 
   /** Like `listWorkspaces`, with the kinds that could not be listed returned alongside (one call, no shared-state race). */
-  async listWorkspacesDetailed(server: ServerConfig): Promise<{ workspaces: MuxWorkspace[]; unavailable: MuxUnavailableKind[] }> {
+  async listWorkspacesDetailed(server: ServerConfig): Promise<{ workspaces: Array<MuxWorkspace & { kind: MuxDriverKind }>; unavailable: MuxUnavailableKind[] }> {
     const { items, unavailable } = await this.gather(server, async (driver, kind) => (await driver.listWorkspaces(server)).map((ws) => ({ ...ws, kind })));
     return { workspaces: items, unavailable };
   }
