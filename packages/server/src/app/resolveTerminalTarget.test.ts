@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { formatMuxRef, type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { resolveTerminalTarget, terminalPaneOrdinal, type TerminalTargetParams } from './resolveTerminalTarget';
-import { AmbiguousWindowKindError } from '../modules/tmux/storedWindowKind';
+import { AmbiguousWindowKindError, type RawProbeResult } from '../modules/tmux/storedWindowKind';
+import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
 import type { ServerConfig } from '../modules/servers/Server';
 import type { Window } from '../modules/windows/Window';
 
@@ -27,9 +28,11 @@ const TMUX_ID_REF: MuxRef = { kind: 'tmux', workspace: 'ws', window: MISAO_REF.w
 // Which muxes each fixture server hosts, and which windows each mux has (a tmux window may carry a misao-id-shaped name).
 const kindsOf = (name: string): MuxDriverKind[] => (name === 'bothsrv' ? ['tmux', 'misao'] : name === 'misaosrv' ? ['misao'] : ['tmux']);
 let existing: { tmux: string[]; misao: string[] } = { tmux: [], misao: [] };
-const resolveRefInMux = vi.fn(async (_server: ServerConfig, kind: MuxDriverKind, target: string): Promise<MuxRef | null> => {
-  if (!existing[kind].includes(target)) return null;
-  return kind === 'misao' ? MISAO_REF : target === BOTH_ID_TARGET ? TMUX_ID_REF : TMUX_REF;
+let down: MuxDriverKind[] = [];
+const resolveRefInMux = vi.fn(async (_server: ServerConfig, kind: MuxDriverKind, target: string): Promise<RawProbeResult> => {
+  if (down.includes(kind)) return { status: 'unavailable', error: new MuxDriverUnavailableError(kind, 'daemon_unreachable') };
+  if (!existing[kind].includes(target)) return { status: 'absent' };
+  return { status: 'found', ref: kind === 'misao' ? MISAO_REF : target === BOTH_ID_TARGET ? TMUX_ID_REF : TMUX_REF };
 });
 const deps = {
   probe: { supportedKinds: (server: ServerConfig) => kindsOf(server.name), resolveRefInMux },
@@ -119,6 +122,18 @@ describe('resolveTerminalTarget', () => {
     it('rejects a target that names a window in both muxes (the client must use windowId or ref)', async () => {
       existing = { tmux: [BOTH_ID_TARGET], misao: [BOTH_ID_TARGET] };
       await expect(resolveTerminalTarget(params({ serverName: 'bothsrv', target: BOTH_ID_TARGET }), deps)).rejects.toBeInstanceOf(AmbiguousWindowKindError);
+    });
+
+    it('does not guess while a mux is down: a window the other mux does not have is an error, one it has still connects', async () => {
+      down = ['misao'];
+      try {
+        existing = { tmux: [], misao: [BOTH_ID_TARGET] };
+        await expect(resolveTerminalTarget(params({ serverName: 'bothsrv', target: BOTH_ID_TARGET }), deps)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
+        existing = { tmux: [BOTH_ID_TARGET], misao: [] };
+        expect(await resolveTerminalTarget(params({ serverName: 'bothsrv', target: BOTH_ID_TARGET }), deps)).toEqual({ server: servers.bothsrv, ref: TMUX_ID_REF });
+      } finally {
+        down = [];
+      }
     });
 
     it('returns null for a window neither mux has', async () => {

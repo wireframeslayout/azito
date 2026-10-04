@@ -20,7 +20,7 @@ import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
-import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 import { kindOfStoredWindow, windowKindOf } from '../tmux/windowIdentity';
@@ -77,7 +77,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
    * that has the window (tmux when none does: the window may not exist yet). A window in both muxes is an error.
    */
   const probe = rawTargetProbeOf(opts.muxDriverRegistry);
-  const rawRegistrationKind = async (srv: ServerConfig, target: string): Promise<{ kind: MuxDriverKind } | { error: string }> => {
+  const rawRegistrationKind = async (srv: ServerConfig, target: string): Promise<{ kind: MuxDriverKind } | { error: string } | { unavailable: { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } }> => {
     const stored = windowRepo.findByServerAndTarget(srv.name, target);
     if (stored) return { kind: kindOfStoredWindow(stored) };
     try {
@@ -85,6 +85,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (found) return { kind: found.kind };
     } catch (err) {
       if (err instanceof AmbiguousWindowKindError) return { error: 'The target names a window in more than one mux; ref required' };
+      // A mux that cannot be asked may hold the window: it is not registered as tmux on a guess.
+      if (err instanceof MuxDriverUnavailableError) return { unavailable: { error: 'mux_driver_unavailable', kind: err.kind, reason: err.reason } };
       throw err;
     }
     const kinds = probe.supportedKinds(srv);
@@ -143,6 +145,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       let rawKind: MuxDriverKind | undefined;
       if (!givenRef && srv) {
         const raw = await rawRegistrationKind(srv, tmuxTarget);
+        if ('unavailable' in raw) return reply.status(400).send(raw.unavailable);
         if ('error' in raw) return reply.status(400).send({ error: raw.error });
         rawKind = raw.kind;
         if (rawKind !== 'tmux') return reply.status(400).send({ error: 'ref required for this server' });
@@ -293,6 +296,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       let rawKind: MuxDriverKind | undefined;
       if (!givenRef && srv) {
         const raw = await rawRegistrationKind(srv, tmuxTarget);
+        if ('unavailable' in raw) return reply.status(400).send(raw.unavailable);
         if ('error' in raw) return reply.status(400).send({ error: raw.error });
         rawKind = raw.kind;
         if (rawKind !== 'tmux') return reply.status(400).send({ error: 'ref required for this server' });

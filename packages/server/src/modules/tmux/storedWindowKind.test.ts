@@ -60,7 +60,8 @@ describe('resolveRawTarget', () => {
     await expect(resolveRawTarget(probe({ tmux: true, misao: true }), local, `ws:${WIN}`)).rejects.toBeInstanceOf(AmbiguousWindowKindError);
   });
 
-  it('treats a mux that cannot answer as not having the window', async () => {
+  it('does not read a mux that cannot answer as absent: the window the other mux lacks is an error, one it has still decides', async () => {
+    await expect(resolveRawTarget(probe({ tmux: false, misao: true }, false), local, `ws:${WIN}`)).rejects.toBeInstanceOf(MuxDriverUnavailableError);
     expect(await resolveRawTarget(probe({ tmux: true, misao: true }, false), local, `ws:${WIN}`)).toMatchObject({ kind: 'tmux' });
   });
 

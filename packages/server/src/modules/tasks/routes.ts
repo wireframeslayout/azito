@@ -38,7 +38,7 @@ import type { ITaskTokenRepository } from './tokens/TaskToken';
 import { isValidModelId } from '@azito/shared';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { taskWindowRef } from '../tmux/windowIdentity';
-import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
+import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../tmux/storedWindowKind';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -361,7 +361,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
             if (ref) paneAlive = await driver.windowExists(srv, ref);
           } catch (err) {
             // The mux daemon being down makes liveness unknown, not the whole task unreadable.
-            if (!(err instanceof MuxDriverUnavailableError)) throw err;
+            // Likewise a window that exists in both muxes of a server whose data carries no mux_ref (#313).
+            if (!(err instanceof MuxDriverUnavailableError || err instanceof AmbiguousWindowKindError)) throw err;
             request.log.warn(`paneAlive unknown for task ${t.id}: ${err.message}`);
           }
         }

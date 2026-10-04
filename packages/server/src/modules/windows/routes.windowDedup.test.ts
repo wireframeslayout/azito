@@ -14,7 +14,7 @@ const REF_ONLY_TARGET = 'azito:w_01M40229BC46M2RPATEBX4JN25';
 const NAMED_TARGET = 'azito:test-window--nksu';
 
 /** Which raw targets each mux of the fixture server has (the registry's lookup for a registration without a ref). */
-async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string[]; misao: string[] } = { tmux: [], misao: [NAMED_TARGET, REF_ONLY_TARGET] }) {
+async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string[]; misao: string[] } = { tmux: [], misao: [NAMED_TARGET, REF_ONLY_TARGET] }, misaoUp = true) {
   const db = buildSeededDb();
   const repo = new SqliteWindowRepository(db);
   const projectId = insertProject(db, 'P');
@@ -33,7 +33,7 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao', has: { tmux: string
       name: 'azito', windowCount: 1, attached: false, created: 0,
       windows: [{ index: 0, name: 'test-window--nksu', ref: MISAO_REF, panes: [] }],
     }],
-  } as unknown as IMuxClient);
+  } as unknown as IMuxClient, () => (misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
   const app = Fastify();
   await app.register(windowsRoutes, {
     windowRepo: repo,
@@ -105,6 +105,21 @@ describe('registration without a ref on a misao server', () => {
 
   it('registers a tmux window named like a misao window id as tmux when only tmux has it (#313)', async () => {
     const { repo, projectId, post } = await setup('misao', { tmux: [REF_ONLY_TARGET], misao: [] });
+    const res = await post(`/api/projects/${projectId}/windows`, { tmux_target: REF_ONLY_TARGET });
+    expect(res.statusCode).toBe(200);
+    expect(repo.findByServerAndTarget('local-misao', REF_ONLY_TARGET)?.muxRef?.kind).toBe('tmux');
+  });
+
+  it('does not register a ref-less target as tmux while the misao daemon is down (the window may be a misao one): mux_driver_unavailable', async () => {
+    const { repo, projectId, post } = await setup('misao', { tmux: [], misao: [REF_ONLY_TARGET] }, false);
+    const res = await post(`/api/projects/${projectId}/windows`, { tmux_target: REF_ONLY_TARGET });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'mux_driver_unavailable', kind: 'misao', reason: 'daemon_unreachable' });
+    expect(repo.findByServerAndTarget('local-misao', REF_ONLY_TARGET)).toBeUndefined();
+  });
+
+  it('still registers a ref-less target as tmux while misao is down when tmux has the window', async () => {
+    const { repo, projectId, post } = await setup('misao', { tmux: [REF_ONLY_TARGET], misao: [] }, false);
     const res = await post(`/api/projects/${projectId}/windows`, { tmux_target: REF_ONLY_TARGET });
     expect(res.statusCode).toBe(200);
     expect(repo.findByServerAndTarget('local-misao', REF_ONLY_TARGET)?.muxRef?.kind).toBe('tmux');
