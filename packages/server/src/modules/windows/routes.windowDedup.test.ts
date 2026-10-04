@@ -81,14 +81,21 @@ describe('window registration routes share one row per physical misao window (re
 });
 
 describe('registration without a ref on a misao server', () => {
-  it('is rejected with 400 for project and task registration and stores no row', async () => {
+  it('rejects a misao window id target with 400 for project and task registration and stores no row', async () => {
     const { repo, projectId, taskId, post } = await setup();
-    const project = await post(`/api/projects/${projectId}/windows`, { tmux_target: NAMED_TARGET });
-    const task = await post(`/api/tasks/${taskId}/windows`, { tmux_target: NAMED_TARGET });
+    const project = await post(`/api/projects/${projectId}/windows`, { tmux_target: REF_ONLY_TARGET });
+    const task = await post(`/api/tasks/${taskId}/windows`, { tmux_target: REF_ONLY_TARGET });
     expect(project.statusCode).toBe(400);
     expect(task.statusCode).toBe(400);
     expect(task.json()).toEqual({ error: 'ref required for this server' });
-    expect(repo.findByServerAndTarget('local-misao', NAMED_TARGET)).toBeUndefined();
+    expect(repo.findByServerAndTarget('local-misao', REF_ONLY_TARGET)).toBeUndefined();
+  });
+
+  it('reads a name target as a tmux window (#313: a local server hosts both muxes; the target shape decides)', async () => {
+    const { repo, projectId, post } = await setup();
+    const res = await post(`/api/projects/${projectId}/windows`, { tmux_target: NAMED_TARGET });
+    expect(res.statusCode).toBe(200);
+    expect(repo.findByServerAndTarget('local-misao', NAMED_TARGET)?.muxRef?.kind).toBe('tmux');
   });
 
   it('task registration by ref reports the row target so the client selects the stored row', async () => {

@@ -49,7 +49,8 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
       { findLatestByTaskPhase: vi.fn().mockReturnValue(null), supersedeRunning: vi.fn(), findLatestEventByType: vi.fn().mockReturnValue(null) } as never,
       logger,
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
-      { findByTask: vi.fn().mockReturnValue([]) } as never,
+      // The misao task's window is a misao one (its row says so); a task without a row is read by its window string.
+      { findByTask: vi.fn((id: number) => (id === 20 ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' } }] : [])) } as never,
     );
 
     await expect(useCase.run()).resolves.toBeUndefined();

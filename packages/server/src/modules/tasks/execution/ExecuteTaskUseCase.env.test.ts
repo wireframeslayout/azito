@@ -1932,7 +1932,7 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
 
     async function run(workspaces: unknown[]) {
       const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
-      const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01OLD' });
+      const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' });
       const built = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit], projectServer: null });
       (built.tmux as { kind: string }).kind = 'misao';
       (built.tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(workspaces);
@@ -1941,21 +1941,21 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     }
 
     it('closes the window whose id matches exactly, with its driver ref', async () => {
-      const ref = misaoRef('azito', 'w_01OLD');
+      const ref = misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH');
       const { tmux } = await run([{ name: 'azito', windowCount: 1, attached: true, created: 0, windows: [win(1, 'task-46', ref)] }]);
       expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
       expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
     });
 
     it('does not close a different window that merely has the id as its name', async () => {
-      const real = misaoRef('azito', 'w_01OLD');
-      const { tmux } = await run([{ name: 'azito', windowCount: 2, attached: true, created: 0, windows: [win(1, 'w_01OLD', misaoRef('azito', 'w_02OTHER')), win(2, 'task-46', real)] }]);
+      const real = misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH');
+      const { tmux } = await run([{ name: 'azito', windowCount: 2, attached: true, created: 0, windows: [win(1, 'w_01M3XFD8H97JCPKS5Y5BH3JZQH', misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ')), win(2, 'task-46', real)] }]);
       expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
       expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), real);
     });
 
     it('finds the window in another workspace after the workspace was renamed', async () => {
-      const ref = misaoRef('renamed-ws', 'w_01OLD');
+      const ref = misaoRef('renamed-ws', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH');
       const { tmux } = await run([{ name: 'renamed-ws', windowCount: 1, attached: true, created: 0, windows: [win(1, 'task-46', ref)] }]);
       expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
     });
