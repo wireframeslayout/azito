@@ -5,6 +5,7 @@ import type { IMuxClient } from './IMuxClient';
 import { MuxOperationUnsupportedError } from './MuxCapabilityError';
 import { TmuxClient } from './TmuxClient';
 import { labelAddedWindowOrRemove, labelRegisteredWindow } from './labelRegisteredWindow';
+import { MuxDriverRegistry } from './MuxDriverRegistry';
 
 const server = { name: 'local', type: 'local' } as ServerConfig;
 const ref: MuxRef = { kind: 'misao', workspace: 'proj', window: 'w_0000000000000000000000000Z' };
@@ -56,4 +57,28 @@ describe('labelAddedWindowOrRemove', () => {
     await labelAddedWindowOrRemove({ supportsPaneLabels: false, labelWindowPanes: vi.fn() } as unknown as IMuxClient, server, ref, { windowId: 806 }, { remove });
     expect(remove).not.toHaveBeenCalled();
   });
+});
+
+// The helper respawn / task execution / restore use to stamp a (re)created window: decided by the window's own mux.
+describe('labelRegisteredWindow through the routing driver (#311)', () => {
+  const misaoRef2: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+  const tmuxRef: MuxRef = { kind: 'tmux', workspace: 'ws', window: 'editor' };
+
+  for (const defaultMux of ['tmux', 'misao'] as const) {
+    it(`labels a misao window and leaves a tmux window unlabelled on a ${defaultMux}-default server`, async () => {
+      const tmuxLabel = vi.fn(async () => { throw new Error('tmux keeps no pane labels'); });
+      const misaoLabel = vi.fn(async () => {});
+      const registry = new MuxDriverRegistry();
+      registry.register('tmux', { kind: 'tmux', supportsPaneLabels: false, labelWindowPanes: tmuxLabel } as unknown as IMuxClient);
+      registry.register('misao', { kind: 'misao', supportsPaneLabels: true, labelWindowPanes: misaoLabel } as unknown as IMuxClient);
+      const server = { name: 'local', type: 'local', defaultMux } as ServerConfig;
+      const driver = registry.resolve(server);
+
+      await labelRegisteredWindow(driver, server, misaoRef2, { windowId: 1, taskId: 2 });
+      await expect(labelRegisteredWindow(driver, server, tmuxRef, { windowId: 3 })).resolves.toBeUndefined();
+
+      expect(misaoLabel).toHaveBeenCalledWith(server, misaoRef2, { windowId: 1, taskId: 2 });
+      expect(tmuxLabel).not.toHaveBeenCalled();
+    });
+  }
 });

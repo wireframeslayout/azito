@@ -1,4 +1,4 @@
-import { type PaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
+import { type PaneHandle, muxKindOfPaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { paneInfoMatchesRef } from '../tmux/types';
@@ -55,7 +55,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(driver, server, handle);
+    await this.preparePaneForInput(server, handle);
     await driver.sendTextToHandle(server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
@@ -74,7 +74,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(driver, server, handle);
+    await this.preparePaneForInput(server, handle);
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey | AnswerKey);
     await driver.sendKeysToHandle(server, handle, [resolvedKey]);
     return 'ok';
@@ -103,8 +103,11 @@ export class WindowInputService {
   /**
    * copy-mode 判定は MuxCapabilities.copyMode で分岐する。tmux ではスクロールバック閲覧中の
    * send-keys がバッファ選択操作に吸収されるため、解除してから短い待機を挟む。
+   * caps はペインが属する mux（handle の形で判別）の driver のものを見る。サーバーの既定 mux の
+   * caps ではない（1 台に tmux と misao のペインが並ぶため）。
    */
-  private async preparePaneForInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle): Promise<void> {
+  private async preparePaneForInput(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    const driver = this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server);
     if (!driver.caps.copyMode) return;
     const inMode = await driver.isPaneInModeByHandle(server, handle);
     if (!inMode) return;
