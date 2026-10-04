@@ -10,6 +10,7 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
+import { canActOnMux } from '../../lib/windowRowPlan';
 import type { WindowPaneTreeProps } from '../ui/WindowPaneTree';
 import { isTerminalTabActive } from '../../lib/windowMatch';
 import { muxRefJson, type TerminalRef } from '../../lib/terminalRef';
@@ -477,7 +478,7 @@ export default function ObjectsSidebar({
   );
 
   // オペレーションウィンドウ用コンテキストメニュー: タスクを表示 / ターミナルを開く / ペインをキャプチャ / (区切り) / オペレーションを停止
-  const getOperationMenuItems = useCallback((w: WindowItem, extra?: { online: boolean; paneTarget?: string }): ContextMenuItem[] => {
+  const getOperationMenuItems = useCallback((w: WindowItem, extra?: { online: boolean; stale?: boolean; paneTarget?: string }): ContextMenuItem[] => {
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
     const items: ContextMenuItem[] = [];
     if (w.taskId != null) {
@@ -489,7 +490,8 @@ export default function ObjectsSidebar({
       onClick: () => handleOperationPaneClick(w.serverName, extra?.paneTarget ?? w.tmuxTarget, w),
     });
     if (extra?.online) {
-      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => onCapturePanes(w.id) });
+      // A stale window's mux cannot be reached: capturing goes through it.
+      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, disabled: !canActOnMux(extra), onClick: () => onCapturePanes(w.id) });
     }
     if (task && RUNNING_STATUSES.has(task.status) && task.unitId != null) {
       items.push({ label: '', separator: true, onClick: () => {} });
@@ -501,11 +503,11 @@ export default function ObjectsSidebar({
     return items;
   }, [taskById, t, handleOpenTask, handleOperationPaneClick, onCapturePanes, onStopOperation]);
 
-  const showOperationContextMenu = useCallback((e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; paneTarget?: string }) => {
+  const showOperationContextMenu = useCallback((e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; stale?: boolean; paneTarget?: string }) => {
     showContextMenu(e, getOperationMenuItems(w, extra));
   }, [showContextMenu, getOperationMenuItems]);
 
-  const showOperationLongPress = useCallback((x: number, y: number, w: WindowItem, extra?: { online: boolean; paneTarget?: string }) => {
+  const showOperationLongPress = useCallback((x: number, y: number, w: WindowItem, extra?: { online: boolean; stale?: boolean; paneTarget?: string }) => {
     showContextMenuAt(x, y, getOperationMenuItems(w, extra));
   }, [showContextMenuAt, getOperationMenuItems]);
 

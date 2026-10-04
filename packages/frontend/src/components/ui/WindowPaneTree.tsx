@@ -574,11 +574,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               color: active ? 'var(--accent)' : 'inherit',
             }}
           >
-            <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
+            <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) && !plan.stale ? undefined : DIMMED_PANE_OPACITY }}>
               <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
               {paneLabel}
             </span>
-            <PaneStateChip pane={pane} />
+            {plan.stale ? <StaleChip /> : <PaneStateChip pane={pane} />}
           </div>
         );
       })}
