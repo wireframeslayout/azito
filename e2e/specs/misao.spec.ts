@@ -117,9 +117,18 @@ test.describe('misao ドライバ', () => {
     await expect(app.locator('.xterm-rows').first()).toContainText('e2e-misao-42', { timeout: 15_000 });
   });
 
-  test('タスク実行: scripted fake がプロンプトに従って完了し、タスクが review になる', async ({ harness }) => {
+  test('タスク実行: tmux の窓と並ぶ misao の窓で、scripted fake がプロンプトに従って完了し、タスクが review になる', async ({ harness }) => {
     const repo = createGitRepo();
     try {
+      // 同じ local サーバーに tmux の窓を置いておく（#311: 1 台で tmux と misao の窓を併用する）。
+      // 既定のターミナル方式は misao なので、名前ベースの tmux セッションルートで tmux 側に作る。
+      const tmuxSession = 'e2e-mixed-tmux';
+      const createdTmux = await harness.api<{ ok: boolean; windowName: string }>('/servers/local/sessions', {
+        method: 'POST',
+        body: JSON.stringify({ name: tmuxSession, windowName: 'side' }),
+      });
+      expect(createdTmux.ok).toBe(true);
+
       await harness.api(`/projects/${projectId}/servers/local`, {
         method: 'PUT',
         body: JSON.stringify({ working_directory: repo }),
@@ -159,6 +168,14 @@ test.describe('misao ドライバ', () => {
       await expect.poll(async () => (await harness.api<{ status: string }>(`/tasks/${taskId}`)).status, {
         timeout: TASK_BUDGET_MS,
       }).toBe('review');
+
+      // タスクの窓は misao に作られ、tmux の窓はそのまま並んでいる。一覧は両方を kind 付きで返す。
+      const taskWindows = await harness.api<Array<{ isPrimary: boolean; muxRef?: { kind: string } }>>(`/tasks/${taskId}/windows`);
+      expect(taskWindows.find((w) => w.isPrimary)?.muxRef?.kind).toBe('misao');
+      const listing = await harness.api<{ sessions: Array<{ name: string; kind: string }>; unavailable: unknown[] }>('/servers/local/sessions?detail=1');
+      expect(listing.unavailable).toEqual([]);
+      expect(listing.sessions).toContainEqual(expect.objectContaining({ name: tmuxSession, kind: 'tmux' }));
+      expect(listing.sessions.some((s) => s.kind === 'misao')).toBe(true);
     } finally {
       fs.rmSync(repo, { recursive: true, force: true });
     }

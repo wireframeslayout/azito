@@ -1,4 +1,5 @@
 import type { ServerConfig } from '../../servers/Server';
+import { serverSupportsMux } from '../../servers/muxKinds';
 import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
@@ -74,11 +75,6 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
   }
 }
 
-/** Servers the misao driver serves: local servers running the misao mux. */
-export function selectLocalMisaoServers<T extends Pick<ServerConfig, 'defaultMux' | 'type'>>(servers: T[]): T[] {
-  return servers.filter((s) => s.defaultMux === 'misao' && s.type === 'local');
-}
-
 /**
  * Creates the daemon connection and the driver on top of it, and registers the driver as kind 'misao'.
  * The connection is not started: the caller starts it so that startup does not wait for the daemon.
@@ -100,9 +96,10 @@ export function registerMisaoDriver(
 }
 
 /**
- * Keeps the daemon's change-event subscription in step with a runtime switch made while the hub runs
- * (startup installs it only for servers already on misao). Failure to install is not fatal: the
- * subscription is established when the daemon becomes reachable.
+ * Keeps the daemon's change-event subscription in step with an edit made while the hub runs (startup installs it
+ * for every server that can host misao, i.e. every local server, whatever its default mux). Changing the default
+ * mux does not move that; changing the server type does. Failure to install is not fatal: the subscription is
+ * established when the daemon becomes reachable.
  */
 export function syncMisaoChangeHooks(
   misao: MisaoHandle,
@@ -110,8 +107,8 @@ export function syncMisaoChangeHooks(
   next: ServerConfig,
   log: { warn(message: string): void },
 ): void {
-  const wasMisao = selectLocalMisaoServers([previous]).length > 0;
-  const isMisao = selectLocalMisaoServers([next]).length > 0;
+  const wasMisao = serverSupportsMux(previous, 'misao');
+  const isMisao = serverSupportsMux(next, 'misao');
   if (isMisao && !wasMisao) {
     misao.driver.installChangeHooks(next).catch((err) => {
       log.warn(`Change events for ${next.name} are not active yet (will start when the misao daemon is reachable): ${err}`);

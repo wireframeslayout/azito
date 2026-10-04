@@ -13,8 +13,7 @@ import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { scheduleStartupRecovery } from './modules/tasks/recovery/scheduleStartupRecovery';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
-import { partitionByTmuxRuntime } from './modules/servers/tmuxServers';
-import { selectLocalMisaoServers } from './modules/tmux/misao/misaoDriver';
+import { selectServersSupportingMux } from './modules/servers/muxKinds';
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
@@ -150,18 +149,18 @@ async function main(): Promise<void> {
 
   // ─── Startup: install tmux hooks + connect agent event streams ───
 
-  const { tmux: tmuxServers, skipped: nonTmuxServers } = partitionByTmuxRuntime(wiring.serverRepo.findAll());
-  for (const srv of nonTmuxServers) {
-    app.log.info(`Skipping tmux startup hooks and linked-session GC for ${srv.name}: default mux '${srv.defaultMux}' is not tmux`);
-  }
+  // A local server hosts both muxes, so it is in both selections; only its default mux is expected to answer.
+  const allServers = wiring.serverRepo.findAll();
+  const tmuxServers = selectServersSupportingMux(allServers, 'tmux');
 
   // Not awaited: the daemon may come up later. Change events for a server installed while the daemon is down
   // start flowing as soon as the connection is established.
   const misao = wiring.misao;
-  const misaoServers = selectLocalMisaoServers(nonTmuxServers);
+  const misaoServers = selectServersSupportingMux(allServers, 'misao');
   void misao.connection.start().then(() => Promise.all([
     ...misaoServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
-      app.log.warn(`Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
+      const message = `Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`;
+      if (srv.defaultMux === 'misao') app.log.warn(message); else app.log.debug(message);
     })),
     misaoPaneStates.start().catch((err) => {
       app.log.warn(`Activity events are not active yet (will start when the misao daemon is reachable): ${err}`);
@@ -171,7 +170,8 @@ async function main(): Promise<void> {
   for (const srv of tmuxServers) {
     if (srv.type === 'local') {
       tmuxHookManager.install(srv).catch((err) => {
-        app.log.warn(`Failed to install tmux hooks on ${srv.name}: ${err}`);
+        const message = `Failed to install tmux hooks on ${srv.name}: ${err}`;
+        if (srv.defaultMux === 'tmux') app.log.warn(message); else app.log.debug(message);
       });
     }
     if (srv.type === 'agent' && srv.host && srv.agentPort && srv.agentToken) {

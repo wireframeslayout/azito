@@ -150,7 +150,31 @@ describe('target resolution against sessions on a misao server', () => {
   });
 
   it('a tmux server keeps its first-match naming', () => {
-    expect(resolveTerminalRefFromTarget('s', 'ws:dup', { sessions: dup, muxKind: 'tmux' })).toEqual(ref(1));
+    const tmuxDup: Session[] = [{ name: 'ws', kind: 'tmux', windows: [
+      { index: 0, name: 'dup', panes: [], ref: '{"kind":"tmux","workspace":"ws","window":"dup"}', windowId: 1 },
+      { index: 1, name: 'dup', panes: [], ref: '{"kind":"tmux","workspace":"ws","window":"dup"}', windowId: 2 },
+    ] }];
+    expect(resolveTerminalRefFromTarget('s', 'ws:dup', { sessions: tmuxDup, muxKind: 'tmux' })).toEqual(ref(1));
+  });
+});
+
+describe('target resolution when a tmux and a misao session share a name (#311)', () => {
+  const MISAO = '{"kind":"misao","workspace":"dev","window":"w_01M40229BC46M2RPATEBX4JN25"}';
+  const TMUX = '{"kind":"tmux","workspace":"dev","window":"editor"}';
+  const sessions: Session[] = [
+    { name: 'dev', kind: 'misao', windows: [{ index: 0, name: 'editor', panes: [], ref: MISAO, windowId: 10 }] },
+    { name: 'dev', kind: 'tmux', windows: [{ index: 0, name: 'editor', panes: [], ref: TMUX, windowId: 20 }] },
+  ];
+  const ref = (windowId: number) => ({ status: 'ready', ref: { kind: 'windowId', serverName: 's', windowId, pane: 1 } });
+
+  it('reads an index or a name in the mux a bare target means (the default), never in the other one', () => {
+    expect(resolveTerminalRefFromTarget('s', 'dev:0', { sessions, muxKind: 'tmux' })).toEqual(ref(20));
+    expect(resolveTerminalRefFromTarget('s', 'dev:editor', { sessions, muxKind: 'tmux' })).toEqual(ref(20));
+    expect(resolveTerminalRefFromTarget('s', 'dev:0', { sessions, muxKind: 'misao' })).toEqual(ref(10));
+  });
+
+  it('finds a misao window by its id whatever the default mux is', () => {
+    expect(resolveTerminalRefFromTarget('s', 'dev:w_01M40229BC46M2RPATEBX4JN25', { sessions, muxKind: 'tmux' })).toEqual(ref(10));
   });
 });
 

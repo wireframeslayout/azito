@@ -1,41 +1,17 @@
 import os from 'os';
-import type { MuxDriverKind } from '@azito/shared';
 import type { IServerTransport, IMuxTransport } from './ServerTransport';
 import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
-import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
-import type { MuxDriverAvailability, MuxProbeTarget } from '../../tmux/MuxDriverRegistry';
-import { MuxlessLocalTransport } from './MuxlessLocalTransport';
-
-type MuxAvailabilityFn = (kind: MuxDriverKind, server: MuxProbeTarget) => MuxDriverAvailability;
-
-export interface TransportFactoryOptions {
-  /** Reports whether the server's default mux driver is usable (MuxDriverRegistry.availability). */
-  muxAvailability: MuxAvailabilityFn;
-}
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport>();
 
-  private muxAvailability: MuxAvailabilityFn;
+  constructor(private publicUrl: string) {}
 
-  constructor(private publicUrl: string, options: TransportFactoryOptions) {
-    this.muxAvailability = options.muxAvailability;
-  }
-
-  getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime' | 'defaultMux'>): IServerTransport & IMuxTransport {
-    // Exec is independent of the mux, so a non-tmux local server still gets a shell transport; its mux operations fail
-    // via the registry's availability instead of falling back to tmux. Checked before the cache so a stale tmux entry
-    // is never returned.
-    const kind = server.defaultMux;
-    if (kind !== 'tmux') {
-      if (server.type === 'local') return new MuxlessLocalTransport(kind, () => this.muxAvailability(kind, server));
-      const availability = this.muxAvailability(kind, server);
-      if (!availability.available) throw new MuxDriverUnavailableError(kind, availability.reason);
-      throw new Error(`Mux kind "${kind}" is not supported on ${server.type} servers`);
-    }
+  /** The shell/tmux transport of a server. It does not depend on the server's mux kinds: a misao window is reached through its driver. */
+  getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
     const key = `${server.type}:${server.name}`;
     const existing = this.cache.get(key);
     if (existing && server.type === 'agent') {

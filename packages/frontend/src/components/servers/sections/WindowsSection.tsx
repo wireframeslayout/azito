@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
+import type { MuxDriverKind } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
@@ -7,6 +8,7 @@ import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveT
 import { stripPaneSuffix } from '@azito/shared';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { preferredPaneOrdinal } from '../../../lib/paneState';
+import { refUsesMuxRoutes, usesMuxRoutes } from '../../../lib/sessionKind';
 import { errorMessageOf } from '../../../lib/apiResult';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useToast } from '../../../hooks/useToast';
@@ -75,32 +77,33 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     setShowTree(false);
   }, []);
 
-  const useMuxRoutes = useMemo(() => server.defaultMux !== 'tmux', [server.defaultMux]);
+  // A new session is created in the server's default mux; an existing session or window is acted on in its own mux.
+  const createsInMux = usesMuxRoutes(server.defaultMux);
 
   const handleCreateSession = useCallback(async () => {
     const name = prompt('New session name:');
     if (!name) return;
-    if (useMuxRoutes) {
+    if (createsInMux) {
       await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
     } else {
       await api(`/servers/${encodeURIComponent(server.name)}/sessions`, { method: 'POST', body: JSON.stringify({ name }) });
     }
     refresh();
-  }, [server.name, refresh, useMuxRoutes]);
+  }, [server.name, refresh, createsInMux]);
 
-  const handleAddWindow = useCallback(async (sessionName: string) => {
-    if (useMuxRoutes) {
-      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+  const handleAddWindow = useCallback(async (sessionName: string, kind: MuxDriverKind) => {
+    if (usesMuxRoutes(kind)) {
+      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) });
     } else {
       await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
     }
     refresh();
-  }, [server.name, refresh, useMuxRoutes]);
+  }, [server.name, refresh]);
 
   const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {
       await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else if (ref && useMuxRoutes) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     } else {
       await api(
@@ -109,7 +112,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
       );
     }
     refresh();
-  }, [server.name, refresh, useMuxRoutes]);
+  }, [server.name, refresh]);
 
   // Deleting what is on screen leaves `selectedRef` pointing at a pane ordinal / window that is gone: fall back to the first window.
   const handleDeletePane = useCallback(async (ref: TerminalRef, label: string, handle?: string) => {

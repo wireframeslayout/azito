@@ -243,7 +243,7 @@ function createMocks(): Mocks {
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function createUseCase(mocks: Mocks, registry?: any, windowRows: unknown[] = []): RecoverStuckTasksUseCase {
-  const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient } as any;
+  const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient, availabilityFor: () => ({ available: true }) } as any;
   return new RecoverStuckTasksUseCase(
     mocks.taskRepo as any,
     mocks.unitRepo as any,

@@ -1,4 +1,4 @@
-import { isPaneHandleLike, type MuxDriverKind, type PaneHandle } from '@azito/shared';
+import type { PaneHandle } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptSource } from './sources/TranscriptSource';
@@ -48,32 +48,21 @@ export class TranscriptPaneService {
   }
 
   /**
-   * ローカルサーバーを mux 種別ごとに 1 台へ絞る（tmux の local は同じ tmux を見るため先頭 1 台で
-   * 足りる。misao の local とは別のデーモンを見る）。
+   * ペインを引くローカルサーバー 1 台。ローカルサーバーは tmux と misao の両方を扱え（振り分け driver が
+   * ペインの種別で振り分け・併合する）、tmux はどのローカルサーバーから見ても同じ tmux なので、1 台で足りる。
+   * tmux 既定のサーバーがあればそれを優先する。
    */
-  private listLocalServersByKind(): ServerConfig[] {
-    const byKind = new Map<MuxDriverKind, ServerConfig>();
-    for (const server of this.listLocalServers()) {
-      const kind = server.defaultMux;
-      if (!byKind.has(kind)) byKind.set(kind, server);
-    }
-    return [...byKind.values()];
-  }
-
-  /** handle の形式と同じ mux 種別のローカルサーバーを返す。該当が無ければ undefined。 */
-  private findLocalServerForHandle(handle: PaneHandle): ServerConfig | undefined {
-    return this.listLocalServersByKind().find((s) => isPaneHandleLike(handle, s.defaultMux));
+  private pickLocalServer(): ServerConfig {
+    const locals = this.listLocalServers();
+    return locals.find((s) => s.defaultMux === 'tmux') ?? locals[0];
   }
 
   async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return null;
 
-    const allPanes = (
-      await Promise.all(
-        this.listLocalServersByKind().map((server) => this.muxDriverRegistry.resolve(server).listAllPanes(server)),
-      )
-    ).flat();
+    const server = this.pickLocalServer();
+    const allPanes = await this.muxDriverRegistry.resolve(server).listAllPanes(server);
     const panes: PaneCandidate[] = allPanes.map((pane) => ({
       paneId: pane.paneId,
       sessionName: pane.sessionName,
@@ -92,8 +81,7 @@ export class TranscriptPaneService {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
-    const server = this.findLocalServerForHandle(handle);
-    if (!server) return 'pane_not_found';
+    const server = this.pickLocalServer();
     const driver = this.muxDriverRegistry.resolve(server);
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';
@@ -114,8 +102,7 @@ export class TranscriptPaneService {
     const meta = source.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
-    const server = this.findLocalServerForHandle(handle);
-    if (!server) return 'pane_not_found';
+    const server = this.pickLocalServer();
     const driver = this.muxDriverRegistry.resolve(server);
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';

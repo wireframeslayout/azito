@@ -16,7 +16,7 @@ describe('MuxDriverRegistry', () => {
     const registry = new MuxDriverRegistry();
     const driver = makeMockDriver('tmux');
     registry.register('tmux', driver);
-    expect(registry.resolve(serverWith('tmux'))).toBe(driver);
+    expect(registry.resolve(serverWith('tmux')).caps).toBe(driver.caps);
   });
 
   it('resolve throws MuxDriverUnavailableError when no driver registered', () => {
@@ -30,7 +30,7 @@ describe('MuxDriverRegistry', () => {
     const second = makeMockDriver('tmux');
     registry.register('tmux', first);
     registry.register('tmux', second);
-    expect(registry.resolve(serverWith('tmux'))).toBe(second);
+    expect(registry.resolve(serverWith('tmux')).caps).toBe(second.caps);
   });
 
 });

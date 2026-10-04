@@ -43,8 +43,23 @@ misao status
 2. 「既定のターミナル方式」で **misao** を選んで保存します（「tmux の実行ファイル」は tmux を使うときの設定で、システム / 管理版を選びます）。
 3. 概要の「既定のターミナル方式」が `misao` になり、接続状態のチップが「接続中」になれば完了です。
 
-tmux 上にあるウィンドウは misao へ移行されません。切り替え後に作ったウィンドウから misao の
-ペインになります。元に戻すときも同じ画面で「既定のターミナル方式」に tmux を選びます。
+「既定のターミナル方式」は、新しく作るウィンドウの置き場所です。local サーバーは tmux と misao の
+両方のウィンドウを同時に扱えます。tmux 上にあるウィンドウは misao へ移行されず、そのまま tmux の
+ウィンドウとして使い続けられます（稼働検知・端末・タスクの follow-up も、ウィンドウごとに自分の方式で動きます）。
+元に戻すときも同じ画面で「既定のターミナル方式」に tmux を選びます。
+
+## 1 台のサーバーで tmux と misao を併用する
+
+- ウィンドウ・ペインの操作は、ウィンドウの `mux_ref` の種別（ペインはハンドルの形。misao は `p_<ULID>`）で
+  tmux / misao に振り分けられます。サーバーの既定の方式は、新しく作るウィンドウにだけ効きます。
+- `GET /api/servers/:name/sessions` は両方の一覧を併せて返し、各セッションに `kind`（`"tmux"` / `"misao"`）を付けます。
+  同じ名前のセッションが両方にあっても、`kind` で区別されます。
+- `?detail=1` を付けると `{ sessions, unavailable }` を返します。`unavailable` は、そのサーバーが扱える方式のうち
+  一覧できなかったもの（例: `{ "kind": "misao", "reason": "daemon_unreachable" }`）です。デーモンが止まっていても
+  もう一方の方式のセッションは返り、止まっている方式のウィンドウは「削除された」扱いになりません
+  （画面のタブは閉じられず、稼働検知も完了を出しません）。両方とも一覧できないときはエラーになります。
+- `POST /api/servers/:name/mux/workspaces` などのワークスペース操作は `kind` を受け付けます（省略時は既定の方式）。
+- misao のウィンドウの `tmux_target` は `<workspace>:<window id>` の形で保存されます（migration 078 で既存の行も変換）。
 
 API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`、misao は local サーバーのみ）と `muxRuntime`（`"system"` / `"managed"`、tmux の実行ファイル）を別々に指定します。
 以前の `muxRuntime: "misao"` は `defaultMux: "misao"` として今のところ受け付けますが、互換のためで、次のリリースで廃止する予定です。
@@ -86,4 +101,5 @@ API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`、mi
   プロセスが終了したときだけ出ます。詳細は [稼働検知 Tier 判定リファレンス](./activity-detection.md) の「misao 窓」を参照してください。
 - ペインのズーム、レイアウトの保存・適用、ペインタイトルの設定などの tmux 固有の操作は未対応です。
 - デーモンを再起動するとペインのプロセスは失われます（メタデータだけが残り、`stopped` になります）。
-- agent / SSH サーバーでの misao、Add Server 画面での選択、managed tmux の導入導線は対象外です。窓ごとに misao / tmux を選ぶ機能は今後の対応です。
+- agent / SSH サーバーでの misao、Add Server 画面での選択、managed tmux の導入導線は対象外です。ウィンドウ追加の画面で
+  方式を選ぶ機能は今後の対応です（今は既定の方式に作られます）。

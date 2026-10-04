@@ -77,8 +77,8 @@ import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookMa
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
-import { partitionByTmuxRuntime } from '../modules/servers/tmuxServers';
-import { describeMisaoDaemon, selectLocalMisaoServers, syncMisaoChangeHooks } from '../modules/tmux/misao/misaoDriver';
+import { selectServersSupportingMux } from '../modules/servers/muxKinds';
+import { describeMisaoDaemon, syncMisaoChangeHooks } from '../modules/tmux/misao/misaoDriver';
 import { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
 import { MisaoActivityBridge } from '../modules/operations/misaoActivityBridge';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
@@ -274,10 +274,21 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     resolver: paneHandleResolver,
     findWindowByRef: (serverName, ref) => windowRepo.findByServerAndRef(serverName, ref),
     monitor: agentActivityMonitor,
-    listServerNames: () => selectLocalMisaoServers(serverRepo.findAll()).map((srv) => srv.name),
+    listServerNames: () => selectServersSupportingMux(serverRepo.findAll(), 'misao').map((srv) => srv.name),
     log: app.log,
   });
   const misaoPaneStates = new MisaoPaneStateEvents(wiring.misao.connection, misaoActivityBridge, app.log);
+
+  // The daemon connecting or dropping changes what a misao-capable server lists (its misao sessions, or misao
+  // reported unavailable): drop those cached listings and let clients refetch.
+  const refreshMisaoServerListings = (): void => {
+    for (const srv of selectServersSupportingMux(serverRepo.findAll(), 'misao')) {
+      invalidateSessionCache(srv.name);
+      notificationBus.emit({ type: 'sessions:updated', payload: { serverName: srv.name } });
+    }
+  };
+  wiring.misao.connection.onConnected(refreshMisaoServerListings);
+  wiring.misao.connection.onDisconnected(refreshMisaoServerListings);
 
   notificationBus.on((event) => {
     if (event.type === 'sessions:updated') {
@@ -593,7 +604,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     misao: {
       // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
       resolvePane: async (serverName, paneId) => {
-        if (!selectLocalMisaoServers(serverRepo.findAll()).some((srv) => srv.name === serverName)) return null;
+        if (!selectServersSupportingMux(serverRepo.findAll(), 'misao').some((srv) => srv.name === serverName)) return null;
         try {
           return await paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId));
         } catch (err) {
@@ -751,7 +762,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         return;
       }
 
-      handleTerminalConnection(socket, resolved.server, resolved.ref, resolvedOrdinal, cols, rows, transportFactory, muxDriverRegistry);
+      handleTerminalConnection(socket, resolved.server, resolved.ref, resolvedOrdinal, cols, rows, muxDriverRegistry);
     });
   });
 
@@ -833,10 +844,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     // 8s hard cap in main.ts's graceful shutdown can starve it in favor of later steps.
     await browserSessionManager.stopAll();
     agentActivityMonitor.stop();
-    const localServers = partitionByTmuxRuntime(serverRepo.findAll()).tmux.filter((s) => s.type === 'local');
+    const localServers = selectServersSupportingMux(serverRepo.findAll(), 'tmux').filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
     misaoPaneStates.stop();
-    for (const srv of selectLocalMisaoServers(serverRepo.findAll())) await wiring.misao.driver.uninstallChangeHooks(srv);
+    for (const srv of selectServersSupportingMux(serverRepo.findAll(), 'misao')) await wiring.misao.driver.uninstallChangeHooks(srv);
     wiring.misao.connection.close();
     for (const stream of agentEventStreams) stream.stop();
     notificationBus.destroy();

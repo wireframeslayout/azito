@@ -85,3 +85,27 @@ describe('windowInfoMatchesRef (misao)', () => {
     expect(windowInfoMatchesRef(win({ name: MISAO_WINDOW }), ref)).toBe(false);
   });
 });
+
+describe('tmux refs never match misao panes or windows of a merged listing (#311)', () => {
+  const misaoPaneRef: MuxRef = { kind: 'misao', workspace: 'main', window: MISAO_WINDOW };
+
+  it('rejects a misao pane in a same-named workspace whose window index and name equal the tmux window', () => {
+    const misaoPane = pane({ paneId: 'p_01M3XFD8H97JCPKS5Y5BH3JZQK', ref: misaoPaneRef });
+    expect(paneInfoMatchesRef(misaoPane, tmuxRef('main', 'win-806'))).toBe(false);
+    expect(paneInfoMatchesRef(misaoPane, tmuxRef('main', '2'))).toBe(false);
+  });
+
+  it('tells a misao pane listed without a ref by its handle shape', () => {
+    expect(paneInfoMatchesRef(pane({ paneId: 'p_01M3XFD8H97JCPKS5Y5BH3JZQK' }), tmuxRef('main', 'win-806'))).toBe(false);
+    expect(paneInfoMatchesRef(pane({ paneId: '%9' }), tmuxRef('main', 'win-806'))).toBe(true);
+  });
+
+  it('rejects a misao window for a tmux ref', () => {
+    expect(windowInfoMatchesRef(win({ ref: misaoPaneRef }), tmuxRef('main', 'win-806'))).toBe(false);
+    expect(windowInfoMatchesRef(win({ ref: tmuxRef('main', 'win-806') }), tmuxRef('main', 'win-806'))).toBe(true);
+  });
+
+  it('keeps a tmux pane from matching a misao ref', () => {
+    expect(paneInfoMatchesRef(pane({ ref: tmuxRef('main', 'win-806') }), misaoPaneRef)).toBe(false);
+  });
+});

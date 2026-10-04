@@ -1,6 +1,5 @@
 import type { WebSocket } from 'ws';
 import type { ServerConfig } from '../../servers/Server';
-import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ITerminalStream, OpenTerminalOpts } from '../../servers/transport/ServerTransport';
 import { TERMINAL_CLOSE, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
@@ -27,7 +26,6 @@ export function handleTerminalConnection(
   ordinal: PaneOrdinal,
   cols: number,
   rows: number,
-  transportFactory: TransportFactory,
   muxDriverRegistry: MuxDriverRegistry,
   terminalOpts?: OpenTerminalOpts,
 ): void {
@@ -52,10 +50,9 @@ export function handleTerminalConnection(
 
   ws.on('close', cleanup);
 
-  // Resolving a driver/transport throws synchronously when it is unavailable; route it through the promise chain so the client gets the error message.
-  const openPromise = Promise.resolve().then(() => server.defaultMux === 'misao'
-    ? muxDriverRegistry.resolve(server).openTerminal(server, ref, ordinal, cols, rows)
-    : transportFactory.getTransport(server).openTerminal(ref, ordinal, cols, rows, terminalOpts));
+  // Resolving the driver throws synchronously when it is unavailable; route it through the promise chain so the client gets the error message.
+  // The routing driver picks the tmux or misao driver by `ref.kind`.
+  const openPromise = Promise.resolve().then(() => muxDriverRegistry.resolve(server).openTerminal(server, ref, ordinal, cols, rows, terminalOpts));
 
   openPromise.then((stream) => {
     if (closed) stream.close();

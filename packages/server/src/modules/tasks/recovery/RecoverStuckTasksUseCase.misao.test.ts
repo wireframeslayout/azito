@@ -124,9 +124,10 @@ describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
       'misao-server': { name: 'misao-server', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig,
       'tmux-server': { name: 'tmux-server', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
     };
+    // Each driver hands out its own handle shape: the routing driver sends a handle to the mux that owns it.
     const driverOf = (kind: string) => ({
       kind,
-      resolvePane: vi.fn().mockResolvedValue('%0'),
+      resolvePane: vi.fn().mockResolvedValue(kind === 'misao' ? 'p_01M3XFD8H97JCPKS5Y5BH3JZQH' : '%0'),
       probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
       sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
     });

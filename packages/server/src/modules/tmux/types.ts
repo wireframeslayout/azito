@@ -1,4 +1,4 @@
-import type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo, MuxRef } from '@azito/shared';
+import { muxKindOfPaneHandle, type MuxWorkspace, type MuxWindowInfo, type MuxPane, type MuxPaneInfo, type MuxRef } from '@azito/shared';
 
 export type { MuxWorkspace, MuxWindowInfo, MuxPane, MuxPaneInfo };
 
@@ -57,14 +57,19 @@ export interface TmuxPaneInfo {
   currentCommand: string;
 }
 
-/** True when the pane belongs to the window `ref` addresses. misao compares window ids; a pane without a ref never matches. */
+/**
+ * True when the pane belongs to the window `ref` addresses. misao compares window ids; a pane without a ref never
+ * matches a misao ref. A tmux ref matches tmux panes only: a merged listing also holds misao panes, whose workspace
+ * and window index/name can equal a tmux window's. A pane's kind is its ref's, else its handle's shape.
+ */
 export function paneInfoMatchesRef(pane: MuxPaneInfo, ref: MuxRef): boolean {
   if (ref.kind === 'misao') return pane.ref?.kind === 'misao' && pane.ref.window === ref.window;
-  return pane.sessionName === ref.workspace && windowSpecMatches(ref.window, pane.windowIndex, pane.windowName);
+  const paneKind = pane.ref?.kind ?? muxKindOfPaneHandle(pane.paneId);
+  return paneKind === 'tmux' && pane.sessionName === ref.workspace && windowSpecMatches(ref.window, pane.windowIndex, pane.windowName);
 }
 
-/** True when `win` (already known to be in the ref's workspace) is the window `ref` addresses. */
+/** True when `win` (already known to be in the ref's workspace) is the window `ref` addresses; a tmux ref matches tmux windows only. */
 export function windowInfoMatchesRef(win: MuxWindowInfo, ref: MuxRef): boolean {
   if (ref.kind === 'misao') return win.ref?.kind === 'misao' && win.ref.window === ref.window;
-  return windowSpecMatches(ref.window, win.index, win.name);
+  return (win.ref?.kind ?? 'tmux') === 'tmux' && windowSpecMatches(ref.window, win.index, win.name);
 }

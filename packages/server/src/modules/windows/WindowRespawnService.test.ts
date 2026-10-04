@@ -554,7 +554,7 @@ describe('WindowRespawnService.respawn — primary vs. secondary task window tok
     expect(paneEnvService.buildEnvForNewWindow).not.toHaveBeenCalled();
     expect(paneEnvService.buildEnvForSecondaryWindow).toHaveBeenCalledWith(task, expect.anything());
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' } },
+      expect.anything(), 'azito', 'task-5-side', { exactName: true, extraEnv: { AZITO_TASK_ID: '1' }, kind: 'tmux' },
     );
   });
 
@@ -714,7 +714,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
 
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: 'task-1--ab12' });
     expect(tmux.openWindow).toHaveBeenCalledWith(
-      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
+      expect.anything(), 'azito', 'task-1--ab12', { exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
     );
   });
 
@@ -928,7 +928,7 @@ describe('WindowRespawnService.respawn — window name preservation', () => {
     const result = await service.respawn(1, makeServer());
 
     expect(tmux.openWorkspace).toHaveBeenCalledWith(
-      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' } },
+      expect.anything(), 'azito', { windowName: 'task-1--ab12', exactName: true, extraEnv: { AZITO_UI_TOKEN: 'ui-token-fixture' }, kind: 'tmux' },
     );
     expect(tmux.openWindow).not.toHaveBeenCalled();
     expect(result.tmuxTarget).toBe('azito:task-1--ab12');
@@ -2080,7 +2080,7 @@ describe('WindowRespawnService.findRunningSessionForTask', () => {
 
     const result = await service.findRunningSessionForTask(5, sessionId, 'local-server');
 
-    expect(result).toEqual({ windowId: 20, tmuxTarget: 'azito:task-alive' });
+    expect(result).toEqual({ windowId: 20, tmuxTarget: 'azito:task-alive', kind: 'tmux' });
   });
 
   it('returns null when PID resolution fails', async () => {

@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import { PaneStreamFactory } from './PaneStreamFactory';
-import { PaneOutputStream } from './PaneOutputStream';
 import { MisaoPaneStream } from './misao/MisaoPaneStream';
 import type { MisaoLineSource } from './misao/MisaoConnection';
 
@@ -20,20 +19,24 @@ describe('PaneStreamFactory', () => {
     const tmuxServer = { ...misaoServer, defaultMux: 'tmux' as const, muxRuntime: 'system' as const };
     const misaoLines = {} as MisaoLineSource;
     const misaoFactory = new PaneStreamFactory(transportFactory, misaoLines);
-    const pane = asPaneHandle('p_1');
+
+    const misaoPane = asPaneHandle('p_01ARZ3NDEKTSV4RRFFQ69G5FAV');
 
     it('reads a misao pane through its line stream', () => {
-      expect(misaoFactory.create('t1-123', misaoServer, pane)).toBeInstanceOf(MisaoPaneStream);
+      expect(misaoFactory.create('t1-123', misaoServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
     });
 
-    it('uses a plain file stream for misao streams without a pane (signal files)', () => {
-      const stream = misaoFactory.create('t1-sig', misaoServer);
-      expect(stream).toBeInstanceOf(PaneOutputStream);
-      expect(stream.getFilePath()).toContain('azito-pipe-t1-sig-');
+    it('tells a misao pane by its handle, whatever the server default mux is', () => {
+      expect(misaoFactory.create('t1-123', tmuxServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
     });
 
-    it('keeps the transport path for tmux servers', () => {
-      expect(misaoFactory.create('t1-123', tmuxServer, pane)).toBe(fileStream);
+    it('takes streams without a pane (signal files) from the transport, which writes a plain file', () => {
+      expect(misaoFactory.create('t1-sig', misaoServer)).toBe(fileStream);
+    });
+
+    it('keeps the transport path for a tmux pane, even on a misao-default server', () => {
+      expect(misaoFactory.create('t1-123', tmuxServer, asPaneHandle('%5'))).toBe(fileStream);
+      expect(misaoFactory.create('t1-123', misaoServer, asPaneHandle('%5'))).toBe(fileStream);
     });
   });
 });

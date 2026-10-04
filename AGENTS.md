@@ -135,7 +135,7 @@ packages/
                                   #         updateScript (out-of-process self-update), serviceControl
         health/                   # [upper] GET /api/health (hub-wide flags: scopedAuthEnabled)
       shared/
-        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-077)
+        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-078)
   frontend/                        # React 19 + Vite + TypeScript
     src/
       components/                  # Layout, Terminal, Modal, FileExplorer, TaskLogView, etc.
@@ -281,7 +281,7 @@ packages/
 - SQLite (better-sqlite3) with WAL mode
 - Migration files in `packages/server/src/shared/db/migrations/`
 - DB path: `<project-root>/data.db`
-- Current migrations: 001-077 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux)
+- Current migrations: 001-077 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux (servers.default_mux split from mux_runtime), 078 normalize misao window rows (mux_ref kind misao, tmux_target `<workspace>:<window id>`, duplicate rows merged))
 
 ### SSH (Tailscale)
 - Persistent shell pool with `\x02AGENTMGR_B/E` markers for command execution
@@ -387,8 +387,13 @@ packages/
 - Ref-based window operations (5-A): `/api/servers/:name/mux/windows/:ref/{kill,rename,panes,...}` — same operations via MuxRef for unregistered windows
 - `GET /api/windows/pane-loading-state` accepts `?windowId=` in addition to `?server_name=&tmux_target=`
 - Operations: `GET /api/operations` (currently running execution runs — `{ unitId, taskId, target, windowId? }[]`; no operations table anymore)
-- misao windows (a local server whose `defaultMux` is `misao`; `servers.default_mux` is separate from `servers.mux_runtime`, which only selects the tmux binary `system`/`managed` — migration 077; the API still reads the legacy `muxRuntime: 'misao'` as `defaultMux: 'misao'` for one release): no tui-supervisor (`shouldSupervise(..., muxKind)` is false for
-  misao). The daemon's `pane.state` events (`MisaoPaneStateEvents` → `MisaoActivityBridge`, first pane of a window only) drive
+- misao windows (a window whose `mux_ref.kind` is `misao`; a local server hosts tmux and misao windows side by side —
+  `MuxDriverRegistry.resolve(server)` returns a `RoutingMuxClient` that routes each call by the ref's kind / the pane handle's
+  shape and merges server-wide listings; `servers.default_mux` only decides where new windows are created and is separate from
+  `servers.mux_runtime`, which only selects the tmux binary `system`/`managed` — migration 077; the API still reads the legacy
+  `muxRuntime: 'misao'` as `defaultMux: 'misao'` for one release): no tui-supervisor (`shouldSupervise(..., windowKind)` is false for
+  misao windows). `GET /api/servers/:name/sessions` stamps each session with `kind`; `?detail=1` returns `{ sessions, unavailable }`
+  where `unavailable` lists the hosted muxes that could not be listed (their windows are kept, not treated as deleted). The daemon's `pane.state` events (`MisaoPaneStateEvents` → `MisaoActivityBridge`, first pane of a window only) drive
   `tier0_mux` through `recordMuxSignal()`; because the misao core never reports `blocked`, a `tier0_mux` working/idle row on a
   misao window is confirmed against the window's first-pane screen (resolved from `mux_ref`, no title pre-check) and refined to
   blocked with `refinedBy: 'tier2_title'`. The three hooks send `misaoPaneId` (from `$MISAO_PANE_ID`) instead of tmux fields when

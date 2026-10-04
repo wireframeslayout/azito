@@ -1,4 +1,4 @@
-import type { MuxRef } from '@azito/shared';
+import type { MuxDriverKind, MuxRef } from '@azito/shared';
 
 export type WindowType = 'terminal' | 'agent';
 export type OwnerType = 'project' | 'task';
@@ -105,9 +105,9 @@ export interface IWindowRepository {
    * (Issue #28 third-party review finding 4) to resolve which windows a
    * whole-session kill is about to take down BEFORE the kill runs (once the
    * session is gone, tmux itself can no longer answer "which windows did it
-   * hold").
+   * hold"). Only rows of `kind` (a tmux and a misao session can share a name).
    */
-  findByServerAndSession(serverName: string, sessionName: string): Window[];
+  findByServerAndSession(serverName: string, sessionName: string, kind: MuxDriverKind): Window[];
   /**
    * The DB's own current timestamp, in the exact same string format as
    * `created_at` on every row (Issue #28 third-party review finding: the

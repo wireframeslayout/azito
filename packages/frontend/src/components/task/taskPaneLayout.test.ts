@@ -1,3 +1,4 @@
+import { canActOnMux } from '../../lib/windowRowPlan';
 import { describe, it, expect, afterEach } from 'vitest';
 import type { Window, Session } from '../../pages/workspace/types';
 import {
@@ -361,8 +362,18 @@ describe('resolveWindowContextExtra', () => {
   it('resolves online window/pane metadata for a matching single-pane window', () => {
     const w = makeWindow({ serverName: 'local', tmuxTarget: 'sess:1.0' });
     expect(resolveWindowContextExtra(w, sessionData)).toEqual({
-      online: true, windowName: 'main', paneTarget: 'sess:main.0', paneTitle: 'my-title', paneCommand: 'bash',
+      online: true, stale: false, windowName: 'main', paneTarget: 'sess:main.0', paneTitle: 'my-title', paneCommand: 'bash',
     });
+  });
+
+  it('carries stale for a window of a session kept from an earlier listing, so the menus disable mux actions (#311)', () => {
+    const data: Record<string, Session[]> = { local: [{ ...sessionData.local[0], stale: true }] };
+    const extra = resolveWindowContextExtra(makeWindow({ serverName: 'local', tmuxTarget: 'sess:1.0' }), data);
+    expect(extra).toMatchObject({ online: true, stale: true });
+    // The gate both window menus (TaskPanel tab / long-press via getWindowMenuItems, operation rows) use to disable
+    // rename / capture / sleep / delete.
+    expect(canActOnMux(extra)).toBe(false);
+    expect(canActOnMux(resolveWindowContextExtra(makeWindow({ serverName: 'local', tmuxTarget: 'sess:1.0' }), sessionData))).toBe(true);
   });
 
   it('falls back to the pane command when the title equals the command', () => {

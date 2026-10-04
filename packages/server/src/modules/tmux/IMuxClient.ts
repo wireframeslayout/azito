@@ -24,15 +24,16 @@ export interface IMuxClient {
 
   listWorkspaces(server: ServerConfig): Promise<MuxWorkspace[]>;
   listWorkspacesStrict(server: ServerConfig): Promise<MuxWorkspace[]>;
-  openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
-  openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string> }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
+  /** `kind` (routing driver only) picks the mux to create in; omitted = the server's default mux. A single driver ignores it. */
+  openWorkspace(server: ServerConfig, name: string, opts?: { command?: string; windowName?: string; exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
+  openWindow(server: ServerConfig, workspace: string, baseName?: string, opts?: { exactName?: boolean; extraEnv?: Record<string, string>; kind?: MuxDriverKind }): Promise<{ ref: MuxRef; result: ExecResult; windowName?: string }>;
   closeWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
-  closeWorkspace(server: ServerConfig, workspace: string): Promise<ExecResult>;
+  closeWorkspace(server: ServerConfig, workspace: string, opts?: { kind?: MuxDriverKind }): Promise<ExecResult>;
   renameWindowByRef(server: ServerConfig, ref: MuxRef, name: string): Promise<ExecResult>;
-  renameWorkspace(server: ServerConfig, from: string, to: string): Promise<ExecResult>;
+  renameWorkspace(server: ServerConfig, from: string, to: string, opts?: { kind?: MuxDriverKind }): Promise<ExecResult>;
   windowExists(server: ServerConfig, ref: MuxRef): Promise<boolean>;
   focusWindow(server: ServerConfig, ref: MuxRef): Promise<ExecResult>;
-  resolveRef(server: ServerConfig, target: string): Promise<MuxRef | null>;
+  resolveRef(server: ServerConfig, target: string, opts?: { kind?: MuxDriverKind }): Promise<MuxRef | null>;
   /** Stamps every pane of the window with the hub window/task identity. Only valid when `supportsPaneLabels`. */
   labelWindowPanes(server: ServerConfig, ref: MuxRef, labels: PaneWindowLabels): Promise<void>;
 

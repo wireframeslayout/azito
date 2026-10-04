@@ -6,8 +6,10 @@ import type { IServerRepository, ServerConfig } from './Server';
 import { parseMuxInput } from './muxInput';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
-import { type MuxWorkspace } from '@azito/shared';
+import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { supportedMuxKinds } from './muxKinds';
+import { checkIsolationBlockers as checkIsolationBlockersFor } from './isolationBlockers';
+import type { MuxCapabilities, MuxDriverKind, MuxWorkspace } from '@azito/shared';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -111,14 +113,30 @@ function redactSecrets(message: string): string {
 
 const MISAO_LOCAL_ONLY_ERROR = 'defaultMux "misao" is only supported on local servers';
 
-function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<string, unknown> {
-  const kind = srv.defaultMux;
+interface MuxKindStatus {
+  kind: MuxDriverKind;
+  driverAvailable: boolean;
+  caps: MuxCapabilities | null;
+  reason?: MuxDriverUnavailableReason;
+}
+
+function describeMuxKind(registry: MuxDriverRegistry, srv: ServerConfig, kind: MuxDriverKind): MuxKindStatus {
   try {
-    return { runtime: srv.muxRuntime, kind, driverAvailable: true, caps: registry.resolve(srv).caps };
+    return { kind, driverAvailable: true, caps: registry.resolveKind(kind, srv).caps };
   } catch (err) {
     if (!(err instanceof MuxDriverUnavailableError)) throw err;
-    return { runtime: srv.muxRuntime, kind, driverAvailable: false, caps: null, reason: err.reason };
+    return { kind, driverAvailable: false, caps: null, reason: err.reason };
   }
+}
+
+/**
+ * `kind`/`driverAvailable`/`caps`/`reason` describe the default mux. A server that can host more than one mux (a local
+ * server) also gets `kinds`, one entry per mux; a tmux-only server keeps its former shape.
+ */
+function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<string, unknown> {
+  const kinds = supportedMuxKinds(srv).map((kind) => describeMuxKind(registry, srv, kind));
+  const { kind, driverAvailable, caps, reason } = kinds.find((k) => k.kind === srv.defaultMux)!;
+  return { runtime: srv.muxRuntime, kind, driverAvailable, caps, ...(reason ? { reason } : {}), ...(kinds.length > 1 ? { kinds } : {}) };
 }
 
 export interface ServersRouteOptions {
@@ -301,48 +319,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // call sites now share this single implementation instead of the gate
   // living inline in only one of them, which is what let the retry path
   // silently skip it in the first place.
-  async function checkIsolationBlockers(
-    serverName: string,
-    srv: ServerConfig,
-  ): Promise<{ status: number; body: Record<string, unknown> } | null> {
-    const riskyWindows = windowRepo
-      .findByServer(serverName)
-      .filter((w) => w.windowType === 'agent' || w.taskId !== null);
-    if (riskyWindows.length > 0) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_windows',
-          message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
-          windowCount: riskyWindows.length,
-        },
-      };
-    }
-    const driver = muxDriverRegistry.resolve(srv);
-    let liveWorkspaces: MuxWorkspace[];
-    try {
-      liveWorkspaces = await driver.listWorkspacesStrict(srv);
-    } catch (err: unknown) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_session_check_failure',
-          message: `隔離対象サーバーのワークスペース一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
-        },
-      };
-    }
-    if (liveWorkspaces.length > 0) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_live_sessions',
-          message: `${liveWorkspaces.length} 件の稼働中ワークスペースがこのサーバー上に存在するため隔離を有効化できません。ワークスペースを終了してから再度有効化してください。`,
-          sessionCount: liveWorkspaces.length,
-        },
-      };
-    }
-    return null;
-  }
+  const checkIsolationBlockers = (serverName: string, srv: ServerConfig) =>
+    checkIsolationBlockersFor({ windowRepo, muxDriverRegistry }, serverName, srv);
 
   // ── GET /api/servers ──
   fastify.get('/api/servers', async () => {
@@ -1213,9 +1191,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         throw err;
       }
 
-      const isMisao = srv.defaultMux === 'misao';
-      const [muxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
-        isMisao ? checkMisao() : checkTmux(),
+      // One row per mux the server can use: its default mux always (missing = to be set up), another mux only when
+      // its driver serves the server now and the check finds it (it is optional, so its absence is not a setup gap).
+      const checkMux = (kind: MuxDriverKind) => (kind === 'misao' ? checkMisao() : checkTmux());
+      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || muxDriverRegistry.availabilityFor(kind, srv).available);
+      const [muxResults, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
+        Promise.all(muxKinds.map(checkMux)),
         checkNode(),
         checkHarness(),
         isRemote ? checkTailscale() : null,
@@ -1223,11 +1204,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         checkChromium(osName),
       ]);
 
-      const result: Record<string, unknown> = {
-        [isMisao ? 'misao' : 'tmux']: muxResult,
-        node: nodeResult,
-        aztHarness: harnessResult,
-      };
+      const result: Record<string, unknown> = {};
+      muxKinds.forEach((kind, i) => {
+        if (kind === srv.defaultMux || muxResults[i].installed) result[kind] = muxResults[i];
+      });
+      result.node = nodeResult;
+      result.aztHarness = harnessResult;
       if (tailscaleResult) result.tailscale = tailscaleResult;
       if (agentResult) result.agent = agentResult;
       if (chromiumResult) result.chromium = chromiumResult;

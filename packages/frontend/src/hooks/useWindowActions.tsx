@@ -11,7 +11,7 @@ import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
 import { refTabMatchesTarget } from '../lib/terminalRef';
-import { canRenamePane } from '../lib/windowRowPlan';
+import { canActOnMux, canRenamePane } from '../lib/windowRowPlan';
 
 interface ConfirmDialog {
   title: string;
@@ -212,21 +212,23 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+    // A stale row's mux cannot be reached: the actions that go through it stay listed but disabled.
+    const muxDisabled = !canActOnMux(extra);
     const items: ContextMenuItem[] = [
       { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
     ];
     if (extra?.online && extra.windowName !== undefined) {
-      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
+      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, disabled: muxDisabled, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
     }
     if (extra?.online && extra.paneTarget && canRenamePane(w)) {
-      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
+      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, disabled: muxDisabled, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
     }
     if (extra?.online) {
-      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => handleCapturePanes(w.id) });
+      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, disabled: muxDisabled, onClick: () => handleCapturePanes(w.id) });
     }
     if (extra?.online && w.windowType === 'agent' && w.agentSessionId && !w.sleeping) {
-      items.push({ label: t('windows.sleep'), icon: <Icon name="moon" size={16} />, onClick: () => handleSleepWindow(w.id) });
+      items.push({ label: t('windows.sleep'), icon: <Icon name="moon" size={16} />, disabled: muxDisabled, onClick: () => handleSleepWindow(w.id) });
     }
     if (!extra?.online) {
       const respawnLabel = w.sleeping ? t('terminal.wake', { ns: 'common' }) : t('windows.respawn');
@@ -238,7 +240,7 @@ export function useWindowActions(
     }
     items.push(
       { label: t('windows.detachFromProject'), icon: <Icon name="external-link" size={16} />, onClick: () => handleDetachWindow(w.id) },
-      { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
+      { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, disabled: muxDisabled, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     );
     items.push(
       { label: '', separator: true, onClick: () => {} },

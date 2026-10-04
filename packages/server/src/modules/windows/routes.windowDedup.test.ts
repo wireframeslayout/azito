@@ -33,7 +33,7 @@ async function setup(defaultMux: 'tmux' | 'misao' = 'misao') {
     windowRepo: repo,
     projectRepo: { findById: () => ({ id: projectId }) },
     taskRepo: { findById: () => ({ id: taskId }) },
-    serverRepo: { findByName: () => ({ name: 'local-misao', defaultMux }) },
+    serverRepo: { findByName: () => ({ name: 'local-misao', type: 'local', defaultMux }) },
     muxDriverRegistry: registry,
     sessionCaptureService: { scheduleInitialScan: vi.fn() },
   } as never);
@@ -52,6 +52,7 @@ describe('window registration routes share one row per physical misao window (re
     const second = await post(`/api/tasks/${taskId}/windows`, { tmux_target: NAMED_TARGET, ref: formatMuxRef(MISAO_REF) });
     expect(second.statusCode).toBe(200);
     expect(second.json()).toMatchObject({ id: first.json().id, adopted: true });
+    expect(repo.findByServerAndRef('local-misao', MISAO_REF)?.tmuxTarget).toBe(REF_ONLY_TARGET);
   });
 
   it('named tmux_target + ref registration, then ref-only, reuses the same row', async () => {
@@ -95,7 +96,8 @@ describe('registration without a ref on a misao server', () => {
     await post(`/api/projects/${projectId}/windows/session`, { session: 'azito' });
     const res = await post(`/api/tasks/${taskId}/windows`, { tmux_target: REF_ONLY_TARGET, ref: formatMuxRef(MISAO_REF) });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ adopted: true, tmuxTarget: NAMED_TARGET });
+    // The session-wide registration stores the window id form too (M-023), never the display name.
+    expect(res.json()).toMatchObject({ adopted: true, tmuxTarget: REF_ONLY_TARGET });
   });
 });
 

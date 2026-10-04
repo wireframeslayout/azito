@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
+import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
 import type { Window } from '../pages/workspace/types';
 import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
@@ -241,7 +242,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         refreshStatuses(),
         // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさず、失敗の種類を区別して返す
         fetchInstallStatus(encoded),
-        api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
+        fetchSessionListing<Session>(serverName).catch(() => null),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
       const [mainResult, metaResult] = await Promise.all([mainPromise, metaPromise]);
@@ -256,7 +257,8 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       if (fetchGenRef.current !== gen) return;
       setInstallStatus(installRes.status);
       setInstallStatusError(installRes.error);
-      setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
+      // A mux that could not be listed keeps its previous sessions (its windows are unreadable, not gone).
+      setSessions((prev) => (sessionsRes ? keepUnavailableKinds(prev, sessionsRes) : []));
       let metaFailed = false;
       if (projResult.status === 'fulfilled' && Array.isArray(projResult.value)) {
         setAllProjects(projResult.value);

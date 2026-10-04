@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { WebSocket } from 'ws';
 import type { MuxRef, PaneOrdinal } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
-import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { handleTerminalConnection } from './terminalHandler';
@@ -20,34 +19,22 @@ function fakeWs() {
 
 function fixtures() {
   const stream = Object.assign(new EventEmitter(), { write: vi.fn(), resize: vi.fn(), close: vi.fn() });
-  const tmuxOpen = vi.fn(async () => stream);
-  const getTransport = vi.fn(() => ({ openTerminal: tmuxOpen }));
-  const transportFactory = { getTransport } as unknown as TransportFactory;
   const misaoOpen = vi.fn(async () => stream);
   const registry = new MuxDriverRegistry();
   const resolve = vi.spyOn(registry, 'resolve').mockReturnValue({ openTerminal: misaoOpen } as never);
-  return { stream, tmuxOpen, getTransport, transportFactory, misaoOpen, registry, resolve };
+  return { stream, misaoOpen, registry, resolve };
 }
 
 function connect(ws: ReturnType<typeof fakeWs>, server: ServerConfig, f: ReturnType<typeof fixtures>): void {
-  handleTerminalConnection(ws as unknown as WebSocket, server, ref, 1 as PaneOrdinal, 100, 30, f.transportFactory, f.registry);
+  handleTerminalConnection(ws as unknown as WebSocket, server, ref, 1 as PaneOrdinal, 100, 30, f.registry);
 }
 
 describe('handleTerminalConnection driver selection', () => {
-  it('opens a tmux server through the transport and never touches the registry', async () => {
+  it('opens any window through the registry driver (the routing driver picks tmux or misao by the ref)', async () => {
     const f = fixtures();
-    const ws = fakeWs();
-    connect(ws, tmuxServer, f);
-    await vi.waitFor(() => expect(f.tmuxOpen).toHaveBeenCalledWith(ref, 1, 100, 30, undefined));
-    expect(f.resolve).not.toHaveBeenCalled();
-  });
-
-  it('opens a misao server through the driver and never touches the transport factory', async () => {
-    const f = fixtures();
-    const ws = fakeWs();
-    connect(ws, misaoServer, f);
-    await vi.waitFor(() => expect(f.misaoOpen).toHaveBeenCalledWith(misaoServer, ref, 1, 100, 30));
-    expect(f.getTransport).not.toHaveBeenCalled();
+    connect(fakeWs(), tmuxServer, f);
+    await vi.waitFor(() => expect(f.misaoOpen).toHaveBeenCalledWith(tmuxServer, ref, 1, 100, 30, undefined));
+    expect(f.resolve).toHaveBeenCalledWith(tmuxServer);
   });
 
   it('relays the stream both ways for a misao server', async () => {

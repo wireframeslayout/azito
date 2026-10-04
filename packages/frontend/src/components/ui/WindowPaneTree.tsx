@@ -5,9 +5,10 @@ import { api } from '../../api/client';
 import { AgentIcon } from './AgentIcons';
 import { WindowIdChip } from './WindowIdChip';
 import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
+import { Chip } from './Chip';
 import { isPaneLive } from '../../lib/paneState';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
-import { planWindowRow } from '../../lib/windowRowPlan';
+import { canActOnMux, planWindowRow } from '../../lib/windowRowPlan';
 import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
@@ -18,7 +19,14 @@ export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'labe
 
 export type EmptyWindowOutcome = Parameters<React.ComponentProps<typeof EmptyWindowActions>['onChanged']>[0];
 
-type ContextMenuExtra = { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
+/** `stale`: the window's mux cannot be listed now, so mux actions in the menu are disabled. */
+type ContextMenuExtra = { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
+
+/** A window of a session kept from an earlier listing (its mux cannot be listed now): marked like an offline row. */
+function StaleChip() {
+  const { t } = useTranslation('servers');
+  return <Chip>{t('status.offline')}</Chip>;
+}
 
 export interface WindowPaneTreeProps {
   windows: WindowItem[];
@@ -295,7 +303,7 @@ function SleepingRow({ w, active, onPaneClick, onContextMenu, onLongPress, extra
   );
 }
 
-function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, active, focused, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, renderTaskBadge, onWindowsChanged }: {
+function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, active, focused, onPaneClick, onContextMenu, onLongPress, extra, activityClassName, renderTaskBadge, onWindowsChanged, stale }: {
   w: WindowItem;
   sessionWindow: TmuxWindow;
   title: React.ReactNode;
@@ -311,11 +319,12 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
   activityClassName?: string;
   renderTaskBadge?: (w: WindowItem, taskId: number) => React.ReactNode;
   onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
+  stale: boolean;
 }) {
   const { t } = useTranslation('servers');
   const bindLongPress = useLongPress();
   const hasLongPress = !!(onContextMenu || onLongPress);
-  const ctxExtra: ContextMenuExtra = { online: true, windowName: sessionWindow.name };
+  const ctxExtra: ContextMenuExtra = { online: true, stale, windowName: sessionWindow.name };
   return (
     <div>
       <div
@@ -340,7 +349,8 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
         <div style={{ position: 'relative', flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {showIdChip && <WindowIdChip id={w.id!} />}
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: stale ? DIMMED_PANE_OPACITY : undefined }}>{title}</span>
+            {stale && <StaleChip />}
             {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
           </div>
           <div style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginTop: 1 }}>
@@ -355,6 +365,7 @@ function EmptyWindowRow({ w, sessionWindow, title, plainTitle, showIdChip, activ
           windowId={w.id}
           muxRef={sessionWindow.ref}
           windowLabel={plainTitle}
+          disabled={stale}
           onChanged={(outcome) => onWindowsChanged(outcome, w)}
         />
       )}
@@ -412,6 +423,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         activityClassName={activityClassName}
         renderTaskBadge={renderTaskBadge}
         onWindowsChanged={onWindowsChanged}
+        stale={plan.stale}
       />
     );
   }
@@ -422,7 +434,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
     const active = isActive?.(w.serverName, target, 'window', w.id) ?? false;
     const focused = !active && isFocusedWindow(w.serverName, target, w.id);
     const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-    const ctxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
+    const ctxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: panes[0].menuPaneTarget, paneTitle: paneLabel };
     const subtitle = renderSubtitle?.(w) ?? paneLabel;
     return (
       <div
@@ -444,10 +456,10 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         <div style={{ flex: 1, overflow: 'hidden', minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {winShowIdChip && <WindowIdChip id={w.id!} />}
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: isPaneLive(pane) && !plan.stale ? undefined : DIMMED_PANE_OPACITY }}>
               {winTitle}
             </span>
-            <PaneStateChip pane={pane} />
+            {plan.stale ? <StaleChip /> : <PaneStateChip pane={pane} />}
             {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
           </div>
           {subtitle != null && (typeof subtitle !== 'string' || subtitle !== winTitle) && (
@@ -467,7 +479,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
   const windowLabel = winTitle;
   const windowHasActive = panes.some((pane) => isActive?.(w.serverName, pane.target, 'window', w.id) ?? false);
   const windowHasFocus = !windowHasActive && isFocusedWindow(w.serverName, baseTarget, w.id);
-  const windowCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name };
+  const windowCtxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name };
   const parentSubtitle = renderSubtitle?.(w) ?? null;
 
   return (
@@ -503,8 +515,9 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
             {winShowIdChip && <WindowIdChip id={w.id!} />}
             <span
               onClick={() => onToggle(expandKey)}
-              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+              style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', opacity: plan.stale ? DIMMED_PANE_OPACITY : undefined }}
             >{windowLabel}</span>
+            {plan.stale && <StaleChip />}
             {w.taskId != null && (renderTaskBadge ? renderTaskBadge(w, w.taskId) : <TaskIdBadge taskId={w.taskId} />)}
           </div>
           {parentSubtitle != null && (typeof parentSubtitle !== 'string' || parentSubtitle !== windowLabel) && (
@@ -517,12 +530,14 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
           )}
         </div>
         <button
+          disabled={!canActOnMux(plan)}
           onClick={(e) => { e.stopPropagation(); onUnzoom(w.serverName, sessionName, windowSpec, sw.windowId ?? undefined, sw.ref); }}
           title={t('windowPaneTree.showAllPanes')}
           aria-label={t('windowPaneTree.showAllPanesLabel')}
           style={{
             background: 'none', border: 'none', color: 'var(--text-dim)',
-            cursor: 'pointer', padding: '2px 3px', borderRadius: 'var(--radius-sm)',
+            cursor: canActOnMux(plan) ? 'pointer' : 'not-allowed', opacity: canActOnMux(plan) ? undefined : DIMMED_PANE_OPACITY,
+            padding: '2px 3px', borderRadius: 'var(--radius-sm)',
             display: 'flex', alignItems: 'center', justifyContent: 'center',
             flexShrink: 0,
           }}
@@ -544,7 +559,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         const active = isActive?.(w.serverName, target, 'pane', w.id) ?? false;
         const focused = !active && isFocusedPane(w.serverName, target);
         const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-        const paneCtxExtra: ContextMenuExtra = { online: true, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel };
+        const paneCtxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel };
         return (
           <div
             key={`${w.id}-${sw.index}-${pane.index}`}
@@ -559,11 +574,11 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
               color: active ? 'var(--accent)' : 'inherit',
             }}
           >
-            <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>
+            <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) && !plan.stale ? undefined : DIMMED_PANE_OPACITY }}>
               <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
               {paneLabel}
             </span>
-            <PaneStateChip pane={pane} />
+            {plan.stale ? <StaleChip /> : <PaneStateChip pane={pane} />}
           </div>
         );
       })}

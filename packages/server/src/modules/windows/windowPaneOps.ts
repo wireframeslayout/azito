@@ -1,4 +1,5 @@
 import type { ServerConfig } from '../servers/Server';
+import { serverSupportsMux, type MuxKindServer } from '../servers/muxKinds';
 import type { ExecResult } from '../servers/transport/ServerTransport';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { Window, IWindowRepository } from './Window';
@@ -28,12 +29,12 @@ export function resolveRefFromParam(encoded: string): MuxRef {
   }
 }
 
-/** A ref is only usable on a server whose driver speaks the same kind; an unknown server accepts tmux refs only. */
-export function isRefKindCompatible(ref: MuxRef, server: Pick<ServerConfig, 'defaultMux'> | null | undefined): boolean {
-  return ref.kind === (server ? server.defaultMux : 'tmux');
+/** A ref is only usable on a server that can host its kind; an unknown server accepts tmux refs only. */
+export function isRefKindCompatible(ref: MuxRef, server: MuxKindServer | null | undefined): boolean {
+  return server ? serverSupportsMux(server, ref.kind) : ref.kind === 'tmux';
 }
 
-export function resolveRefForServer(encoded: string, server: Pick<ServerConfig, 'defaultMux'>): MuxRef {
+export function resolveRefForServer(encoded: string, server: MuxKindServer): MuxRef {
   const ref = resolveRefFromParam(encoded);
   if (!isRefKindCompatible(ref, server)) {
     throw Object.assign(new Error('Invalid ref parameter'), { statusCode: 400 });

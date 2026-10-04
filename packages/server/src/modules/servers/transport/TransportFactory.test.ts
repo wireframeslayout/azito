@@ -4,6 +4,7 @@ vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 import { TransportFactory } from './TransportFactory';
 import { AgentTransport } from './AgentTransport';
+import { LocalTransport } from './LocalTransport';
 
 describe('TransportFactory', () => {
   const baseServer = {
@@ -16,14 +17,14 @@ describe('TransportFactory', () => {
   };
 
   it('returns cached transport when token and muxRuntime match', () => {
-    const factory = new TransportFactory('http://hub:3001', { muxAvailability: () => ({ available: true }) });
+    const factory = new TransportFactory('http://hub:3001');
     const t1 = factory.getTransport(baseServer);
     const t2 = factory.getTransport(baseServer);
     expect(t1).toBe(t2);
   });
 
   it('recreates transport when agentToken changes', () => {
-    const factory = new TransportFactory('http://hub:3001', { muxAvailability: () => ({ available: true }) });
+    const factory = new TransportFactory('http://hub:3001');
     const t1 = factory.getTransport(baseServer);
     const t2 = factory.getTransport({ ...baseServer, agentToken: 'tok-2' });
     expect(t1).not.toBe(t2);
@@ -31,15 +32,22 @@ describe('TransportFactory', () => {
   });
 
   it('recreates transport when muxRuntime changes', () => {
-    const factory = new TransportFactory('http://hub:3001', { muxAvailability: () => ({ available: true }) });
+    const factory = new TransportFactory('http://hub:3001');
     const t1 = factory.getTransport(baseServer);
-    const t2 = factory.getTransport({ ...baseServer, defaultMux: 'tmux' as const, muxRuntime: 'managed' });
+    const t2 = factory.getTransport({ ...baseServer, muxRuntime: 'managed' });
     expect(t1).not.toBe(t2);
     expect(t2).toBeInstanceOf(AgentTransport);
   });
 
+  it('gives a local server the tmux LocalTransport whichever mux it defaults to', () => {
+    const factory = new TransportFactory('http://hub:3001');
+    const local = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, muxRuntime: 'system' as const };
+    expect(factory.getTransport(local)).toBeInstanceOf(LocalTransport);
+    expect(factory.getTransport({ ...local, defaultMux: 'misao' } as never)).toBeInstanceOf(LocalTransport);
+  });
+
   it('invalidate forces recreation on next getTransport', () => {
-    const factory = new TransportFactory('http://hub:3001', { muxAvailability: () => ({ available: true }) });
+    const factory = new TransportFactory('http://hub:3001');
     const t1 = factory.getTransport(baseServer);
     factory.invalidate('server007');
     const t2 = factory.getTransport(baseServer);

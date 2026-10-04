@@ -10,6 +10,7 @@ import { useAgentDefinitions, type AgentDefinition } from './useAgentDefinitions
 import { useToast } from './useToast';
 import { useServerStatuses } from './useServerStatuses';
 import { fetchSessionsForServers } from '../lib/fetchServerSessions';
+import { findSessionByKey, sessionKindOf, windowTargetSelectOptions } from '../lib/sessionKind';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
 export function isInsufficientResources(res: unknown): res is { error: string; resources: ResourceStatus } {
@@ -218,16 +219,8 @@ export function useAddWindowModal(
     setAwOfflineServers((prev) => [...new Set([...prev, ...offline])]);
   }, [servers, awSessionData, awOfflineServers, isServerOffline]);
 
-  const getWindowTargets = useCallback((): { value: string; label: string }[] => {
-    const sessions = awSessionData[awServer] || [];
-    const targets: { value: string; label: string }[] = [];
-    for (const s of sessions) {
-      for (const w of s.windows) {
-        targets.push({ value: `${s.name}:${w.name}`, label: `${s.name} / ${w.name} (${w.panes.length} panes)` });
-      }
-    }
-    return targets;
-  }, [awSessionData, awServer]);
+  const getWindowTargets = useCallback((): { value: string; label: string }[] =>
+    windowTargetSelectOptions(awSessionData[awServer] || []), [awSessionData, awServer]);
 
   // launch-agent の再送（force 付き）。ウィンドウ作成後に 409 になったケースの retry 用。
   const launchAgent = useCallback(async (windowId: number, command: string, force: boolean): Promise<boolean> => {
@@ -260,7 +253,8 @@ export function useAddWindowModal(
     setAddWindowLoading(true);
     const effectiveProjectId = awEffectiveProjectId || projectId;
     const numericProjectId = effectiveProjectId ? parseInt(effectiveProjectId, 10) : undefined;
-    const muxKind = servers.find((s) => s.name === awServer)?.defaultMux ?? 'tmux';
+    // A new session/window is created in the server's default mux; an existing one is registered in its own mux.
+    const defaultKind = servers.find((s) => s.name === awServer)?.defaultMux ?? 'tmux';
     // The window is already registered on the project when the task attachment fails; surface it instead of rejecting.
     const failTaskWindow = (err: unknown): void => {
       console.error('task window add failed', err);
@@ -268,14 +262,16 @@ export function useAddWindowModal(
     };
     try {
       if (awMode === 'session') {
-        await api(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: awSelectedSession }) });
-        const sess = (awSessionData[awServer] || []).find((s) => s.name === awSelectedSession);
-        if (sess && sess.windows.length > 0) {
+        const sess = findSessionByKey(awSessionData[awServer] || [], awSelectedSession);
+        if (!sess) throw new Error(`session ${awSelectedSession} is not listed on ${awServer}`);
+        const sessionKind = sessionKindOf(sess);
+        await api(`/projects/${effectiveProjectId}/windows/session`, { method: 'POST', body: JSON.stringify({ server_name: awServer, session: sess.name, kind: sessionKind }) });
+        if (sess.windows.length > 0) {
           if (awTaskId != null) {
             try {
               for (const [index, w] of sess.windows.entries()) {
-                const reg = taskWindowRegistration({ muxKind, target: `${awSelectedSession}:${w.name}`, ref: w.ref });
-                if (!reg) throw new Error(`window ref is not resolved for ${awSelectedSession}:${w.name}`);
+                const reg = taskWindowRegistration({ muxKind: sessionKind, target: `${sess.name}:${w.name}`, ref: w.ref });
+                if (!reg) throw new Error(`window ref is not resolved for ${sess.name}:${w.name}`);
                 await onTaskWindowAdded?.(awTaskId, awServer, reg.target, w.name, index === 0, reg.ref ? { ref: reg.ref } : undefined);
               }
             } catch (err) {
@@ -295,11 +291,13 @@ export function useAddWindowModal(
           }
         }
       } else if (awMode === 'existing') {
-        const existingRef = resolveWindowRegistrationRef({
-          muxKind,
-          target: awTarget,
-          sessions: awSessionData[awServer],
-        });
+        const option = windowTargetSelectOptions(awSessionData[awServer] || []).find((o) => o.value === awTarget);
+        if (!option) throw new Error(`window ${awTarget} is not listed on ${awServer}`);
+        const muxKind = option.kind;
+        // tmux keeps its target-derived ref; another mux uses the ref the server reported for the picked window.
+        const existingRef = muxKind === 'tmux'
+          ? resolveWindowRegistrationRef({ muxKind, target: awTarget, sessions: awSessionData[awServer] })
+          : option.ref;
         if (!existingRef) throw new Error(`window ref is not resolved for ${awTarget}`);
         const registered = await api<{ ok: boolean; id: number }>(`/projects/${effectiveProjectId}/windows`, { method: 'POST', body: JSON.stringify({ server_name: awServer, tmux_target: awTarget, ref: existingRef, label: awLabel.trim() }) });
         if (awTaskId != null) {
@@ -324,9 +322,10 @@ export function useAddWindowModal(
         }
         const sessionName = awNewSession.trim();
         const beforeSessions = awSessionData[awServer] || [];
-        const sessionExists = beforeSessions.some((s) => s.name === sessionName);
+        // Only a session of the mux the window is created in counts (a same-named session of the other mux does not).
+        const sessionExists = beforeSessions.some((s) => s.name === sessionName && sessionKindOf(s) === defaultKind);
         const serverInfo = servers.find((s) => s.name === awServer);
-        const useMuxRoutes = muxKind !== 'tmux';
+        const useMuxRoutes = defaultKind !== 'tmux';
         let createdTarget: string;
         let createdRef: string | undefined;
         if (useMuxRoutes) {

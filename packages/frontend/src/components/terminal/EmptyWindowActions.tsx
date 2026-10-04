@@ -16,6 +16,8 @@ interface EmptyWindowActionsProps {
   muxRef: string;
   /** Name shown in the delete confirmation. */
   windowLabel: string;
+  /** The window's mux cannot be reached now (a stale listing): both actions are disabled. */
+  disabled?: boolean;
   /** Called after a pane was opened or the window was deleted, so the caller can refresh its window list. */
   onChanged: (outcome: Extract<PaneNoticeOutcome, 'pane_opened' | 'window_deleted'>) => void;
 }
@@ -24,7 +26,7 @@ interface EmptyWindowActionsProps {
  * The ways out of a window that has no panes (a misao window stays after its last pane closed):
  * open a pane in it, or delete the window. Inline counterpart of the terminal's PaneUnavailableNotice.
  */
-export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, onChanged }: EmptyWindowActionsProps) {
+export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, disabled = false, onChanged }: EmptyWindowActionsProps) {
   const { t } = useTranslation('common');
   const confirm = useConfirm();
   const [openFormShown, setOpenFormShown] = useState(false);
@@ -52,7 +54,7 @@ export function EmptyWindowActions({ serverName, windowId, muxRef, windowLabel, 
     }
   }
 
-  const isBusy = killing || openSubmitting;
+  const isBusy = killing || openSubmitting || disabled;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-2)', padding: 'var(--space-1) var(--space-3) var(--space-2) calc(var(--space-6) + var(--space-4))' }}>

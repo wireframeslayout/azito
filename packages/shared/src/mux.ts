@@ -58,7 +58,16 @@ export interface MuxWindowInfo {
   ref?: MuxRef;
 }
 
+/** A mux kind a server could not serve in a merged listing, and why (`reason` is a driver-unavailable code or `driver_error`). */
+export interface MuxUnavailableKind {
+  kind: MuxDriverKind;
+  reason: string;
+  detail?: string;
+}
+
 export interface MuxWorkspace {
+  /** Stamped by the routing driver: which mux the workspace lives in. Same-named workspaces can exist in two muxes. */
+  kind?: MuxDriverKind;
   name: string;
   windowCount: number;
   attached: boolean;
@@ -91,7 +100,9 @@ export function formatMuxRef(ref: MuxRef): string {
 // Same ULID alphabet as misao's protocol primitives.ts (shared has no dependencies, so it is duplicated).
 const MISAO_ULID = '[0-7][0-9A-HJKMNP-TV-Z]{25}';
 const MISAO_WINDOW_ID_RE = new RegExp(`^w_${MISAO_ULID}$`);
-const MISAO_PANE_ID_RE = new RegExp(`^p_${MISAO_ULID}$`);
+/** A misao pane id: `p_` + ULID. A pane handle that does not match is a tmux one. */
+export const MISAO_PANE_ID_PREFIX = 'p_';
+export const MISAO_PANE_ID_RE = new RegExp(`^${MISAO_PANE_ID_PREFIX}${MISAO_ULID}$`);
 
 export function isMisaoWindowId(s: string): boolean {
   return MISAO_WINDOW_ID_RE.test(s);
@@ -141,6 +152,11 @@ export function isPaneHandleLike(s: string, kind: MuxDriverKind): boolean {
   return (kind === 'misao' ? MISAO_PANE_ID_RE : TMUX_PANE_HANDLE_RE).test(s);
 }
 
+
+/** The mux kind that owns a pane handle, told by its shape (misao `p_<ULID>`; anything else is tmux's). */
+export function muxKindOfPaneHandle(handle: string): MuxDriverKind {
+  return MISAO_PANE_ID_RE.test(handle) ? 'misao' : 'tmux';
+}
 
 /** True when `s` has the shape of a pane handle of any known mux kind (tmux `%<n>`, misao `p_<ULID>`). */
 export function isPaneHandle(s: string): boolean {

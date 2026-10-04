@@ -26,6 +26,7 @@ export {
   TERMINAL_CLOSE,
   type MuxWindowInfo,
   type MuxWorkspace,
+  type MuxUnavailableKind,
   type MuxPaneInfo,
   type MuxExecRequest,
   asPaneHandle,
@@ -37,4 +38,7 @@ export {
   isPaneHandle,
   isPaneHandleLike,
   isMisaoWindowId,
+  MISAO_PANE_ID_PREFIX,
+  MISAO_PANE_ID_RE,
+  muxKindOfPaneHandle,
 } from './mux';

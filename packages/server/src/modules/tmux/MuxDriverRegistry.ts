@@ -2,6 +2,9 @@ import type { MuxDriverKind } from '@azito/shared';
 import type { IMuxClient } from './IMuxClient';
 import type { ServerConfig } from '../servers/Server';
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from './MuxCapabilityError';
+import { RoutingMuxClient } from './RoutingMuxClient';
+
+const MUX_DRIVER_KINDS: readonly MuxDriverKind[] = ['tmux', 'misao'];
 
 export type MuxDriverAvailability = { available: true } | { available: false; reason: MuxDriverUnavailableReason };
 
@@ -16,6 +19,7 @@ export type MuxDriverProbe = (server: MuxProbeTarget) => MuxDriverAvailability;
 
 export class MuxDriverRegistry {
   private drivers = new Map<MuxDriverKind, { driver: IMuxClient; probe?: MuxDriverProbe }>();
+  private routing = new Map<MuxDriverKind, RoutingMuxClient>();
 
   register(kind: MuxDriverKind, driver: IMuxClient, probe?: MuxDriverProbe): void {
     this.drivers.set(kind, { driver, probe });
@@ -33,12 +37,67 @@ export class MuxDriverRegistry {
     return this.drivers.get(kind)!.driver;
   }
 
-  availability(server: MuxServerRef): MuxDriverAvailability {
-    return this.availabilityFor(server.defaultMux, server);
+  /**
+   * The kinds a server hosts, its default kind first: the default always, another kind when its driver is registered
+   * and the server type can host it (a local server hosts tmux and misao; an agent/ssh server tmux only). Whether a
+   * kind answers right now is `usableKinds`; a supported kind that does not is unavailable, not absent.
+   */
+  supportedKinds(server: MuxServerRef): MuxDriverKind[] {
+    const others = MUX_DRIVER_KINDS.filter((kind) => kind !== server.defaultMux && this.drivers.has(kind)
+      && (kind === 'tmux' || server.type === undefined || server.type === 'local'));
+    return [server.defaultMux, ...others];
   }
 
-  /** Alias of `resolveKind(server.defaultMux, server)`: the server-wide default driver. */
-  resolve(server: MuxServerRef): IMuxClient {
-    return this.resolveKind(server.defaultMux, server);
+  /**
+   * The supported kinds to call now, default first. The default is always listed (a failure of it must surface);
+   * another kind only while its driver is available for the server.
+   */
+  usableKinds(server: MuxServerRef): MuxDriverKind[] {
+    return this.supportedKinds(server).filter((kind) => kind === server.defaultMux || this.availabilityFor(kind, server).available);
+  }
+
+  /** The supported non-default kinds that cannot be called now, with the reason (a stopped or incompatible daemon). */
+  downKinds(server: MuxServerRef): Array<{ kind: MuxDriverKind; reason: MuxDriverUnavailableReason }> {
+    const down: Array<{ kind: MuxDriverKind; reason: MuxDriverUnavailableReason }> = [];
+    for (const kind of this.supportedKinds(server)) {
+      if (kind === server.defaultMux) continue;
+      const availability = this.availabilityFor(kind, server);
+      if (!availability.available) down.push({ kind, reason: availability.reason });
+    }
+    return down;
+  }
+
+  /** Whether the server can use a mux at all: its default driver is available, or another kind is. */
+  availability(server: MuxServerRef): MuxDriverAvailability {
+    const defaultAvailability = this.availabilityFor(server.defaultMux, server);
+    if (defaultAvailability.available) return defaultAvailability;
+    const usable = this.usableKinds(server).some((kind) => kind !== server.defaultMux);
+    return usable ? { available: true } : defaultAvailability;
+  }
+
+  /**
+   * The routing driver for a server: each call goes to the tmux or misao driver that owns its argument, and
+   * server-wide calls cover every usable kind. Its `kind` is the server's default mux.
+   * Throws `MuxDriverUnavailableError` when the server can use no mux at all (see `availability`).
+   */
+  resolve(server: MuxServerRef): RoutingMuxClient {
+    const availability = this.availability(server);
+    if (!availability.available) throw new MuxDriverUnavailableError(server.defaultMux, availability.reason);
+    const kind = server.defaultMux;
+    let routing = this.routing.get(kind);
+    if (!routing) {
+      routing = new RoutingMuxClient({
+        driver: (k) => {
+          const entry = this.drivers.get(k);
+          if (!entry) throw new MuxDriverUnavailableError(k, 'driver_not_registered');
+          return entry.driver;
+        },
+        resolveKind: (k, srv) => this.resolveKind(k, srv),
+        usableKinds: (srv) => this.usableKinds(srv),
+        downKinds: (srv) => this.downKinds(srv),
+      }, kind);
+      this.routing.set(kind, routing);
+    }
+    return routing;
   }
 }

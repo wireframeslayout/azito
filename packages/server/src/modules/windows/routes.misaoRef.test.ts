@@ -12,7 +12,7 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 const MISAO_REF = formatMuxRef({ kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
 const URLS = ['/api/projects/1/windows', '/api/tasks/1/windows'];
 
-async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = false) {
+async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = false, type: ServerConfig['type'] = 'local') {
   const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined), add: vi.fn(() => 7), create: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
   const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', { kind: 'tmux' } as unknown as IMuxClient);
@@ -22,7 +22,7 @@ async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = 
     windowRepo: windowRepo as unknown as IWindowRepository,
     projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
     taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
-    serverRepo: { findByName: () => ({ name: 's', defaultMux }) } as unknown as IServerRepository,
+    serverRepo: { findByName: () => ({ name: 's', type, defaultMux }) } as unknown as IServerRepository,
     muxDriverRegistry,
     sessionCaptureService: { scheduleInitialScan: vi.fn() },
   } as any);
@@ -31,8 +31,8 @@ async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = 
 }
 
 describe('window registration with a misao ref', () => {
-  it.each(URLS)('%s rejects a misao ref on a tmux server even with tmux_target', async (url) => {
-    const { app, windowRepo } = await buildApp('tmux');
+  it.each(URLS)('%s rejects a misao ref on a tmux-only (agent) server even with tmux_target', async (url) => {
+    const { app, windowRepo } = await buildApp('tmux', true, 'agent');
     const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', tmux_target: 'a:b', ref: MISAO_REF } });
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ error: 'Invalid ref' });
@@ -46,6 +46,14 @@ describe('window registration with only a misao ref', () => {
     const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', ref: MISAO_REF } });
     expect(res.statusCode).toBe(200);
     expect(windowRepo.findByServerAndTarget).toHaveBeenCalledWith('s', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
+  });
+
+  it.each(URLS)('%s stores <workspace>:<window id> even when an ordinal or display-name target is sent (M-022)', async (url) => {
+    const { app, windowRepo } = await buildApp('tmux', true);
+    const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', tmux_target: 'ws:0', ref: MISAO_REF } });
+    expect(res.statusCode).toBe(200);
+    expect(windowRepo.findByServerAndTarget).toHaveBeenCalledWith('s', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
+    expect(windowRepo.findByServerAndTarget).not.toHaveBeenCalledWith('s', 'ws:0');
   });
 });
 
@@ -64,4 +72,40 @@ describe('window registration on a server whose mux driver is unavailable', () =
       expect(windowRepo.adoptForTask).not.toHaveBeenCalled();
     },
   );
+});
+
+describe('window registration labels by the window\'s own mux, not the server default (#311)', () => {
+  const TMUX_REF = formatMuxRef({ kind: 'tmux', workspace: 'ws', window: 'editor' });
+
+  async function buildMixed(defaultMux: ServerConfig['defaultMux']) {
+    const windowRepo = { findByServerAndTarget: vi.fn(() => undefined), findByServerAndRef: vi.fn(() => undefined), add: vi.fn(() => 7), remove: vi.fn(), update: vi.fn(), adoptForTask: vi.fn() };
+    const tmuxLabel = vi.fn(async () => { throw new Error('tmux keeps no pane labels'); });
+    const misaoLabel = vi.fn(async () => {});
+    const muxDriverRegistry = new MuxDriverRegistry();
+    muxDriverRegistry.register('tmux', { kind: 'tmux', supportsPaneLabels: false, labelWindowPanes: tmuxLabel } as unknown as IMuxClient);
+    muxDriverRegistry.register('misao', { kind: 'misao', supportsPaneLabels: true, labelWindowPanes: misaoLabel } as unknown as IMuxClient);
+    const app = Fastify();
+    await app.register(windowsRoutes, {
+      windowRepo: windowRepo as unknown as IWindowRepository,
+      projectRepo: { findById: () => ({ id: 1 }) } as unknown as IProjectRepository,
+      taskRepo: { findById: () => ({ id: 1 }) } as unknown as ITaskRepository,
+      serverRepo: { findByName: () => ({ name: 's', type: 'local', defaultMux }) } as unknown as IServerRepository,
+      muxDriverRegistry,
+      sessionCaptureService: { scheduleInitialScan: vi.fn() },
+    } as any);
+    await app.ready();
+    return { app, windowRepo, tmuxLabel, misaoLabel };
+  }
+
+  for (const defaultMux of ['tmux', 'misao'] as const) {
+    it.each(URLS)(`%s on a ${defaultMux}-default server: labels a misao window, registers a tmux window without labelling`, async (url) => {
+      const { app, windowRepo, tmuxLabel, misaoLabel } = await buildMixed(defaultMux);
+      const misao = await app.inject({ method: 'POST', url, payload: { server_name: 's', ref: MISAO_REF } });
+      const tmux = await app.inject({ method: 'POST', url, payload: { server_name: 's', tmux_target: 'ws:editor', ref: TMUX_REF } });
+      expect([misao.statusCode, tmux.statusCode]).toEqual([200, 200]);
+      expect(misaoLabel).toHaveBeenCalledTimes(1);
+      expect(tmuxLabel).not.toHaveBeenCalled();
+      expect(windowRepo.remove).not.toHaveBeenCalled();
+    });
+  }
 });

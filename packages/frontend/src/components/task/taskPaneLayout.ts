@@ -415,6 +415,8 @@ export function selectTaskTerminal(taskId: number, terminal: { serverName: strin
 
 export interface WindowContextExtra {
   online: boolean;
+  /** The window's session was kept from an earlier listing (its mux cannot be listed now): mux actions are disabled. */
+  stale?: boolean;
   windowName?: string;
   paneTarget?: string;
   /** 表示用のペインラベル。ペインタイトルが未設定（＝コマンド名と同じ）なら command が入る */
@@ -439,6 +441,7 @@ export function resolveWindowContextExtra(
   const match = findSessionWindow(w, sessionData[w.serverName] || []);
   if (!match) return { online: false };
   const { session: matchedSession, window: sw } = match;
+  const stale = matchedSession.stale === true;
 
   // Resolve pane from the tmuxTarget's pane suffix (shared by all paths)
   const rest = w.tmuxTarget.split(':')[1] ?? '';
@@ -448,10 +451,10 @@ export function resolveWindowContextExtra(
   const pane = paneIdxPart != null
     ? sw.panes.find((p) => String(p.index) === paneIdxPart) ?? sw.panes[0]
     : sw.panes[0];
-  if (!pane) return { online: true, windowName: sw.name };
+  if (!pane) return { online: true, stale, windowName: sw.name };
 
   const sessionName = matchedSession.name;
   const paneTarget = `${sessionName}:${sw.name}.${pane.index}`;
   const paneTitle = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-  return { online: true, windowName: sw.name, paneTarget, paneTitle, paneCommand: pane.command };
+  return { online: true, stale, windowName: sw.name, paneTarget, paneTitle, paneCommand: pane.command };
 }

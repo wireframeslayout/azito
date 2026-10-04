@@ -1064,10 +1064,10 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
 
   const openWorkspace = vi.fn(async () => { heldAtCall.push(lockHeld); return { ref, result: { stdout: '', stderr: '', code: 0 } }; });
   const openWindow = vi.fn(async () => { heldAtCall.push(lockHeld); return { ref, result: { stdout: '', stderr: '', code: 0 }, windowName: 'main' }; });
-  const splitPaneByHandle = vi.fn(async () => { heldAtCall.push(lockHeld); return { handle: 'p_2', result: { stdout: '', stderr: '', code: 0 } }; });
+  const splitPaneByHandle = vi.fn(async () => { heldAtCall.push(lockHeld); return { handle: 'p_0123456789ABCDEFGHJKMNPQRT', result: { stdout: '', stderr: '', code: 0 } }; });
   const driver = {
     openWorkspace, openWindow, splitPaneByHandle,
-    resolvePane: vi.fn(async () => 'p_1'),
+    resolvePane: vi.fn(async () => 'p_0123456789ABCDEFGHJKMNPQRS'),
   } as unknown as IMuxClient;
 
   async function build(server: ServerConfig, extra: { windowRepo?: SqliteWindowRepository; buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string> } = {}) {
@@ -1129,14 +1129,14 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     await build(normal, { windowRepo: makeWindowRepo() });
     const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: { direction: 'h' } });
     expect(res.statusCode).toBe(200);
-    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'h', { AZITO_UI_TOKEN: 'test-token' });
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_0123456789ABCDEFGHJKMNPQRS', 'h', { AZITO_UI_TOKEN: 'test-token' });
     expect(heldAtCall).toEqual([true]);
   });
 
   it('POST /mux/windows/:ref/panes (split) passes the mask env to an isolated server', async () => {
     await build(isolated, { windowRepo: makeWindowRepo() });
     await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
-    expect(splitPaneByHandle).toHaveBeenCalledWith(isolated, 'p_1', 'v', MASKED);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(isolated, 'p_0123456789ABCDEFGHJKMNPQRS', 'v', MASKED);
   });
 
   it('POST /mux/windows/:ref/panes (split) gives a secondary task window its own masked env', async () => {
@@ -1150,7 +1150,7 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
     expect(res.statusCode).toBe(200);
     expect(buildSecondaryWindowEnv).toHaveBeenCalledWith(42, normal);
-    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_1', 'v', taskEnv);
+    expect(splitPaneByHandle).toHaveBeenCalledWith(normal, 'p_0123456789ABCDEFGHJKMNPQRS', 'v', taskEnv);
   });
 
   it('POST /mux/windows/:ref/panes (split) still refuses a task primary window', async () => {
@@ -1276,5 +1276,154 @@ describe('DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal', () => {
     const res = await app.inject({ method: 'DELETE', url: `${url}?handle=${HANDLE}` });
     expect(res.statusCode).toBe(503);
     expect(closePane).not.toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/servers/:name/sessions merges the muxes a server can use (#311)', () => {
+  const misaoRef = { kind: 'misao', workspace: 'dev', window: 'w_0123456789ABCDEFGHJKMNPQRS' } as const;
+  const tmuxSession = { name: 'dev', windowCount: 1, attached: false, created: 1, windows: [{ index: 0, name: 'editor', active: true, panes: [], activity: 0 }] };
+  const misaoWorkspace = { name: 'dev', windowCount: 1, attached: false, created: 2, windows: [{ index: 0, name: 'main', active: false, panes: [], activity: 0, ref: misaoRef }] };
+  let app: FastifyInstance;
+  let serverName = '';
+
+  async function build(server: ServerConfig, drivers: { tmux: Partial<IMuxClient>; misao?: Partial<IMuxClient>; misaoAvailable?: boolean }, tmux: Partial<TmuxClient> = {}) {
+    serverName = server.name;
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', drivers.tmux as IMuxClient);
+    if (drivers.misao) {
+      registry.register('misao', drivers.misao as IMuxClient, (srv) => {
+        if (srv.type !== undefined && srv.type !== 'local') return { available: false, reason: 'remote_unsupported' };
+        return drivers.misaoAvailable === false ? { available: false, reason: 'daemon_unreachable' } : { available: true };
+      });
+    }
+    const tmuxClient = { listSessions: vi.fn(async () => [tmuxSession]), cleanupLinkedSessions: vi.fn(async () => 0), ...tmux };
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(server),
+      tmux: tmuxClient as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo: makeWindowRepo(),
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+    return tmuxClient;
+  }
+
+  afterEach(async () => {
+    invalidateSessionCache(serverName);
+    await app.close();
+  });
+
+  it('lists an agent (tmux-only) server exactly as before, with only the kind stamp added', async () => {
+    const agent = { name: 'agent1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
+    const misaoList = vi.fn();
+    const tmuxClient = await build(agent, { tmux: { listWorkspaces: vi.fn() }, misao: { listWorkspaces: misaoList } });
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/agent1/sessions' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual([{ ...tmuxSession, kind: 'tmux', windows: [{ ...tmuxSession.windows[0], ref: JSON.stringify({ kind: 'tmux', workspace: 'dev', window: 'editor' }), windowId: null }] }]);
+    expect(tmuxClient.listSessions).toHaveBeenCalledTimes(1);
+    expect(tmuxClient.cleanupLinkedSessions).toHaveBeenCalledTimes(1);
+    expect(misaoList).not.toHaveBeenCalled();
+  });
+
+  it('lists the tmux sessions of a local tmux server whose misao daemon is down, and reports misao as unavailable (not absent)', async () => {
+    const local = { name: 'local1', type: 'local', defaultMux: 'tmux' } as ServerConfig;
+    const misaoList = vi.fn();
+    const tmuxClient = await build(local, { tmux: { listWorkspaces: vi.fn(async () => [tmuxSession]) }, misao: { listWorkspaces: misaoList }, misaoAvailable: false });
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/local1/sessions?detail=1' });
+
+    expect(res.json()).toMatchObject({ sessions: [{ name: 'dev', kind: 'tmux' }], unavailable: [{ kind: 'misao', reason: 'daemon_unreachable' }] });
+    expect(misaoList).not.toHaveBeenCalled();
+    expect(tmuxClient.cleanupLinkedSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns same-named tmux and misao sessions side by side, each with its kind', async () => {
+    const local = { name: 'local2', type: 'local', defaultMux: 'tmux' } as ServerConfig;
+    const tmuxClient = await build(local, { tmux: { listWorkspaces: vi.fn(async () => [tmuxSession]) }, misao: { listWorkspaces: vi.fn(async () => [misaoWorkspace]) } });
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/local2/sessions?detail=1' });
+
+    const body = res.json() as { sessions: Array<{ name: string; kind: string; windows: Array<{ ref: string }> }>; unavailable: unknown[] };
+    expect(body.sessions.map((s) => [s.name, s.kind])).toEqual([['dev', 'tmux'], ['dev', 'misao']]);
+    expect(body.sessions[1].windows[0].ref).toBe(JSON.stringify(misaoRef));
+    expect(body.unavailable).toEqual([]);
+    expect(tmuxClient.cleanupLinkedSessions).toHaveBeenCalledTimes(1);
+  });
+
+  it('still returns the tmux sessions when misao fails, and reports misao as unavailable', async () => {
+    const local = { name: 'local3', type: 'local', defaultMux: 'tmux' } as ServerConfig;
+    await build(local, { tmux: { listWorkspaces: vi.fn(async () => [tmuxSession]) }, misao: { listWorkspaces: vi.fn(async () => { throw new Error('daemon went away'); }) } });
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/local3/sessions?detail=1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      sessions: [{ name: 'dev', kind: 'tmux' }],
+      unavailable: [{ kind: 'misao', reason: 'driver_error', detail: 'daemon went away' }],
+    });
+    // The bare array form still answers with what could be listed.
+    invalidateSessionCache('local3');
+    expect((await app.inject({ method: 'GET', url: '/api/servers/local3/sessions' })).json()).toHaveLength(1);
+  });
+
+  it('fails (not an empty list) when every mux fails', async () => {
+    const local = { name: 'local4', type: 'local', defaultMux: 'misao' } as ServerConfig;
+    const tmuxClient = await build(local, { tmux: { listWorkspaces: vi.fn(async () => { throw new Error('tmux broke'); }) }, misao: { listWorkspaces: vi.fn(async () => { throw new Error('misao broke'); }) } });
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/local4/sessions' });
+
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'misao broke' });
+    expect(tmuxClient.cleanupLinkedSessions).not.toHaveBeenCalled();
+  });
+});
+
+describe('mux workspace routes pick the mux by `kind` (#311)', () => {
+  const local = { name: 'mixed', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
+  const ok = { stdout: '', stderr: '', code: 0 };
+  let app: FastifyInstance;
+
+  async function build() {
+    const tmuxDriver = { closeWorkspace: vi.fn(async () => ok), renameWorkspace: vi.fn(async () => ok) };
+    const misaoDriver = { closeWorkspace: vi.fn(async () => ok), renameWorkspace: vi.fn(async () => ok) };
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', tmuxDriver as unknown as IMuxClient);
+    registry.register('misao', misaoDriver as unknown as IMuxClient);
+    const windowRepo = makeWindowRepo();
+    app = Fastify();
+    await app.register(sessionsRoutes, {
+      serverRepo: makeServerRepo(local),
+      tmux: {} as unknown as TmuxClient,
+      uiToken: 'test-token',
+      windowRepo,
+      muxDriverRegistry: registry,
+      serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+    });
+    await app.ready();
+    return { tmuxDriver, misaoDriver, windowRepo };
+  }
+
+  afterEach(async () => { await app.close(); });
+
+  it('closes the tmux session of a name shared with misao when asked for kind=tmux, and only its rows', async () => {
+    const { tmuxDriver, misaoDriver, windowRepo } = await build();
+    const res = await app.inject({ method: 'DELETE', url: '/api/servers/mixed/mux/workspaces/dev?kind=tmux' });
+    expect(res.statusCode).toBe(200);
+    expect(tmuxDriver.closeWorkspace).toHaveBeenCalledWith(local, 'dev');
+    expect(misaoDriver.closeWorkspace).not.toHaveBeenCalled();
+    expect(windowRepo.findByServerAndSession).toHaveBeenCalledWith('mixed', 'dev', 'tmux');
+  });
+
+  it('defaults to the server default mux and rejects an unknown kind', async () => {
+    const { tmuxDriver, misaoDriver } = await build();
+    await app.inject({ method: 'PUT', url: '/api/servers/mixed/mux/workspaces/dev/rename', payload: { name: 'prod' } });
+    expect(misaoDriver.renameWorkspace).toHaveBeenCalledWith(local, 'dev', 'prod');
+    expect(tmuxDriver.renameWorkspace).not.toHaveBeenCalled();
+    const bad = await app.inject({ method: 'PUT', url: '/api/servers/mixed/mux/workspaces/dev/rename', payload: { name: 'prod', kind: 'zellij' } });
+    expect(bad.statusCode).toBe(400);
   });
 });
