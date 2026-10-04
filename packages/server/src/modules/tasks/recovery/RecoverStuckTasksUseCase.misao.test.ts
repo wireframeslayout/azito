@@ -75,6 +75,13 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
     };
     const registry = new MuxDriverRegistry();
     registry.register('misao', misaoDriver as unknown as IMuxClient);
+    const tmuxDriver = {
+      kind: 'tmux',
+      resolvePane: vi.fn().mockResolvedValue('%0'),
+      probePane: vi.fn().mockResolvedValue({ alive: true, verified: true }),
+      sendKeysToHandle: vi.fn().mockResolvedValue(undefined),
+    };
+    registry.register('tmux', tmuxDriver as unknown as IMuxClient);
     const resumeStateMachine = vi.fn().mockResolvedValue(undefined);
     const logger = { info: vi.fn(), warn: vi.fn() };
     const useCase = new RecoverStuckTasksUseCase(
@@ -91,7 +98,7 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       { findByTask: vi.fn().mockReturnValue(windows) } as never,
     );
-    return { useCase, misaoDriver, resumeStateMachine, logger };
+    return { useCase, misaoDriver, tmuxDriver, resumeStateMachine, logger };
   }
 
   it('resolves the pane from the primary window row\'s window id, not from a display name left in task.tmuxWindow', async () => {
@@ -111,6 +118,16 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
 
     expect(misaoDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'misao', window: WINDOW_ID }), 1);
     expect(resumeStateMachine).toHaveBeenCalledWith(1, 31);
+  });
+
+  it('(#313) recovers, on a misao-default server, a task without a window row whose window string is a tmux name as a tmux window, not a misao one', async () => {
+    const { useCase, misaoDriver, tmuxDriver, resumeStateMachine } = build({ ...task(32, 'misao-server'), tmuxWindow: 'task-32' }, []);
+
+    await useCase.run();
+
+    expect(misaoDriver.resolvePane).not.toHaveBeenCalled();
+    expect(tmuxDriver.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tmux', window: 'task-32' }), 1);
+    expect(resumeStateMachine).toHaveBeenCalledWith(1, 32);
   });
 });
 

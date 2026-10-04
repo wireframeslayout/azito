@@ -3,6 +3,10 @@ import type Database from 'better-sqlite3';
 export const version = 79;
 export const description = 'Merge duplicate local servers (one machine = one server) and record the old names in server_aliases (Issue #313)';
 
+// Same ULID alphabet as misao's protocol primitives (see @azito/shared mux.ts). Duplicated, as in 078, so the
+// migration keeps working whatever the shared helpers become.
+const MISAO_WINDOW_ID_RE = /^w_[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+
 interface ServerRow { name: string; default_mux: string; mux_runtime: string; rowid: number }
 interface WindowRow {
   id: number; server_name: string; tmux_target: string; mux_ref: string | null; task_id: number | null; is_primary: number;
@@ -21,22 +25,31 @@ interface Launch { id: number; task_id: number | null; target: string; status: s
 const PLAIN_TABLES = ['tasks', 'supervisor_launches', 'agent_turns'] as const;
 const UNIQUE_TABLES = ['agent_watches', 'distribution_state', 'browser_groups', 'browser_tab_snapshots', 'project_servers'] as const;
 
-/**
- * The windows of the merged servers that name one physical window (same `(server_name, tmux_target)` or
- * `(server_name, mux_ref)` once the server names are equal) are merged into one row, as 068 / 078 did: this is
- * the same machine, so two rows for one window are one window. Throwing here would stop the hub from starting
- * unattended and the old state could not be repaired without editing the database by hand, so the migration
- * instead keeps the row of the latest task (then the target's own row), moves the references that are safe to
- * move, clears the others and warns. Nothing but a duplicate row is ever deleted.
- */
-function mergeCollidingWindows(db: Database.Database, names: string[], target: string): void {
-  const placeholders = names.map(() => '?').join(', ');
-  const rows = db.prepare(
-    `SELECT id, server_name, tmux_target, mux_ref, task_id, is_primary, project_id, label, sleeping FROM windows WHERE server_name IN (${placeholders})`,
-  ).all(...names) as WindowRow[];
+function refKind(muxRef: string | null): string | null {
+  if (!muxRef) return null;
+  try {
+    const kind = (JSON.parse(muxRef) as { kind?: unknown }).kind;
+    return typeof kind === 'string' ? kind : null;
+  } catch {
+    return null;
+  }
+}
 
-  // Union rows that share a physical key.
-  const parent = new Map<number, number>();
+/** The mux a window row belongs to: its ref's kind, else misao when its target names a misao window id, else tmux. */
+function kindOf(row: WindowRow): string {
+  const fromRef = refKind(row.mux_ref);
+  if (fromRef) return fromRef;
+  const sep = row.tmux_target.indexOf(':');
+  return sep !== -1 && MISAO_WINDOW_ID_RE.test(row.tmux_target.slice(sep + 1)) ? 'misao' : 'tmux';
+}
+
+/**
+ * Groups the rows that stand for one physical window: the same `mux_ref` (it carries the kind), or the same
+ * `tmux_target` of the same kind. A tmux window and a misao window may carry the same name, which makes them
+ * different windows, so a shared target alone is not an identity.
+ */
+function windowComponents(rows: WindowRow[]): Map<number, WindowRow[]> {
+  const parent = new Map<number, number>(rows.map((r) => [r.id, r.id]));
   const find = (x: number): number => {
     let root = x;
     while (parent.get(root) !== root) root = parent.get(root)!;
@@ -45,10 +58,7 @@ function mergeCollidingWindows(db: Database.Database, names: string[], target: s
   };
   const byKey = new Map<string, number>();
   for (const row of rows) {
-    parent.set(row.id, row.id);
-  }
-  for (const row of rows) {
-    for (const key of [`t\u0000${row.tmux_target}`, ...(row.mux_ref ? [`r\u0000${row.mux_ref}`] : [])]) {
+    for (const key of [`t\u0000${kindOf(row)}\u0000${row.tmux_target}`, ...(row.mux_ref ? [`r\u0000${row.mux_ref}`] : [])]) {
       const seen = byKey.get(key);
       if (seen === undefined) byKey.set(key, row.id);
       else parent.set(find(row.id), find(seen));
@@ -59,11 +69,56 @@ function mergeCollidingWindows(db: Database.Database, names: string[], target: s
     const root = find(row.id);
     groups.set(root, [...(groups.get(root) ?? []), row]);
   }
+  return groups;
+}
+
+const windowsOf = (db: Database.Database, names: string[]): WindowRow[] =>
+  db.prepare(
+    `SELECT id, server_name, tmux_target, mux_ref, task_id, is_primary, project_id, label, sleeping FROM windows WHERE server_name IN (${names.map(() => '?').join(', ')})`,
+  ).all(...names) as WindowRow[];
+
+/**
+ * The servers that cannot join the merge without a UNIQUE(server_name, tmux_target) clash between two windows that
+ * are NOT the same window (a tmux and a misao window with one name). Nothing is deleted for them: the source stays
+ * a server of its own with its rows.
+ */
+function findBlockedSources(db: Database.Database, target: string, sources: string[]): Set<string> {
+  const blocked = new Set<string>();
+  for (let changed = true; changed;) {
+    changed = false;
+    const names = [target, ...sources.filter((s) => !blocked.has(s))];
+    const rows = windowsOf(db, names);
+    const component = new Map<number, number>();
+    for (const [root, members] of windowComponents(rows)) members.forEach((m) => component.set(m.id, root));
+    const byTarget = new Map<string, WindowRow[]>();
+    for (const row of rows) byTarget.set(row.tmux_target, [...(byTarget.get(row.tmux_target) ?? []), row]);
+    for (const group of byTarget.values()) {
+      if (new Set(group.map((r) => component.get(r.id))).size < 2) continue;
+      // The target (then the earlier source) keeps its place; the other servers in this clash stay out.
+      const keep = names.find((n) => group.some((r) => r.server_name === n))!;
+      for (const row of group) {
+        if (row.server_name !== keep && !blocked.has(row.server_name)) { blocked.add(row.server_name); changed = true; }
+      }
+    }
+  }
+  return blocked;
+}
+
+/**
+ * The windows of the merged servers that name one physical window (see windowComponents) are merged into one row, as
+ * 068 / 078 did: this is the same machine, so two rows for one window are one window. Throwing here would stop the
+ * hub from starting unattended and the old state could not be repaired without editing the database by hand, so the
+ * migration instead keeps the row of the latest task (then the target's own row), moves the references that are safe
+ * to move, clears the others and warns. Nothing but a duplicate row is ever deleted.
+ */
+function mergeCollidingWindows(db: Database.Database, names: string[], target: string): void {
+  const groups = windowComponents(windowsOf(db, names));
 
   const inherit = db.prepare('UPDATE windows SET project_id = COALESCE(project_id, ?), label = COALESCE(label, ?), sleeping = MAX(sleeping, ?) WHERE id = ?');
   const pendingOf = db.prepare('SELECT id FROM tasks WHERE pending_operation_window_id = ?');
   const setPending = db.prepare('UPDATE tasks SET pending_operation_window_id = ? WHERE id = ?');
-  const launchesOf = db.prepare('SELECT id, task_id, target, status FROM supervisor_launches WHERE window_id = ?');
+  // A launch is tied to a window by `window_id`; older ones (070 did not backfill it) only by (server_name, target).
+  const launchesOf = db.prepare('SELECT id, task_id, target, status FROM supervisor_launches WHERE window_id = ? OR (window_id IS NULL AND server_name = ? AND target = ?)');
   const setLaunch = db.prepare('UPDATE supervisor_launches SET window_id = ? WHERE id = ?');
   const expireLaunch = db.prepare("UPDATE supervisor_launches SET window_id = NULL, status = 'expired' WHERE id = ?");
   const moveWatches = db.prepare('UPDATE agent_watches SET window_id = ? WHERE window_id = ?');
@@ -87,13 +142,14 @@ function mergeCollidingWindows(db: Database.Database, names: string[], target: s
         setPending.run(own ? keeper.id : null, taskId);
         if (!own) detachedTasks.add(taskId);
       }
-      for (const launch of launchesOf.all(dup.id) as Launch[]) {
+      for (const launch of launchesOf.all(dup.id, dup.server_name, dup.tmux_target) as Launch[]) {
         const own = keeper.task_id !== null && launch.task_id === keeper.task_id;
         if (own && launch.target === keeper.tmux_target) setLaunch.run(keeper.id, launch.id);
         else if (isLive(launch)) expireLaunch.run(launch.id);
         else setLaunch.run(null, launch.id);
         if (!own && launch.task_id !== null) detachedTasks.add(launch.task_id);
       }
+      // A watch follows the physical window, whichever row stood for it.
       moveWatches.run(keeper.id, dup.id);
       remove.run(dup.id);
       merged.push(dup.id);
@@ -106,13 +162,36 @@ function mergeCollidingWindows(db: Database.Database, names: string[], target: s
 }
 
 /**
+ * Once the server names are equal, at most one pending/active launch may stand per (server_name, target) (a new launch
+ * supersedes the earlier ones): the newest stays, the others are `replaced`.
+ */
+function supersedeDuplicateLaunches(db: Database.Database, server: string): void {
+  const live = db.prepare("SELECT id, target FROM supervisor_launches WHERE server_name = ? AND status IN ('pending', 'active') ORDER BY id DESC").all(server) as Array<{ id: number; target: string }>;
+  const seen = new Set<string>();
+  const replace = db.prepare("UPDATE supervisor_launches SET status = 'replaced' WHERE id = ?");
+  for (const launch of live) {
+    if (seen.has(launch.target)) replace.run(launch.id);
+    else seen.add(launch.target);
+  }
+}
+
+/**
  * `type = 'local'` servers all stand for this machine, so the ones that a server-per-mux setup created (`local`,
  * `local-misao`) are merged into one: the target is the tmux-default server with the lowest rowid (else the lowest
- * rowid), and it takes `default_mux = 'misao'` when any merged server used misao (the user's intent is kept). A
- * `tmux` server whose `mux_runtime` differs from the target's runs on another tmux socket (`-L azito`), i.e. other
- * windows, so it is not a duplicate and is left alone. Rows that name the old servers move to the target; the old
- * names are recorded in `server_aliases` so webhooks and saved tabs that still carry them resolve (1 release, #313).
- * Does nothing when there is at most one mergeable local server.
+ * rowid), and it takes `default_mux = 'misao'` when any merged server used misao (the user's intent is kept).
+ *
+ * A local server stays out of the merge (with a warning, nothing deleted) when
+ * - its `mux_runtime` differs from the target's: it runs tmux on another socket (`-L azito`), whatever its
+ *   `default_mux`, so its tmux windows are other windows than the target's;
+ * - one of its windows would clash on `(server_name, tmux_target)` with a different window of the same name.
+ * Servers that stay are still `type = local`; listing the same misao daemon more than once is #327's concern.
+ *
+ * Rows that name the merged servers move to the target; the old names are recorded in `server_aliases` so webhooks,
+ * supervisors and saved tabs that still carry them resolve (1 release, #313). Does nothing when fewer than two
+ * servers can be merged.
+ *
+ * TODO(#313): when the aliases are removed (the release after this one), every pane's hook configuration must no
+ * longer name an old server: re-run `harness/setup.sh --server-name <merge target>` on this machine first.
  */
 export function up(db: Database.Database): void {
   db.exec(`
@@ -127,20 +206,24 @@ export function up(db: Database.Database): void {
   if (locals.length < 2) return;
 
   const target = locals.find((s) => s.default_mux === 'tmux') ?? locals[0];
-  const sources: ServerRow[] = [];
+  const candidates: ServerRow[] = [];
   for (const server of locals) {
     if (server === target) continue;
-    if (server.default_mux === 'tmux' && server.mux_runtime !== target.mux_runtime) {
-      console.warn(`Migration 079: local server '${server.name}' (tmux, ${server.mux_runtime}) is not merged into '${target.name}' (${target.mux_runtime}): another tmux socket`);
+    if (server.mux_runtime !== target.mux_runtime) {
+      console.warn(`Migration 079: local server '${server.name}' (${server.default_mux}, ${server.mux_runtime}) is not merged into '${target.name}' (${target.mux_runtime}): another tmux socket (listing the same misao daemon twice is #327)`);
       continue;
     }
-    sources.push(server);
+    candidates.push(server);
   }
+  const blocked = findBlockedSources(db, target.name, candidates.map((s) => s.name));
+  for (const name of blocked) {
+    console.warn(`Migration 079: local server '${name}' is not merged into '${target.name}': a window of the same name exists there as a different window (a tmux and a misao window); its rows stay on '${name}'`);
+  }
+  const sources = candidates.filter((s) => !blocked.has(s.name));
   if (sources.length === 0) return;
 
   const sourceNames = sources.map((s) => s.name);
-  const allNames = [target.name, ...sourceNames];
-  mergeCollidingWindows(db, allNames, target.name);
+  mergeCollidingWindows(db, [target.name, ...sourceNames], target.name);
 
   for (const name of sourceNames) {
     db.prepare('UPDATE windows SET server_name = ? WHERE server_name = ?').run(target.name, name);
@@ -152,6 +235,7 @@ export function up(db: Database.Database): void {
     }
     db.prepare('UPDATE server_aliases SET new_name = ? WHERE new_name = ?').run(target.name, name);
   }
+  supersedeDuplicateLaunches(db, target.name);
 
   if (sources.some((s) => s.default_mux === 'misao') && target.default_mux !== 'misao') {
     db.prepare("UPDATE servers SET default_mux = 'misao' WHERE name = ?").run(target.name);
@@ -161,4 +245,5 @@ export function up(db: Database.Database): void {
     db.prepare('INSERT OR REPLACE INTO server_aliases (old_name, new_name) VALUES (?, ?)').run(name, target.name);
   }
   console.log(`Migration 079: merged local server(s) ${sourceNames.join(', ')} into '${target.name}'`);
+  console.warn(`Migration 079: panes started before this still report the old server name(s) (${sourceNames.join(', ')}); the hub resolves them for one release. Re-run \`harness/setup.sh --server-name ${target.name}\` to update the hook configuration.`);
 }

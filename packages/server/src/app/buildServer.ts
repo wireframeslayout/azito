@@ -775,7 +775,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         socket.close(1008, 'Unauthorized');
         return;
       }
-      handleSupervisorConnection(socket, supervisorRegistry);
+      handleSupervisorConnection(socket, supervisorRegistry, (name) => serverAliasRepo.resolve(name));
     });
   });
 

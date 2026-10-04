@@ -57,7 +57,7 @@ function ServerCard({
     if (isOnline) {
       const transport = server.type === 'agent'
         ? `agent HTTP/WS :${server.agentPort ?? 3002} · Tailscale`
-        : 'SSH';
+        : server.type === 'local' ? t('status.localTransport') : 'SSH';
       return t('status.connectedVia', { transport });
     }
     return t('status.disconnected');

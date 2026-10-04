@@ -78,13 +78,18 @@ describe('resolveTerminalTarget', () => {
     expect(await resolveTerminalTarget(params({ serverName: 'tmuxsrv', target: 'sess:win.1' }), deps)).toEqual({ server: servers.tmuxsrv, ref: TMUX_REF });
   });
 
-  it('resolves a target on a misao server through the driver, not as a tmux target', async () => {
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:win.1' }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: `ws:${MISAO_REF.window}` }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: `ws:${MISAO_REF.window}.2` }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:other' }), deps)).toBeNull();
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:win' }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
-    expect(resolveDriverRef).toHaveBeenCalledWith(servers.misaosrv, 'ws:win');
+  it('resolves a misao window id target through the driver, on a server of either default mux', async () => {
+    for (const name of ['misaosrv', 'tmuxsrv']) {
+      expect(await resolveTerminalTarget(params({ serverName: name, target: `ws:${MISAO_REF.window}` }), deps)).toEqual({ server: servers[name], ref: MISAO_REF });
+      expect(await resolveTerminalTarget(params({ serverName: name, target: `ws:${MISAO_REF.window}.2` }), deps)).toEqual({ server: servers[name], ref: MISAO_REF });
+    }
+    expect(resolveDriverRef).toHaveBeenCalledWith(servers.misaosrv, `ws:${MISAO_REF.window}`);
+  });
+
+  it('reads a name target as a tmux target even on a misao-default server (a local server hosts both)', async () => {
+    resolveDriverRef.mockClear();
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'sess:win.1' }), deps)).toEqual({ server: servers.misaosrv, ref: TMUX_REF });
+    expect(resolveDriverRef).not.toHaveBeenCalled();
   });
 
   it('does not consult the driver for a tmux target', async () => {

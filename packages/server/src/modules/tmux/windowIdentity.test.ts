@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { MuxRef } from '@azito/shared';
-import { isSameWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
+import { isSameWindow, kindOfWindowName, kindOfWindowTarget, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
 
 const ID_A = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ID_B = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
@@ -64,5 +64,20 @@ describe('windowDisplayName', () => {
     expect(windowDisplayName({ label: null })).toBeUndefined();
     expect(windowDisplayName({ label: '  ' })).toBeUndefined();
     expect(windowDisplayName({ label: ID_A })).toBeUndefined();
+  });
+});
+
+describe('kindOfWindowName / kindOfWindowTarget (the mux of a ref-less string, never the server default)', () => {
+  it('reads a misao window id as misao and anything else as tmux', () => {
+    expect(kindOfWindowName(ID_A)).toBe('misao');
+    expect(kindOfWindowName('task-12')).toBe('tmux');
+    expect(kindOfWindowName('w_notAnId')).toBe('tmux');
+  });
+
+  it('reads the window part of a target, without its pane suffix', () => {
+    expect(kindOfWindowTarget(`ws:${ID_A}`)).toBe('misao');
+    expect(kindOfWindowTarget(`ws:${ID_A}.2`)).toBe('misao');
+    expect(kindOfWindowTarget('azito:3')).toBe('tmux');
+    expect(kindOfWindowTarget('azito:main.1')).toBe('tmux');
   });
 });

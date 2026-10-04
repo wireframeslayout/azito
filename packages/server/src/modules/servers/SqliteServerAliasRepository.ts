@@ -11,8 +11,10 @@ export interface ServerAlias {
  * browser may still hold saved tabs for it.
  *
  * TODO(#313): compatibility for one release only. Remove this repository, the `server_aliases` table (new migration),
- * the webhook resolution, `aliases` in GET /api/servers and the frontend tab migration after the release that ships
- * migration 079.
+ * the webhook and supervisor-register resolution, `aliases` in GET /api/servers and the frontend tab migration after
+ * the release that ships migration 079. Only once every machine's hook configuration and running supervisors no
+ * longer name an old server: `harness/setup.sh --server-name <merge target>` must have been re-run on it (079 logs
+ * this), and panes started before the merge must have been restarted.
  */
 export interface IServerAliasRepository {
   /**

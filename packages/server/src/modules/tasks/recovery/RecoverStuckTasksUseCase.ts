@@ -21,7 +21,7 @@ import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
 import type { PaneHandle } from '@azito/shared';
 import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Window';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
-import { taskWindowRef, windowKindOf } from '../../tmux/windowIdentity';
+import { kindOfWindowName, taskWindowRef, windowKindOf } from '../../tmux/windowIdentity';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -212,9 +212,9 @@ export class RecoverStuckTasksUseCase {
 
     const muxWorkspace = resolveMuxWorkspace(task.projectId, resolvedServerName, this.projectServerRepo);
     // The primary window row's mux_ref names the window (misao: its id); task.tmuxWindow is only the fallback.
-    // The window lives in its row's mux (no row: the server's default mux), which must be the one that is available.
+    // The window lives in its row's mux (no row: the mux its window string names, not the server's default), which must be the one that is available.
     const primaryWin = this.windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
-    const windowKind = primaryWin ? windowKindOf(primaryWin) : server.defaultMux;
+    const windowKind = primaryWin ? windowKindOf(primaryWin) : kindOfWindowName(task.tmuxWindow || `task-${task.id}`);
     const kindAvailability = this.muxDriverRegistry.availabilityFor(windowKind, server);
     if (!kindAvailability.available) {
       skipUnavailable(new MuxDriverUnavailableError(windowKind, kindAvailability.reason));

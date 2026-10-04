@@ -129,4 +129,115 @@ describe('migration 079: merge duplicate local servers', () => {
     expect(aliases(db)).toEqual([{ old_name: 'local-misao', new_name: 'local' }]);
     expect(db.prepare('SELECT COUNT(*) AS n FROM windows').get()).toEqual({ n: 1 });
   });
+
+  describe('window identity includes the mux kind', () => {
+    const tmuxRef = JSON.stringify({ kind: 'tmux', workspace: 'ws', window: 'w_X' });
+    const misaoRef = JSON.stringify({ kind: 'misao', workspace: 'ws', window: 'w_X' });
+
+    it('does not merge a tmux and a misao window that carry one name; the source keeps its server and rows', () => {
+      addServer(db, 'local-misao', 'misao');
+      const tmuxWin = addWindow(db, 'local', 'ws:w_X', { muxRef: tmuxRef });
+      const misaoWin = addWindow(db, 'local-misao', 'ws:w_X', { muxRef: misaoRef });
+      run(db);
+      expect(names(db)).toEqual(['local', 'local-misao']);
+      expect(aliases(db)).toEqual([]);
+      expect(db.prepare('SELECT id, server_name AS s FROM windows ORDER BY id').all()).toEqual([{ id: tmuxWin, s: 'local' }, { id: misaoWin, s: 'local-misao' }]);
+    });
+
+    it('still merges the other sources when one is blocked', () => {
+      addServer(db, 'local-misao', 'misao');
+      addServer(db, 'local-misao2', 'misao');
+      addWindow(db, 'local', 'ws:w_X', { muxRef: tmuxRef });
+      addWindow(db, 'local-misao', 'ws:w_X', { muxRef: misaoRef });
+      const other = addWindow(db, 'local-misao2', 'ws:w_Z', { muxRef: JSON.stringify({ kind: 'misao', workspace: 'ws', window: 'w_Z' }) });
+      run(db);
+      expect(names(db)).toEqual(['local', 'local-misao']);
+      expect(aliases(db)).toEqual([{ old_name: 'local-misao2', new_name: 'local' }]);
+      expect(db.prepare('SELECT server_name AS s FROM windows WHERE id = ?').get(other)).toEqual({ s: 'local' });
+    });
+
+    it('merges a ref-less tmux row with the tmux-ref row of the same target, but not with a misao-ref row', () => {
+      addServer(db, 'local-misao', 'misao');
+      addWindow(db, 'local', 'azito:1', { muxRef: JSON.stringify({ kind: 'tmux', workspace: 'azito', window: '1' }) });
+      addWindow(db, 'local-misao', 'azito:1');
+      run(db);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM windows').get()).toEqual({ n: 1 });
+    });
+  });
+
+  it('does not merge a misao-default local on another tmux socket either (its tmux windows live there), and warns about #327', () => {
+    addServer(db, 'local-misao-managed', 'misao', 'managed');
+    run(db);
+    expect(names(db)).toEqual(['local', 'local-misao-managed']);
+  });
+
+  describe('references of merged window rows (as 078 does)', () => {
+    const sameWindow = (db2: SqliteDatabase, taskId: number | null) => {
+      const keeper = addWindow(db2, 'local', 'azito:1', taskId ? { taskId } : {});
+      const dup = addWindow(db2, 'local-misao', 'azito:1');
+      return { keeper, dup };
+    };
+    const live = (db2: SqliteDatabase, id: string, server: string, target: string, task: number | null, window: number | null, status = 'active'): void => {
+      db2.prepare('INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, bootstrap_hash, window_id, status) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(id, server, target, task, 'h', window, status);
+    };
+    const launches = (db2: SqliteDatabase): unknown[] => db2.prepare('SELECT launch_id AS l, window_id AS w, status, server_name AS s FROM supervisor_launches ORDER BY id').all();
+    beforeEach(() => {
+      addServer(db, 'local-misao', 'misao');
+      db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 'a'), (1, 'b')").run();
+    });
+
+    it('keeps the keeper task\'s own pending operation and its launch whose target matches, clears another task\'s', () => {
+      const { keeper, dup } = sameWindow(db, 2);
+      db.prepare('UPDATE tasks SET pending_operation_window_id = ? WHERE id = 2').run(keeper);
+      db.prepare('UPDATE tasks SET pending_operation_window_id = ? WHERE id = 1').run(dup);
+      live(db, 'mine', 'local-misao', 'azito:1', 2, dup);
+      live(db, 'other', 'local-misao', 'azito:1', 1, dup, 'replaced');
+      run(db);
+      expect(db.prepare('SELECT id, pending_operation_window_id AS w FROM tasks ORDER BY id').all()).toEqual([{ id: 1, w: null }, { id: 2, w: keeper }]);
+      expect(launches(db)).toEqual([{ l: 'mine', w: keeper, status: 'active', s: 'local' }, { l: 'other', w: null, status: 'replaced', s: 'local' }]);
+    });
+
+    it('expires a live launch of the merged row that cannot stay on the keeper', () => {
+      const { dup } = sameWindow(db, 2);
+      live(db, 'foreign', 'local-misao', 'azito:1', 1, dup);
+      run(db);
+      expect(launches(db)).toEqual([{ l: 'foreign', w: null, status: 'expired', s: 'local' }]);
+    });
+
+    it('finds a launch without window_id by (server, target) and keeps one live launch per target (the newest)', () => {
+      const { keeper } = sameWindow(db, 2);
+      live(db, 'old', 'local-misao', 'azito:1', 2, null);
+      live(db, 'new', 'local', 'azito:1', 2, null);
+      live(db, 'elsewhere', 'local-misao', 'azito:9', 2, null);
+      run(db);
+      expect(launches(db)).toEqual([
+        { l: 'old', w: keeper, status: 'replaced', s: 'local' },
+        { l: 'new', w: null, status: 'active', s: 'local' },
+        { l: 'elsewhere', w: null, status: 'active', s: 'local' },
+      ]);
+    });
+
+    it('moves watches of a merged row to the keeper and carries project_id / label / sleeping over', () => {
+      const { keeper, dup } = sameWindow(db, null);
+      db.prepare("UPDATE windows SET label = NULL, project_id = 1 WHERE id = ?").run(keeper);
+      db.prepare("UPDATE windows SET label = 'shown', sleeping = 1 WHERE id = ?").run(dup);
+      db.prepare("INSERT INTO agent_watches (endpoint, server_name, target, window_id) VALUES ('e', 'local-misao', 'azito:1', ?)").run(dup);
+      run(db);
+      expect(db.prepare('SELECT window_id AS w, server_name AS s FROM agent_watches').all()).toEqual([{ w: keeper, s: 'local' }]);
+      expect(db.prepare('SELECT label AS l, sleeping AS sl FROM windows WHERE id = ?').get(keeper)).toEqual({ l: 'shown', sl: 1 });
+    });
+
+    it('merges two sources into the target in one run', () => {
+      addServer(db, 'local-misao2', 'misao');
+      db.prepare("INSERT INTO tasks (project_id, title, server_name) VALUES (1, 'c', 'local-misao'), (1, 'd', 'local-misao2')").run();
+      addWindow(db, 'local-misao', 'ws:w_A');
+      addWindow(db, 'local-misao2', 'ws:w_B');
+      run(db);
+      expect(names(db)).toEqual(['local']);
+      expect(aliases(db)).toEqual([{ old_name: 'local-misao', new_name: 'local' }, { old_name: 'local-misao2', new_name: 'local' }]);
+      expect(db.prepare('SELECT DISTINCT server_name AS s FROM tasks WHERE server_name IS NOT NULL').all()).toEqual([{ s: 'local' }]);
+      expect(db.prepare('SELECT COUNT(*) AS n FROM windows WHERE server_name = ?').get('local')).toEqual({ n: 2 });
+    });
+  });
 });

@@ -79,9 +79,9 @@ export default function TopologyView({ servers, statuses }: TopologyViewProps) {
 
       const transport = srv.type === 'agent'
         ? `agent HTTP/WS :${srv.agentPort ?? 3002}`
-        : 'SSH';
+        : srv.type === 'local' ? t('status.localTransport') : 'SSH';
       const edgeLabel = isOnline
-        ? `${transport} · Tailscale`
+        ? (srv.type === 'local' ? transport : `${transport} · Tailscale`)
         : t('topology.disconnected');
 
       return {

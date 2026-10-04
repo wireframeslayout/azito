@@ -19,6 +19,21 @@ export function windowKindOf(win: Pick<WindowRowIdentity, 'muxRef'>): MuxDriverK
   return win.muxRef?.kind ?? 'tmux';
 }
 
+/**
+ * The mux of a window known only by its name/id string (a task's `tmuxWindow`, the window part of a `tmux_target`):
+ * a misao window id (`w_<ULID>`) is misao, anything else tmux. For references that carry no `mux_ref`: a server's
+ * `defaultMux` says where NEW windows go, not which mux an existing string names (one local server hosts both).
+ */
+export function kindOfWindowName(window: string): MuxDriverKind {
+  return isMisaoWindowId(window) ? 'misao' : 'tmux';
+}
+
+/** `kindOfWindowName` of the window part of `<workspace>:<window>` (a trailing `.<pane>` is not part of the window). */
+export function kindOfWindowTarget(target: string): MuxDriverKind {
+  const sep = target.indexOf(':');
+  return kindOfWindowName(sep === -1 ? target : target.slice(sep + 1).replace(/\.\d+$/, ''));
+}
+
 /** The ref of a window row: its `mux_ref`, or the one derived from `tmux_target` for rows that predate `mux_ref`. */
 export function windowRefOf(win: Pick<WindowRowIdentity, 'muxRef' | 'tmuxTarget'>, kind: MuxDriverKind): MuxRef {
   return win.muxRef ?? { ...muxRefFromTmuxTarget(win.tmuxTarget), kind };

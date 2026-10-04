@@ -5,6 +5,7 @@
     "error": "エラー",
     "checking": "確認中…",
     "connectedVia": "─ Hub と接続中 · {{transport}}",
+    "localTransport": "ローカル · 別ソケットの tmux",
     "disconnected": "- - 切断中",
     "versionDrift": "⚠ {{version}}（要更新）"
   },

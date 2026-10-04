@@ -5,6 +5,7 @@
     "error": "Error",
     "checking": "Checking…",
     "connectedVia": "─ Connected to Hub · {{transport}}",
+    "localTransport": "Local · separate tmux socket",
     "disconnected": "- - Disconnected",
     "versionDrift": "⚠ {{version}} (outdated)"
   },
