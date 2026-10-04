@@ -459,6 +459,7 @@ export default function OverviewSection({
                 ? t('overview.muxManaged')
                 : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
             </span>
+            <span style={{ display: 'block', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('overview.muxRuntimeNote')}</span>
           </KvRow>
           {isAgent && (
             <KvRow label={t('overview.agentVersionLabel')}>

@@ -14,6 +14,7 @@ import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneA
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
+import { MuxDriverUnavailableError, MUX_BINARY_MISSING, isMissingBinaryError, isMissingBinaryResult } from '../MuxCapabilityError';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
 import { muxWindowTarget } from '../muxWindowTarget';
 import { serverSupportsMux } from '../../servers/muxKinds';
@@ -183,6 +184,57 @@ function requestedMuxKind(value: unknown, srv: ServerConfig): MuxDriverKind | un
   if (value === undefined || value === '') return undefined;
   if (value !== 'tmux' && value !== 'misao') return null;
   return serverSupportsMux(srv, value) ? value : null;
+}
+
+/**
+ * The mux kind a create request asks for. `undefined` = not given (the server's default mux applies). Only an absent
+ * `kind` means "not given": an empty string is a 400. The kind that will run the call (the given one, else the
+ * server's default) must be usable now, or the answer is a 409 with the reason.
+ */
+type CreationKind =
+  | { ok: true; kind: MuxDriverKind | undefined }
+  | { ok: false; status: 400 | 409; body: { error: string; kind?: MuxDriverKind; reason?: string } };
+
+function unavailableBody(kind: MuxDriverKind, reason: string): { error: string; kind: MuxDriverKind; reason: string } {
+  return { error: 'mux_kind_unavailable', kind, reason };
+}
+
+function creationMuxKind(value: unknown, srv: ServerConfig, registry: MuxDriverRegistry | undefined): CreationKind {
+  if (value !== undefined && value !== 'tmux' && value !== 'misao') return { ok: false, status: 400, body: { error: 'Invalid kind' } };
+  const effectiveKind: MuxDriverKind = value ?? srv.defaultMux;
+  const availability = registry?.availabilityFor(effectiveKind, srv);
+  if (!serverSupportsMux(srv, effectiveKind)) {
+    const reason = availability && !availability.available ? availability.reason : 'remote_unsupported';
+    return { ok: false, status: 409, body: unavailableBody(effectiveKind, reason) };
+  }
+  if (availability && !availability.available) {
+    return { ok: false, status: 409, body: unavailableBody(effectiveKind, availability.reason) };
+  }
+  return { ok: true, kind: value };
+}
+
+/**
+ * How a failed create call is answered. A driver that cannot serve the call (daemon lost mid-call) or a mux binary
+ * that is not installed is a 409 `mux_kind_unavailable` with the reason; anything else is a 500.
+ */
+function createFailure(kind: MuxDriverKind, err: unknown): { status: 409 | 500; body: Record<string, unknown> } {
+  if (err instanceof MuxDriverUnavailableError) return { status: 409, body: unavailableBody(err.kind, err.reason) };
+  if (kind === 'tmux' && isMissingBinaryError(err)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
+  return { status: 500, body: { error: err instanceof Error ? err.message : String(err) } };
+}
+
+/** An agent/ssh transport resolves with a non-zero ExecResult instead of throwing when the remote mux fails. */
+// A missing tmux on an agent server stays a 500: the agent turns a spawn ENOENT into code 1 with an empty stderr
+// (agent/routes.ts), so there is nothing here to tell it from another failure. An SSH server's code 127 is recognised.
+function createResultFailure(kind: MuxDriverKind, result: ExecResult): { status: 409 | 500; body: Record<string, unknown> } {
+  if (kind === 'tmux' && isMissingBinaryResult(result)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
+  return { status: 500, body: { error: `create failed: ${result.stderr || result.stdout}` } };
+}
+
+function replyCreateError(reply: FastifyReply, kind: MuxDriverKind, err: unknown): FastifyReply {
+  if (err instanceof AgentUnreachableError) throw err;
+  const failure = createFailure(kind, err);
+  return reply.status(failure.status).send(failure.body);
 }
 
 // ─── Session cache (30 s TTL) ───
@@ -1057,8 +1109,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const kind = requestedMuxKind(kindParam, freshSrv);
-        if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });
+        const requested = creationMuxKind(kindParam, freshSrv, opts.muxDriverRegistry);
+        if (!requested.ok) return reply.status(requested.status).send(requested.body);
+        const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
@@ -1066,13 +1119,17 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
         }
         try {
-          const { ref, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          const { ref, result, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          if (result.code !== 0) {
+            const failure = createResultFailure(kind ?? freshSrv.defaultMux, result);
+            return reply.status(failure.status).send(failure.body);
+          }
           notifySessionsChanged(request.params.name);
           // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
           return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return replyRouteError(reply, err);
+          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
         }
       });
     },
@@ -1086,8 +1143,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const kind = requestedMuxKind(kindParam, freshSrv);
-        if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });
+        const requested = creationMuxKind(kindParam, freshSrv, opts.muxDriverRegistry);
+        if (!requested.ok) return reply.status(requested.status).send(requested.body);
+        const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
@@ -1097,11 +1155,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         try {
           const workspace = decodeURIComponent(request.params.workspace);
           const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          if (created.result.code !== 0) {
+            const failure = createResultFailure(kind ?? freshSrv.defaultMux, created.result);
+            return reply.status(failure.status).send(failure.body);
+          }
           notifySessionsChanged(request.params.name);
           return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return replyRouteError(reply, err);
+          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
         }
       });
     },

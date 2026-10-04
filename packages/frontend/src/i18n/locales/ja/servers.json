@@ -124,7 +124,8 @@
     "notSupported": "未対応",
     "sessionsLabel": "セッション",
     "sessionsSummary": "セッション {{sessionCount}} · ウィンドウ {{windowCount}}",
-    "hubVersionLabel": "Hub バージョン"
+    "hubVersionLabel": "Hub バージョン",
+    "muxRuntimeNote": "tmux を使うときだけ有効"
   },
   "setup": {
     "title": "セットアップ",
@@ -190,7 +191,9 @@
     "noPanes": "ペインがありません",
     "openPane": "ペインを開く",
     "killWindow": "ウィンドウを削除",
-    "deletePane": "ペイン {{name}} を削除"
+    "deletePane": "ペイン {{name}} を削除",
+    "sessionName": "セッション名",
+    "creating": "作成中…"
   },
   "danger": {
     "resetFingerprint": "SSH fingerprint をリセット",

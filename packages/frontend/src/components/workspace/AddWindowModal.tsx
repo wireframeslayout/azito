@@ -4,7 +4,10 @@ import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
 import { FormInput, FormSelect, baseInputStyle, Button, ModelSelect } from '../ui';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
+import type { MuxKindSelectModel } from '../../lib/muxKindChoice';
+import MuxKindField from './MuxKindField';
 import { findSessionByKey, hasMixedKinds, sessionKey, sessionOptionLabel, windowTargetSelectOptions } from '../../lib/sessionKind';
 
 interface AddWindowModalProps {
@@ -42,6 +45,9 @@ interface AddWindowModalProps {
   agentPresets: Record<string, { command: string; label: string }>;
   agentPresetsLoading?: boolean;
   agentPresetsError?: string | null;
+  /** 新規作成時のターミナル方式（misao / tmux）の選択状態。サーバーが 1 方式しか持たない場合は表示しない。 */
+  muxKind: MuxKindSelectModel | null;
+  onMuxKindChange: (kind: MuxDriverKind) => void;
   servers: Server[];
   projectServers: { serverName: string; workingDirectory?: string }[];
   project: { workingDirectory?: string } | null;
@@ -70,6 +76,7 @@ export default function AddWindowModal({
   agentPresets,
   agentPresetsLoading,
   agentPresetsError,
+  muxKind, onMuxKindChange,
   servers, projectServers, project,
 }: AddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
@@ -94,19 +101,17 @@ export default function AddWindowModal({
           {projectServers.length <= 1 && awServer && (
             <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12 }}>{t('addWindow.serverLabel')}{awServer}{awOfflineServers.includes(awServer) && ` (${t('addWindow.serverOffline')})`}</div>
           )}
+          <MuxKindField model={muxKind} onChange={onMuxKindChange} disabled={loading} />
           <FormField label={t('addWindow.session')}>
             <FormInput value={awNewSession} readOnly style={{ opacity: 0.7, cursor: 'default' }} />
           </FormField>
           <FormField label={t('addWindow.windowName')}>
             <FormInput value={awNewWindowName} onChange={(e) => setAwNewWindowName(e.target.value)} placeholder={t('addWindow.windowNamePlaceholder')} />
-            {!awNewWindowName.trim() && (() => {
-              const serverInfo = servers.find((s) => s.name === awServer);
-              return serverInfo && serverInfo.defaultMux !== 'tmux' ? (
-                <div style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
-                  {t('addWindow.windowNameAutoGenHint')}
-                </div>
-              ) : null;
-            })()}
+            {!awNewWindowName.trim() && muxKind?.value === 'misao' && (
+              <div style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                {t('addWindow.windowNameAutoGenHint')}
+              </div>
+            )}
           </FormField>
           <FormField label={t('addWindow.workingDir')}>
             <DirectoryInput

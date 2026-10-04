@@ -124,7 +124,8 @@
     "notSupported": "Not supported",
     "sessionsLabel": "Sessions",
     "sessionsSummary": "Sessions {{sessionCount}} · Windows {{windowCount}}",
-    "hubVersionLabel": "Hub version"
+    "hubVersionLabel": "Hub version",
+    "muxRuntimeNote": "Only applies when using tmux"
   },
   "setup": {
     "title": "Setup",
@@ -190,7 +191,9 @@
     "noPanes": "No panes",
     "openPane": "Open a pane",
     "killWindow": "Delete window",
-    "deletePane": "Delete pane {{name}}"
+    "deletePane": "Delete pane {{name}}",
+    "sessionName": "Session name",
+    "creating": "Creating…"
   },
   "danger": {
     "resetFingerprint": "Reset SSH Fingerprint",

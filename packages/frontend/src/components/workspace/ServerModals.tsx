@@ -117,7 +117,7 @@ function MuxFields({ serverType, defaultMux, onDefaultMuxChange, originalDefault
           {kindNotice && <MuxNotice id={defaultMuxNoticeId} tone={kindNotice === 'enterMisao' ? 'info' : 'warning'}>{t(DEFAULT_MUX_NOTICE_KEY[kindNotice])}</MuxNotice>}
         </>
       )}
-      <FormField label={t('serverModals.muxRuntime')}>
+      <FormField label={t('serverModals.muxRuntime')} hint={t('serverModals.muxRuntimeHint')}>
         <FormSelect
           value={muxRuntime}
           onChange={(e) => onMuxRuntimeChange(e.target.value as MuxRuntime)}
