@@ -54,16 +54,16 @@ describe('syncTmuxChangeHooks', () => {
   const manager = () => ({ install: vi.fn(async () => {}) });
   const log = { warn: vi.fn() };
 
-  it('installs hooks when a local server is switched back onto tmux', () => {
+  it('installs hooks for a local server whose mux settings changed, whichever mux it defaults to', () => {
     const m = manager();
     syncTmuxChangeHooks(m, srv('tmux'), log);
     syncTmuxChangeHooks(m, srv('tmux', 'local', 'managed'), log);
-    expect(m.install).toHaveBeenCalledTimes(2);
+    syncTmuxChangeHooks(m, srv('misao'), log);
+    expect(m.install).toHaveBeenCalledTimes(3);
   });
 
-  it('does nothing for a misao server or a non-local server', () => {
+  it('does nothing for a non-local server', () => {
     const m = manager();
-    syncTmuxChangeHooks(m, srv('misao'), log);
     syncTmuxChangeHooks(m, srv('tmux', 'agent'), log);
     expect(m.install).not.toHaveBeenCalled();
   });
