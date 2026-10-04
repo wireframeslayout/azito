@@ -1935,6 +1935,10 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
       const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' });
       const built = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit], projectServer: null });
       (built.tmux as { kind: string }).kind = 'misao';
+      // The old window's primary row carries its misao ref (stored data without a ref is tmux).
+      (built.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 90, ownerType: 'task', taskId: 46, isPrimary: true, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH') },
+      ]);
       (built.tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(workspaces);
       await built.useCase.execute(36, 46);
       return built;

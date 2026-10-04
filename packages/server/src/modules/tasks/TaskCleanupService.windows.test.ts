@@ -22,7 +22,8 @@ function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.f
     projectServerRepo: { find: () => ({ tmuxSession: 'azito' }), findByProject: () => [] } as never,
     projectRepo: {} as never,
     muxDriverRegistry: registry,
-    windowRepo: { findByTask: () => opts.windows ?? [] } as never,
+    // By default the misao task has its primary row with a misao ref (stored data without a ref is tmux).
+    windowRepo: { findByTask: () => opts.windows ?? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] } as never,
   });
   const log = { warn: vi.fn() };
   const task = { id: 987654, projectId: 1, serverName: 'local', tmuxWindow: WINDOW_ID, worktreePath: null } as unknown as Task;
@@ -41,12 +42,12 @@ describe('TaskCleanupService window close', () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it('closes by task.tmuxWindow (a window id) when there is no row', async () => {
-    const { service, closeWindow, log, task } = setup({});
+  it('reads task.tmuxWindow as a tmux window when there is no row, even if it has the misao id form (stored data without a ref is tmux)', async () => {
+    const { service, closeWindow, log, task } = setup({ windows: [], kind: 'tmux' });
 
     await service.closeWindow(task, log);
 
-    expect(closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'misao', workspace: 'azito', window: WINDOW_ID });
+    expect(closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: WINDOW_ID });
   });
 
   it('warns when the close result is a failure (an RPC error is a non-zero result, not a rejection)', async () => {
