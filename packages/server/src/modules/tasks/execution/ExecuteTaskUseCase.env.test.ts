@@ -461,7 +461,7 @@ function buildUseCase(opts: {
     null,
     (opts.fetchDistributionService as any) ?? null,
     (opts.distributionStateRepo as any) ?? null,
-    { resolve: () => tmux } as any,
+    { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
     // Issue #274: primaryWindowWaker mock — no-op for most tests.
     primaryWindowWaker as any,
   );
@@ -837,7 +837,8 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     await useCase.execute(42, taskId);
 
     expect(windowRepo.findByTask).toHaveBeenCalledWith(taskId);
-    expect(windowRepo.remove).toHaveBeenCalledTimes(1);
+    // The stale primary row is removed (the mocked list is static, so each of the two clean-ups sees it); nothing else is.
+    expect((windowRepo.remove as ReturnType<typeof vi.fn>).mock.calls.every(([id]) => id === 5)).toBe(true);
     expect(windowRepo.remove).toHaveBeenCalledWith(5);
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
@@ -1643,7 +1644,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       null,
       null,
       null,
-      { resolve: () => tmux } as any,
+      { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
     );
 
@@ -1789,6 +1790,11 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       units: [unit],
       projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
     });
+    // The primary window row saved when the window is created (#313) must be gone again after the rollback.
+    const rows: Array<{ id: number }> = [];
+    windowRepo.add.mockImplementation(((row: object) => { rows.push({ id: 77, ...row }); return 77; }) as never);
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockImplementation(() => rows.slice());
+    windowRepo.remove.mockImplementation(((id: number) => { rows.splice(rows.findIndex((r) => r.id === id), 1); }) as never);
     // Simulate a worktree service that reports a path escaping allowedRoot —
     // exercises the post-creation wt.path containment check independently of
     // how the escape happened (symlink, bug in the worktree service, etc).
@@ -1807,7 +1813,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       worktreePath: null,
       worktreeBranch: null,
     });
-    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(rows).toEqual([]);
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
     // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
     // TOKEN_REVOKING_STATUSES), so the just-created window's token
@@ -1847,6 +1853,11 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       units: [unit],
       projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
     });
+    // The primary window row saved when the window is created (#313) must be gone again after the rollback.
+    const rows: Array<{ id: number }> = [];
+    windowRepo.add.mockImplementation(((row: object) => { rows.push({ id: 77, ...row }); return 77; }) as never);
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockImplementation(() => rows.slice());
+    windowRepo.remove.mockImplementation(((id: number) => { rows.splice(rows.findIndex((r) => r.id === id), 1); }) as never);
     const worktreeRemove = vi.fn(async () => {});
     worktreeServiceFactory.create.mockReturnValue({
       create: vi.fn(async () => ({ path: outsideDir, branch: 'task/6-slug' })),
@@ -1865,7 +1876,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       worktreePath: null,
       worktreeBranch: null,
     });
-    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(rows).toEqual([]);
   });
 });
 
@@ -1924,6 +1935,23 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'azito', window: '5' });
     expect(tmux.killPane).not.toHaveBeenCalled();
     expect(windowRepo.add).toHaveBeenCalled();
+  });
+
+  it('execute(): saves the primary window row with the created window\'s mux_ref right before the task\'s tmuxWindow (#313)', async () => {
+    const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 48, serverName: 'local-server', unitId: 36 });
+    const { useCase, tmux, windowRepo, taskRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    (tmux.openWindow as ReturnType<typeof vi.fn>).mockResolvedValue({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-48' });
+
+    await useCase.execute(36, 48);
+
+    const addCall = (windowRepo.add as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).toMatchObject({ ownerType: 'task', taskId: 48, isPrimary: true, muxRef: misaoRef });
+    const addOrder = (windowRepo.add as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const taskWrite = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls.findIndex(([, data]) => (data as { tmuxWindow?: string }).tmuxWindow === misaoRef.window);
+    expect(taskWrite).toBeGreaterThanOrEqual(0);
+    expect(addOrder).toBeLessThan((taskRepo.update as ReturnType<typeof vi.fn>).mock.invocationCallOrder[taskWrite]);
   });
 
   describe('misao leftover window lookup', () => {
@@ -2852,7 +2880,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       null,
       null,
       null,
-      { resolve: () => tmux } as any,
+      { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
     );
 

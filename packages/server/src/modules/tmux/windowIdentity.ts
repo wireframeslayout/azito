@@ -1,5 +1,4 @@
 import { isMisaoWindowId, muxRefFromTmuxTarget, type MuxDriverKind, type MuxRef } from '@azito/shared';
-import { serverSupportsMux, type MuxKindServer } from '../servers/muxKinds';
 
 /** The fields of a window row these helpers read (structural, so this base module does not import the windows module). */
 export interface WindowRowIdentity {
@@ -28,18 +27,6 @@ export function windowKindOf(win: Pick<WindowRowIdentity, 'muxRef'>): MuxDriverK
  */
 export function kindOfStoredWindow(win: Pick<WindowRowIdentity, 'muxRef'> | undefined): MuxDriverKind {
   return win?.muxRef?.kind ?? 'tmux';
-}
-
-/**
- * The mux of a RAW `<workspace>:<window>` target string from a client (`target=` of a terminal connection, a window
- * registration without a ref), which carries no kind: misao only when the server can host misao (a local server;
- * agent / ssh servers are tmux only) and the window part (without a `.<pane>` suffix) has the misao window id form.
- * Use `kindOfStoredWindow` for anything read from the database.
- */
-export function kindOfRawTarget(target: string, server: MuxKindServer): MuxDriverKind {
-  const sep = target.indexOf(':');
-  const window = sep === -1 ? target : target.slice(sep + 1).replace(/\.\d+$/, '');
-  return serverSupportsMux(server, 'misao') && isMisaoWindowId(window) ? 'misao' : 'tmux';
 }
 
 /** The ref of a window row: its `mux_ref`, or the one derived from `tmux_target` for rows that predate `mux_ref`. */

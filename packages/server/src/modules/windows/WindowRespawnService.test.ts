@@ -1432,6 +1432,22 @@ describe('WindowRespawnService.resumeLegacySession (Issue #328 fourth-round revi
     expect(result.windowName).toBe('task-7-new');
   });
 
+  it('(#313) saves the primary window row with the created window\'s mux_ref (misao), right before the task\'s tmuxWindow', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const { service, tmux, windowRepo, taskRepo } = buildService({ window: makeWindow({ taskId: 7 }), task, unit });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    tmux.openWindow.mockResolvedValue({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-7' } as never);
+
+    await service.resumeLegacySession(7, makeServer());
+
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ ownerType: 'task', taskId: 7, isPrimary: true, muxRef: misaoRef, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH' }));
+    const addOrder = (windowRepo.add as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const updateOrder = (taskRepo.update as ReturnType<typeof vi.fn>).mock.invocationCallOrder.at(-1)!;
+    expect(addOrder).toBeLessThan(updateOrder);
+    expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' });
+  });
+
   // Issue #29 review (10th pass), Important finding 3: resumeLegacySession's
   // own `resolvePaneId`/`sendKeysToHandle` calls (and its rollback's `closeWindow`,
   // covered by the sibling describe block below) previously kept using the
@@ -1566,6 +1582,20 @@ describe('WindowRespawnService.resumeLegacySession rollback safety (Issue #28 th
 
     expect(paneEnvService.revokeGeneration).not.toHaveBeenCalled();
     expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: 'task-7-new' });
+  });
+
+  it('(#313) also saves the primary window row (with its ref) for a window left alive when the launch failed and the kill failed', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const unit = makeUnit({ id: 10 });
+    const { service, tmux, windowRepo } = buildService({ window: makeWindow({ taskId: 7 }), task, unit });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    tmux.openWindow.mockResolvedValue({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-7' } as never);
+    tmux.resolvePane.mockRejectedValue(new Error('no such pane'));
+    tmux.closeWindow.mockResolvedValue({ stdout: '', stderr: 'device busy', code: 1 });
+
+    await expect(service.resumeLegacySession(7, makeServer())).rejects.toThrow(/no such pane/);
+
+    expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ taskId: 7, isPrimary: true, muxRef: misaoRef }));
   });
 });
 

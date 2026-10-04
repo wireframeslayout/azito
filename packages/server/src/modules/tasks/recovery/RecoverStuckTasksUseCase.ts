@@ -18,10 +18,11 @@ import { extractPhaseSummary } from '../extractPhaseSummary';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from '../execution/TaskExecutionEnv';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import type { UnitType, UnitTypePhase } from '../../sidekicks/UnitType';
-import type { PaneHandle } from '@azito/shared';
+import type { MuxDriverKind, PaneHandle } from '@azito/shared';
 import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Window';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
-import { kindOfStoredWindow, taskWindowRef } from '../../tmux/windowIdentity';
+import { taskWindowRef } from '../../tmux/windowIdentity';
+import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../../tmux/storedWindowKind';
 
 export interface RecoveryLogger {
   info(msg: string, ...args: unknown[]): void;
@@ -214,7 +215,14 @@ export class RecoverStuckTasksUseCase {
     // The primary window row's mux_ref names the window (misao: its id); task.tmuxWindow is only the fallback.
     // The window lives in its row's mux (no row: tmux, not the server's default), which must be the one that is available.
     const primaryWin = this.windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
-    const windowKind = kindOfStoredWindow(primaryWin);
+    let windowKind: MuxDriverKind;
+    try {
+      windowKind = await resolveStoredWindowKind(this.muxDriverRegistry, server, primaryWin, muxWorkspace, task.tmuxWindow || `task-${task.id}`);
+    } catch (err) {
+      if (err instanceof MuxDriverUnavailableError) { skipUnavailable(err); return; }
+      if (err instanceof AmbiguousWindowKindError) { this.logger.warn(`Recovery skip: task ${task.id}: ${err.message}`); return; }
+      throw err;
+    }
     const kindAvailability = this.muxDriverRegistry.availabilityFor(windowKind, server);
     if (!kindAvailability.available) {
       skipUnavailable(new MuxDriverUnavailableError(windowKind, kindAvailability.reason));

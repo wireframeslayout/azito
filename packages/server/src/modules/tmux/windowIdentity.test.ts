@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { MuxRef } from '@azito/shared';
-import { isSameWindow, kindOfRawTarget, kindOfStoredWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
+import { isSameWindow, kindOfStoredWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
 
 const ID_A = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ID_B = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
@@ -73,23 +73,5 @@ describe('kindOfStoredWindow (stored data: the ref decides, else tmux)', () => {
     expect(kindOfStoredWindow({ muxRef: tmux('ws', ID_A) })).toBe('tmux');
     expect(kindOfStoredWindow({})).toBe('tmux');
     expect(kindOfStoredWindow(undefined)).toBe('tmux');
-  });
-});
-
-describe('kindOfRawTarget (a raw target string from a client)', () => {
-  const local = { type: 'local' as const, defaultMux: 'tmux' as const };
-  const misaoLocal = { type: 'local' as const, defaultMux: 'misao' as const };
-  const agent = { type: 'agent' as const, defaultMux: 'tmux' as const };
-
-  it('is misao only on a server that can host misao and for a window id form (pane suffix ignored)', () => {
-    expect(kindOfRawTarget(`ws:${ID_A}`, local)).toBe('misao');
-    expect(kindOfRawTarget(`ws:${ID_A}`, misaoLocal)).toBe('misao');
-    expect(kindOfRawTarget(`ws:${ID_A}.2`, local)).toBe('misao');
-    expect(kindOfRawTarget('azito:3', misaoLocal)).toBe('tmux');
-    expect(kindOfRawTarget('azito:main.1', local)).toBe('tmux');
-  });
-
-  it('is tmux on a tmux-only server even for a tmux window named like a misao id', () => {
-    expect(kindOfRawTarget(`ws:${ID_A}`, agent)).toBe('tmux');
   });
 });

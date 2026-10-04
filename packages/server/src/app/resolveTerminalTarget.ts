@@ -2,7 +2,7 @@ import { muxRefFromTmuxTarget, parseMuxRef, stripPaneSuffix, type MuxRef } from 
 import type { IServerRepository, ServerConfig } from '../modules/servers/Server';
 import type { IWindowRepository } from '../modules/windows/Window';
 import { isRefKindCompatible } from '../modules/windows/windowPaneOps';
-import { kindOfRawTarget } from '../modules/tmux/windowIdentity';
+import { resolveRawTarget, type RawTargetProbe } from '../modules/tmux/storedWindowKind';
 
 export interface TerminalTargetParams {
   serverName: string | null;
@@ -13,15 +13,16 @@ export interface TerminalTargetParams {
 
 export interface TerminalTargetDeps {
   serverRepo: Pick<IServerRepository, 'findByName'>;
-  windowRepo: Pick<IWindowRepository, 'findById'>;
-  /** Resolves a name-based target through the server's mux driver; null when the target names no single window. */
-  resolveDriverRef: (server: ServerConfig, target: string) => Promise<MuxRef | null>;
+  windowRepo: Pick<IWindowRepository, 'findById' | 'findByServerAndTarget'>;
+  /** How a raw target is looked up in the muxes of a server (only reached for a target no window row has). */
+  probe: RawTargetProbe;
 }
 
 /**
  * Terminal WS: windowId → ref → target (fallback). A ref (given, or stored on the window row) whose kind does not match
- * the server's mux is rejected. A raw `target` carries no kind (`kindOfRawTarget`): on a server that can host misao a misao window id goes
- * through the driver (rejected, null, when it cannot be resolved), anything else is a tmux target.
+ * the server's mux is rejected. A raw `target` carries no kind: a registered window (a row for the server and target)
+ * is attached by its stored ref, any other target is looked up in the muxes of the server (`resolveRawTarget`: the mux
+ * that has the window decides; a window in both throws `AmbiguousWindowKindError`, the client must use windowId / ref).
  */
 export async function resolveTerminalTarget(params: TerminalTargetParams, deps: TerminalTargetDeps): Promise<{ server: ServerConfig; ref: MuxRef } | null> {
   let server = params.serverName ? deps.serverRepo.findByName(params.serverName) : null;
@@ -41,12 +42,15 @@ export async function resolveTerminalTarget(params: TerminalTargetParams, deps: 
       const parsed = parseMuxRef(decodeURIComponent(params.ref));
       if (isRefKindCompatible(parsed, server)) ref = parsed;
     } catch { /* invalid ref */ }
-  } else if (params.target) {
-    if (server && kindOfRawTarget(params.target, server) === 'misao') {
-      // The pane comes from the `pane` param, so a `.N` suffix on the target is not part of the window.
-      ref = await deps.resolveDriverRef(server, stripPaneSuffix(params.target));
+  } else if (params.target && server) {
+    // The pane comes from the `pane` param, so a `.N` suffix on the target is not part of the window.
+    const target = stripPaneSuffix(params.target);
+    const stored = deps.windowRepo.findByServerAndTarget(server.name, target);
+    if (stored) {
+      const storedRef = stored.muxRef ?? muxRefFromTmuxTarget(stored.tmuxTarget);
+      if (isRefKindCompatible(storedRef, server)) ref = storedRef;
     } else {
-      ref = muxRefFromTmuxTarget(params.target);
+      ref = (await resolveRawTarget(deps.probe, server, target))?.ref ?? null;
     }
   }
 

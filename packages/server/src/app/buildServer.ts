@@ -35,6 +35,7 @@ import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
 import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
+import { AmbiguousWindowKindError, rawTargetProbeOf } from '../modules/tmux/storedWindowKind';
 import { resolveTerminalTarget, terminalPaneOrdinal } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
 import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
@@ -743,20 +744,18 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const paneParam = wsUrl.searchParams.get('pane');
 
       const resolvedOrdinal = terminalPaneOrdinal(paneParam, target) as PaneOrdinal;
-      const resolved = await resolveTerminalTarget(
-        { serverName, windowId: windowIdParam, ref: refParam, target },
-        {
-          serverRepo,
-          windowRepo,
-          resolveDriverRef: async (server, driverTarget) => {
-            try {
-              return await muxDriverRegistry.resolve(server).resolveRef(server, driverTarget);
-            } catch {
-              return null; // driver unavailable or daemon down: the target stays unresolved and the connection is rejected
-            }
-          },
-        },
-      );
+      let resolved: Awaited<ReturnType<typeof resolveTerminalTarget>>;
+      try {
+        resolved = await resolveTerminalTarget(
+          { serverName, windowId: windowIdParam, ref: refParam, target },
+          { serverRepo, windowRepo, probe: rawTargetProbeOf(muxDriverRegistry) },
+        );
+      } catch (err) {
+        if (!(err instanceof AmbiguousWindowKindError)) throw err;
+        socket.send(JSON.stringify({ error: 'The target names a window in more than one mux; connect by windowId or ref' }));
+        socket.close();
+        return;
+      }
       if (!resolved) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();

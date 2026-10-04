@@ -23,7 +23,8 @@ import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type 
 import type { MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
-import { kindOfRawTarget, windowKindOf } from '../tmux/windowIdentity';
+import { kindOfStoredWindow, windowKindOf } from '../tmux/windowIdentity';
+import { AmbiguousWindowKindError, rawTargetProbeOf, resolveRawTarget } from '../tmux/storedWindowKind';
 import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
@@ -71,6 +72,25 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   // One physical window = one row. The ref is the window's identity (a unique index covers it), the tmux_target is
   // only a display/legacy key that differs between `ws:w_<id>` (ref-only registration) and `ws:<name>`; so a given
   // ref decides first and the target is consulted only when no ref was sent or no row carries it.
+  /**
+   * The mux of a registration that carries no ref: a registered window's row decides; otherwise the mux of the server
+   * that has the window (tmux when none does: the window may not exist yet). A window in both muxes is an error.
+   */
+  const probe = rawTargetProbeOf(opts.muxDriverRegistry);
+  const rawRegistrationKind = async (srv: ServerConfig, target: string): Promise<{ kind: MuxDriverKind } | { error: string }> => {
+    const stored = windowRepo.findByServerAndTarget(srv.name, target);
+    if (stored) return { kind: kindOfStoredWindow(stored) };
+    try {
+      const found = await resolveRawTarget(probe, srv, target);
+      if (found) return { kind: found.kind };
+    } catch (err) {
+      if (err instanceof AmbiguousWindowKindError) return { error: 'The target names a window in more than one mux; ref required' };
+      throw err;
+    }
+    const kinds = probe.supportedKinds(srv);
+    return { kind: kinds.includes('tmux') ? 'tmux' : kinds[0] };
+  };
+
   function findExistingWindow(serverName: string, tmuxTarget: string, givenRef: MuxRef | undefined): Window | undefined {
     return (givenRef ? windowRepo.findByServerAndRef(serverName, givenRef) : undefined)
       ?? windowRepo.findByServerAndTarget(serverName, tmuxTarget);
@@ -119,9 +139,15 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
-      if (!givenRef && srv && kindOfRawTarget(tmuxTarget, srv) !== 'tmux')
-        return reply.status(400).send({ error: 'ref required for this server' });
-      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? kindOfRawTarget(tmuxTarget, srv)) : null;
+      // Its mux is the registered row's, else the one that has the window (a local server hosts both; see resolveRawTarget).
+      let rawKind: MuxDriverKind | undefined;
+      if (!givenRef && srv) {
+        const raw = await rawRegistrationKind(srv, tmuxTarget);
+        if ('error' in raw) return reply.status(400).send({ error: raw.error });
+        rawKind = raw.kind;
+        if (rawKind !== 'tmux') return reply.status(400).send({ error: 'ref required for this server' });
+      }
+      const unavailable = srv && (givenRef?.kind ?? rawKind) ? muxUnavailableBody(srv, (givenRef?.kind ?? rawKind)!) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);
@@ -263,9 +289,15 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!serverName || !tmuxTarget)
         return reply.status(400).send({ error: 'server_name and (tmux_target or ref) required' });
       // A name-only target cannot identify a window on a non-tmux mux; storing it would write a tmux-kind mux_ref.
-      if (!givenRef && srv && kindOfRawTarget(tmuxTarget, srv) !== 'tmux')
-        return reply.status(400).send({ error: 'ref required for this server' });
-      const unavailable = srv ? muxUnavailableBody(srv, givenRef?.kind ?? kindOfRawTarget(tmuxTarget, srv)) : null;
+      // Its mux is the registered row's, else the one that has the window (a local server hosts both; see resolveRawTarget).
+      let rawKind: MuxDriverKind | undefined;
+      if (!givenRef && srv) {
+        const raw = await rawRegistrationKind(srv, tmuxTarget);
+        if ('error' in raw) return reply.status(400).send({ error: raw.error });
+        rawKind = raw.kind;
+        if (rawKind !== 'tmux') return reply.status(400).send({ error: 'ref required for this server' });
+      }
+      const unavailable = srv && (givenRef?.kind ?? rawKind) ? muxUnavailableBody(srv, (givenRef?.kind ?? rawKind)!) : null;
       if (unavailable) return reply.status(400).send(unavailable);
 
       const existing = findExistingWindow(serverName, tmuxTarget, givenRef);

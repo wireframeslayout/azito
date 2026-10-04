@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { formatMuxRef, type MuxRef } from '@azito/shared';
+import { formatMuxRef, type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { resolveTerminalTarget, terminalPaneOrdinal, type TerminalTargetParams } from './resolveTerminalTarget';
+import { AmbiguousWindowKindError } from '../modules/tmux/storedWindowKind';
 import type { ServerConfig } from '../modules/servers/Server';
 import type { Window } from '../modules/windows/Window';
 
@@ -10,6 +11,7 @@ const MISAO_REF: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_01J9Z8Y7X
 const servers: Record<string, ServerConfig> = {
   tmuxsrv: { name: 'tmuxsrv', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
   misaosrv: { name: 'misaosrv', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig,
+  bothsrv: { name: 'bothsrv', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
   agentsrv: { name: 'agentsrv', type: 'agent', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig,
 };
 const windows: Record<number, Window> = {
@@ -20,11 +22,22 @@ const windows: Record<number, Window> = {
   10: { id: 10, serverName: 'misaosrv', tmuxTarget: 'ws:name' } as Window,
   12: { id: 12, serverName: 'agentsrv', tmuxTarget: 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', muxRef: MISAO_REF } as Window,
 };
-const resolveDriverRef = vi.fn(async (_server: ServerConfig, target: string): Promise<MuxRef | null> => (target === 'ws:win' || target === `ws:${MISAO_REF.window}` ? MISAO_REF : null));
+const BOTH_ID_TARGET = `ws:${MISAO_REF.window}`;
+const TMUX_ID_REF: MuxRef = { kind: 'tmux', workspace: 'ws', window: MISAO_REF.window };
+// Which muxes each fixture server hosts, and which windows each mux has (a tmux window may carry a misao-id-shaped name).
+const kindsOf = (name: string): MuxDriverKind[] => (name === 'bothsrv' ? ['tmux', 'misao'] : name === 'misaosrv' ? ['misao'] : ['tmux']);
+let existing: { tmux: string[]; misao: string[] } = { tmux: [], misao: [] };
+const resolveRefInMux = vi.fn(async (_server: ServerConfig, kind: MuxDriverKind, target: string): Promise<MuxRef | null> => {
+  if (!existing[kind].includes(target)) return null;
+  return kind === 'misao' ? MISAO_REF : target === BOTH_ID_TARGET ? TMUX_ID_REF : TMUX_REF;
+});
 const deps = {
-  resolveDriverRef,
+  probe: { supportedKinds: (server: ServerConfig) => kindsOf(server.name), resolveRefInMux },
   serverRepo: { findByName: (name: string) => servers[name] ?? null },
-  windowRepo: { findById: (id: number) => windows[id] },
+  windowRepo: {
+    findById: (id: number) => windows[id],
+    findByServerAndTarget: (serverName: string, target: string) => Object.values(windows).find((w) => w.serverName === serverName && w.tmuxTarget === target),
+  },
 };
 const params = (p: Partial<TerminalTargetParams>): TerminalTargetParams => ({ serverName: null, windowId: null, ref: null, target: null, ...p });
 const encoded = (ref: MuxRef) => encodeURIComponent(formatMuxRef(ref));
@@ -78,31 +91,52 @@ describe('resolveTerminalTarget', () => {
     expect(await resolveTerminalTarget(params({ serverName: 'tmuxsrv', target: 'sess:win.1' }), deps)).toEqual({ server: servers.tmuxsrv, ref: TMUX_REF });
   });
 
-  it('resolves a misao window id target through the driver, on a server of either default mux', async () => {
-    for (const name of ['misaosrv', 'tmuxsrv']) {
-      expect(await resolveTerminalTarget(params({ serverName: name, target: `ws:${MISAO_REF.window}` }), deps)).toEqual({ server: servers[name], ref: MISAO_REF });
-      expect(await resolveTerminalTarget(params({ serverName: name, target: `ws:${MISAO_REF.window}.2` }), deps)).toEqual({ server: servers[name], ref: MISAO_REF });
-    }
-    expect(resolveDriverRef).toHaveBeenCalledWith(servers.misaosrv, `ws:${MISAO_REF.window}`);
+  it('resolves a target on a misao-only server through the driver', async () => {
+    existing = { tmux: [], misao: ['ws:win', BOTH_ID_TARGET] };
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:win.1' }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: `${BOTH_ID_TARGET}.2` }), deps)).toEqual({ server: servers.misaosrv, ref: MISAO_REF });
+    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'ws:other' }), deps)).toBeNull();
   });
 
-  it('reads a misao-id-shaped target as a tmux target on a tmux-only (agent) server', async () => {
-    resolveDriverRef.mockClear();
-    const result = await resolveTerminalTarget(params({ serverName: 'agentsrv', target: `ws:${MISAO_REF.window}.1` }), deps);
-    expect(result).toEqual({ server: servers.agentsrv, ref: { kind: 'tmux', workspace: 'ws', window: MISAO_REF.window } });
-    expect(resolveDriverRef).not.toHaveBeenCalled();
+  it('reads a target on a tmux-only server as a tmux target, without asking a mux, even with a misao-id-shaped name', async () => {
+    resolveRefInMux.mockClear();
+    expect(await resolveTerminalTarget(params({ serverName: 'agentsrv', target: `agent-ws:${MISAO_REF.window}.1` }), deps)).toEqual({ server: servers.agentsrv, ref: { ...TMUX_ID_REF, workspace: 'agent-ws' } });
+    expect(await resolveTerminalTarget(params({ serverName: 'tmuxsrv', target: 'sess:win' }), deps)).toEqual({ server: servers.tmuxsrv, ref: TMUX_REF });
+    expect(resolveRefInMux).not.toHaveBeenCalled();
   });
 
-  it('reads a name target as a tmux target even on a misao-default server (a local server hosts both)', async () => {
-    resolveDriverRef.mockClear();
-    expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', target: 'sess:win.1' }), deps)).toEqual({ server: servers.misaosrv, ref: TMUX_REF });
-    expect(resolveDriverRef).not.toHaveBeenCalled();
-  });
+  describe('on a local server hosting both muxes', () => {
+    it('connects a tmux window named like a misao id as tmux', async () => {
+      existing = { tmux: [BOTH_ID_TARGET], misao: [] };
+      expect(await resolveTerminalTarget(params({ serverName: 'bothsrv', target: `${BOTH_ID_TARGET}.1` }), deps)).toEqual({ server: servers.bothsrv, ref: TMUX_ID_REF });
+    });
 
-  it('does not consult the driver for a tmux target', async () => {
-    resolveDriverRef.mockClear();
-    await resolveTerminalTarget(params({ serverName: 'tmuxsrv', target: 'sess:win' }), deps);
-    expect(resolveDriverRef).not.toHaveBeenCalled();
+    it('connects a misao window by its id as misao', async () => {
+      existing = { tmux: [], misao: [BOTH_ID_TARGET] };
+      expect(await resolveTerminalTarget(params({ serverName: 'bothsrv', target: BOTH_ID_TARGET }), deps)).toEqual({ server: servers.bothsrv, ref: MISAO_REF });
+    });
+
+    it('rejects a target that names a window in both muxes (the client must use windowId or ref)', async () => {
+      existing = { tmux: [BOTH_ID_TARGET], misao: [BOTH_ID_TARGET] };
+      await expect(resolveTerminalTarget(params({ serverName: 'bothsrv', target: BOTH_ID_TARGET }), deps)).rejects.toBeInstanceOf(AmbiguousWindowKindError);
+    });
+
+    it('returns null for a window neither mux has', async () => {
+      existing = { tmux: [], misao: [] };
+      expect(await resolveTerminalTarget(params({ serverName: 'bothsrv', target: 'ws:nothing' }), deps)).toBeNull();
+    });
+
+    it('uses the stored ref of a registered window without asking the muxes, even when both have it', async () => {
+      existing = { tmux: [BOTH_ID_TARGET], misao: [BOTH_ID_TARGET] };
+      resolveRefInMux.mockClear();
+      windows[20] = { id: 20, serverName: 'bothsrv', tmuxTarget: BOTH_ID_TARGET, muxRef: TMUX_ID_REF } as Window;
+      try {
+        expect(await resolveTerminalTarget(params({ serverName: 'bothsrv', target: BOTH_ID_TARGET }), deps)).toEqual({ server: servers.bothsrv, ref: TMUX_ID_REF });
+        expect(resolveRefInMux).not.toHaveBeenCalled();
+      } finally {
+        delete windows[20];
+      }
+    });
   });
 });
 

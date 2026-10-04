@@ -55,7 +55,8 @@ import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labe
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch, resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 import { type MuxDriverKind, type MuxRef, type PaneHandle } from '@azito/shared';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
-import { isSameWindow, kindOfStoredWindow, taskWindowRef, windowKindOf, windowRefOf } from '../../tmux/windowIdentity';
+import { isSameWindow, taskWindowRef, windowKindOf, windowRefOf } from '../../tmux/windowIdentity';
+import { resolveStoredWindowKind } from '../../tmux/storedWindowKind';
 import { performDistribution, resolveExecutionRepositoryEntry, resolveRecordedDistributionRepositoryEntry, isDistributionRequired, isDistributionRequiredForContinuation, isDistributionRequiredButRepositoryUnresolved, shouldClearRecordedDistributionRepository, type DistributionOutcome } from './DistributionHelper';
 import type { IDistributionStateRepository } from '../../git/hub-transfer/types';
 import type { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -562,6 +563,31 @@ export class ExecuteTaskUseCase {
    * unconditional `taskRepo.update()` — see that method's own doc comment
    * for the clobber this closes.
    */
+  /** Saves the primary window row of a window just created for the task, replacing any earlier primary row. */
+  private registerCreatedPrimaryWindow(taskId: number, serverName: string, ref: MuxRef, label: string, unit: Pick<Unit, 'workerType' | 'workerModel'>): void {
+    for (const w of this.windowRepo.findByTask(taskId)) {
+      if (w.ownerType === 'task' && w.isPrimary) this.windowRepo.remove(w.id);
+    }
+    this.windowRepo.add({
+      ownerType: 'task',
+      projectId: null,
+      taskId,
+      serverName,
+      tmuxTarget: muxWindowTarget(ref),
+      muxRef: ref,
+      label,
+      isPrimary: true,
+      windowType: unit.workerType ? 'agent' : 'terminal',
+      workerType: unit.workerType,
+      workerModel: unit.workerModel,
+      agentSessionId: null,
+      launchCommand: null,
+      workingDirectory: null,
+      paneLayout: null,
+      sleeping: false,
+    });
+  }
+
   private async rollbackWindowAfterPostCreationFailure(
     taskId: number,
     server: ServerConfig,
@@ -583,7 +609,13 @@ export class ExecuteTaskUseCase {
         this.paneEnvService,
         tokenId,
         revokeReason,
-        () => this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName),
+        () => {
+          this.taskRepo.clearTmuxWindowIfMatches(taskId, windowName);
+          // The window is gone: so is the primary row `registerCreatedPrimaryWindow` saved for it.
+          for (const w of this.windowRepo.findByTask(taskId)) {
+            if (w.ownerType === 'task' && w.isPrimary && w.muxRef?.window === windowName) this.windowRepo.remove(w.id);
+          }
+        },
         () => {},
       );
     } catch {}
@@ -886,13 +918,13 @@ export class ExecuteTaskUseCase {
         // window creation both run inside its callback, against the same
         // `freshServer` row, so a mismatch now aborts before anything is
         // killed.
-        const { windowName: newWindowName, label: newWindowLabel, tokenId: newTokenId, server: newServer } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
+        const { windowName: newWindowName, label: newWindowLabel, tokenId: newTokenId, server: newServer, ref: newWindowRef } = await withServerLock(this.serverIsolationLock, server, true, async (freshServer) => {
           if (currentTask.tmuxWindow) {
             const killDriver = this.resolveDriver(freshServer);
             const preWorkspaces = await killDriver.listWorkspaces(freshServer);
             // The old window lives in the mux its primary row says (rows without one are tmux; no row = tmux).
             const primaryRow = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
-            const oldKind = kindOfStoredWindow(primaryRow);
+            const oldKind = await resolveStoredWindowKind(this.muxDriverRegistry, freshServer, primaryRow, muxWorkspace, currentTask.tmuxWindow);
             // misao stores the window id in tmuxWindow (and the primary row's mux_ref) and windows
             // can be renamed across workspaces: match the id exactly, in every workspace. tmux
             // matches the window name inside the task's (tmux) workspace only.
@@ -933,6 +965,10 @@ export class ExecuteTaskUseCase {
           );
         });
 
+        // The window's identity is saved with the task in one synchronous step (no await between the two writes):
+        // a task whose `tmuxWindow` is set while no primary window row carries its `mux_ref` would be read as a tmux
+        // window by everything that reads stored data. The row is completed (working directory, label) further down.
+        this.registerCreatedPrimaryWindow(taskId, newServer.name, newWindowRef ?? { kind: this.resolveDriver(newServer).kind, workspace: muxWorkspace, window: newWindowName }, newWindowLabel ?? newWindowName, unit);
         this.taskRepo.update(taskId, { status: 'in_progress' as TaskStatus, tmuxWindow: newWindowName });
         // `server` is returned too (Issue #29 review, 10th pass, Important
         // finding 3) — the lock re-read and actually created the window
@@ -1301,13 +1337,16 @@ export class ExecuteTaskUseCase {
       } catch {}
     }
 
-    // Clean up stale task-owned window rows before adding the new one.
-    // Primary rows are always removed (a fresh primary is about to be created).
+    // Clean up stale task-owned window rows before completing the new one.
+    // Stale primary rows are removed; the row `registerCreatedPrimaryWindow` saved for THIS window right after it was
+    // created is completed below instead of being replaced.
     // Non-primary rows are removed only when their tmux pane no longer exists.
+    let createdPrimaryRowId: number | null = null;
     for (const w of this.windowRepo.findByTask(taskId)) {
       if (w.ownerType !== 'task') continue;
       if (w.isPrimary) {
-        this.windowRepo.remove(w.id);
+        if (w.tmuxTarget === windowTarget && w.muxRef && createdPrimaryRowId === null) createdPrimaryRowId = w.id;
+        else this.windowRepo.remove(w.id);
         continue;
       }
       if (w.sleeping) continue;
@@ -1328,24 +1367,40 @@ export class ExecuteTaskUseCase {
 
     const windowType = unit.workerType ? 'agent' as const : 'terminal' as const;
 
-    const windowRowId = this.windowRepo.add({
-      ownerType: 'task',
-      projectId: null,
-      taskId,
-      serverName,
-      tmuxTarget: windowTarget,
-      muxRef: ref,
-      label: windowLabel,
-      isPrimary: true,
-      windowType,
-      workerType: unit.workerType,
-      workerModel: unit.workerModel,
-      agentSessionId: null,
-      launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
-      workingDirectory: effectiveDir || null,
-      paneLayout: null,
-      sleeping: false,
-    });
+    const launchCommandOfWindow = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+    let windowRowId: number;
+    if (createdPrimaryRowId !== null) {
+      windowRowId = createdPrimaryRowId;
+      this.windowRepo.update(windowRowId, {
+        muxRef: ref,
+        label: windowLabel,
+        windowType,
+        workerType: unit.workerType,
+        workerModel: unit.workerModel,
+        launchCommand: launchCommandOfWindow,
+        workingDirectory: effectiveDir || null,
+        sleeping: false,
+      });
+    } else {
+      windowRowId = this.windowRepo.add({
+        ownerType: 'task',
+        projectId: null,
+        taskId,
+        serverName,
+        tmuxTarget: windowTarget,
+        muxRef: ref,
+        label: windowLabel,
+        isPrimary: true,
+        windowType,
+        workerType: unit.workerType,
+        workerModel: unit.workerModel,
+        agentSessionId: null,
+        launchCommand: launchCommandOfWindow,
+        workingDirectory: effectiveDir || null,
+        paneLayout: null,
+        sleeping: false,
+      });
+    }
     await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
@@ -1736,7 +1791,7 @@ export class ExecuteTaskUseCase {
         // is respawned or renamed independently.
         const freshPrimary = this.windowRepo.findByTask(taskId).find((w) => isPrimaryTaskWindow(w));
         const fuDriver = this.resolveDriver(server);
-        const candidateKind = kindOfStoredWindow(freshPrimary);
+        const candidateKind = await resolveStoredWindowKind(this.muxDriverRegistry, server, freshPrimary, muxWorkspace, currentTask.tmuxWindow);
         const candidateRef = taskWindowRef(currentTask, freshPrimary, muxWorkspace, candidateKind, { tmuxPrefersPrimary: true })
           ?? { kind: candidateKind, workspace: muxWorkspace, window: `task-${task.id}` };
         const candidateWindowName = candidateRef.window;
@@ -2235,7 +2290,7 @@ export class ExecuteTaskUseCase {
       windowName = task.tmuxWindow || `task-${task.id}`;
     }
     const resumeDriver = this.resolveDriver(server);
-    const ref: MuxRef = { kind: kindOfStoredWindow(primaryWindow), workspace: muxWorkspace, window: windowName };
+    const ref: MuxRef = { kind: await resolveStoredWindowKind(this.muxDriverRegistry, server, primaryWindow, muxWorkspace, windowName), workspace: muxWorkspace, window: windowName };
     const windowTarget = muxWindowTarget(ref);
     const handle = await resumeDriver.resolvePane(server, ref, 1);
 
