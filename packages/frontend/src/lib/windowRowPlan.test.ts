@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { formatMuxRef } from '@azito/shared';
 import type { MuxRef } from '@azito/shared';
-import { planWindowRow, canRenamePane } from './windowRowPlan';
+import { planWindowRow, canRenamePane, canActOnMux } from './windowRowPlan';
 import type { Pane, Session, TmuxWindow } from '../pages/workspace/types';
 
 const ULID = 'w_01HZZZZZZZZZZZZZZZZZZZZZZZ';
@@ -84,5 +84,32 @@ describe('canRenamePane', () => {
     expect(canRenamePane({ muxRef: misaoRef })).toBe(false);
     expect(canRenamePane({ muxRef: { kind: 'tmux', workspace: 'main', window: 'editor' } })).toBe(true);
     expect(canRenamePane({})).toBe(true);
+  });
+});
+
+describe('stale rows (#311)', () => {
+  const misaoWin = win('main', [pane(1)], { ref: formatMuxRef(misaoRef) });
+
+  it('marks a window of a session kept from an earlier listing as stale', () => {
+    const sessions: Session[] = [{ name: 'ws', kind: 'misao', stale: true, windows: [misaoWin] }];
+    const plan = planWindowRow({ id: 5, tmuxTarget: `ws:${ULID}`, muxRef: misaoRef }, sessions);
+    expect(plan.kind).toBe('single');
+    if (plan.kind !== 'single') return;
+    expect(plan.stale).toBe(true);
+    expect(canActOnMux(plan)).toBe(false);
+  });
+
+  it('keeps a freshly listed window actionable', () => {
+    const sessions: Session[] = [{ name: 'ws', kind: 'misao', windows: [misaoWin] }];
+    const plan = planWindowRow({ id: 5, tmuxTarget: `ws:${ULID}`, muxRef: misaoRef }, sessions);
+    if (plan.kind !== 'single') throw new Error(plan.kind);
+    expect(plan.stale).toBe(false);
+    expect(canActOnMux(plan)).toBe(true);
+  });
+
+  it('decides menu and session actions the same way', () => {
+    expect(canActOnMux({ stale: true })).toBe(false);
+    expect(canActOnMux({ online: true } as { stale?: boolean })).toBe(true);
+    expect(canActOnMux(undefined)).toBe(true);
   });
 });

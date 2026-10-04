@@ -3,6 +3,12 @@ import { useTranslation } from 'react-i18next';
 import type { MuxDriverKind } from '@azito/shared';
 import type { Session } from '../../hooks/useServerManagement';
 import { hasMixedKinds, sessionKey, sessionKindOf } from '../../lib/sessionKind';
+import { canActOnMux } from '../../lib/windowRowPlan';
+
+/** A text action that cannot run now: shown dimmed, not clickable. */
+function disabledStyle(enabled: boolean): React.CSSProperties {
+  return enabled ? { cursor: 'pointer' } : { cursor: 'not-allowed', opacity: DIMMED_PANE_OPACITY };
+}
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
 import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
@@ -67,6 +73,8 @@ export default function WindowTreePopover({
       {sessions.map((sess) => {
         const key = sessionKey(sess);
         const kind = sessionKindOf(sess);
+        // A stale session's mux cannot be reached: its windows still open, but nothing goes through the mux.
+        const actionable = canActOnMux(sess);
         const expanded = expandedSessions.has(key);
         return (
           <div key={key}>
@@ -86,8 +94,9 @@ export default function WindowTreePopover({
                 {sess.windows.length} windows
               </span>
               <span
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); onAddWindow(sess.name, kind); }}
+                aria-disabled={!actionable}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(actionable) }}
+                onClick={(e) => { e.stopPropagation(); if (actionable) onAddWindow(sess.name, kind); }}
               >
                 <Icon name="plus" size={14} />Window
               </span>
@@ -129,10 +138,11 @@ export default function WindowTreePopover({
                     </span>
                     {!isEmptyWindow && (
                       <span
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
+                        aria-disabled={!actionable}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(actionable) }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
+                          if (actionable) onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
                         }}
                       >
                         <Icon name="split-h" size={14} /> {t('windows.split')}
@@ -143,7 +153,7 @@ export default function WindowTreePopover({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `4px 9px 6px ${9 + 2 * 20}px` }}>
                       {/* Opening the window shows the pane-unavailable notice, which carries the open-pane form. */}
                       <Button size="sm" variant="primary" onClick={() => onSelect(winRef)}>{t('windows.openPane')}</Button>
-                      <Button size="sm" onClick={() => onKillWindow(winRef, winLabel)}>{t('windows.killWindow')}</Button>
+                      <Button size="sm" disabled={!actionable} onClick={() => onKillWindow(winRef, winLabel)}>{t('windows.killWindow')}</Button>
                     </div>
                   )}
                   {win.panes.map((pane) => {
@@ -164,6 +174,7 @@ export default function WindowTreePopover({
                             title={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
                             aria-label={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
                             style={{ marginLeft: 'auto' }}
+                            disabled={!actionable}
                             onClick={(e) => { e.stopPropagation(); onDeletePane(paneRef, `${winLabel}.${pane.index}`, pane.handle); }}
                           >
                             <Icon name="trash" size={14} />

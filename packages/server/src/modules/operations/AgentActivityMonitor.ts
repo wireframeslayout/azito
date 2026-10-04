@@ -1257,7 +1257,7 @@ export class AgentActivityMonitor {
         // A mux that could not be listed leaves its windows unreadable this tick, not gone.
         for (const u of unavailable) {
           sessionErrors.add(kindSessionErrorKey(serverName, u.kind));
-          const hasWindows = candidates.some((c) => c.serverName === serverName && (c.muxRef?.kind ?? 'tmux') === u.kind);
+          const hasWindows = allWindows.some((w) => w.serverName === serverName && (w.muxRef?.kind ?? 'tmux') === u.kind);
           this.warnKindUnavailableOnChange(serverName, u.kind, u.reason, hasWindows);
         }
         if (unavailable.length === 0) this.unavailableDriverReasons.delete(serverName);
