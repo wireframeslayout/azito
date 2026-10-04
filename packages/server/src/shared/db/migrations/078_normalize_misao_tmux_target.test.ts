@@ -226,13 +226,38 @@ describe('migration 078: normalize misao window rows', () => {
     const keeper = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: newer, primary: true });
     const merged = insertWindow(db, 'local', 'other:main', tmux('other', WIN_A), { id: older, primary: true });
     db.prepare('UPDATE tasks SET pending_operation_window_id = ? WHERE id IN (?, ?)').run(merged, older, newer);
-    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, bootstrap_hash, window_id) VALUES ('l1', 'local', 'x', ?, 'h', ?), ('l2', 'local', 'x', ?, 'h', ?)`)
-      .run(older, merged, newer, merged);
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, bootstrap_hash, window_id, status) VALUES
+      ('l1', 'local', 'other:main', ?, 'h', ?, 'active'),
+      ('l2', 'local', ?, ?, 'h', ?, 'active')`)
+      .run(older, merged, `ws:${WIN_A}`, newer, merged);
     run();
     const pending = db.prepare('SELECT id, pending_operation_window_id AS w FROM tasks ORDER BY id').all();
     expect(pending).toEqual([{ id: older, w: null }, { id: newer, w: keeper }]);
-    const launches = db.prepare('SELECT task_id AS t, window_id AS w FROM supervisor_launches ORDER BY id').all();
-    expect(launches).toEqual([{ t: older, w: null }, { t: newer, w: keeper }]);
+    const launches = db.prepare('SELECT task_id AS t, window_id AS w, target, status FROM supervisor_launches ORDER BY id').all();
+    expect(launches).toEqual([
+      { t: older, w: null, target: 'other:main', status: 'active' },
+      { t: newer, w: keeper, target: `ws:${WIN_A}`, status: 'active' },
+    ]);
+    expect(readWindow(db, keeper).tmux_target).toBe(`ws:${WIN_A}`);
+  });
+
+  it('expires a live launch of the keeper task whose target is not the keeper\'s final target (it could not be expired later)', () => {
+    const taskId = insertTask(db);
+    const keeper = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A), { id: taskId, primary: true });
+    const plain = insertWindow(db, 'local', 'old:main', tmux('old', WIN_A));
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, bootstrap_hash, window_id, status) VALUES
+      ('mine', 'local', 'ws:main', ?, 'h', ?, 'pending'),
+      ('dup', 'local', 'old:main', ?, 'h', ?, 'active'),
+      ('done', 'local', 'old:main', ?, 'h', ?, 'replaced')`)
+      .run(taskId, keeper, taskId, plain, taskId, plain);
+    run();
+    expect(readWindow(db, keeper).tmux_target).toBe(`ws:${WIN_A}`);
+    const launches = db.prepare('SELECT launch_id AS l, window_id AS w, target, status FROM supervisor_launches ORDER BY id').all();
+    expect(launches).toEqual([
+      { l: 'mine', w: null, target: 'ws:main', status: 'expired' },
+      { l: 'dup', w: null, target: 'old:main', status: 'expired' },
+      { l: 'done', w: null, target: 'old:main', status: 'replaced' },
+    ]);
   });
 
   it('carries project_id / label / sleeping of the merged rows over to the keeper (COALESCE, as 068 does)', () => {

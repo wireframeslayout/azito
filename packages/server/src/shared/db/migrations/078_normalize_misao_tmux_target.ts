@@ -55,7 +55,10 @@ const targetOf = (ref: Ref): string => `${ref.workspace}:${ref.window}`;
  * - the keeper takes over `project_id` / `label` (COALESCE) and `sleeping` (MAX) of the merged rows;
  * - references to a merged row move to the keeper only when they belong to the keeper's task (a pending operation, a
  *   supervisor launch) or to the window itself (an agent watch); another task's reference is cleared, and that task
- *   is reported. The migration never fails on such data.
+ *   is reported. The migration never fails on such data;
+ * - a supervisor launch is found again by `(server_name, target)` when it is expired, so one of the keeper's task stays
+ *   on the keeper only when its target is the keeper's final `tmux_target`; a live (pending/active) one that does not
+ *   match is detached and expired (it could not be expired later). The keeper's own launches follow the same rule.
  */
 export function up(db: Database.Database): void {
   const rows = db.prepare('SELECT id, server_name, tmux_target, mux_ref, task_id, is_primary, project_id, label, sleeping FROM windows').all() as Row[];
@@ -70,13 +73,14 @@ export function up(db: Database.Database): void {
   }
   if (groups.size === 0) return;
 
-  const targetTaken = db.prepare('SELECT 1 FROM windows WHERE server_name = ? AND tmux_target = ? AND id != ?');
   const update = db.prepare('UPDATE windows SET tmux_target = ?, mux_ref = ? WHERE id = ?');
   const inherit = db.prepare('UPDATE windows SET project_id = COALESCE(project_id, ?), label = COALESCE(label, ?), sleeping = MAX(sleeping, ?) WHERE id = ?');
   const pendingOf = db.prepare('SELECT id FROM tasks WHERE pending_operation_window_id = ?');
   const setPending = db.prepare('UPDATE tasks SET pending_operation_window_id = ? WHERE id = ?');
-  const launchesOf = db.prepare('SELECT id, task_id FROM supervisor_launches WHERE window_id = ?');
+  const launchesOf = db.prepare('SELECT id, task_id, target, status FROM supervisor_launches WHERE window_id = ?');
   const setLaunch = db.prepare('UPDATE supervisor_launches SET window_id = ? WHERE id = ?');
+  const expireLaunch = db.prepare("UPDATE supervisor_launches SET window_id = NULL, status = 'expired' WHERE id = ?");
+  const targetHolder = db.prepare('SELECT id FROM windows WHERE server_name = ? AND tmux_target = ? AND id != ?');
   const moveWatches = db.prepare('UPDATE agent_watches SET window_id = ? WHERE window_id = ?');
   const remove = db.prepare('DELETE FROM windows WHERE id = ?');
 
@@ -84,17 +88,30 @@ export function up(db: Database.Database): void {
   const merged: number[] = [];
   const detachedTasks = new Set<number>();
 
-  const mergeInto = (dup: Row, keeper: Row): void => {
+  interface Launch { id: number; task_id: number | null; target: string; status: string }
+  const isLive = (launch: Launch): boolean => launch.status === 'pending' || launch.status === 'active';
+  /** A launch of the keeper's task: kept on the keeper when its target is the keeper's final one, else expired when live. */
+  const settleOwnLaunch = (launch: Launch, keeper: Row, finalTarget: string): void => {
+    if (launch.target === finalTarget) setLaunch.run(keeper.id, launch.id);
+    else if (isLive(launch)) expireLaunch.run(launch.id);
+    else setLaunch.run(null, launch.id);
+  };
+
+  const mergeInto = (dup: Row, keeper: Row, finalTarget: string): void => {
     inherit.run(dup.project_id, dup.label, dup.sleeping, keeper.id);
     for (const { id: taskId } of pendingOf.all(dup.id) as Array<{ id: number }>) {
       const own = keeper.task_id !== null && taskId === keeper.task_id;
       setPending.run(own ? keeper.id : null, taskId);
       if (!own) detachedTasks.add(taskId);
     }
-    for (const launch of launchesOf.all(dup.id) as Array<{ id: number; task_id: number | null }>) {
+    for (const launch of launchesOf.all(dup.id) as Launch[]) {
       const own = keeper.task_id !== null && launch.task_id === keeper.task_id;
-      setLaunch.run(own ? keeper.id : null, launch.id);
-      if (!own && launch.task_id !== null) detachedTasks.add(launch.task_id);
+      if (own) {
+        settleOwnLaunch(launch, keeper, finalTarget);
+      } else {
+        setLaunch.run(null, launch.id);
+        if (launch.task_id !== null) detachedTasks.add(launch.task_id);
+      }
     }
     // A watch follows the physical window, whichever row stood for it.
     moveWatches.run(keeper.id, dup.id);
@@ -107,12 +124,19 @@ export function up(db: Database.Database): void {
     const keeper = taskRows.length > 0
       ? taskRows.slice().sort((a, b) => (b.row.task_id! - a.row.task_id!) || (b.row.is_primary - a.row.is_primary) || (a.row.id - b.row.id))[0]
       : group.slice().sort((a, b) => (b.row.is_primary - a.row.is_primary) || (a.row.id - b.row.id))[0];
-    for (const g of group) if (g !== keeper) mergeInto(g.row, keeper.row);
-
-    // The merged rows are gone, so the keeper's misao ref is free; its window-id target may still be another row's.
+    // The keeper's final target first: the window-id form unless a row outside this group holds it (rows of the group
+    // are merged away below, freeing it). Launches are settled against it.
     const ref = refJson(keeper.ref);
     const canonical = targetOf(keeper.ref);
-    const target = targetTaken.get(keeper.row.server_name, canonical, keeper.row.id) ? keeper.row.tmux_target : canonical;
+    const groupIds = new Set(group.map((g) => g.row.id));
+    const holder = targetHolder.get(keeper.row.server_name, canonical, keeper.row.id) as { id: number } | undefined;
+    const target = holder && !groupIds.has(holder.id) ? keeper.row.tmux_target : canonical;
+
+    for (const g of group) if (g !== keeper) mergeInto(g.row, keeper.row, target);
+    if (target !== keeper.row.tmux_target) {
+      for (const launch of launchesOf.all(keeper.row.id) as Launch[]) settleOwnLaunch(launch, keeper.row, target);
+    }
+
     if (target === keeper.row.tmux_target && ref === keeper.row.mux_ref) continue;
     update.run(target, ref, keeper.row.id);
     normalized++;
