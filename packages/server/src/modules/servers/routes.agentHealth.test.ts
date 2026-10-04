@@ -23,6 +23,7 @@ async function buildApp(transport: AgentTransport) {
   const serverRepo = { findByName: vi.fn(() => agentServer), findAll: vi.fn(() => []) } as unknown as IServerRepository;
   const opts: ServersRouteOptions = {
     serverRepo,
+    serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
     misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: {

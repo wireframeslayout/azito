@@ -3,6 +3,7 @@ import { execSync } from 'child_process';
 import os from 'os';
 import fs from 'fs';
 import type { IServerRepository, ServerConfig } from './Server';
+import type { IServerAliasRepository } from './SqliteServerAliasRepository';
 import { parseMuxInput } from './muxInput';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
@@ -140,6 +141,7 @@ function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<str
 }
 
 export interface ServersRouteOptions {
+  serverAliasRepo: IServerAliasRepository;
   serverRepo: IServerRepository;
   tmux: TmuxClient;
   transportFactory: TransportFactory;
@@ -206,7 +208,7 @@ export interface ServersRouteOptions {
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, misaoDaemonStatus } = opts;
+  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, misaoDaemonStatus } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -331,10 +333,14 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     // JSON verification/cleanup outcome — see Server.ts's doc comments on
     // both, split per review round Important finding 4) — the list endpoint
     // exposes only the intent flag and last-check timestamp.
+    // `aliases`: old names of servers merged into this one by migration 079, so saved browser tabs can be
+    // re-pointed. TODO(#313): compatibility for one release; remove with the `server_aliases` table.
+    const aliases = serverAliasRepo.findAll();
     return serverRepo.findAll().map(({ agentToken, isolationReport, isolationCleanupReport, ...rest }) => ({
       ...rest,
       hasAgentToken: agentToken != null,
       hubVersion: hubBundleHash,
+      aliases: aliases.filter((a) => a.newName === rest.name).map((a) => a.oldName),
     }));
   });
 

@@ -120,7 +120,11 @@ export class SqliteServerRepository implements IServerRepository {
   }
 
   create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void {
-    this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system', defaultMux ?? 'tmux');
+    // A new server takes the name over from a merged server's old name (#313): the alias would shadow it otherwise.
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM server_aliases WHERE old_name = ?').run(name);
+      this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system', defaultMux ?? 'tmux');
+    })();
   }
 
   update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void {

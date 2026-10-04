@@ -29,6 +29,7 @@ function makeOpts(stored: ServerConfig | null, registerMisao = false): ServersRo
   if (registerMisao) muxDriverRegistry.register('misao', { kind: 'misao', caps: TMUX_CAPS } as unknown as IMuxClient);
   return {
     serverRepo,
+    serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
