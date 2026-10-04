@@ -99,7 +99,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, migrateServerAliases, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -271,6 +271,16 @@ function WorkspaceInner() {
     idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionData, migrateLegacyTerminalTabIds, isTmuxServer]);
+
+  // Tabs saved under the name of a server that was merged into another (#313) follow the merge.
+  // TODO(#313): compatibility for one release; remove with the server-side alias table.
+  useEffect(() => {
+    const aliases = new Map<string, string>();
+    for (const sv of servers) for (const old of sv.aliases ?? []) aliases.set(old, sv.name);
+    if (aliases.size === 0) return;
+    migrateServerAliases(aliases).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servers, migrateServerAliases]);
 
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 

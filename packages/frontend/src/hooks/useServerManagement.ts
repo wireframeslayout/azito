@@ -21,6 +21,8 @@ export interface Server {
   agentVersion?: string;
   sshHost?: string;
   defaultMux: MuxDriverKind;
+  /** Old names of servers merged into this one (migration 079); saved tabs are re-pointed. TODO(#313): remove after one release. */
+  aliases?: string[];
   muxRuntime?: MuxRuntime;
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
