@@ -135,7 +135,7 @@ packages/
                                   #         updateScript (out-of-process self-update), serviceControl
         health/                   # [upper] GET /api/health (hub-wide flags: scopedAuthEnabled)
       shared/
-        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-078)
+        db/                       # Database.ts (SQLite/WAL) + migrations/ (001-079)
   frontend/                        # React 19 + Vite + TypeScript
     src/
       components/                  # Layout, Terminal, Modal, FileExplorer, TaskLogView, etc.
@@ -281,7 +281,7 @@ packages/
 - SQLite (better-sqlite3) with WAL mode
 - Migration files in `packages/server/src/shared/db/migrations/`
 - DB path: `<project-root>/data.db`
-- Current migrations: 001-077 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux (servers.default_mux split from mux_runtime), 078 normalize misao window rows (mux_ref kind misao, tmux_target `<workspace>:<window id>`, duplicate rows merged))
+- Current migrations: 001-079 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux (servers.default_mux split from mux_runtime), 078 normalize misao window rows (mux_ref kind misao, tmux_target `<workspace>:<window id>`, duplicate rows merged), 079 merge duplicate `type=local` servers into one (rows re-pointed, `server_aliases` keeps the old names for webhooks / saved tabs for one release, #313))
 
 ### SSH (Tailscale)
 - Persistent shell pool with `\x02AGENTMGR_B/E` markers for command execution
