@@ -1249,6 +1249,8 @@ function WorkspaceInner() {
         servers={servers}
         projectServers={addWindowModal.awEffectiveProjectServers ?? projectServers}
         project={addWindowModal.awEffectiveProject ?? project}
+        muxKind={addWindowModal.muxKindModel}
+        onMuxKindChange={addWindowModal.setAwMuxChoice}
       />
       <QuickAddWindowModal
         open={addWindowModal.awQuickAddOpen}
@@ -1264,6 +1266,8 @@ function WorkspaceInner() {
         onAgentModelChange={addWindowModal.setAwAgentModel}
         workerModels={addWindowModal.awWorkerModels}
         workerType={addWindowModal.awQuickAddAgent}
+        muxKind={addWindowModal.muxKindModel}
+        onMuxKindChange={addWindowModal.setAwMuxChoice}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}

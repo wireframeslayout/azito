@@ -8,11 +8,13 @@ import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveT
 import { stripPaneSuffix } from '@azito/shared';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
 import { preferredPaneOrdinal } from '../../../lib/paneState';
-import { refUsesMuxRoutes, usesMuxRoutes } from '../../../lib/sessionKind';
+import { refUsesMuxRoutes } from '../../../lib/sessionKind';
+import { isMuxKindUnavailable, muxKindReason } from '../../../lib/muxKindChoice';
 import { errorMessageOf } from '../../../lib/apiResult';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useToast } from '../../../hooks/useToast';
 import WindowTreePopover from '../WindowTreePopover';
+import CreateSessionModal from '../CreateSessionModal';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
 import { Icon } from '../../ui/Icon';
@@ -28,10 +30,12 @@ interface WindowsSectionProps {
 
 export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
+  const { t: tw } = useTranslation('workspace');
   const confirm = useConfirm();
   const { showToast } = useToast();
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
+  const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
 
   const firstRef = useMemo<TerminalRef | null>(() => {
@@ -77,28 +81,31 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     setShowTree(false);
   }, []);
 
-  // A new session is created in the server's default mux; an existing session or window is acted on in its own mux.
-  const createsInMux = usesMuxRoutes(server.defaultMux);
-
-  const handleCreateSession = useCallback(async () => {
-    const name = prompt('New session name:');
-    if (!name) return;
-    if (createsInMux) {
-      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
-    } else {
-      await api(`/servers/${encodeURIComponent(server.name)}/sessions`, { method: 'POST', body: JSON.stringify({ name }) });
+  // Creation always goes through the mux routes with an explicit kind: a new session in the kind the user picked,
+  // a new window in the kind of the session it is added to. A refusal comes back as a body, shown as text.
+  const failureText = useCallback((res: unknown): string | null => {
+    if (isMuxKindUnavailable(res)) {
+      return tw('addWindow.muxKindUnavailable', { kind: tw(`muxKind.${res.kind}`), reason: tw(`muxKind.reason.${muxKindReason(res.kind, res.reason)}`) });
     }
-    refresh();
-  }, [server.name, refresh, createsInMux]);
+    return errorMessageOf(res);
+  }, [tw]);
+
+  const handleCreateSession = useCallback(async (name: string, kind: MuxDriverKind): Promise<string | null> => {
+    const res = await api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) });
+    const failure = failureText(res);
+    if (failure === null) refresh();
+    return failure;
+  }, [server.name, refresh, failureText]);
 
   const handleAddWindow = useCallback(async (sessionName: string, kind: MuxDriverKind) => {
-    if (usesMuxRoutes(kind)) {
-      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) });
-    } else {
-      await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
+    const res = await api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) });
+    const failure = failureText(res);
+    if (failure !== null) {
+      showToast(failure);
+      return;
     }
     refresh();
-  }, [server.name, refresh]);
+  }, [server.name, refresh, failureText, showToast]);
 
   const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {
@@ -159,14 +166,27 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     </div>
   ) : null;
 
+  const createSessionModal = createSessionOpen ? (
+    <CreateSessionModal
+      server={server}
+      onClose={() => setCreateSessionOpen(false)}
+      onCreate={async (name, kind) => {
+        const failure = await handleCreateSession(name, kind);
+        if (failure === null) setCreateSessionOpen(false);
+        return failure;
+      }}
+    />
+  ) : null;
+
   if (sessions.length === 0) {
     return (
       <div>
         {metaErrorBar}
+        {createSessionModal}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>
           <button
-            onClick={handleCreateSession}
+            onClick={() => setCreateSessionOpen(true)}
             style={{
               background: 'var(--accent)', color: '#fff', border: 'none', // lint-allow: hex - white text on solid accent fill; no on-color token yet
               borderRadius: 'var(--radius-md)', padding: '8px 20px',
@@ -184,6 +204,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {metaErrorBar}
+      {createSessionModal}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 14px',
@@ -237,7 +258,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
           selectedRef={activeRef}
           onSelect={handleSelect}
           onClose={() => setShowTree(false)}
-          onCreateSession={handleCreateSession}
+          onCreateSession={() => setCreateSessionOpen(true)}
           onAddWindow={handleAddWindow}
           onSplitPane={handleSplitPane}
           onDeletePane={handleDeletePane}

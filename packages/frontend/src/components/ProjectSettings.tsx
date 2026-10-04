@@ -554,6 +554,8 @@ export function SettingsContent({ settings }: { settings: ReturnType<typeof useP
         servers={(s.servers || []) as Server[]}
         projectServers={s.projectServers}
         project={s.project}
+        muxKind={addWindowModal.muxKindModel}
+        onMuxKindChange={addWindowModal.setAwMuxChoice}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}

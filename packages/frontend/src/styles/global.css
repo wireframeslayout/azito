@@ -399,6 +399,8 @@ a:hover {
   transition: background 0.13s ease, color 0.13s ease;
 }
 .icon-btn:hover { color: var(--text); background: var(--bg-hover); }
+.segmented-toggle-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.segmented-toggle-btn:disabled { cursor: not-allowed; }
 .icon-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .icon-btn:disabled { color: var(--text-dim); opacity: 0.4; cursor: not-allowed; }
 .icon-btn:disabled:hover { color: var(--text-dim); }

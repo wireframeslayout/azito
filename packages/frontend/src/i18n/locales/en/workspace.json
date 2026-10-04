@@ -123,7 +123,8 @@
     "agentCommandUnavailable": "Could not determine the launch command. Try again once agent definitions finish loading, or enter a command.",
     "window": "Window",
     "sessionWindowCount_one": "{{name}} ({{count}} window)",
-    "sessionWindowCount_other": "{{name}} ({{count}} windows)"
+    "sessionWindowCount_other": "{{name}} ({{count}} windows)",
+    "muxKindUnavailable": "Cannot create in {{kind}} ({{reason}})"
   },
   "serverModals": {
     "addTitle": "Add Server",
@@ -158,7 +159,8 @@
     "isolationIntent": "Isolated execution",
     "isolationIntentLabel": "Withhold operator credentials from this server",
     "isolationIntentHint": "Enabling attempts to clean up any already-distributed operator token. Use \"Verify isolation\" on the server detail page to confirm no credentials remain.",
-    "isolationRequiresScopedAuth": "Enabling isolation requires scoped auth (AZITO_SCOPED_AUTH) to be on. In compat mode, only disabling it is allowed."
+    "isolationRequiresScopedAuth": "Enabling isolation requires scoped auth (AZITO_SCOPED_AUTH) to be on. In compat mode, only disabling it is allowed.",
+    "muxRuntimeHint": "Only applies when using tmux. misao does not use it."
   },
   "menu": {
     "windows": "Objects",
@@ -308,5 +310,19 @@
     "pinTab": "Pin tab",
     "addWindowChip": "Window",
     "addBrowserChip": "Browser"
+  },
+  "muxKind": {
+    "label": "Terminal type",
+    "misao": "misao",
+    "tmux": "tmux",
+    "checking": "Checking which types are available…",
+    "checkFailed": "Could not check which types are available. The hub decides when you create.",
+    "reason": {
+      "misaoUnreachable": "Cannot connect to the misao daemon",
+      "misaoIncompatible": "The misao daemon version does not match this hub",
+      "misaoNotRegistered": "misao is not enabled",
+      "tmuxMissing": "tmux is not installed",
+      "unavailable": "Unavailable"
+    }
   }
 }

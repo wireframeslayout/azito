@@ -7,6 +7,7 @@ export { Spinner } from './Spinner';
 export { EmptyState } from './EmptyState';
 export { IconButton } from './IconButton';
 export { SegmentedToggle } from './SegmentedToggle';
+export { MuxKindSelect } from './MuxKindSelect';
 export type { SegmentedToggleOption } from './SegmentedToggle';
 export { TerminalChatToggle } from './TerminalChatToggle';
 export type { WindowViewMode as TerminalChatViewMode } from './TerminalChatToggle';
