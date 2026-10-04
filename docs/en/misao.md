@@ -43,8 +43,23 @@ The hub and the `misao` command must see the same socket. Set it in `packages/se
 2. In "Default terminal" choose **misao** and save ("tmux executable" is the setting for when you use tmux: System or Managed).
 3. When the Overview shows `misao` under "Default terminal" with a "Connected" chip, you are done.
 
-Windows that already exist in tmux are not migrated to misao; windows you create afterwards are
-misao panes. To go back, choose tmux under "Default terminal" in the same dialog.
+"Default terminal" decides where new windows are created. A local server handles tmux and misao windows
+at the same time: windows that already exist in tmux are not migrated and keep working as tmux windows
+(activity detection, the terminal and task follow-ups each follow the window's own mux). To go back,
+choose tmux under "Default terminal" in the same dialog.
+
+## Using tmux and misao on one server
+
+- Window and pane operations are routed to tmux or misao by the window's `mux_ref` kind (a pane by its handle's
+  shape; misao's are `p_<ULID>`). The server's default only applies to windows created from now on.
+- `GET /api/servers/:name/sessions` returns both listings merged, each session stamped with `kind`
+  (`"tmux"` / `"misao"`), so same-named sessions of the two muxes are told apart.
+- With `?detail=1` it returns `{ sessions, unavailable }`: `unavailable` lists the muxes the server hosts that could
+  not be listed (e.g. `{ "kind": "misao", "reason": "daemon_unreachable" }`). While the daemon is down the other
+  mux's sessions are still returned, and the stopped mux's windows are not treated as deleted (their tabs stay open
+  and activity detection announces no completion). When neither can be listed the request fails.
+- Workspace operations such as `POST /api/servers/:name/mux/workspaces` accept `kind` (default: the server's default).
+- A misao window's `tmux_target` is stored as `<workspace>:<window id>` (migration 078 converts existing rows).
 
 The API takes `defaultMux` (`"misao"` / `"tmux"`; misao is local servers only) and `muxRuntime`
 (`"system"` / `"managed"`, the tmux executable) separately on `PUT /api/servers/:name`.
@@ -88,4 +103,5 @@ the hub cannot reach the daemon.
   [activity detection reference](./activity-detection.md) for details.
 - tmux-specific operations such as pane zoom, saving and applying layouts, and setting pane titles are not supported.
 - Restarting the daemon loses the pane processes (only metadata remains, shown as `stopped`).
-- misao on agent / SSH servers, choosing it in the Add Server dialog, and the managed tmux install flow are out of scope. Choosing misao or tmux per window is future work.
+- misao on agent / SSH servers, choosing it in the Add Server dialog, and the managed tmux install flow are out of scope.
+  Choosing the mux in the add-window dialog is future work (new windows go to the default mux for now).
