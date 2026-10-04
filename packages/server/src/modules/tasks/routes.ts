@@ -37,7 +37,8 @@ import { TaskOriginationService, originFromPrincipal } from './origination/TaskO
 import type { ITaskTokenRepository } from './tokens/TaskToken';
 import { isValidModelId } from '@azito/shared';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
-import { taskWindowRef, windowKindOf } from '../tmux/windowIdentity';
+import { taskWindowRef } from '../tmux/windowIdentity';
+import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../tmux/storedWindowKind';
 
 function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConfig | null {
   if (raw === null || raw === undefined) return null;
@@ -356,11 +357,12 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
           try {
             const driver = muxDriverRegistry.resolve(srv);
             const primaryWin = windows.find((w) => w.isPrimary);
-            const ref = taskWindowRef(t, primaryWin?.muxRef ? primaryWin : undefined, resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo), primaryWin?.muxRef ? windowKindOf(primaryWin) : driver.kind, { tmuxPrefersPrimary: true });
+            const ref = taskWindowRef(t, primaryWin?.muxRef ? primaryWin : undefined, resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo), await resolveStoredWindowKind(muxDriverRegistry, srv, primaryWin, resolveMuxWorkspace(t.projectId, resolvedServerName, projectServerRepo), t.tmuxWindow), { tmuxPrefersPrimary: true });
             if (ref) paneAlive = await driver.windowExists(srv, ref);
           } catch (err) {
             // The mux daemon being down makes liveness unknown, not the whole task unreadable.
-            if (!(err instanceof MuxDriverUnavailableError)) throw err;
+            // Likewise a window that exists in both muxes of a server whose data carries no mux_ref (#313).
+            if (!(err instanceof MuxDriverUnavailableError || err instanceof AmbiguousWindowKindError)) throw err;
             request.log.warn(`paneAlive unknown for task ${t.id}: ${err.message}`);
           }
         }
@@ -963,7 +965,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         const driver = muxDriverRegistry.resolve(srv);
         const retryWindows = windowRepo.findByTask(id);
         const retryPrimaryWin = retryWindows.find((w) => w.isPrimary);
-        const retryRef = taskWindowRef({ tmuxWindow: windowName }, retryPrimaryWin?.muxRef ? retryPrimaryWin : undefined, muxWorkspace, retryPrimaryWin?.muxRef ? windowKindOf(retryPrimaryWin) : driver.kind, { tmuxPrefersPrimary: true });
+        const retryRef = taskWindowRef({ tmuxWindow: windowName }, retryPrimaryWin?.muxRef ? retryPrimaryWin : undefined, muxWorkspace, await resolveStoredWindowKind(muxDriverRegistry, srv, retryPrimaryWin, muxWorkspace, windowName), { tmuxPrefersPrimary: true });
         if (!retryRef) throw new Error(`Task ${id} has no window to abandon`);
         const target = muxWindowTarget(retryRef);
         const outcome = await destroyPrimaryTaskWindow(id, windowName, resolvedServerName, target, 'retry_abandoned_window', () => driver.closeWindow(srv, retryRef), () => {});

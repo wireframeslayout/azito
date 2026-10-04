@@ -11,6 +11,7 @@ function buildOptions(overrides: Partial<WebhookRouteOptions> = {}): WebhookRout
   return {
     taskRepo: { findById: vi.fn().mockReturnValue(undefined) } as unknown as SqliteTaskRepository,
     verifyToken: createTokenVerifier(TOKEN),
+    resolveServerName: (name) => name,
     recordAgentActivity: vi.fn(),
     recordInteractionSignal: vi.fn(),
     misao: { resolvePane: vi.fn().mockResolvedValue(null), recordAgentActivity: vi.fn() },
@@ -533,5 +534,46 @@ describe('hook webhooks from a misao pane (misaoPaneId)', () => {
     const res = await post('/api/webhooks/agent-interaction', { serverName: 'local', misaoPaneId: 'nope', event: 'open' });
 
     expect(res.statusCode).toBe(400);
+  });
+});
+
+// TODO(#313): remove with the server_aliases compatibility.
+describe('hook signals from a pane that still carries a merged server\'s old name', () => {
+  let app: FastifyInstance;
+  afterEach(async () => { await app.close(); });
+  const headers = { authorization: `Bearer ${TOKEN}` };
+  const aliasOptions = (): WebhookRouteOptions => buildOptions({ resolveServerName: (name) => (name === 'local-misao' ? 'local' : name) });
+
+  it('resolves the old name for a tmux activity signal', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    const res = await app.inject({ method: 'POST', url: '/api/webhooks/agent-activity', headers, payload: { ...validActivityBody, serverName: 'local-misao' } });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'local' }));
+  });
+
+  it('resolves the old name for a tmux interaction signal', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    const res = await app.inject({ method: 'POST', url: '/api/webhooks/agent-interaction', headers, payload: { ...validInteractionBody, serverName: 'local-misao' } });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'local' }));
+  });
+
+  it('resolves the old name before looking up a misao pane', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    await app.inject({
+      method: 'POST', url: '/api/webhooks/agent-activity', headers,
+      payload: { serverName: 'local-misao', misaoPaneId: 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXA', event: 'start' },
+    });
+    expect(options.misao.resolvePane).toHaveBeenCalledWith('local', expect.any(String));
+  });
+
+  it('leaves a current name untouched', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    await app.inject({ method: 'POST', url: '/api/webhooks/agent-activity', headers, payload: validActivityBody });
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'local' }));
   });
 });

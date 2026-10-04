@@ -11,7 +11,8 @@ import { isPrimaryTaskWindow, type IWindowRepository } from '../windows/Window';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { resolveKillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
-import { taskWindowRef, windowKindOf } from '../tmux/windowIdentity';
+import { taskWindowRef } from '../tmux/windowIdentity';
+import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
 
 const WORKTREE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-]+\/\.worktrees\/task-\d+$/;
 
@@ -76,7 +77,7 @@ export class TaskCleanupService {
     const driver = this.deps.muxDriverRegistry.resolve(server);
     const muxWorkspace = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
     const primaryWin = windowRepo.findByTask(task.id).find((w) => isPrimaryTaskWindow(w));
-    const ref = taskWindowRef(task, primaryWin, muxWorkspace, primaryWin ? windowKindOf(primaryWin) : driver.kind);
+    const ref = taskWindowRef(task, primaryWin, muxWorkspace, await resolveStoredWindowKind(this.deps.muxDriverRegistry, server, primaryWin, muxWorkspace, task.tmuxWindow));
     if (!ref) return;
     const closing = driver.closeWindow(server, ref);
     try {

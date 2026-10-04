@@ -19,6 +19,16 @@ export function windowKindOf(win: Pick<WindowRowIdentity, 'muxRef'>): MuxDriverK
   return win.muxRef?.kind ?? 'tmux';
 }
 
+/**
+ * The mux of STORED window data (a window row, a task's `tmuxWindow`): its `mux_ref` kind, and tmux when there is
+ * none. Migration 078 gave every misao row a `mux_ref`, so data without one predates misao. A `w_<ULID>` string is
+ * NOT evidence of misao here: it is a valid tmux window name too. A server's `defaultMux` says where NEW windows
+ * go, not which mux existing data lives in (one local server hosts both).
+ */
+export function kindOfStoredWindow(win: Pick<WindowRowIdentity, 'muxRef'> | undefined): MuxDriverKind {
+  return win?.muxRef?.kind ?? 'tmux';
+}
+
 /** The ref of a window row: its `mux_ref`, or the one derived from `tmux_target` for rows that predate `mux_ref`. */
 export function windowRefOf(win: Pick<WindowRowIdentity, 'muxRef' | 'tmuxTarget'>, kind: MuxDriverKind): MuxRef {
   return win.muxRef ?? { ...muxRefFromTmuxTarget(win.tmuxTarget), kind };

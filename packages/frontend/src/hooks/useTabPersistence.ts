@@ -3,6 +3,7 @@ import { stripPaneSuffix } from '@azito/shared';
 import { api } from '../api/client';
 import { applyRetargetTabs } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
+import { renameServerInTabs } from '../lib/serverAliasTabs';
 import {
   type TerminalRef,
   terminalTabId,
@@ -405,6 +406,20 @@ export function useTabPersistence(storageKey?: string) {
     return idMap;
   }, []);
 
+  /**
+   * Re-points saved tabs of a server that migration 079 merged into another (`aliases`: old name -> current
+   * name, from GET /api/servers). A no-op when no tab names an old server. Returns the id renames so the
+   * caller can move the pane layout along. TODO(#313): compatibility for one release.
+   */
+  const migrateServerAliases = useCallback((aliases: ReadonlyMap<string, string>): Map<string, string> => {
+    const { tabs: renamed, changed, idMap } = renameServerInTabs(tabsRef.current, aliases);
+    if (!changed) return idMap;
+    setTabs(renamed);
+    const active = activeTabIdRef.current;
+    if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
+    return idMap;
+  }, []);
+
   const togglePin = useCallback((tabId: string) => {
     setTabs((prev) => prev.map((t) =>
       t.id === tabId ? { ...t, pinned: !t.pinned } : t,
@@ -684,5 +699,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, migrateServerAliases, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

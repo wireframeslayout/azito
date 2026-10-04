@@ -35,6 +35,8 @@ import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
 import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
+import { AmbiguousWindowKindError, rawTargetProbeOf } from '../modules/tmux/storedWindowKind';
+import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
 import { resolveTerminalTarget, terminalPaneOrdinal } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
 import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
@@ -92,7 +94,7 @@ export interface ServerHandles {
 
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
   const {
-    serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
+    serverRepo, serverAliasRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
@@ -479,7 +481,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
-    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: () => describeMisaoDaemon(wiring.misao.connection),
     onMuxChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);
@@ -599,6 +601,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(webhookRoutes, {
     taskRepo,
     verifyToken: verifyWebhookToken,
+    resolveServerName: (name) => serverAliasRepo.resolve(name),
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
     misao: {
@@ -742,20 +745,23 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const paneParam = wsUrl.searchParams.get('pane');
 
       const resolvedOrdinal = terminalPaneOrdinal(paneParam, target) as PaneOrdinal;
-      const resolved = await resolveTerminalTarget(
-        { serverName, windowId: windowIdParam, ref: refParam, target },
-        {
-          serverRepo,
-          windowRepo,
-          resolveDriverRef: async (server, driverTarget) => {
-            try {
-              return await muxDriverRegistry.resolve(server).resolveRef(server, driverTarget);
-            } catch {
-              return null; // driver unavailable or daemon down: the target stays unresolved and the connection is rejected
-            }
-          },
-        },
-      );
+      let resolved: Awaited<ReturnType<typeof resolveTerminalTarget>>;
+      try {
+        resolved = await resolveTerminalTarget(
+          { serverName, windowId: windowIdParam, ref: refParam, target },
+          { serverRepo, windowRepo, probe: rawTargetProbeOf(muxDriverRegistry) },
+        );
+      } catch (err) {
+        if (err instanceof MuxDriverUnavailableError) {
+          socket.send(JSON.stringify({ error: `${err.message}; connect by windowId or ref` }));
+          socket.close();
+          return;
+        }
+        if (!(err instanceof AmbiguousWindowKindError)) throw err;
+        socket.send(JSON.stringify({ error: 'The target names a window in more than one mux; connect by windowId or ref' }));
+        socket.close();
+        return;
+      }
       if (!resolved) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();
@@ -774,7 +780,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         socket.close(1008, 'Unauthorized');
         return;
       }
-      handleSupervisorConnection(socket, supervisorRegistry);
+      handleSupervisorConnection(socket, supervisorRegistry, (name) => serverAliasRepo.resolve(name));
     });
   });
 

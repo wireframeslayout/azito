@@ -45,6 +45,7 @@ import { TmuxInstaller } from '../modules/servers/agent-deploy/TmuxInstaller';
 import { NotificationBus } from '../modules/notifications/NotificationBus';
 
 import { SqliteServerRepository } from '../modules/servers/SqliteServerRepository';
+import { SqliteServerAliasRepository } from '../modules/servers/SqliteServerAliasRepository';
 import { SqliteProjectRepository } from '../modules/projects/SqliteProjectRepository';
 import { SqliteProviderRepository } from '../modules/llm/SqliteProviderRepository';
 import { SqliteUnitRepository } from '../modules/units/SqliteUnitRepository';
@@ -146,6 +147,7 @@ export interface SharedInfra {
 
 export interface Repositories {
   serverRepo: SqliteServerRepository;
+  serverAliasRepo: SqliteServerAliasRepository;
   windowRepo: SqliteWindowRepository;
   projectRepo: SqliteProjectRepository;
   providerRepo: SqliteProviderRepository;
@@ -305,6 +307,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
 
 function buildRepositories(db: SqliteDatabase): Repositories {
   const serverRepo = new SqliteServerRepository(db);
+  const serverAliasRepo = new SqliteServerAliasRepository(db);
   const windowRepo = new SqliteWindowRepository(db);
   const projectRepo = new SqliteProjectRepository(db, windowRepo);
   const providerRepo = new SqliteProviderRepository(db);
@@ -325,6 +328,7 @@ function buildRepositories(db: SqliteDatabase): Repositories {
 
   return {
     serverRepo,
+    serverAliasRepo,
     windowRepo,
     projectRepo,
     providerRepo,

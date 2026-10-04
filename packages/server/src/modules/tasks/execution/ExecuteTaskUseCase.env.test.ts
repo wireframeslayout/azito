@@ -461,7 +461,7 @@ function buildUseCase(opts: {
     null,
     (opts.fetchDistributionService as any) ?? null,
     (opts.distributionStateRepo as any) ?? null,
-    { resolve: () => tmux } as any,
+    { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
     // Issue #274: primaryWindowWaker mock — no-op for most tests.
     primaryWindowWaker as any,
   );
@@ -837,7 +837,8 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     await useCase.execute(42, taskId);
 
     expect(windowRepo.findByTask).toHaveBeenCalledWith(taskId);
-    expect(windowRepo.remove).toHaveBeenCalledTimes(1);
+    // The stale primary row is removed (the mocked list is static, so each of the two clean-ups sees it); nothing else is.
+    expect((windowRepo.remove as ReturnType<typeof vi.fn>).mock.calls.every(([id]) => id === 5)).toBe(true);
     expect(windowRepo.remove).toHaveBeenCalledWith(5);
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
@@ -1643,7 +1644,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       null,
       null,
       null,
-      { resolve: () => tmux } as any,
+      { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
     );
 
@@ -1789,6 +1790,11 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       units: [unit],
       projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
     });
+    // The primary window row saved when the window is created (#313) must be gone again after the rollback.
+    const rows: Array<{ id: number }> = [];
+    windowRepo.add.mockImplementation(((row: object) => { rows.push({ id: 77, ...row }); return 77; }) as never);
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockImplementation(() => rows.slice());
+    windowRepo.remove.mockImplementation(((id: number) => { rows.splice(rows.findIndex((r) => r.id === id), 1); }) as never);
     // Simulate a worktree service that reports a path escaping allowedRoot —
     // exercises the post-creation wt.path containment check independently of
     // how the escape happened (symlink, bug in the worktree service, etc).
@@ -1807,7 +1813,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       worktreePath: null,
       worktreeBranch: null,
     });
-    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(rows).toEqual([]);
     expect(logRepo.append).toHaveBeenCalledWith(4, 13, 'command', expect.objectContaining({ type: 'worktree_path_rejected' }));
     // Issue #28 third-party review fix: 'failed' doesn't auto-revoke (see
     // TOKEN_REVOKING_STATUSES), so the just-created window's token
@@ -1847,6 +1853,11 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       units: [unit],
       projectServer: { workingDirectory: allowedRoot, branch: null, tmuxSession: 'azito' },
     });
+    // The primary window row saved when the window is created (#313) must be gone again after the rollback.
+    const rows: Array<{ id: number }> = [];
+    windowRepo.add.mockImplementation(((row: object) => { rows.push({ id: 77, ...row }); return 77; }) as never);
+    (windowRepo.findByTask as ReturnType<typeof vi.fn>).mockImplementation(() => rows.slice());
+    windowRepo.remove.mockImplementation(((id: number) => { rows.splice(rows.findIndex((r) => r.id === id), 1); }) as never);
     const worktreeRemove = vi.fn(async () => {});
     worktreeServiceFactory.create.mockReturnValue({
       create: vi.fn(async () => ({ path: outsideDir, branch: 'task/6-slug' })),
@@ -1865,7 +1876,7 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
       worktreePath: null,
       worktreeBranch: null,
     });
-    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(rows).toEqual([]);
   });
 });
 
@@ -1926,39 +1937,79 @@ describe('ExecuteTaskUseCase window-rotation rollback safety (Issue #28 third-pa
     expect(windowRepo.add).toHaveBeenCalled();
   });
 
+  it('execute(): saves the primary window row with the created window\'s mux_ref right before the task\'s tmuxWindow (#313)', async () => {
+    const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 48, serverName: 'local-server', unitId: 36 });
+    const { useCase, tmux, windowRepo, taskRepo } = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit] });
+    const misaoRef = { kind: 'misao' as const, workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' };
+    (tmux.openWindow as ReturnType<typeof vi.fn>).mockResolvedValue({ ref: misaoRef, result: { stdout: '', stderr: '', code: 0 }, windowName: 'task-48' });
+
+    await useCase.execute(36, 48);
+
+    const addCall = (windowRepo.add as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(addCall).toMatchObject({ ownerType: 'task', taskId: 48, isPrimary: true, muxRef: misaoRef });
+    const addOrder = (windowRepo.add as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0];
+    const taskWrite = (taskRepo.update as ReturnType<typeof vi.fn>).mock.calls.findIndex(([, data]) => (data as { tmuxWindow?: string }).tmuxWindow === misaoRef.window);
+    expect(taskWrite).toBeGreaterThanOrEqual(0);
+    expect(addOrder).toBeLessThan((taskRepo.update as ReturnType<typeof vi.fn>).mock.invocationCallOrder[taskWrite]);
+  });
+
   describe('misao leftover window lookup', () => {
     const misaoRef = (workspace: string, window: string) => ({ kind: 'misao', workspace, window });
     const win = (index: number, name: string, ref: ReturnType<typeof misaoRef>) => ({ index, name, active: false, panes: [], activity: 0, ref });
 
     async function run(workspaces: unknown[]) {
       const unit = makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' });
-      const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01OLD' });
+      const task = makeTask({ id: 46, serverName: 'local-server', unitId: 36, tmuxWindow: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' });
       const built = buildUseCase({ task, project: makeProject({ defaultUnitId: null }), units: [unit], projectServer: null });
       (built.tmux as { kind: string }).kind = 'misao';
+      // The old window's primary row carries its misao ref (stored data without a ref is tmux).
+      (built.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([
+        { id: 90, ownerType: 'task', taskId: 46, isPrimary: true, tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH') },
+      ]);
       (built.tmux.listWorkspaces as ReturnType<typeof vi.fn>).mockResolvedValue(workspaces);
       await built.useCase.execute(36, 46);
       return built;
     }
 
     it('closes the window whose id matches exactly, with its driver ref', async () => {
-      const ref = misaoRef('azito', 'w_01OLD');
+      const ref = misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH');
       const { tmux } = await run([{ name: 'azito', windowCount: 1, attached: true, created: 0, windows: [win(1, 'task-46', ref)] }]);
       expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
       expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
     });
 
     it('does not close a different window that merely has the id as its name', async () => {
-      const real = misaoRef('azito', 'w_01OLD');
-      const { tmux } = await run([{ name: 'azito', windowCount: 2, attached: true, created: 0, windows: [win(1, 'w_01OLD', misaoRef('azito', 'w_02OTHER')), win(2, 'task-46', real)] }]);
+      const real = misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH');
+      const { tmux } = await run([{ name: 'azito', windowCount: 2, attached: true, created: 0, windows: [win(1, 'w_01M3XFD8H97JCPKS5Y5BH3JZQH', misaoRef('azito', 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ')), win(2, 'task-46', real)] }]);
       expect(tmux.closeWindow).toHaveBeenCalledTimes(1);
       expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), real);
     });
 
     it('finds the window in another workspace after the workspace was renamed', async () => {
-      const ref = misaoRef('renamed-ws', 'w_01OLD');
+      const ref = misaoRef('renamed-ws', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH');
       const { tmux } = await run([{ name: 'renamed-ws', windowCount: 1, attached: true, created: 0, windows: [win(1, 'task-46', ref)] }]);
       expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), ref);
     });
+  });
+
+  it('resumeStateMachine(): on a misao-default local server, a task without a window row is a tmux task (#313), also when its name has the misao id form', async () => {
+    for (const tmuxWindow of ['task-47', 'w_01M3XFD8H97JCPKS5Y5BH3JZQH']) {
+      const server = makeServer({ defaultMux: 'misao' });
+      const task = makeTask({ id: 47, serverName: server.name, unitId: 36, tmuxWindow, workingDirectory: '/srv/repo' });
+      const { useCase, tmux } = buildUseCase({
+        task,
+        project: makeProject({ defaultUnitId: null }),
+        units: [makeUnit({ id: 36, workerType: 'claude', workerModel: 'opus' })],
+        projectServer: { workingDirectory: null, branch: null, tmuxSession: 'azito', distributeCode: false, distributionRepositoryId: null },
+        server,
+      });
+      (tmux as { kind: string }).kind = 'misao'; // the routing driver of a misao-default server reports its default kind
+
+      await useCase.resumeStateMachine(36, 47);
+
+      expect(tmux.resolvePane).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ kind: 'tmux', window: tmuxWindow }), 1);
+    }
   });
 
   describe('misao window identity (task.tmuxWindow = window id, label = display name)', () => {
@@ -2829,7 +2880,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       null,
       null,
       null,
-      { resolve: () => tmux } as any,
+      { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
     );
 

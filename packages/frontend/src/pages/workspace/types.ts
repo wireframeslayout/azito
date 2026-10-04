@@ -156,6 +156,8 @@ export interface Server {
   type: string;
   host?: string;
   defaultMux: MuxDriverKind;
+  /** Old names of servers merged into this one (migration 079); saved tabs are re-pointed. TODO(#313): remove after one release. */
+  aliases?: string[];
   muxRuntime?: MuxRuntime;
   /** Issue #29 Step 3a: whether this server has declared isolation intent — GET /api/servers already returns this (only agentToken/isolationReport/isolationCleanupReport are stripped from the list response), used to gate whether 'allow' is selectable for a project_servers row on this server. */
   isolationIntent?: boolean;

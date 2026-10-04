@@ -375,6 +375,25 @@ describe('tasks routes while the mux daemon is down', () => {
     expect(JSON.parse(res.payload)).toMatchObject({ id: 1, paneAlive: null });
   });
 
+  it('GET /api/tasks/:id answers 200 with paneAlive null when a task without a window row names a window that exists in both muxes (#313)', async () => {
+    const opts = makeOpts({ status: 'in_progress', tmuxWindow: 'w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8' });
+    (opts.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue([]);
+    const bothHaveIt = { windowExists: vi.fn(async () => true) };
+    opts.muxDriverRegistry = {
+      resolve: vi.fn(() => bothHaveIt),
+      supportedKinds: vi.fn(() => ['tmux', 'misao']),
+      resolveKind: vi.fn(() => bothHaveIt),
+    } as unknown as TasksRouteOptions['muxDriverRegistry'];
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/tasks/1' });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.payload)).toMatchObject({ id: 1, paneAlive: null });
+  });
+
   // Fail closed: the window cannot be closed, and deleting the task and its window rows would
   // leave the misao window with no identity to remove it by once the daemon is back.
   function appWithErrorMapping() {

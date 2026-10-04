@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { MuxRef } from '@azito/shared';
-import { isSameWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
+import { isSameWindow, kindOfStoredWindow, taskWindowRef, windowDisplayName, windowRefOf } from './windowIdentity';
 
 const ID_A = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ID_B = 'w_01M3XFD8H97JCPKS5Y5BH3JZQJ';
@@ -64,5 +64,14 @@ describe('windowDisplayName', () => {
     expect(windowDisplayName({ label: null })).toBeUndefined();
     expect(windowDisplayName({ label: '  ' })).toBeUndefined();
     expect(windowDisplayName({ label: ID_A })).toBeUndefined();
+  });
+});
+
+describe('kindOfStoredWindow (stored data: the ref decides, else tmux)', () => {
+  it('uses the ref kind and reads data without a ref as tmux, even when its name has the misao id form', () => {
+    expect(kindOfStoredWindow({ muxRef: misao('ws', ID_A) })).toBe('misao');
+    expect(kindOfStoredWindow({ muxRef: tmux('ws', ID_A) })).toBe('tmux');
+    expect(kindOfStoredWindow({})).toBe('tmux');
+    expect(kindOfStoredWindow(undefined)).toBe('tmux');
   });
 });

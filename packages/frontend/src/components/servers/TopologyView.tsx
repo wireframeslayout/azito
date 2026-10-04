@@ -35,7 +35,8 @@ export default function TopologyView({ servers, statuses }: TopologyViewProps) {
   const { t } = useTranslation('servers');
 
   const hub = useMemo(() => servers.find((s) => s.type === 'local'), [servers]);
-  const remotes = useMemo(() => servers.filter((s) => s.type !== 'local'), [servers]);
+  // A second local server (another tmux socket, not merged by migration 079) is a node beside the remotes, not hidden.
+  const remotes = useMemo(() => servers.filter((s) => s !== hub), [servers, hub]);
 
   const hubY = useMemo(() => {
     if (remotes.length === 0) return START_Y;
@@ -78,9 +79,9 @@ export default function TopologyView({ servers, statuses }: TopologyViewProps) {
 
       const transport = srv.type === 'agent'
         ? `agent HTTP/WS :${srv.agentPort ?? 3002}`
-        : 'SSH';
+        : srv.type === 'local' ? t('status.localTransport') : 'SSH';
       const edgeLabel = isOnline
-        ? `${transport} · Tailscale`
+        ? (srv.type === 'local' ? transport : `${transport} · Tailscale`)
         : t('topology.disconnected');
 
       return {

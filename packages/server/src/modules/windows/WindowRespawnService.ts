@@ -921,15 +921,47 @@ export class WindowRespawnService {
             created.tokenId,
             'resume_legacy_launch_failed_rollback',
             () => {},
-            () => this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>),
+            () => {
+              this.registerLegacyPrimaryWindow(task, server.name, legacyRef, created.label ?? created.windowName, unitId);
+              this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
+            },
           );
         } catch {}
         throw err;
       }
+      // The window's identity (its mux_ref) is saved with the task in one synchronous step: a `tmuxWindow` without a
+      // primary row carrying the ref would be read as a tmux window by everything that reads stored data (#313).
+      this.registerLegacyPrimaryWindow(task, server.name, legacyRef, created.label ?? created.windowName, unitId);
       this.taskRepo.update(taskId, { tmuxWindow: created.windowName } as Partial<Task>);
       return { windowName: created.windowName };
     });
     return { windowName };
+  }
+
+  /** Saves the primary window row of the window a legacy recovery created (the task had none), with its mux_ref. */
+  private registerLegacyPrimaryWindow(task: Task, serverName: string, ref: MuxRef, label: string, unitId: number | null): void {
+    for (const w of this.windowRepo.findByTask(task.id)) {
+      if (w.ownerType === 'task' && w.isPrimary) this.windowRepo.remove(w.id);
+    }
+    const unit = unitId === null ? null : this.unitRepo.findById(unitId);
+    this.windowRepo.add({
+      ownerType: 'task',
+      projectId: null,
+      taskId: task.id,
+      serverName,
+      tmuxTarget: muxWindowTarget(ref),
+      muxRef: ref,
+      label,
+      isPrimary: true,
+      windowType: unit?.workerType ? 'agent' : 'terminal',
+      workerType: unit?.workerType ?? null,
+      workerModel: unit?.workerModel ?? null,
+      agentSessionId: task.agentSessionId,
+      launchCommand: null,
+      workingDirectory: null,
+      paneLayout: null,
+      sleeping: false,
+    });
   }
 
   /**

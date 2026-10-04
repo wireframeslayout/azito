@@ -45,7 +45,16 @@ function validateRegisterMessage(raw: Record<string, unknown>): RegisterMessage 
  * forwards everything else to SupervisorRegistry — all state and business
  * logic (ack matching, heartbeat, ping/pong, event emission) live there.
  */
-export function handleSupervisorConnection(socket: WebSocket, registry: SupervisorRegistry): void {
+export function handleSupervisorConnection(
+  socket: WebSocket,
+  registry: SupervisorRegistry,
+  /**
+   * Maps the `serverName` a supervisor registers with to the current server name: a supervisor started before
+   * migration 079 merged its server into another still carries the old name (`AZITO_SERVER_NAME`).
+   * TODO(#313): compatibility for one release; remove with the `server_aliases` table.
+   */
+  resolveServerName: (name: string) => string,
+): void {
   socket.on('message', (raw) => {
     let parsed: unknown;
     try {
@@ -66,7 +75,7 @@ export function handleSupervisorConnection(socket: WebSocket, registry: Supervis
         console.warn('[supervisors] received invalid register message, ignoring');
         return;
       }
-      registry.register(socket, validated);
+      registry.register(socket, { ...validated, serverName: resolveServerName(validated.serverName) });
       return;
     }
 
