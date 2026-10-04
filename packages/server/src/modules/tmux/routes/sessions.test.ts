@@ -1542,7 +1542,7 @@ describe('mux create routes answer failures of the mux call (#312 review)', () =
     }
   });
 
-  it('answers 409 binary_missing for a local spawn ENOENT, and for a remote "command not found"', async () => {
+  it('answers 409 binary_missing for a local spawn ENOENT, and for an SSH shell "command not found" (an agent server reports a missing tmux as code 1, so it stays a 500)', async () => {
     const enoent = Object.assign(new Error('spawn tmux ENOENT'), { code: 'ENOENT' });
     await build(localTmux, { tmux: () => { throw enoent; } });
     const res = await post('', { name: 'dev', kind: 'tmux' });
@@ -1550,10 +1550,29 @@ describe('mux create routes answer failures of the mux call (#312 review)', () =
     expect(res.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'tmux', reason: 'binary_missing' });
     await app.close();
 
+    // The transport's result is what matters, not the server row: this is the shape an SSH shell returns.
     await build(agentSrv, { tmux: () => ({ ref: ref('tmux'), result: fail('sh: tmux: command not found', 127), windowName: 'main' }) });
     const remote = await post('/dev/windows', { kind: 'tmux' });
     expect(remote.statusCode).toBe(409);
     expect(remote.json()).toEqual({ error: 'mux_kind_unavailable', kind: 'tmux', reason: 'binary_missing' });
+  });
+
+  it('keeps a missing tmux server socket a 500: "No such file or directory" is not a missing binary', async () => {
+    const socket = 'error connecting to /tmp/tmux-1000/default (No such file or directory)';
+    await build(localTmux, { tmux: () => { throw new Error(socket); } });
+    const thrown = await post('', { name: 'dev', kind: 'tmux' });
+    expect(thrown.statusCode).toBe(500);
+    await app.close();
+
+    await build(agentSrv, { tmux: () => ({ ref: ref('tmux'), result: fail(socket), windowName: 'main' }) });
+    const resolved = await post('/dev/windows', { kind: 'tmux' });
+    expect(resolved.statusCode).toBe(500);
+  });
+
+  it('does not read a misao ENOENT as a missing tmux', async () => {
+    await build(localMisao, { misao: () => { throw Object.assign(new Error('connect ENOENT /run/misao.sock'), { code: 'ENOENT' }); } });
+    const res = await post('', { name: 'dev', kind: 'misao' });
+    expect(res.statusCode).toBe(500);
   });
 
   it('answers 409 with the daemon reason when misao drops during the call', async () => {

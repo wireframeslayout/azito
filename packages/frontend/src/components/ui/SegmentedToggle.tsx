@@ -30,7 +30,7 @@ interface SegmentedToggleProps<T extends string> {
  * デザイン方針によりボーダーは使わない（--bg-* トークンのみで階層表現）。
  */
 export function SegmentedToggle<T extends string>({ options, value, onChange, size = 'sm', ariaLabel, disabled = false }: SegmentedToggleProps<T>) {
-  const padding = size === 'sm' ? '3px 8px' : '5px 12px';
+  const padding = size === 'sm' ? 'var(--space-1) var(--space-2)' : 'var(--space-1) var(--space-3)';
   const fontSize = size === 'sm' ? 'var(--font-xs)' : 'var(--font-sm)';
   const iconSize = 14;
 
@@ -54,8 +54,8 @@ export function SegmentedToggle<T extends string>({ options, value, onChange, si
       style={{
         display: 'inline-flex',
         alignItems: 'center',
-        gap: 2,
-        padding: 2,
+        gap: 'var(--space-1)',
+        padding: 'var(--space-1)',
         borderRadius: 'var(--radius-md)',
         background: 'var(--bg-hover)',
         flexShrink: 0,
@@ -78,7 +78,7 @@ export function SegmentedToggle<T extends string>({ options, value, onChange, si
             style={{
               display: 'flex',
               alignItems: 'center',
-              gap: 4,
+              gap: 'var(--space-1)',
               padding,
               fontSize,
               fontWeight: active ? 600 : 400,

@@ -18,7 +18,7 @@ export interface RoutingMuxDeps {
 
 function describeUnavailable(kind: MuxDriverKind, err: unknown): MuxUnavailableKind {
   if (err instanceof MuxDriverUnavailableError) return { kind, reason: err.reason, detail: err.message };
-  if (isMissingBinaryError(err)) return { kind, reason: MUX_BINARY_MISSING, detail: err instanceof Error ? err.message : String(err) };
+  if (kind === 'tmux' && isMissingBinaryError(err)) return { kind, reason: MUX_BINARY_MISSING, detail: err instanceof Error ? err.message : String(err) };
   return { kind, reason: 'driver_error', detail: err instanceof Error ? err.message : String(err) };
 }
 

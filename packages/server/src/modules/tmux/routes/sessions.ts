@@ -224,6 +224,8 @@ function createFailure(kind: MuxDriverKind, err: unknown): { status: 409 | 500; 
 }
 
 /** An agent/ssh transport resolves with a non-zero ExecResult instead of throwing when the remote mux fails. */
+// A missing tmux on an agent server stays a 500: the agent turns a spawn ENOENT into code 1 with an empty stderr
+// (agent/routes.ts), so there is nothing here to tell it from another failure. An SSH server's code 127 is recognised.
 function createResultFailure(kind: MuxDriverKind, result: ExecResult): { status: 409 | 500; body: Record<string, unknown> } {
   if (kind === 'tmux' && isMissingBinaryResult(result)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
   return { status: 500, body: { error: `create failed: ${result.stderr || result.stdout}` } };
