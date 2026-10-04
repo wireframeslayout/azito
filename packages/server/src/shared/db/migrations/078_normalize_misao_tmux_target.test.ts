@@ -209,24 +209,40 @@ describe('migration 078: normalize misao window rows', () => {
     expect(readWindow(db, row)).toEqual({ tmux_target: 'ws:main', mux_ref: misao('ws', WIN_A) });
   });
 
-  it('keeps two task rows of one misao window in different workspaces, both with the misao kind', () => {
-    const t1 = insertTask(db);
-    const t2 = insertTask(db);
-    const a = insertWindow(db, 'local', 'old:main', tmux('old', WIN_A), { id: t1, primary: true });
-    const b = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: t2, primary: true });
+  it('merges task rows of one misao window even when their workspaces differ, keeping the latest task', () => {
+    const older = insertTask(db);
+    const newer = insertTask(db);
+    const a = insertWindow(db, 'local', 'old:main', tmux('old', WIN_A), { id: newer, primary: true });
+    const b = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: older, primary: true });
     run();
+    expect(windowExists(db, b)).toBe(false);
     expect(readWindow(db, a)).toEqual({ tmux_target: `old:${WIN_A}`, mux_ref: misao('old', WIN_A) });
-    expect(readWindow(db, b)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM windows').get()).toEqual({ n: 1 });
   });
 
-  it('merges two task rows that would carry the same misao ref (it is UNIQUE), keeping the primary one', () => {
-    const t1 = insertTask(db);
-    const t2 = insertTask(db);
-    const secondary = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: t1 });
-    const primary = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A), { id: t2, primary: true });
+  it('clears another task\'s references to a merged row and moves only the keeper task\'s', () => {
+    const older = insertTask(db);
+    const newer = insertTask(db);
+    const keeper = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: newer, primary: true });
+    const merged = insertWindow(db, 'local', 'other:main', tmux('other', WIN_A), { id: older, primary: true });
+    db.prepare('UPDATE tasks SET pending_operation_window_id = ? WHERE id IN (?, ?)').run(merged, older, newer);
+    db.prepare(`INSERT INTO supervisor_launches (launch_id, server_name, target, task_id, bootstrap_hash, window_id) VALUES ('l1', 'local', 'x', ?, 'h', ?), ('l2', 'local', 'x', ?, 'h', ?)`)
+      .run(older, merged, newer, merged);
     run();
-    expect(windowExists(db, secondary)).toBe(false);
-    expect(readWindow(db, primary)).toEqual({ tmux_target: `ws:${WIN_A}`, mux_ref: misao('ws', WIN_A) });
+    const pending = db.prepare('SELECT id, pending_operation_window_id AS w FROM tasks ORDER BY id').all();
+    expect(pending).toEqual([{ id: older, w: null }, { id: newer, w: keeper }]);
+    const launches = db.prepare('SELECT task_id AS t, window_id AS w FROM supervisor_launches ORDER BY id').all();
+    expect(launches).toEqual([{ t: older, w: null }, { t: newer, w: keeper }]);
+  });
+
+  it('carries project_id / label / sleeping of the merged rows over to the keeper (COALESCE, as 068 does)', () => {
+    const taskId = insertTask(db);
+    const keeper = insertWindow(db, 'local', `ws:${WIN_A}`, misao('ws', WIN_A), { id: taskId, primary: true });
+    const plain = insertWindow(db, 'local', 'ws:main', tmux('ws', WIN_A));
+    db.prepare(`UPDATE windows SET label = 'shown', sleeping = 1 WHERE id = ?`).run(plain);
+    run();
+    expect(windowExists(db, plain)).toBe(false);
+    expect(db.prepare('SELECT project_id AS p, label AS l, sleeping AS s FROM windows WHERE id = ?').get(keeper)).toEqual({ p: 1, l: 'shown', s: 1 });
   });
 
   it('is idempotent', () => {
