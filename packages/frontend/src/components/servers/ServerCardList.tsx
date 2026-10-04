@@ -13,7 +13,8 @@ export default function ServerCardList({ servers, statuses }: ServerCardListProp
   const navigate = useNavigate();
   const { t } = useTranslation('servers');
   const hub = servers.find((s) => s.type === 'local');
-  const remotes = servers.filter((s) => s.type !== 'local');
+  // A second local server (another tmux socket, not merged by migration 079) is listed after the hub, not hidden.
+  const remotes = servers.filter((s) => s !== hub);
 
   return (
     <div style={{ padding: 'var(--space-3)', display: 'flex', flexDirection: 'column', gap: 'var(--space-2)' }}>
