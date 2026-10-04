@@ -340,6 +340,13 @@ interface ScreenCheckState {
 const UNKNOWN_HOLD_MS = 30_000;
 
 /**
+ * How long a window of a mux that could not be listed (while the server's other mux could) keeps its previous state.
+ * Longer than UNKNOWN_HOLD_MS: it covers a misao daemon restart / reconnect, not one unreadable screen. Past it the
+ * window is judged from the listing again (so a daemon that never comes back ends as gone, like before).
+ */
+const MUX_UNAVAILABLE_HOLD_MS = 120_000;
+
+/**
  * Maximum `capture-pane` calls in flight per server. The screen checks of
  * different windows are independent, so running them one after another makes a
  * tick cost the sum of every pane's round trip — on an ssh/agent server that is
@@ -675,6 +682,9 @@ export class AgentActivityMonitor {
   // Last MuxDriverUnavailableError reason logged per server, so a server whose driver is
   // unavailable is reported once (and again only if the reason changes) instead of every tick.
   private unavailableDriverReasons = new Map<string, string>();
+
+  // Since when a window's mux could not be listed (while its server's other mux could); see MUX_UNAVAILABLE_HOLD_MS.
+  private muxUnavailableSince = new Map<string, number>();
 
   constructor(
     private executeTaskUseCase: ExecuteTaskUseCase,
@@ -1170,6 +1180,9 @@ export class AgentActivityMonitor {
     for (const key of this.hookMatchedBy.keys()) {
       if (!candidateKeys.has(key)) this.hookMatchedBy.delete(key);
     }
+    for (const key of this.muxUnavailableSince.keys()) {
+      if (!candidateKeys.has(key)) this.muxUnavailableSince.delete(key);
+    }
     for (const key of this.processDisarmedKeys) {
       if (!candidateKeys.has(key) && !operationKeys.has(key)) this.processDisarmedKeys.delete(key);
     }
@@ -1244,7 +1257,8 @@ export class AgentActivityMonitor {
         // A mux that could not be listed leaves its windows unreadable this tick, not gone.
         for (const u of unavailable) {
           sessionErrors.add(kindSessionErrorKey(serverName, u.kind));
-          this.warnKindUnavailableOnChange(serverName, u.kind, u.reason);
+          const hasWindows = candidates.some((c) => c.serverName === serverName && (c.muxRef?.kind ?? 'tmux') === u.kind);
+          this.warnKindUnavailableOnChange(serverName, u.kind, u.reason, hasWindows);
         }
         if (unavailable.length === 0) this.unavailableDriverReasons.delete(serverName);
       } catch (err) {
@@ -1457,14 +1471,21 @@ export class AgentActivityMonitor {
         // mapped === null → unknown: fall through to lower tiers.
       }
 
-      // A listing that could not read this window's mux (that mux is down, or the whole server could not be listed)
-      // says nothing about the window: keep its previous state and never announce it as deleted (#311).
-      if (sessionErrors.has(w.serverName) || sessionErrors.has(kindSessionErrorKey(w.serverName, w.muxRef?.kind ?? 'tmux'))) {
-        const previous = this.state.get(key);
-        if (previous) next.set(key, previous);
-        if (this.previousLiveKeys.has(key)) liveKeys.add(key);
-        decide(key, w.serverName, w.tmuxTarget, 'none', previous?.running ? (previous.status ?? 'working') : 'none', w.taskId ?? undefined);
-        continue;
+      // A listing that could list the server's other mux but not this window's says nothing about the window: keep its
+      // previous state for a bounded time and do not announce it as deleted (#311). A whole-server listing failure is
+      // not held (an unreachable agent/ssh server ends its windows as before).
+      if (sessionErrors.has(kindSessionErrorKey(w.serverName, w.muxRef?.kind ?? 'tmux'))) {
+        const since = this.muxUnavailableSince.get(key) ?? Date.now();
+        this.muxUnavailableSince.set(key, since);
+        if (Date.now() - since <= MUX_UNAVAILABLE_HOLD_MS) {
+          const previous = this.state.get(key);
+          if (previous) next.set(key, previous);
+          if (this.previousLiveKeys.has(key)) liveKeys.add(key);
+          decide(key, w.serverName, w.tmuxTarget, 'none', previous?.running ? (previous.status ?? 'working') : 'none', w.taskId ?? undefined);
+          continue;
+        }
+      } else {
+        this.muxUnavailableSince.delete(key);
       }
       const sessions = sessionsByServer.get(w.serverName) ?? [];
       const window = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
@@ -2036,11 +2057,13 @@ export class AgentActivityMonitor {
   }
 
   /** Like warnDriverUnavailableOnChange, for one mux of a server whose other muxes were listed. */
-  private warnKindUnavailableOnChange(serverName: string, kind: MuxDriverKind, reason: string): void {
+  /** Warned only when the server has windows of that mux; otherwise (misao not installed on a local server) debug. */
+  private warnKindUnavailableOnChange(serverName: string, kind: MuxDriverKind, reason: string, hasWindows: boolean): void {
     const warned = `${kind}: ${reason}`;
     if (this.unavailableDriverReasons.get(serverName) === warned) return;
     this.unavailableDriverReasons.set(serverName, warned);
-    console.warn(`[agent-activity] mux driver unavailable for server ${serverName} (${warned}); skipping its ${kind} windows`);
+    const message = `[agent-activity] mux driver unavailable for server ${serverName} (${warned}); skipping its ${kind} windows`;
+    if (hasWindows) console.warn(message); else console.debug(message);
   }
 
   private warnDriverUnavailableOnChange(serverName: string, err: unknown): void {
