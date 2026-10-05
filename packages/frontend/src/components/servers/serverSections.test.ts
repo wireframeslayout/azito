@@ -47,6 +47,7 @@ describe('describeMisaoItem', () => {
     ['daemon_unreachable', 'overview.misaoUnreachable'],
     ['protocol_incompatible', 'overview.misaoIncompatible'],
     ['driver_not_registered', 'overview.misaoDriverNotRegistered'],
+    ['not_installed', 'overview.misaoNotInstalled'],
   ])('translates the %s detail', (detail, key) => {
     expect(describeMisaoItem({ installed: false, detail }, t).detail).toBe(key);
   });

@@ -1,4 +1,4 @@
-import type { MisaoClient, EventHandler, LineHandler, GapInfo, Subscription, SubscriptionErrorInfo, ConnectionState } from '@misao/sdk' with { 'resolution-mode': 'import' };
+import type { MisaoClient, EventHandler, LineHandler, GapInfo, Subscription, SubscriptionErrorInfo, ConnectionState, ConnectFunction } from '@misao/sdk' with { 'resolution-mode': 'import' };
 import type { MethodName, MethodParams, MethodResult } from '@misao/protocol' with { 'resolution-mode': 'import' };
 import type { MuxDriverAvailability } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
@@ -59,11 +59,15 @@ interface LineRegistration {
 
 type MisaoProtocolVersionErrorLike = InstanceType<MisaoSdk['MisaoProtocolVersionError']>;
 
-export interface MisaoConnectionOptions {
-  socketPath: string;
+/** How the SDK reaches a daemon: a unix socket path, or a function that opens a Duplex to it (a relay through an agent). */
+export type MisaoTarget = { socketPath: string; connect?: never } | { connect: ConnectFunction; socketPath?: never };
+
+export type MisaoConnectionOptions = MisaoTarget & {
   sdk: MisaoSdk;
   log: { warn(message: string): void };
-}
+  /** Names the connection in its log lines (`[misao:<server>]`); the hub's own connection is plain `[misao]`. */
+  logTag?: string;
+};
 
 type Status = 'idle' | 'connected' | 'disconnected';
 
@@ -105,7 +109,11 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   private readonly gapListeners = new Set<(gap: GapInfo) => void>();
   private readonly subscriptionErrorListeners = new Set<(info: SubscriptionErrorInfo) => void>();
 
-  constructor(private readonly options: MisaoConnectionOptions) {}
+  private readonly tag: string;
+
+  constructor(private readonly options: MisaoConnectionOptions) {
+    this.tag = options.logTag ?? 'misao';
+  }
 
   /** Makes the first connect attempt; later attempts continue in the background. Never rejects on an unreachable daemon. */
   async start(): Promise<void> {
@@ -120,12 +128,12 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   private createClient(): MisaoClient {
-    const client = new this.options.sdk.MisaoClient({ socketPath: this.options.socketPath });
+    const client = new this.options.sdk.MisaoClient(clientTarget(this.options));
     this.client = client;
     client.onStateChange((state) => this.handleState(state));
     client.onGap((gap) => { for (const listener of this.gapListeners) listener(gap); });
     client.onSubscriptionError((info) => this.handleSubscriptionError(info));
-    client.onError((err) => this.options.log.warn(`[misao] callback error: ${err instanceof Error ? err.message : String(err)}`));
+    client.onError((err) => this.options.log.warn(`[${this.tag}] callback error: ${err instanceof Error ? err.message : String(err)}`));
     return client;
   }
 
@@ -160,7 +168,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
         throw this.translate(err);
       }
       this.eventsInterrupted = true;
-      this.options.log.warn(`[misao] events subscription failed, retrying in the background: ${err instanceof Error ? err.message : String(err)}`);
+      this.options.log.warn(`[${this.tag}] events subscription failed, retrying in the background: ${err instanceof Error ? err.message : String(err)}`);
       this.scheduleEventRetry();
     }
     return registration;
@@ -183,7 +191,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
           try {
             listener();
           } catch (err) {
-            this.options.log.warn(`[misao] events recovered listener failed: ${err instanceof Error ? err.message : String(err)}`);
+            this.options.log.warn(`[${this.tag}] events recovered listener failed: ${err instanceof Error ? err.message : String(err)}`);
           }
         }
       })
@@ -207,7 +215,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     if (this.eventHandlers.size === 0 || this.status !== 'connected') return;
     this.ensureEventSubscription().catch((err: unknown) => {
       if (this.isConnectionError(err)) return;
-      this.options.log.warn(`[misao] events subscription retry failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.options.log.warn(`[${this.tag}] events subscription retry failed: ${err instanceof Error ? err.message : String(err)}`);
       this.scheduleEventRetry();
     });
   }
@@ -217,7 +225,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
     if (info.stream.kind === 'events') {
       this.eventSubscription = undefined;
       this.eventsInterrupted = true;
-      this.options.log.warn(`[misao] events re-subscribe refused, retrying in the background: ${info.error.message}`);
+      this.options.log.warn(`[${this.tag}] events re-subscribe refused, retrying in the background: ${info.error.message}`);
       this.scheduleEventRetry();
     } else {
       // The SDK dropped this line stream from its own table; ours must go too, or a later client replacement would
@@ -246,7 +254,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
       try {
         handler(event);
       } catch (err) {
-        this.options.log.warn(`[misao] event handler failed: ${err instanceof Error ? err.message : String(err)}`);
+        this.options.log.warn(`[${this.tag}] event handler failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }
@@ -277,7 +285,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
       try {
         registration.subscription?.unsubscribe();
       } catch (err) {
-        this.options.log.warn(`[misao] could not release line subscription for ${paneId}: ${err instanceof Error ? err.message : String(err)}`);
+        this.options.log.warn(`[${this.tag}] could not release line subscription for ${paneId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       registration.subscription = undefined;
     }
@@ -290,7 +298,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
         registration.lastCursor = registration.subscription?.cursor ?? registration.lastCursor;
         registration.subscription?.unsubscribe();
       } catch (err) {
-        this.options.log.warn(`[misao] could not release line subscription for ${registration.paneId}: ${err instanceof Error ? err.message : String(err)}`);
+        this.options.log.warn(`[${this.tag}] could not release line subscription for ${registration.paneId}: ${err instanceof Error ? err.message : String(err)}`);
       }
       registration.subscription = undefined;
     }
@@ -324,7 +332,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
       return;
     }
     this.lineRegistrations.delete(registration);
-    this.options.log.warn(`[misao] line subscription for ${registration.paneId} could not be restored: ${err instanceof Error ? err.message : String(err)}`);
+    this.options.log.warn(`[${this.tag}] line subscription for ${registration.paneId} could not be restored: ${err instanceof Error ? err.message : String(err)}`);
     const info = { stream: { kind: 'lines', paneId: registration.paneId }, error: err } as SubscriptionErrorInfo;
     for (const listener of this.subscriptionErrorListeners) listener(info);
   }
@@ -401,7 +409,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
    */
   private handleClientClosed(cause: unknown): void {
     if (this.isProtocolVersionError(cause)) this.reportIncompatibility(cause);
-    else this.options.log.warn(`[misao] connection closed, starting over: ${cause instanceof Error ? cause.message : String(cause)}`);
+    else this.options.log.warn(`[${this.tag}] connection closed, starting over: ${cause instanceof Error ? cause.message : String(cause)}`);
     this.eventSubscription = undefined;
     this.eventSubscribing = undefined;
     this.eventsInterrupted = this.eventHandlers.size > 0;
@@ -416,7 +424,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
 
   private reportIncompatibility(err: MisaoProtocolVersionErrorLike): void {
     // Logged when it first appears or its versions change, not on every retry.
-    if (this.incompatibility?.message !== err.message) this.options.log.warn(`[misao] ${err.message}; retrying in the background`);
+    if (this.incompatibility?.message !== err.message) this.options.log.warn(`[${this.tag}] ${err.message}; retrying in the background`);
     this.incompatibility = err;
   }
 
@@ -437,9 +445,9 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
         this.reportIncompatibility(err);
       } else if (err instanceof this.options.sdk.MisaoConnectionError) {
         this.incompatibility = undefined;
-        if (attempt === 1) this.options.log.warn(`[misao] daemon not reachable, retrying in the background: ${err.message}`);
+        if (attempt === 1) this.options.log.warn(`[${this.tag}] daemon not reachable, retrying in the background: ${err.message}`);
       } else {
-        this.options.log.warn(`[misao] giving up connecting: ${err instanceof Error ? err.message : String(err)}`);
+        this.options.log.warn(`[${this.tag}] giving up connecting: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
       this.scheduleConnect(client, attempt);
@@ -447,9 +455,13 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 }
 
+function clientTarget(target: MisaoTarget): { socketPath: string } | { connect: ConnectFunction } {
+  return target.connect ? { connect: target.connect } : { socketPath: target.socketPath };
+}
+
 /** Opens a connection that is not shared with the driver, so closing it detaches only that terminal. */
-export async function connectDedicatedMisaoClient(sdk: MisaoSdk, socketPath: string): Promise<MisaoAttachClient> {
-  const client = new sdk.MisaoClient({ socketPath });
+export async function connectDedicatedMisaoClient(sdk: MisaoSdk, target: MisaoTarget): Promise<MisaoAttachClient> {
+  const client = new sdk.MisaoClient(clientTarget(target));
   try {
     await client.connect();
   } catch (err) {

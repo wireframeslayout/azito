@@ -125,7 +125,9 @@
     "sessionsLabel": "Sessions",
     "sessionsSummary": "Sessions {{sessionCount}} · Windows {{windowCount}}",
     "hubVersionLabel": "Hub version",
-    "muxRuntimeNote": "Only applies when using tmux"
+    "muxRuntimeNote": "Only applies when using tmux",
+    "misaoNotInstalled": "misao is not installed on this server",
+    "misaoNotInstalledSub": "Install it from Setup (Install misao). The hub sends its own copy through the agent."
   },
   "setup": {
     "title": "Setup",
@@ -178,7 +180,8 @@
     "rollingBack": "Rolling back mux runtime to system…",
     "rolledBack": "Rolled back to system",
     "installComplete": "Done v{{version}}",
-    "tmuxOptionalNote": "Optional. Only needed for tmux windows (AZITO panes run on the bundled misao)."
+    "tmuxOptionalNote": "Optional. Only needed for tmux windows (AZITO panes run on the bundled misao).",
+    "misaoInstallFailedOnAdd": "The agent was installed, but misao could not be installed: {{error}}. Install it from the server's Setup."
   },
   "windows": {
     "noSessions": "No sessions found on this server.",
@@ -259,5 +262,21 @@
       "unknown": "This hub cannot manage the misao service."
     },
     "stateActiveUnreachable": "Running (not reachable)"
+  },
+  "agentMisao": {
+    "install": "Install misao",
+    "retry": "Try again",
+    "installing": "Installing misao…",
+    "installDesc": "Sends the misao bundled with this hub to the server through its agent and starts it as a service. Nothing is downloaded on the server.",
+    "notInstallable": "This hub does not bundle misao, so it cannot install it on a server.",
+    "failed": "misao could not be installed",
+    "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",
+    "updateAvailableSub": "It is not switched automatically: switching ends every pane on this server. Update it when no work is running there.",
+    "step": {
+      "inspect": "Checking the server…",
+      "transfer": "Sending misao to the server…",
+      "prepare": "Preparing misao…",
+      "start": "Starting misao…"
+    }
   }
 }

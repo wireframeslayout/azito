@@ -7,23 +7,8 @@ import { readEnvValue, upsertEnvValue } from '../../../shared/envFile';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { sha256File, type MisaoBundle } from './MisaoBundle';
 import type { MisaoServiceController } from './MisaoServiceController';
-
-export type MisaoServiceErrorCode =
-  | 'usage'
-  | 'busy'
-  | 'not_managed'
-  | 'custom_socket'
-  | 'not_installed'
-  | 'daemon_not_ready'
-  | 'update_failed';
-
-/** A refusal the caller can show as is: the service operation did not (fully) happen, and why. */
-export class MisaoServiceError extends Error {
-  constructor(readonly code: MisaoServiceErrorCode, message: string) {
-    super(message);
-    this.name = 'MisaoServiceError';
-  }
-}
+import { MisaoServiceError } from './MisaoServiceError';
+import { renderMisaoUnit } from './misaoUnit';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -55,10 +40,6 @@ function isSocketListening(socketPath: string): Promise<boolean> {
     socket.once('error', () => done(false));
     socket.setTimeout(2_000, () => done(false));
   });
-}
-
-function xmlEscape(value: string): string {
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 /**
@@ -300,13 +281,13 @@ export class MisaoServiceService {
   }
 
   private renderUnit(bundle: MisaoBundle, controller: MisaoServiceController): string {
-    const template = fs.readFileSync(path.join(bundle.templatesDir, controller.templateName), 'utf-8');
-    const servicePath = buildServicePath(this.deps.env, this.deps.homeDir ?? os.homedir(), fs.existsSync);
-    // systemd treats % as a specifier, plist is XML.
-    const escapedPath = controller.manager === 'launchd' ? xmlEscape(servicePath) : servicePath.replace(/%/g, '%%');
-    return template
-      .replaceAll('__AZITO_PREFIX__', this.paths.prefix)
-      .replaceAll('__PATH__', escapedPath);
+    return renderMisaoUnit({
+      template: fs.readFileSync(path.join(bundle.templatesDir, controller.templateName), 'utf-8'),
+      manager: controller.manager,
+      prefix: this.paths.prefix,
+      node: path.join(this.paths.prefix, 'hub', 'current', 'node'),
+      servicePath: buildServicePath(this.deps.env, this.deps.homeDir ?? os.homedir(), fs.existsSync),
+    });
   }
 
   private async waitUntilListening(): Promise<void> {

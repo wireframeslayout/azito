@@ -94,6 +94,10 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   `azito misao update` (or the Setup row's update button): stopping the daemon closes every pane, so a hub update or restart never
   touches it. `azito misao install|update|start|status` (`cli/misaoCommand.ts`) and `GET/POST /api/system/misao[/install|start|update]`
   share `modules/system/misao/MisaoServiceService`; `install.sh` just calls the bundled CLI. tmux is optional on a release install.
+  The same bundled misao is installed on **agent servers** by `modules/system/misao/MisaoAgentInstaller` (files sent through the agent and
+  sha256-checked on both ends, never downloaded by the agent; the unit template is rendered by the shared `misaoUnit.ts`; it never switches or
+  stops a running daemon): `AgentInstaller.install` runs it after the agent is healthy, and `POST /api/servers/:name/install-misao`
+  (`system/misao/agentMisaoRoutes.ts`, operator only even in compat mode; `GET` = progress) runs it on demand. `AgentUpdater` never touches the daemon.
 
 ## Architecture
 
@@ -104,10 +108,11 @@ packages/
       main.ts                      # Composition root: wires repositories/services, registers routes, starts Fastify
       agent/                       # Lightweight agent entry point (deployed to remote servers)
         main.ts, routes.ts         # Agent process HTTP/WS surface
+        misaoRelay.ts, misaoRoutes.ts  # `/ws?mode=misao` byte relay to the agent's own misao socket (fixed at startup, 128 at once) + `GET /api/misao/status` / `PUT /api/misao/upload` (the two release files, staged under `~/.azito/misao/<version>.upload/`) — all behind the agent token
       modules/                     # Feature modules (1 module = 1 responsibility; routes+service+repository together)
         tmux/                      # [base] TmuxClient, PaneOutputStream/PaneStream(Factory), TmuxHookManager
           routes/, ws/             # HTTP routes (sessions, hooks) + WS handlers (terminal, agent-terminal)
-          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal), MisaoPaneStateEvents (the daemon's `pane.state` activity events, consumed by `operations/misaoActivityBridge.ts`), MisaoPaneStream (task output read from the daemon's line stream instead of pipe-pane; a gap is only logged as `pane_stream_gap` — completion/questions are detected from the signal file) — the driver is always registered (no feature flag; an absent daemon is `daemon_unreachable`), local servers only
+          misao/                   # MisaoMuxClient (IMuxClient over the misao daemon), MisaoConnection, MisaoTerminalStream (browser terminal attach, one dedicated daemon connection per terminal), MisaoPaneStateEvents (the daemon's `pane.state` activity events, consumed by `operations/misaoActivityBridge.ts`), MisaoPaneStream (task output read from the daemon's line stream instead of pipe-pane; a gap is only logged as `pane_stream_gap` — completion/questions are detected from the signal file) — the driver is always registered (no feature flag; an absent daemon is `daemon_unreachable`); `MisaoServers` holds one node (connection + driver) per daemon — the hub's own for every local server, one per agent server that has misao (created lazily, dropped when the server is edited/deleted; the SDK reaches it through `MisaoClient({ connect })` over the agent relay) — and `MisaoDriverRouter` is the registered driver that routes each call by server; an agent server lists misao only once it has a node (`MuxDriverRegistry` `hosted`), otherwise `not_installed`
         servers/                  # [base] Server entity, SqliteServerRepository, install status parsing
           transport/               # ServerTransport interface + Local/Ssh/Agent implementations, AgentPaneStream/EventStream
           ssh/                     # SshClient (persistent shell pool, marker-based exec)

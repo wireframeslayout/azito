@@ -12,6 +12,7 @@ import { useServerStatuses } from './useServerStatuses';
 import { fetchSessionsForServers } from '../lib/fetchServerSessions';
 import { findSessionByKey, sessionKindOf, windowTargetSelectOptions } from '../lib/sessionKind';
 import { muxCreateFailureText, muxKindSelectModel } from '../lib/muxKindChoice';
+import { useMisaoInstallOffer } from './useMisaoInstallOffer';
 import { useMuxKindAvailability } from './useMuxKindAvailability';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
@@ -109,6 +110,7 @@ export function useAddWindowModal(
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { showToast } = useToast();
+  const withMisaoInstall = useMisaoInstallOffer();
   const { statuses } = useServerStatuses();
   const isServerOffline = useCallback((name: string) => statuses[name]?.status === 'offline', [statuses]);
 
@@ -343,7 +345,8 @@ export function useAddWindowModal(
         const sessionExists = beforeSessions.some((s) => s.name === sessionName && sessionKindOf(s) === newKind);
         const windowName = awNewWindowName.trim() || undefined;
         const serverPath = `/servers/${encodeURIComponent(awServer)}/mux/workspaces`;
-        const res = await api<MuxCreateResponse | { error: string }>(
+        // A server without misao offers to install it (after the operator agrees) and creates the window once it is there.
+        const res = await withMisaoInstall(awServer, () => api<MuxCreateResponse | { error: string }>(
           sessionExists ? `${serverPath}/${encodeURIComponent(sessionName)}/windows` : serverPath,
           {
             method: 'POST',
@@ -351,7 +354,7 @@ export function useAddWindowModal(
               ? { name: windowName, kind: newKind, force }
               : { name: sessionName, windowName, kind: newKind, force }),
           },
-        );
+        ));
         if (isInsufficientResources(res)) {
           setAwResourceWarning({ resources: res.resources, retry: () => { setAwResourceWarning(null); void perform(true); } });
           return;
@@ -409,7 +412,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall]);
 
   return {
     // State

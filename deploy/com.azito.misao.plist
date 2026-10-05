@@ -3,7 +3,7 @@
 <!--
   AZITO が同梱する misao デーモンの launchd ユーザーエージェント (macOS)。ハブ (com.azito.hub) とは別のサービス:
   misao を止めると全ペインが閉じるため、ハブの再起動・更新に巻き込まない。
-  __AZITO_PREFIX__ と __PATH__ は install 時に絶対パスへ置き換える (launchd は ~ や %h を展開しない)。
+  __AZITO_PREFIX__ / __NODE__ / __PATH__ は install 時に絶対パスへ置き換える (launchd は ~ や %h を展開しない)。
 -->
 <plist version="1.0">
 <dict>
@@ -11,7 +11,7 @@
   <string>com.azito.misao</string>
   <key>ProgramArguments</key>
   <array>
-    <string>__AZITO_PREFIX__/hub/current/node</string>
+    <string>__NODE__</string>
     <string>__AZITO_PREFIX__/misao/current/misao.mjs</string>
     <string>serve</string>
     <string>--socket</string>

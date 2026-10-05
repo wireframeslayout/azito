@@ -9,6 +9,8 @@ import { describeMisaoItem, type InstallStatusResponse, type InstallStatusItem }
 import { useToast } from '../../../hooks/useToast';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { MisaoServicePanel } from './MisaoServicePanel';
+import { AgentMisaoPanel } from './AgentMisaoPanel';
+import { useAgentMisaoInstall } from '../../../hooks/useAgentMisaoInstall';
 
 const URL_PATTERN = /^https?:\/\/[\w.:\-[\]]+\/?$/;
 
@@ -76,6 +78,7 @@ export default function SetupSection({ server, installStatus, installStatusError
   const [isRechecking, setIsRechecking] = useState(false);
   const { showToast } = useToast();
   const confirm = useConfirm();
+  const agentMisao = useAgentMisaoInstall(server.name, refresh, server.type === 'agent');
 
   const handleRecheck = useCallback(() => {
     setIsRechecking(true);
@@ -287,9 +290,10 @@ export default function SetupSection({ server, installStatus, installStatusError
           item={describeMisaoItem(installStatus.misao, t)}
           categoryLabel={t('setup.foundation')}
           optional={installStatus.misao.optional}
-          running={false}
+          running={server.type === 'agent' && agentMisao.installing}
         >
           {server.type === 'local' && <MisaoServicePanel onChanged={refresh} />}
+          {server.type === 'agent' && <AgentMisaoPanel item={installStatus.misao} state={agentMisao} onInstall={() => { void agentMisao.install(); }} />}
         </StepRow>
       )}
 

@@ -31,6 +31,8 @@ export interface MisaoMuxClientOptions {
   connectAttachClient: () => Promise<MisaoAttachClient>;
 }
 
+export const MISAO_CAPS: MuxCapabilities = { changeEvents: true, agentState: false, independentClients: true, copyMode: false };
+
 const OK: ExecResult = { stdout: '', stderr: '', code: 0 };
 
 const unsupported = (operation: string): MuxOperationUnsupportedError => new MuxOperationUnsupportedError('misao', operation);
@@ -42,7 +44,7 @@ const unsupported = (operation: string): MuxOperationUnsupportedError => new Mux
  */
 export class MisaoMuxClient implements IMuxClient {
   readonly kind: MuxDriverKind = 'misao';
-  readonly caps: MuxCapabilities = { changeEvents: true, agentState: false, independentClients: true, copyMode: false };
+  readonly caps: MuxCapabilities = MISAO_CAPS;
   readonly supportsPaneLabels = true;
 
   private readonly changeEvents: MisaoChangeEvents;

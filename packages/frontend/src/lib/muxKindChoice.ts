@@ -4,7 +4,7 @@ import type { UnavailableMuxKind } from './fetchServerSessions';
 import { errorMessageOf } from './apiResult';
 
 /** i18n keys  of why a kind cannot be picked right now. */
-export type MuxKindReason = 'misaoUnreachable' | 'misaoIncompatible' | 'misaoNotRegistered' | 'tmuxMissing' | 'unavailable';
+export type MuxKindReason = 'misaoUnreachable' | 'misaoIncompatible' | 'misaoNotRegistered' | 'misaoNotInstalled' | 'tmuxMissing' | 'unavailable';
 
 export interface MuxKindAvailability {
   ok: boolean;
@@ -19,7 +19,7 @@ export type MuxAvailabilityState =
   | { status: 'error' }
   | { status: 'ready'; unavailable: readonly UnavailableMuxKind[] };
 
-/** The kinds a server offers for a new window: both on a local server, tmux only elsewhere. */
+/** The kinds a server offers for a new window: misao and tmux on a local or an agent server, tmux only elsewhere. */
 export function selectableMuxKinds(server: { type: string }): MuxDriverKind[] {
   return defaultMuxOptions(server.type);
 }
@@ -31,6 +31,7 @@ export function muxKindReason(kind: MuxDriverKind, hubReason: string): MuxKindRe
     case 'daemon_unreachable': return 'misaoUnreachable';
     case 'protocol_incompatible': return 'misaoIncompatible';
     case 'driver_not_registered': return 'misaoNotRegistered';
+    case 'not_installed': return 'misaoNotInstalled';
     default: return 'unavailable';
   }
 }
@@ -92,6 +93,11 @@ export function isMuxKindUnavailable(res: unknown): res is { error: 'mux_kind_un
   if (typeof res !== 'object' || res === null) return false;
   const r = res as Record<string, unknown>;
   return r['error'] === 'mux_kind_unavailable' && (r['kind'] === 'tmux' || r['kind'] === 'misao') && typeof r['reason'] === 'string';
+}
+
+/** The hub's 409 for a misao window asked for on a server that has no misao: installable, after the operator agrees. */
+export function isMisaoNotInstalled(res: unknown): boolean {
+  return isMuxKindUnavailable(res) && res.kind === 'misao' && res.reason === 'not_installed';
 }
 
 /** Translates `key` (i18n options are strings only here). */

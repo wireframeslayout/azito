@@ -52,24 +52,24 @@ describe('MuxDriverRegistry (driver probe)', () => {
     const tmux = driver('tmux');
     const misao = driver('misao');
     registry.register('tmux', tmux);
-    registry.register('misao', misao, (server) => (server.type === 'local' ? { available: true } : { available: false, reason: 'remote_unsupported' }));
+    registry.register('misao', misao, (server) => (server.type === 'local' ? { available: true } : { available: false, reason: 'not_installed' }));
     expect(registry.resolveKind('misao', { type: 'local' })).toBe(misao);
     expect(registry.resolveKind('tmux', { type: 'local' })).toBe(tmux);
-    expect(registry.availabilityFor('misao', { type: 'agent' })).toEqual({ available: false, reason: 'remote_unsupported' });
+    expect(registry.availabilityFor('misao', { type: 'agent' })).toEqual({ available: false, reason: 'not_installed' });
     expect(() => registry.resolveKind('misao', { type: 'agent' })).toThrow(MuxDriverUnavailableError);
     expect(registry.resolve({ defaultMux: 'misao' as const, type: 'local' }).caps).toBe(misao.caps);
   });
 
   it('reports the probe verdict and throws it from resolve', () => {
     const registry = new MuxDriverRegistry();
-    registry.register('misao', driver('misao'), (server) => (server.type === 'local' ? { available: true } : { available: false, reason: 'remote_unsupported' }));
+    registry.register('misao', driver('misao'), (server) => (server.type === 'local' ? { available: true } : { available: false, reason: 'not_installed' }));
     expect(registry.availability({ defaultMux: 'misao' as const, type: 'local' })).toEqual({ available: true });
-    expect(registry.availability({ defaultMux: 'misao' as const, type: 'agent' })).toEqual({ available: false, reason: 'remote_unsupported' });
+    expect(registry.availability({ defaultMux: 'misao' as const, type: 'agent' })).toEqual({ available: false, reason: 'not_installed' });
     try {
       registry.resolve({ defaultMux: 'misao' as const, type: 'agent' });
       expect.unreachable();
     } catch (err) {
-      expect((err as MuxDriverUnavailableError).reason).toBe('remote_unsupported');
+      expect((err as MuxDriverUnavailableError).reason).toBe('not_installed');
     }
   });
 
@@ -94,8 +94,10 @@ describe('MuxDriverRegistry (driver probe)', () => {
 });
 
 describe('MuxDriverRegistry (usable kinds)', () => {
+  /** misao as the hub registers it: every local server hosts it, an agent server only where it was set up. */
+  const hostedOn = (agents: string[]) => (server: { type?: string; name?: string }) => server.type !== 'agent' || (server.name !== undefined && agents.includes(server.name));
   const probeOf = (connected: () => boolean) => (server: { type?: string }) => {
-    if (server.type !== undefined && server.type !== 'local') return { available: false, reason: 'remote_unsupported' } as const;
+    if (server.type !== undefined && server.type !== 'local') return { available: false, reason: 'not_installed' } as const;
     return connected() ? { available: true } as const : { available: false, reason: 'daemon_unreachable' } as const;
   };
 
@@ -103,7 +105,7 @@ describe('MuxDriverRegistry (usable kinds)', () => {
     let connected = false;
     const registry = new MuxDriverRegistry();
     registry.register('tmux', driver('tmux'));
-    registry.register('misao', driver('misao'), probeOf(() => connected));
+    registry.register('misao', driver('misao'), probeOf(() => connected), hostedOn([]));
     expect(registry.usableKinds({ defaultMux: 'tmux', type: 'local' })).toEqual(['tmux']);
     connected = true;
     expect(registry.usableKinds({ defaultMux: 'tmux', type: 'local' })).toEqual(['tmux', 'misao']);
@@ -114,7 +116,7 @@ describe('MuxDriverRegistry (usable kinds)', () => {
     let connected = false;
     const registry = new MuxDriverRegistry();
     registry.register('tmux', driver('tmux'));
-    registry.register('misao', driver('misao'), probeOf(() => connected));
+    registry.register('misao', driver('misao'), probeOf(() => connected), hostedOn([]));
     const local = { defaultMux: 'tmux' as const, type: 'local' as const };
     expect(registry.supportedKinds(local)).toEqual(['tmux', 'misao']);
     expect(registry.downKinds(local)).toEqual([{ kind: 'misao', reason: 'daemon_unreachable' }]);
@@ -124,11 +126,23 @@ describe('MuxDriverRegistry (usable kinds)', () => {
     expect(registry.downKinds({ defaultMux: 'tmux', type: 'agent' })).toEqual([]);
   });
 
-  it('never lists misao for an agent or ssh server, whatever the daemon state', () => {
+  it('lists misao on an agent server only where it is hosted, so a server without it has no unavailable noise', () => {
     const registry = new MuxDriverRegistry();
     registry.register('tmux', driver('tmux'));
-    registry.register('misao', driver('misao'), probeOf(() => true));
-    expect(registry.usableKinds({ defaultMux: 'tmux', type: 'agent' })).toEqual(['tmux']);
+    registry.register('misao', driver('misao'), () => ({ available: false, reason: 'not_installed' }), hostedOn(['a-with-misao']));
+    const without = { defaultMux: 'tmux' as const, type: 'agent' as const, name: 'a-without' };
+    const withMisao = { defaultMux: 'tmux' as const, type: 'agent' as const, name: 'a-with-misao' };
+    expect(registry.supportedKinds(without)).toEqual(['tmux']);
+    expect(registry.downKinds(without)).toEqual([]);
+    expect(registry.supportedKinds(withMisao)).toEqual(['tmux', 'misao']);
+    expect(registry.downKinds(withMisao)).toEqual([{ kind: 'misao', reason: 'not_installed' }]);
+  });
+
+  it('always lists the default kind of an agent server, hosted or not, so its failure surfaces', () => {
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', driver('tmux'));
+    registry.register('misao', driver('misao'), () => ({ available: false, reason: 'not_installed' }), hostedOn([]));
+    expect(registry.supportedKinds({ defaultMux: 'misao', type: 'agent', name: 'a' })).toEqual(['misao', 'tmux']);
   });
 
   it('keeps the default kind listed when it is down, so its failure surfaces', () => {

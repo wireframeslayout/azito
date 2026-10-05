@@ -19,6 +19,9 @@ vi.mock('./useServerStatuses', () => ({
 vi.mock('./useToast', () => ({
   useToast: () => ({ showToast: vi.fn() }),
 }));
+vi.mock('./useMisaoInstallOffer', () => ({
+  useMisaoInstallOffer: () => <T,>(_serverName: string, create: () => Promise<T>) => create(),
+}));
 
 import { buildAgentCommand, isInsufficientResources } from './useAddWindowModal';
 

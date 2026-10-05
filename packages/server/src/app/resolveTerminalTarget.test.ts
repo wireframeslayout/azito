@@ -59,8 +59,8 @@ describe('resolveTerminalTarget (windowId)', () => {
     expect(await resolveTerminalTarget(params({ windowId: '10' }), deps)).toEqual({ server: servers.misaosrv, ref: { kind: 'tmux', workspace: 'ws', window: 'name' } });
   });
 
-  it('rejects a misao row on an agent server (it hosts tmux only)', async () => {
-    expect(await resolveTerminalTarget(params({ windowId: '12' }), deps)).toBeNull();
+  it('accepts a misao row on an agent server (its misao runs through the agent)', async () => {
+    expect(await resolveTerminalTarget(params({ windowId: '12' }), deps)).toEqual({ server: servers.agentsrv, ref: MISAO_REF });
   });
 });
 
@@ -69,13 +69,12 @@ describe('resolveTerminalTarget', () => {
     expect(await resolveTerminalTarget(params({ serverName: 'tmuxsrv', ref: encoded(TMUX_REF) }), deps)).toEqual({ server: servers.tmuxsrv, ref: TMUX_REF });
   });
 
-  it('rejects a misao ref on a tmux-only (agent) server', async () => {
-    expect(await resolveTerminalTarget(params({ serverName: 'agentsrv', ref: encoded(MISAO_REF) }), deps)).toBeNull();
+  it('accepts a misao ref on an agent server', async () => {
+    expect(await resolveTerminalTarget(params({ serverName: 'agentsrv', ref: encoded(MISAO_REF) }), deps)).toEqual({ server: servers.agentsrv, ref: MISAO_REF });
   });
 
-  it('accepts a tmux ref on a local misao-default server, and rejects a misao ref on an agent server', async () => {
+  it('accepts a tmux ref on a local misao-default server', async () => {
     expect(await resolveTerminalTarget(params({ serverName: 'misaosrv', ref: encoded(TMUX_REF) }), deps)).toEqual({ server: servers.misaosrv, ref: TMUX_REF });
-    expect(await resolveTerminalTarget(params({ serverName: 'agentsrv', ref: encoded(MISAO_REF) }), deps)).toBeNull();
   });
 
   it('rejects a ref when the server is unknown', async () => {

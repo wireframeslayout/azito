@@ -31,12 +31,11 @@ async function buildApp(defaultMux: ServerConfig['defaultMux'], registerMisao = 
 }
 
 describe('window registration with a misao ref', () => {
-  it.each(URLS)('%s rejects a misao ref on a tmux-only (agent) server even with tmux_target', async (url) => {
+  it.each(URLS)('%s accepts a misao ref on an agent server: its misao runs through the agent', async (url) => {
     const { app, windowRepo } = await buildApp('tmux', true, 'agent');
-    const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', tmux_target: 'a:b', ref: MISAO_REF } });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual({ error: 'Invalid ref' });
-    expect(windowRepo.findByServerAndTarget).not.toHaveBeenCalled();
+    const res = await app.inject({ method: 'POST', url, payload: { server_name: 's', ref: MISAO_REF } });
+    expect(res.statusCode).toBe(200);
+    expect(windowRepo.findByServerAndTarget).toHaveBeenCalledWith('s', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8');
   });
 });
 

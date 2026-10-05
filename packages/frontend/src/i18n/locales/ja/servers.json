@@ -125,7 +125,9 @@
     "sessionsLabel": "セッション",
     "sessionsSummary": "セッション {{sessionCount}} · ウィンドウ {{windowCount}}",
     "hubVersionLabel": "Hub バージョン",
-    "muxRuntimeNote": "tmux を使うときだけ有効"
+    "muxRuntimeNote": "tmux を使うときだけ有効",
+    "misaoNotInstalled": "このサーバーには misao が入っていません",
+    "misaoNotInstalledSub": "セットアップの「misao をインストール」から入れられます。ハブが持っている misao をエージェント経由で送ります。"
   },
   "setup": {
     "title": "セットアップ",
@@ -178,7 +180,8 @@
     "rollingBack": "mux runtime を system に戻しています…",
     "rolledBack": "system に戻しました",
     "installComplete": "完了 v{{version}}",
-    "tmuxOptionalNote": "任意。tmux の窓を使う場合だけ必要です（AZITO のペインは同梱の misao で動きます）"
+    "tmuxOptionalNote": "任意。tmux の窓を使う場合だけ必要です（AZITO のペインは同梱の misao で動きます）",
+    "misaoInstallFailedOnAdd": "エージェントは導入できましたが、misao を導入できませんでした: {{error}}。サーバーのセットアップから導入してください。"
   },
   "windows": {
     "noSessions": "このサーバーにセッションはありません。",
@@ -259,5 +262,21 @@
       "unknown": "このハブでは misao のサービスを管理できません。"
     },
     "stateActiveUnreachable": "起動中（接続できません）"
+  },
+  "agentMisao": {
+    "install": "misao をインストール",
+    "retry": "もう一度試す",
+    "installing": "misao をインストール中…",
+    "installDesc": "このハブに同梱の misao をエージェント経由でサーバーへ送り、サービスとして起動します。サーバー側では何もダウンロードしません。",
+    "notInstallable": "このハブは misao を同梱していないため、サーバーに導入できません。",
+    "failed": "misao を導入できませんでした",
+    "updateAvailable": "稼働中の misao（{{running}}）が同梱版（{{bundled}}）と異なります",
+    "updateAvailableSub": "自動では切り替えません。切り替えるとこのサーバーのペインがすべて終了するため、作業が動いていないときに更新してください。",
+    "step": {
+      "inspect": "サーバーを確認中…",
+      "transfer": "misao をサーバーへ送信中…",
+      "prepare": "misao を準備中…",
+      "start": "misao を起動中…"
+    }
   }
 }

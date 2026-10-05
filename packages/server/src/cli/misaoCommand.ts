@@ -3,7 +3,8 @@ import type { MisaoServiceStatus } from '@azito/shared';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
 import { createMisaoServiceController, runCommand } from '../modules/system/misao/MisaoServiceController';
-import { MisaoServiceError, MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { MisaoServiceError } from '../modules/system/misao/MisaoServiceError';
 import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 
 const USAGE = `Usage: azito misao <command> [options]

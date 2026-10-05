@@ -19,6 +19,10 @@ import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
+import { createMisaoRelay } from './misaoRelay';
+import misaoRoutes from './misaoRoutes';
+import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
+import { buildServicePath } from '../modules/system/misao/misaoPaths';
 
 // ─── Environment validation ───
 
@@ -59,6 +63,25 @@ function resolveVersion(): string {
 }
 const agentVersion = resolveVersion();
 
+/** What the hub's misao installer needs to know about this host: the node and node-pty this agent runs on, and its PATH. */
+function describeMisaoHost(): AgentMisaoHost {
+  const homeDir = os.homedir();
+  let nodePtyDir: string | null = null;
+  try {
+    nodePtyDir = path.dirname(require.resolve('node-pty/package.json'));
+  } catch {
+    nodePtyDir = null;
+  }
+  return {
+    homeDir,
+    nodePath: process.execPath,
+    servicePath: buildServicePath(process.env, homeDir, fs.existsSync),
+    nodePtyDir,
+    platform: process.platform,
+    arch: process.arch,
+  };
+}
+
 // ─── Graceful shutdown ───
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
@@ -90,11 +113,24 @@ async function main(): Promise<void> {
   });
 
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  // Agent servers are tmux-only: the misao mux is local-only (see parseMuxInput / POST /api/servers).
+  // The tmux endpoints (/api/tmux, mode=terminal) are tmux's. misao is reached through its own relay (mode=misao).
   const muxKind = 'tmux';
   const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
 
   const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '');
+
+  // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
+  // socket path disables the relay (tmux keeps working) rather than stopping the agent.
+  let misaoSocket: AgentMisaoSocket | null = null;
+  try {
+    misaoSocket = resolveAgentMisaoSocket(process.env, os.homedir());
+  } catch (err) {
+    app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+  }
+  const relayMisao = createMisaoRelay(misaoSocket, app.log);
+
+  // Registered after the auth hook above, so it is covered by it like every other /api route.
+  await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost() });
 
   // WebSocket routes
   await app.register(async (fastify) => {
@@ -129,6 +165,12 @@ async function main(): Promise<void> {
         const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
 
         handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
+        return;
+      }
+
+      if (mode === 'misao') {
+        // Same token check as every route (the onRequest hook above). Relays to this agent's own socket only.
+        relayMisao(socket);
         return;
       }
 

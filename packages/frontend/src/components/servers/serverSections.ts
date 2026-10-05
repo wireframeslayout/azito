@@ -34,6 +34,12 @@ export interface InstallStatusItem {
   optional?: boolean;
   /** misao only: the daemon's release version (`version` is its protocol version). */
   daemonVersion?: string;
+  /** misao on an agent server only: this hub carries a misao it can install there. */
+  installable?: boolean;
+  /** misao on an agent server only: the release this hub would install. */
+  bundledVersion?: string;
+  /** misao on an agent server only: the daemon runs another release than the bundled one (it is not switched on its own). */
+  updateAvailable?: boolean;
 }
 
 export interface InstallStatusResponse {
@@ -51,6 +57,7 @@ const MISAO_DETAIL_KEYS: Record<string, string> = {
   daemon_unreachable: 'overview.misaoUnreachable',
   protocol_incompatible: 'overview.misaoIncompatible',
   driver_not_registered: 'overview.misaoDriverNotRegistered',
+  not_installed: 'overview.misaoNotInstalled',
 };
 
 /** Turns the server's machine-readable misao status into what StepRow prints (protocol label, readable detail). */

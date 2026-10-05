@@ -4,11 +4,11 @@ import type { MuxDriverKind, MuxRuntime } from '@azito/shared';
 export const TMUX_RUNTIME_OPTIONS: readonly MuxRuntime[] = ['system', 'managed'];
 
 /**
- * Default mux kinds the server form offers. misao is local-only (agent/ssh servers stay on tmux), so only a
- * local server gets a choice; for the others the field is not shown.
+ * Default mux kinds the server form offers: a local and an agent server can both run misao (an agent's through its
+ * agent, installed with it) or tmux. Any other type stays on tmux.
  */
 export function defaultMuxOptions(serverType: string): MuxDriverKind[] {
-  return serverType === 'local' ? ['misao', 'tmux'] : ['tmux'];
+  return serverType === 'local' || serverType === 'agent' ? ['misao', 'tmux'] : ['tmux'];
 }
 
 /** What the default-mux field tells the user about the selection: entering misao or leaving it. */
@@ -27,7 +27,7 @@ export function tmuxRuntimeNotice(original: MuxRuntime | undefined, value: MuxRu
   return original && original !== value ? 'tmuxMigration' : null;
 }
 
-/** A stored default mux the form does not offer (e.g. misao on a non-local server) starts as tmux. */
+/** A stored default mux the form does not offer starts as tmux. */
 export function editableDefaultMux(stored: MuxDriverKind, options: readonly MuxDriverKind[]): MuxDriverKind {
   return options.find((option) => option === stored) ?? 'tmux';
 }

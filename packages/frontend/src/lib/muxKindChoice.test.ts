@@ -20,6 +20,7 @@ describe('muxKindReason', () => {
     expect(muxKindReason('misao', 'daemon_unreachable')).toBe('misaoUnreachable');
     expect(muxKindReason('misao', 'protocol_incompatible')).toBe('misaoIncompatible');
     expect(muxKindReason('misao', 'driver_not_registered')).toBe('misaoNotRegistered');
+    expect(muxKindReason('misao', 'not_installed')).toBe('misaoNotInstalled');
     expect(muxKindReason('misao', 'driver_error')).toBe('unavailable');
     expect(muxKindReason('tmux', 'binary_missing')).toBe('tmuxMissing');
     expect(muxKindReason('tmux', 'driver_error')).toBe('unavailable');
@@ -69,9 +70,19 @@ describe('initial and effective kind', () => {
 });
 
 describe('muxKindSelectModel', () => {
-  it('is hidden on a server that offers tmux only', () => {
-    const model = muxKindSelectModel(agent, ready(), null);
+  it('is hidden on a server of another type, which offers tmux only', () => {
+    const model = muxKindSelectModel({ type: 'ssh', defaultMux: 'tmux' as const }, ready(), null);
     expect(model.visible).toBe(false);
+    expect(model.value).toBe('tmux');
+  });
+
+  it('offers both kinds on an agent server too, starting on its default', () => {
+    expect(muxKindSelectModel(agent, ready(), null)).toMatchObject({ visible: true, kinds: ['misao', 'tmux'], value: 'tmux' });
+  });
+
+  it('shows misao as not installed on an agent server the hub reports it missing on', () => {
+    const model = muxKindSelectModel(agent, ready([{ kind: 'misao', reason: 'not_installed' }]), null);
+    expect(model.availability.misao).toEqual({ ok: false, reason: 'misaoNotInstalled' });
     expect(model.value).toBe('tmux');
   });
 

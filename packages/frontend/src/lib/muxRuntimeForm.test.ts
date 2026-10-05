@@ -6,8 +6,11 @@ describe('defaultMuxOptions', () => {
     expect(defaultMuxOptions('local')).toEqual(['misao', 'tmux']);
   });
 
-  it('offers only tmux for agent or ssh servers', () => {
-    expect(defaultMuxOptions('agent')).toEqual(['tmux']);
+  it('offers misao and tmux for an agent server too: its misao runs through the agent', () => {
+    expect(defaultMuxOptions('agent')).toEqual(['misao', 'tmux']);
+  });
+
+  it('offers only tmux for any other server type', () => {
     expect(defaultMuxOptions('ssh')).toEqual(['tmux']);
   });
 });
@@ -19,7 +22,7 @@ describe('editableDefaultMux', () => {
   });
 
   it('starts as tmux for a kind the form does not offer', () => {
-    expect(editableDefaultMux('misao', defaultMuxOptions('agent'))).toBe('tmux');
+    expect(editableDefaultMux('misao', defaultMuxOptions('ssh'))).toBe('tmux');
   });
 });
 

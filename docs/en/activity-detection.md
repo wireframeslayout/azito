@@ -549,7 +549,7 @@ socket), which checks the `pane.state`-driven working row and the finished row p
 
 ## 13. misao windows
 
-Local servers whose default mux (`servers.default_mux`) is `misao` are served by the misao daemon instead of
+Windows whose `mux_ref.kind` is `misao` (local servers, and agent servers that have misao: each through its own daemon connection and its own `MisaoActivityBridge`) are served by the misao daemon instead of
 tmux. For tmux servers nothing below is created and the tmux behavior above is unchanged.
 
 - **No supervisor.** `shouldSupervise(serverType, windowType, muxKind)` is false for a misao

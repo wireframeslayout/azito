@@ -12,7 +12,6 @@ import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoConnection, connectDedicatedMisaoClient } from './MisaoConnection';
 import { MisaoMuxClient } from './MisaoMuxClient';
-import { selectServersSupportingMux } from '../../servers/muxKinds';
 import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
@@ -52,7 +51,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
-    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, socketPath) });
+    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
     await connection.start();
     expect(connection.availability()).toEqual({ available: true });
   });
@@ -237,7 +236,6 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
   });
 
   it('notifies on changes once change hooks are installed', async () => {
-    expect(selectServersSupportingMux([server], 'misao')).toHaveLength(1);
     await client.installChangeHooks(server);
     onChange.mockClear();
     await client.openWindow(server, 'azm-ws2', 'third', { exactName: true });

@@ -134,7 +134,7 @@
     "hostPlaceholder": "e.g. user@hostname or ssh-config-alias",
     "autoInstall": "Auto-install agent",
     "autoInstallDesc": "Connects via SSH, installs the agent process, and manages it automatically.",
-    "autoInstallReq": "Requires: Node.js 24+, tmux, Tailscale on the remote server.",
+    "autoInstallReq": "Requires: Node.js 24+ and Tailscale on the remote server. tmux is optional (misao is installed with the agent).",
     "type": "Type",
     "agent": "Agent",
     "agentHostPlaceholder": "e.g. 100.64.0.2 (Tailscale IP)",
@@ -322,7 +322,14 @@
       "misaoIncompatible": "The misao daemon version does not match this hub",
       "misaoNotRegistered": "misao is not enabled",
       "tmuxMissing": "tmux is not installed",
-      "unavailable": "Unavailable"
+      "unavailable": "Unavailable",
+      "misaoNotInstalled": "misao is not installed on this server"
     }
+  },
+  "misaoInstall": {
+    "title": "Install misao on this server?",
+    "message": "{{server}} has no misao yet. The hub sends the misao bundled with it to the server through its agent and starts it as a service (nothing is downloaded on the server). The window is created once it is running.",
+    "confirm": "Install misao",
+    "installing": "Installing misao on {{server}}…"
   }
 }
