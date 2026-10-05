@@ -41,13 +41,13 @@ jobs:
             --arch ${{ matrix.arch }} \
             --repo ${{ github.repository }}
 
-      # The bundled misao runs on the bundled node with the bundled node-pty — the same way the installed
-      # service will start it — so a broken asset or a missing native module fails the release here.
+      # Runs the bundled misao the way the installed service does (bundled node + node-pty, a mode-700 data dir),
+      # checks that server.info reports both versions, and stops it — a broken asset or native module fails the release here.
       - name: Smoke-test bundled misao
         run: |
           SMOKE=$(mktemp -d)
           tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
-          "$SMOKE/node" "$SMOKE/misao/misao.mjs" --version
+          bash packages/server/scripts/smoke-misao.sh "$SMOKE"
 
       - name: Verify no data/ in tarball
         run: |
@@ -62,7 +62,7 @@ jobs:
       # platform-independent, so linting it once on Linux is enough.
       - name: shellcheck install.sh
         if: runner.os == 'Linux'
-        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh
+        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh
 
       - uses: actions/upload-artifact@v4
         with:

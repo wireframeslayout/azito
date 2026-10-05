@@ -163,6 +163,22 @@ describe('MisaoServiceService', () => {
       expect(readEnvValue(paths.hubEnvFile, 'MISAO_SOCKET')).toBe(paths.socket);
     });
 
+    it('also asks before moving the hub off a daemon answering on the default socket (MISAO_SOCKET unset)', async () => {
+      const defaultSocket = path.join(prefix, '.misao', 'misao.sock');
+      fs.mkdirSync(path.dirname(defaultSocket), { recursive: true });
+      const own = net.createServer();
+      await new Promise<void>((resolve) => own.listen(defaultSocket, resolve));
+      try {
+        await expect(newService().install()).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining(defaultSocket) });
+        expect(controller.calls).toEqual([]);
+
+        await newService().install({ replaceSocketSetting: true });
+        expect(readEnvValue(paths.hubEnvFile, 'MISAO_SOCKET')).toBe(paths.socket);
+      } finally {
+        await new Promise((resolve) => own.close(resolve));
+      }
+    });
+
     it('fails with a clear error when the daemon does not open its socket', async () => {
       controller.start = async () => { controller.calls.push('start'); controller.current = 'active'; };
       await expect(newService({ readyTimeoutMs: 300 }).install()).rejects.toMatchObject({ code: 'daemon_not_ready' });
@@ -204,6 +220,77 @@ describe('MisaoServiceService', () => {
       await expect(newService().update()).rejects.toThrow();
       expect(controller.calls).toEqual([]);
       expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
+    });
+
+    describe('when the switch fails after the daemon was stopped', () => {
+      /** Makes the n-th call (1-based) of a controller method fail; later calls behave normally. */
+      function failCall(method: 'install' | 'start', nth: number): void {
+        const original = controller[method].bind(controller);
+        let calls = 0;
+        controller[method] = (async (...args: [string]) => {
+          calls += 1;
+          if (calls === nth) throw new Error(`${method} exploded`);
+          return original(...args);
+        }) as never;
+      }
+
+      it('puts the previous version back and starts it when re-registering the unit fails', async () => {
+        await installOld();
+        failCall('install', 1);
+
+        await expect(newService().update()).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('install exploded') });
+        expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
+        expect(controller.calls.at(-1)).toBe('start:0.1.0');
+        expect(controller.current).toBe('active');
+      });
+
+      it('puts the previous version back when start fails', async () => {
+        await installOld();
+        failCall('start', 1);
+
+        await expect(newService().update()).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('was restored and started') });
+        expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
+        expect(controller.current).toBe('active');
+      });
+
+      it('puts the previous version back when the new daemon never starts (service not running)', async () => {
+        await installOld();
+        const original = controller.start.bind(controller);
+        let starts = 0;
+        controller.start = async () => {
+          starts += 1;
+          if (starts === 1) { controller.calls.push('start:silent'); return; } // "started" but nothing listens, state stays inactive
+          await original();
+        };
+
+        await expect(newService({ readyTimeoutMs: 300 }).update()).rejects.toMatchObject({ code: 'update_failed' });
+        expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
+        expect(controller.current).toBe('active');
+      });
+
+      it('leaves a running but slow daemon alone and says how to revert by hand', async () => {
+        await installOld();
+        controller.start = async () => { controller.calls.push('start:slow'); controller.current = 'active'; };
+
+        const failure = await newService({ readyTimeoutMs: 300 }).update().catch((err: unknown) => err as Error);
+        expect(failure).toMatchObject({ code: 'update_failed' });
+        expect((failure as Error).message).toContain('ln -sfn 0.1.0');
+        expect(fs.readlinkSync(paths.current)).toBe(BUNDLED_VERSION);
+        expect(controller.calls.filter((c) => c.startsWith('start'))).toEqual(['start:slow']);
+      });
+
+      it('reports both failures and the manual steps when the restore fails too', async () => {
+        await installOld();
+        controller.start = async () => { throw new Error('start refused'); };
+
+        const failure = await newService().update().catch((err: unknown) => err as Error);
+        expect((failure as MisaoServiceError).code).toBe('update_failed');
+        expect((failure as Error).message).toContain('start refused');
+        expect((failure as Error).message).toContain('restoring 0.1.0 failed too');
+        expect((failure as Error).message).toContain('ln -sfn 0.1.0');
+        expect((failure as Error).message).toContain('azito misao start');
+        expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
+      });
     });
 
     it('does not stop a daemon that already runs the bundled version', async () => {

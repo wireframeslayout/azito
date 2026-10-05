@@ -1,4 +1,4 @@
-import type { MisaoServiceStatus, MisaoUnmanagedReason } from '@azito/shared';
+import type { MisaoServiceState, MisaoServiceStatus, MisaoUnmanagedReason } from '@azito/shared';
 
 /** Which controls the misao service row offers. */
 export type MisaoServiceMode =
@@ -12,6 +12,16 @@ export function misaoServiceMode(status: MisaoServiceStatus): MisaoServiceMode {
   if (!status.managed) return 'unmanaged';
   if (!status.serviceInstalled) return 'not_installed';
   return status.serviceState === 'active' ? 'running' : 'stopped';
+}
+
+/** The state the service chip shows. A service the manager calls active whose daemon does not answer is a warning, not "running". */
+export type MisaoServiceChipState = MisaoServiceState | 'activeUnreachable';
+
+/** Undefined while the service is not installed (the row shows "not installed" itself). */
+export function misaoServiceChipState(status: MisaoServiceStatus): MisaoServiceChipState | undefined {
+  if (!status.serviceState) return undefined;
+  if (status.serviceState === 'active' && !status.daemon.reachable) return 'activeUnreachable';
+  return status.serviceState;
 }
 
 /** Notices for the row, most urgent first (urgent → context → detail). Each key is an i18n key under `servers:misaoService.notice`. */

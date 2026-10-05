@@ -49,6 +49,8 @@ export function upsertEnvValue(filePath: string, key: string, value: string): vo
     lines.push(line, '');
   }
   fs.writeFileSync(filePath, lines.join('\n'));
+  // The file holds secrets (tokens): writeFileSync keeps an existing file's mode, so tighten one that was looser.
+  fs.chmodSync(filePath, 0o600);
 }
 
 export function resolveServerEnvPath(): string {

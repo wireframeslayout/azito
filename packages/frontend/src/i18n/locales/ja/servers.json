@@ -257,6 +257,7 @@
       "unsupportedPlatform": "systemd も launchd も無いため、misao のサービスは管理できません。",
       "invalidPrefix": "インストール先のパスが長すぎて、misao のソケットを作れません。",
       "unknown": "このハブでは misao のサービスを管理できません。"
-    }
+    },
+    "stateActiveUnreachable": "起動中（接続できません）"
   }
 }

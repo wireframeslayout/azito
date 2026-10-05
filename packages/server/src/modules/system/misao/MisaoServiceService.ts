@@ -14,7 +14,8 @@ export type MisaoServiceErrorCode =
   | 'not_managed'
   | 'custom_socket'
   | 'not_installed'
-  | 'daemon_not_ready';
+  | 'daemon_not_ready'
+  | 'update_failed';
 
 /** A refusal the caller can show as is: the service operation did not (fully) happen, and why. */
 export class MisaoServiceError extends Error {
@@ -159,6 +160,13 @@ export class MisaoServiceService {
       throw new MisaoServiceError('custom_socket', `MISAO_SOCKET in ${this.paths.hubEnvFile} points at another daemon (${readEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET')}). Installing the managed service would move the hub away from it; run \`azito misao install --replace-socket\` to do that on purpose.`);
     }
 
+    // MISAO_SOCKET unset means the hub uses the default socket. A daemon already answering there (a self-run one from the
+    // experimental days) would be left behind by the new setting, so that too needs an explicit go-ahead.
+    const defaultSocket = path.join(this.deps.homeDir ?? os.homedir(), '.misao', 'misao.sock');
+    if (this.socketSetting() === 'unset' && !opts.replaceSocketSetting && await isSocketListening(defaultSocket)) {
+      throw new MisaoServiceError('custom_socket', `A misao daemon is already running on the default socket (${defaultSocket}), which this hub uses while MISAO_SOCKET is unset. Installing the managed service would move the hub away from it; run \`azito misao install --replace-socket\` to do that on purpose.`);
+    }
+
     this.ensureRootDir();
     this.extractVersion(bundle);
     if (!this.installedVersion()) this.switchCurrent(bundle.version);
@@ -205,13 +213,42 @@ export class MisaoServiceService {
     // Already on the bundled version: nothing to switch, and stopping would close every pane for no reason.
     if (this.installedVersion() === bundle.version) return this.doStart();
 
+    const previous = this.installedVersion()!;
     this.extractVersion(bundle);
     await controller.stop();
-    this.switchCurrent(bundle.version);
-    await controller.install(this.renderUnit(bundle, controller));
-    await controller.start();
-    await this.waitUntilListening();
+    try {
+      this.switchCurrent(bundle.version);
+      await controller.install(this.renderUnit(bundle, controller));
+      await controller.start();
+      await this.waitUntilListening();
+    } catch (err) {
+      return this.recoverFromFailedUpdate(err, previous, bundle, controller);
+    }
     return this.status();
+  }
+
+  /**
+   * The daemon was stopped (its panes are gone) and the switch to the bundled version failed part-way. Put the previous
+   * version back and start it, then still report the failure: the update did not happen. If the new daemon is running but
+   * only slow to open its socket, it is left alone (restoring would kill a daemon that is about to be ready). If the restore
+   * fails too, both errors are reported with the manual steps.
+   */
+  private async recoverFromFailedUpdate(cause: unknown, previous: string, bundle: MisaoBundle, controller: MisaoServiceController): Promise<never> {
+    const causeText = cause instanceof Error ? cause.message : String(cause);
+    const manual = `To restore the previous version by hand: ln -sfn ${previous} ${this.paths.current} && azito misao start`;
+    if (cause instanceof MisaoServiceError && cause.code === 'daemon_not_ready' && (await controller.state()) === 'active') {
+      throw new MisaoServiceError('update_failed', `Updating misao to ${bundle.version}: ${causeText} The new daemon is running, so it was left as it is. Check the service log; ${manual}`);
+    }
+    try {
+      this.switchCurrent(previous);
+      await controller.install(this.renderUnit(bundle, controller));
+      await controller.start();
+      await this.waitUntilListening();
+    } catch (restoreErr) {
+      const restoreText = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+      throw new MisaoServiceError('update_failed', `Updating misao to ${bundle.version} failed (${causeText}) and restoring ${previous} failed too (${restoreText}). misao is not running and every pane has ended. ${manual}`);
+    }
+    throw new MisaoServiceError('update_failed', `Updating misao to ${bundle.version} failed (${causeText}). The previous version ${previous} was restored and started; its panes had already ended.`);
   }
 
   /** One install / start / update at a time: two of them interleaving could stop a daemon the other just started. */

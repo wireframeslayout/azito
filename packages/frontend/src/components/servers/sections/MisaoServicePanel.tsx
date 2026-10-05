@@ -1,13 +1,13 @@
 import { useTranslation } from 'react-i18next';
-import type { MisaoServiceState } from '@azito/shared';
 import { Button, Chip, Notice, Spinner } from '../../ui';
 import type { ChipTone } from '../../ui';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useMisaoService } from '../../../hooks/useMisaoService';
-import { misaoNotices, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice } from '../../../lib/misaoService';
+import { misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
 
-const STATE_CHIP: Record<MisaoServiceState, { key: string; tone: ChipTone }> = {
+const STATE_CHIP: Record<MisaoServiceChipState, { key: string; tone: ChipTone }> = {
   active: { key: 'stateActive', tone: 'green' },
+  activeUnreachable: { key: 'stateActiveUnreachable', tone: 'orange' },
   inactive: { key: 'stateInactive', tone: 'orange' },
   failed: { key: 'stateFailed', tone: 'red' },
   unknown: { key: 'stateUnknown', tone: 'default' },
@@ -58,6 +58,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
   const mode = misaoServiceMode(status);
   const versions = misaoVersions(status);
   const notices = misaoNotices(status);
+  const chipState = misaoServiceChipState(status);
 
   const handleInstall = async (): Promise<void> => {
     if (status.socketSetting === 'custom') {
@@ -96,8 +97,8 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
         <span style={mutedStyle}>{t('misaoService.service')}</span>
-        {status.serviceState
-          ? <Chip tone={STATE_CHIP[status.serviceState].tone}>{t(`misaoService.${STATE_CHIP[status.serviceState].key}`)}</Chip>
+        {chipState
+          ? <Chip tone={STATE_CHIP[chipState].tone}>{t(`misaoService.${STATE_CHIP[chipState].key}`)}</Chip>
           : <Chip tone="orange">{t('misaoService.stateNotInstalled')}</Chip>}
         {versions.bundled && <span style={{ ...mutedStyle, fontFamily: 'var(--mono)' }}>{t('misaoService.bundledVersion', { version: versions.bundled })}</span>}
         {versions.running && <span style={{ ...mutedStyle, fontFamily: 'var(--mono)' }}>{t('misaoService.runningVersion', { version: versions.running })}</span>}

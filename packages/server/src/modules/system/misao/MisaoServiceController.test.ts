@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LaunchdMisaoController, SystemdMisaoController, type CommandResult, type CommandRunner } from './MisaoServiceController';
-import { buildServicePath, resolveInstallPrefix, resolveMisaoPaths } from './misaoPaths';
+import { buildServicePath, hasMisaoToRelyOn, resolveInstallPrefix, resolveMisaoPaths } from './misaoPaths';
 import { readEnvValue, upsertEnvValue } from '../../../shared/envFile';
 
 function recorder(results: Record<string, Partial<CommandResult>> = {}): { run: CommandRunner; calls: string[] } {
@@ -99,6 +99,10 @@ describe('misaoPaths', () => {
     expect(() => resolveMisaoPaths(`/${'a'.repeat(100)}`)).toThrow(/107-byte limit/);
   });
 
+  it.each(['/home/my user/.azito', '/home/u/50%/.azito', '/home/u/a&b', '/home/u/<x>', '/home/u/it\'s', '/home/u/"q"', '/home/u/a\\b', '/home/u/$HOME'])('rejects the prefix %s (it would be re-interpreted in the unit / plist)', (prefix) => {
+    expect(() => resolveMisaoPaths(prefix)).toThrow(/must not contain/);
+  });
+
   it('rejects a relative prefix', () => {
     expect(() => resolveMisaoPaths('azito')).toThrow(/absolute/);
   });
@@ -116,10 +120,29 @@ describe('misaoPaths', () => {
   });
 });
 
+describe('hasMisaoToRelyOn', () => {
+  const none = (): boolean => false;
+  it('is false with neither a service definition nor MISAO_SOCKET, so a fresh install without misao starts on tmux', () => {
+    expect(hasMisaoToRelyOn({}, '/home/u', none)).toBe(false);
+  });
+  it('is true once MISAO_SOCKET is set or either service definition exists', () => {
+    expect(hasMisaoToRelyOn({ MISAO_SOCKET: '/s' }, '/home/u', none)).toBe(true);
+    expect(hasMisaoToRelyOn({}, '/home/u', (f) => f === '/home/u/.config/systemd/user/azito-misao.service')).toBe(true);
+    expect(hasMisaoToRelyOn({}, '/home/u', (f) => f === '/home/u/Library/LaunchAgents/com.azito.misao.plist')).toBe(true);
+  });
+});
+
 describe('upsertEnvValue', () => {
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aze-')); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  it('tightens an existing file that was more permissive to mode 600', () => {
+    const file = path.join(dir, '.env');
+    fs.writeFileSync(file, 'A=1\n', { mode: 0o644 });
+    upsertEnvValue(file, 'MISAO_SOCKET', '/s');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+  });
 
   it('creates a missing file with mode 600', () => {
     const file = path.join(dir, 'hub', '.env');

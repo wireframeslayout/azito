@@ -1,6 +1,7 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import systemRoutes from '../routes';
+import { OPERATOR_PRINCIPAL } from '../../../shared/auth/Principal';
 import { MisaoServiceError, type MisaoServiceService } from '../misao/MisaoServiceService';
 
 const STATUS = { managed: true, serviceInstalled: true, daemon: { reachable: true }, socketSetting: 'managed', needsHubRestart: false, updateAvailable: false };
@@ -17,6 +18,7 @@ describe('misao service routes', () => {
   beforeEach(async () => {
     for (const fn of Object.values(misaoService)) fn.mockReset().mockResolvedValue(STATUS);
     app = Fastify();
+    app.addHook('onRequest', async (request) => { request.principal = OPERATOR_PRINCIPAL; });
     await app.register(systemRoutes, {
       systemUpdateService: {} as never,
       channelResolver: {} as never,

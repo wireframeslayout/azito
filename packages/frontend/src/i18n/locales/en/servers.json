@@ -257,6 +257,7 @@
       "unsupportedPlatform": "This host has neither systemd nor launchd, so the misao service cannot be managed.",
       "invalidPrefix": "The install path is too long to create the misao socket.",
       "unknown": "This hub cannot manage the misao service."
-    }
+    },
+    "stateActiveUnreachable": "Running (not reachable)"
   }
 }

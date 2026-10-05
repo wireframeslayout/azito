@@ -401,7 +401,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "Usage: azito {start|stop|status|token show|token rotate|misao status|misao install|misao update|version}"
+    echo "Usage: azito {start|stop|status|token show|token rotate|misao status|misao install|misao update|misao start|version}"
     ;;
 esac
 WRAPPER

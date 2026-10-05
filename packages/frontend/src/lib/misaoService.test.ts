@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MisaoServiceStatus } from '@azito/shared';
-import { misaoNotices, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
+import { misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
 
 function status(overrides: Partial<MisaoServiceStatus> = {}): MisaoServiceStatus {
   return {
@@ -66,5 +66,14 @@ describe('misaoVersions / unmanagedReasonKey', () => {
     expect(unmanagedReasonKey('unsupported_platform')).toBe('unsupportedPlatform');
     expect(unmanagedReasonKey('invalid_prefix')).toBe('invalidPrefix');
     expect(unmanagedReasonKey(undefined)).toBe('unknown');
+  });
+});
+
+describe('misaoServiceChipState', () => {
+  it('shows a service the manager calls active but whose daemon does not answer as a warning, not running', () => {
+    expect(misaoServiceChipState(status({ daemon: { reachable: false, detail: 'daemon_unreachable' } }))).toBe('activeUnreachable');
+    expect(misaoServiceChipState(status())).toBe('active');
+    expect(misaoServiceChipState(status({ serviceState: 'failed', daemon: { reachable: false } }))).toBe('failed');
+    expect(misaoServiceChipState(status({ serviceInstalled: false, serviceState: undefined }))).toBeUndefined();
   });
 });

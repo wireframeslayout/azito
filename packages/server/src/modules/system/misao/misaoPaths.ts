@@ -3,6 +3,8 @@ import path from 'path';
 /** sockaddr_un.sun_path on Linux holds 108 bytes including the terminating NUL (same limit as @misao/sdk). */
 const MAX_SOCKET_PATH_BYTES = 107;
 
+const UNSAFE_PATH_CHARS = /[\s%&<>"'`\\$]/;
+
 export const MISAO_SYSTEMD_UNIT = 'azito-misao';
 export const MISAO_LAUNCHD_LABEL = 'com.azito.misao';
 
@@ -30,6 +32,11 @@ export function hubEnvFilePath(prefix: string): string {
 
 export function resolveMisaoPaths(prefix: string): MisaoPaths {
   if (!path.isAbsolute(prefix)) throw new Error(`AZITO prefix must be an absolute path: ${prefix}`);
+  // The prefix lands in a systemd unit and a launchd plist, where whitespace, %, & < > and quotes would be re-interpreted.
+  // Rejecting them is simpler and safer than escaping for two formats.
+  if (UNSAFE_PATH_CHARS.test(prefix)) {
+    throw new Error(`AZITO prefix must not contain whitespace, %, &, <, >, quotes or backslashes (it is written into the service definition): ${prefix}`);
+  }
   const root = path.join(prefix, 'misao');
   const socket = path.join(root, 'misao.sock');
   const bytes = Buffer.byteLength(socket);
@@ -76,4 +83,20 @@ export function buildServicePath(env: NodeJS.ProcessEnv, homeDir: string, exists
   const inherited = (env.PATH ?? '').split(path.delimiter).filter((dir) => dir !== '');
   const system = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'];
   return [...new Set([...preferred, ...inherited, ...system])].join(path.delimiter);
+}
+
+/** Where the managed service's definition lives on this host (systemd user unit / launchd agent). */
+export function misaoServiceDefinitionPaths(homeDir: string): string[] {
+  return [
+    path.join(homeDir, '.config', 'systemd', 'user', `${MISAO_SYSTEMD_UNIT}.service`),
+    path.join(homeDir, 'Library', 'LaunchAgents', `${MISAO_LAUNCHD_LABEL}.plist`),
+  ];
+}
+
+/**
+ * Whether this host has a misao to rely on: the managed service is defined, or MISAO_SOCKET names a daemon. A brand-new
+ * installation only defaults its local server to misao in that case; otherwise it starts on tmux.
+ */
+export function hasMisaoToRelyOn(env: NodeJS.ProcessEnv, homeDir: string, exists: (file: string) => boolean): boolean {
+  return !!env.MISAO_SOCKET || misaoServiceDefinitionPaths(homeDir).some(exists);
 }
