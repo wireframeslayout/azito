@@ -30,6 +30,10 @@ export interface InstallStatusItem {
   installed: boolean;
   version?: string;
   detail?: string;
+  /** The server does not need this component (e.g. tmux on a server whose default mux is misao). */
+  optional?: boolean;
+  /** misao only: the daemon's release version (`version` is its protocol version). */
+  daemonVersion?: string;
 }
 
 export interface InstallStatusResponse {
@@ -54,7 +58,9 @@ export function describeMisaoItem(item: InstallStatusItem, t: TFunction): Instal
   const detailKey = item.detail ? MISAO_DETAIL_KEYS[item.detail] : undefined;
   return {
     ...item,
-    version: item.version ? t('setup.misaoProtocol', { version: item.version }) : undefined,
+    version: [item.daemonVersion, item.version ? t('setup.misaoProtocol', { version: item.version }) : undefined]
+      .filter((part): part is string => part !== undefined)
+      .join(' · ') || undefined,
     detail: detailKey ? t(detailKey) : item.detail,
   };
 }
@@ -85,7 +91,7 @@ export function getSetupSummary(installStatus: InstallStatusResponse | null, ins
     installStatus.agent,
     installStatus.chromium,
   ].filter(Boolean);
-  const missing = items.filter((i) => !i!.installed).length;
+  const missing = items.filter((i) => !i!.installed && !i!.optional).length;
   if (missing === 0) return { text: 'servers:setup.allInstalled', tone: 'green' };
   return { text: 'servers:setup.missingCount', textParams: { count: missing }, tone: 'orange' };
 }

@@ -177,7 +177,8 @@
     "deployingBinary": "Deploying binary…",
     "rollingBack": "Rolling back mux runtime to system…",
     "rolledBack": "Rolled back to system",
-    "installComplete": "Done v{{version}}"
+    "installComplete": "Done v{{version}}",
+    "tmuxOptionalNote": "Optional. Only needed for tmux windows (AZITO panes run on the bundled misao)."
   },
   "windows": {
     "noSessions": "No sessions found on this server.",
@@ -216,5 +217,47 @@
     "killWindowMessage": "Kill window \"{{name}}\"?",
     "killPane": "Kill Pane",
     "killPaneMessage": "Kill pane \"{{name}}\"?"
+  },
+  "misaoService": {
+    "loading": "Checking the misao service…",
+    "loadFailed": "Could not read the misao service state.",
+    "service": "Service",
+    "stateActive": "Running",
+    "stateInactive": "Stopped",
+    "stateFailed": "Failed",
+    "stateUnknown": "Unknown",
+    "stateNotInstalled": "Not installed",
+    "bundledVersion": "bundled {{version}}",
+    "runningVersion": "running {{version}}",
+    "install": "Install misao",
+    "installing": "Installing…",
+    "start": "Start misao",
+    "starting": "Starting…",
+    "update": "Update misao (running panes will end)",
+    "updating": "Updating…",
+    "updateConfirmTitle": "Update misao?",
+    "updateConfirmMessage": "misao is stopped to update it. Every running pane ends and agent work in them is interrupted. Finish what you need before continuing.",
+    "updateConfirmLabel": "Stop and update",
+    "replaceSocketTitle": "Switch the hub to the managed misao?",
+    "replaceSocketMessage": "The hub setting (MISAO_SOCKET) points at another daemon than the misao AZITO manages. Installing rewrites it to the managed socket (applied when the hub restarts).",
+    "replaceSocketConfirm": "Rewrite and install",
+    "notice": {
+      "incompatible": "The misao protocol does not match this hub",
+      "incompatibleSub": "Updating to the bundled misao fixes this. The update ends every running pane.",
+      "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",
+      "updateAvailableSub": "A hub update does not replace misao. Update it with the button above when you do not need the panes.",
+      "needsHubRestart": "Restart the hub to connect to the misao AZITO manages",
+      "needsHubRestartSub": "Restarting the hub does not end misao panes.",
+      "customSocket": "The hub setting (MISAO_SOCKET) points at another daemon",
+      "customSocketSub": "Installing rewrites that setting to the managed socket."
+    },
+    "unmanaged": {
+      "sourceInstall": "A source checkout does not install the service. It connects to the misao at MISAO_SOCKET or the default socket.",
+      "noBundledMisao": "This hub release does not bundle misao.",
+      "unsupportedPlatform": "This host has neither systemd nor launchd, so the misao service cannot be managed.",
+      "invalidPrefix": "The install path is too long to create the misao socket.",
+      "unknown": "This hub cannot manage the misao service."
+    },
+    "stateActiveUnreachable": "Running (not reachable)"
   }
 }

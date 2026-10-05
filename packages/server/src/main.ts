@@ -1,3 +1,5 @@
+import fs from 'fs';
+import os from 'os';
 import Fastify from 'fastify';
 
 import { resolveDataDir, getLegacyPaths } from './shared/dataDir';
@@ -19,6 +21,8 @@ import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
+import { misaoCommand } from './cli/misaoCommand';
+import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
 
 // ─── Graceful shutdown ───
@@ -30,6 +34,11 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 async function main(): Promise<void> {
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (process.argv[2] === 'misao') {
+    await misaoCommand(process.argv.slice(3));
     return;
   }
 
@@ -84,7 +93,11 @@ async function main(): Promise<void> {
     console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
   }
 
-  const db = openDatabase(paths.db);
+  // A release install runs its panes on the bundled misao, so a new installation's local server starts on misao, but only
+  // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh sets both up).
+  // Otherwise, and for a source checkout (`npm run dev`), it starts on tmux.
+  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, os.homedir(), fs.existsSync);
+  const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux' });
   const uiToken = resolveUiToken(paths.uiToken);
   const webhookToken = resolveWebhookToken(paths.webhookToken);
 

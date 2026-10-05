@@ -24,3 +24,7 @@ data/master.key
 # Playwright E2E
 test-results/
 playwright-report/
+
+# misao release assets cached by build-hub
+packages/server/.cache/
+packages/server/dist-hub/

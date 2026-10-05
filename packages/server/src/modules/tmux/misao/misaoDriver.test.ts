@@ -156,6 +156,11 @@ describe('describeMisaoDaemon', () => {
     expect(request).toHaveBeenCalledWith('server.info', {});
   });
 
+  it('adds the release version of a daemon that reports one', async () => {
+    const status = await describeMisaoDaemon(connection({ available: true }, async () => ({ protocolVersion: '0.3.0', version: '0.2.0' })));
+    expect(status).toEqual({ installed: true, version: '0.3.0', daemonVersion: '0.2.0' });
+  });
+
   it('reports an unreachable daemon without sending a request', async () => {
     const request = vi.fn();
     const status = await describeMisaoDaemon(connection({ available: false, reason: 'daemon_unreachable' }, request));

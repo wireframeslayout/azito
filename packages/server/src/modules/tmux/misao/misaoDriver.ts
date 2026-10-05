@@ -1,3 +1,4 @@
+import type { MisaoDaemonInfo } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 import { serverSupportsMux } from '../../servers/muxKinds';
 import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegistry';
@@ -52,27 +53,38 @@ export async function resolveMisaoRuntimeForHub(
 export interface MisaoHandle {
   connection: MisaoConnection;
   driver: MisaoMuxClient;
+  /** The socket this hub's connection uses (what MISAO_SOCKET / the default resolved to at startup). */
+  socketPath: string;
 }
 
 export interface MisaoDaemonStatus {
   installed: boolean;
   /** The daemon's protocol version (`server.info`). */
   version?: string;
+  /** The daemon's release version (`server.info`); a daemon that predates the field reports none. */
+  daemonVersion?: string;
   /** Why the daemon is not usable. */
   detail?: string;
 }
 
-/** Reports whether the daemon is reachable and which protocol version it speaks. Never throws: a failure is the status. */
-export async function describeMisaoDaemon(connection: MisaoConnection): Promise<MisaoDaemonStatus> {
+/** Reports whether the daemon is reachable and which protocol / release it speaks. Never throws: a failure is the status. */
+export async function probeMisaoDaemon(connection: MisaoConnection): Promise<MisaoDaemonInfo> {
   const availability = connection.availability();
-  if (!availability.available) return { installed: false, detail: availability.reason };
+  if (!availability.available) return { reachable: false, detail: availability.reason };
   try {
     const info = await connection.request('server.info', {});
-    return { installed: true, version: info.protocolVersion };
+    return { reachable: true, protocolVersion: info.protocolVersion, ...(info.version ? { version: info.version } : {}) };
   } catch (err) {
-    if (err instanceof MuxDriverUnavailableError) return { installed: false, detail: err.reason };
-    return { installed: false, detail: err instanceof Error ? err.message : String(err) };
+    if (err instanceof MuxDriverUnavailableError) return { reachable: false, detail: err.reason };
+    return { reachable: false, detail: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/** `probeMisaoDaemon` in the shape of an install-status row. */
+export async function describeMisaoDaemon(connection: MisaoConnection): Promise<MisaoDaemonStatus> {
+  const info = await probeMisaoDaemon(connection);
+  if (!info.reachable) return { installed: false, detail: info.detail };
+  return { installed: true, version: info.protocolVersion, ...(info.version ? { daemonVersion: info.version } : {}) };
 }
 
 /**
@@ -92,7 +104,7 @@ export function registerMisaoDriver(
     if (server.type !== undefined && server.type !== 'local') return { available: false, reason: 'remote_unsupported' };
     return connection.availability();
   });
-  return { connection, driver };
+  return { connection, driver, socketPath: runtime.socketPath };
 }
 
 /**

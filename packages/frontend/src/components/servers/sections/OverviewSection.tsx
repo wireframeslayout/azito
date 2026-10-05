@@ -457,7 +457,7 @@ export default function OverviewSection({
             <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
               {server.muxRuntime === 'managed'
                 ? t('overview.muxManaged')
-                : `${t('overview.muxSystem')}${status?.tmuxVersion ? ` ${status.tmuxVersion}` : ''}`}
+                : `${t('overview.muxSystem')}${status?.mux?.tmux?.version ? ` ${status.mux.tmux.version}` : ''}`}
             </span>
             <span style={{ display: 'block', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('overview.muxRuntimeNote')}</span>
           </KvRow>

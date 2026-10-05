@@ -82,7 +82,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
             console.warn('[useServerStatuses] status probe failed:', srv.name, err);
             setStatuses((prev) => ({
               ...prev,
-              [srv.name]: { status: 'error', tmux: false, message: 'Failed to check status' },
+              [srv.name]: { status: 'error', message: 'Failed to check status' },
             }));
           }
         })
@@ -111,7 +111,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
     setStatuses((prev) => {
       const next: Record<string, ServerStatus> = {};
       for (const srv of srvs) {
-        next[srv.name] = prev[srv.name] ?? { status: 'checking', tmux: false };
+        next[srv.name] = prev[srv.name] ?? { status: 'checking' };
       }
       return next;
     });

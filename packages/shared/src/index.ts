@@ -27,6 +27,7 @@ export {
   type MuxWindowInfo,
   type MuxWorkspace,
   type MuxUnavailableKind,
+  type MuxStatusItem,
   type MuxPaneInfo,
   type MuxExecRequest,
   asPaneHandle,
@@ -42,3 +43,10 @@ export {
   MISAO_PANE_ID_RE,
   muxKindOfPaneHandle,
 } from './mux';
+export type {
+  MisaoServiceState,
+  MisaoUnmanagedReason,
+  MisaoSocketSetting,
+  MisaoDaemonInfo,
+  MisaoServiceStatus,
+} from './misaoService';

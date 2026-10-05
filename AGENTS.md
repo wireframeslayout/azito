@@ -87,6 +87,13 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (config, outside the versioned dir) and `~/.azito/data/` (DB, keys, token).
 - In-app update: Settings → System. Works under systemd and launchd; not for a source checkout, and
   not for pre-releases (GitHub's `releases/latest` returns stable releases only).
+- The tarball also carries `misao/{misao.mjs,LICENSES.txt,manifest.json}` (a pinned release asset: version, URL and sha256 are
+  constants in `scripts/misaoAssets.ts`, verified at build time; offline builds set `AZITO_MISAO_ASSET_DIR`) plus
+  `deploy/azito-misao.service` / `com.azito.misao.plist`. node-pty is the hub's own copy. misao is **a separate service**
+  (`azito-misao` / `com.azito.misao`) unpacked to `~/.azito/misao/<version>/` with `misao/current` switched only by an explicit
+  `azito misao update` (or the Setup row's update button): stopping the daemon closes every pane, so a hub update or restart never
+  touches it. `azito misao install|update|start|status` (`cli/misaoCommand.ts`) and `GET/POST /api/system/misao[/install|start|update]`
+  share `modules/system/misao/MisaoServiceService`; `install.sh` just calls the bundled CLI. tmux is optional on a release install.
 
 ## Architecture
 

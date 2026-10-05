@@ -7,7 +7,7 @@ import type { InstallStep } from '../components/ui';
 import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
 import { useConfirm } from './useConfirm';
-import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime } from '@azito/shared';
+import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime, MuxStatusItem } from '@azito/shared';
 import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
 import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
 import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
@@ -67,8 +67,8 @@ export interface Session {
 
 export interface ServerStatus {
   status: 'online' | 'offline' | 'error' | 'checking';
-  tmux: boolean;
-  tmuxVersion?: string;
+  /** One entry per mux kind the server can host (absent while checking or when the check failed). */
+  mux?: Partial<Record<MuxDriverKind, MuxStatusItem>>;
   agentVersion?: string;
   hubVersion?: string;
   versionMatch?: boolean;

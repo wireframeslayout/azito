@@ -10,7 +10,8 @@ import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
 import { supportedMuxKinds } from './muxKinds';
 import { checkIsolationBlockers as checkIsolationBlockersFor } from './isolationBlockers';
-import type { MuxCapabilities, MuxDriverKind, MuxWorkspace } from '@azito/shared';
+import type { MuxCapabilities, MuxDriverKind, MuxStatusItem, MuxWorkspace } from '@azito/shared';
+import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem, tmuxVersionCommand } from './muxStatus';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
@@ -1057,6 +1058,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   );
 
   // ── GET /api/servers/:name/status ──
+  // One entry per mux kind the server can host (`mux`), each checked on its own terms: tmux by running the binary,
+  // misao by asking its daemon. A kind that is down is reported on its entry — it does not make the server offline,
+  // and a missing tmux is not an error on a server whose default mux is misao.
   fastify.get<{ Params: { name: string } }>(
     '/api/servers/:name/status',
     async (request, reply) => {
@@ -1064,50 +1068,43 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
       try {
-        // Bundle content hash (what agents report at /health), read without triggering
-        // a build — this route is polled frequently and must stay cheap. Null (bundle
-        // not built yet) keeps the pre-existing "unknown hub version" semantics.
-        const tmuxVersionCmd = srv.muxRuntime === 'managed'
-          ? '$HOME/.azito/tmux/bin/tmux -L azito -f $HOME/.azito/tmux/azito.conf -V'
-          : 'tmux -V';
-        const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
+        const checkMuxKind = (kind: MuxDriverKind): Promise<MuxStatusItem> => (
+          kind === 'misao'
+            ? misaoDaemonStatus().then(misaoStatusItem)
+            : checkTmuxStatus(transportFactory.getTransport(srv), srv.muxRuntime)
+        );
+        const checkMuxes = async (): Promise<Partial<Record<MuxDriverKind, MuxStatusItem>>> => {
+          const kinds = supportedMuxKinds(srv);
+          const items = await Promise.all(kinds.map(checkMuxKind));
+          return Object.fromEntries(kinds.map((kind, i) => [kind, items[i]]));
+        };
+
         if (srv.type === 'agent') {
+          // Bundle content hash (what agents report at /health), read without triggering
+          // a build — this route is polled frequently and must stay cheap. Null (bundle
+          // not built yet) keeps the pre-existing "unknown hub version" semantics.
+          const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
           try {
             const health = await transportFactory.getAgentTransport(srv).fetchHealth() as { version: string; pid: number; uptime: number };
             const versionMatch = hubBundleHash ? health.version === hubBundleHash : true;
-            let tmuxAvailable = false;
-            let tmuxVersion = '';
-            try {
-              const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
-              tmuxAvailable = true;
-              tmuxVersion = stdout.trim();
-            } catch { /* tmux not found on agent */ }
+            const mux = await checkMuxes();
             return {
               status: 'online' as const,
-              tmux: tmuxAvailable,
-              tmuxVersion,
+              mux,
               agentVersion: health.version,
               hubVersion: hubBundleHash,
               versionMatch,
-              message: tmuxAvailable ? undefined : 'tmux not found on agent server',
+              message: describeDefaultMuxProblem(srv, mux),
             };
           } catch (err: unknown) {
-            if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, tmux: false, message: `Agent returned an error: ${(err as Error).message}` };
-            return { status: 'offline' as const, tmux: false, message: `Agent unreachable: ${err.reason}` };
+            if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, mux: {}, message: `Agent returned an error: ${(err as Error).message}` };
+            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}` };
           }
-        } else {
-          // Check if tmux is available locally
-          let tmuxAvailable = false;
-          let tmuxVersion = '';
-          try {
-            const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
-            tmuxAvailable = true;
-            tmuxVersion = stdout.trim();
-          } catch { /* tmux not found */ }
-          return { status: 'online' as const, tmux: tmuxAvailable, tmuxVersion, message: tmuxAvailable ? undefined : 'tmux not found' };
         }
+        const mux = await checkMuxes();
+        return { status: 'online' as const, mux, message: describeDefaultMuxProblem(srv, mux) };
       } catch (err: unknown) {
-        return { status: 'error' as const, tmux: false, message: (err as Error).message };
+        return { status: 'error' as const, mux: {}, message: (err as Error).message };
       }
     },
   );
@@ -1126,10 +1123,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkTmux = async () => {
         try {
-          const cmd = srv.muxRuntime === 'managed'
-            ? '$HOME/.azito/tmux/bin/tmux -L azito -f $HOME/.azito/tmux/azito.conf -V'
-            : 'tmux -V';
-          const r = await transport.exec(cmd);
+          const r = await transport.exec(tmuxVersionCommand(srv.muxRuntime));
           return { ...parseTmuxVersion(stripTerminalArtifacts(r.stdout), r.code), mode: srv.muxRuntime };
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message, mode: srv.muxRuntime };
@@ -1197,10 +1191,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         throw err;
       }
 
-      // One row per mux the server can use: its default mux always (missing = to be set up), another mux only when
-      // its driver serves the server now and the check finds it (it is optional, so its absence is not a setup gap).
+      // One row per mux the server can use: its default mux always (missing = to be set up), another mux marked optional.
       const checkMux = (kind: MuxDriverKind) => (kind === 'misao' ? checkMisao() : checkTmux());
-      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || muxDriverRegistry.availabilityFor(kind, srv).available);
+      // A local server always lists misao (even on a tmux default and with no daemon): its row carries the install /
+      // update controls for the bundled service.
+      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || (kind === 'misao' && srv.type === 'local') || muxDriverRegistry.availabilityFor(kind, srv).available);
       const [muxResults, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
         Promise.all(muxKinds.map(checkMux)),
         checkNode(),
@@ -1211,8 +1206,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       ]);
 
       const result: Record<string, unknown> = {};
+      // A kind that is not the default is optional, and still listed: tmux's row tells how to add it, misao's carries the
+      // service controls.
       muxKinds.forEach((kind, i) => {
-        if (kind === srv.defaultMux || muxResults[i].installed) result[kind] = muxResults[i];
+        result[kind] = kind === srv.defaultMux ? muxResults[i] : { ...muxResults[i], optional: true };
       });
       result.node = nodeResult;
       result.aztHarness = harnessResult;

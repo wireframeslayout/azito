@@ -8,13 +8,12 @@
 // misao のビルド成果物（MISAO_CLI、既定 ~/workspace/misao/packages/cli/dist/main.js）が無い環境では
 // 理由付きで skip する。
 
-import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import type { Locator, Page } from '@playwright/test';
 import { test, expect, MisaoDaemon } from '../fixtures/misaoTest';
 import type { Harness } from '../fixtures/misaoTest';
+import { createGitRepo, runScriptedTaskToReview } from '../fixtures/scriptedTask';
 
 test.skip(
   MisaoDaemon.cliPath() === null,
@@ -22,13 +21,8 @@ test.skip(
 );
 test.describe.configure({ mode: 'serial' });
 
-const NO_SUBAGENT = { enabled: false, provider: '', model: '' };
-const TASK_AGENT_PATH = path.join(__dirname, '..', 'fixtures', 'fake-agent', 'task-agent');
-
 /** pane.state イベント → Tier 0（tier0_mux）→ WS → 描画までに許す最大遅延。 */
 const REALTIME_BUDGET_MS = 10_000;
-/** タスク実行（窓作成 → コマンド送出 → プロンプト往復 → 完了検知）に許す最大時間。 */
-const TASK_BUDGET_MS = 60_000;
 
 function activeWindowsPanel(page: Page): Locator {
   return page.getByRole('button', { name: /アクティブウィンドウ/ }).locator('xpath=..');
@@ -153,45 +147,7 @@ test.describe('misao ドライバ', () => {
       });
       expect(createdTmux.ok).toBe(true);
 
-      await harness.api(`/projects/${projectId}/servers/local`, {
-        method: 'PUT',
-        body: JSON.stringify({ working_directory: repo }),
-      });
-      const phaseConfig = Object.fromEntries(
-        ['planning', 'reviewing', 'testing', 'pushing'].map((phase) => [phase, { enabled: false }]),
-      );
-      const { id: unitId } = await harness.api<{ id: number }>('/units', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: 'e2e-misao-unit',
-          worker_type: 'generic',
-          worker_extra_args: `${shellQuote(process.execPath)} ${shellQuote(TASK_AGENT_PATH)}`,
-          phase_config: phaseConfig,
-          // POST /api/units は省略された subagent 設定を JSON の "null" として保存し、読み戻しで
-          // 失敗する（既存の不具合）。明示的に「無効」を渡して避ける。
-          review_subagent: NO_SUBAGENT,
-          implement_subagent: NO_SUBAGENT,
-        }),
-      });
-      const { id: taskId } = await harness.api<{ id: number }>('/tasks', {
-        method: 'POST',
-        body: JSON.stringify({
-          project_id: projectId,
-          unit_id: unitId,
-          server_name: 'local',
-          title: 'e2e misao task',
-          description: 'e2e: scripted fake agent completes this task',
-          base_branch: 'main',
-          skip_pr: true,
-          require_plan_approval: false,
-        }),
-      });
-
-      await harness.api(`/units/${unitId}/execute`, { method: 'POST', body: JSON.stringify({ taskId, force: true }) });
-
-      await expect.poll(async () => (await harness.api<{ status: string }>(`/tasks/${taskId}`)).status, {
-        timeout: TASK_BUDGET_MS,
-      }).toBe('review');
+      const taskId = await runScriptedTaskToReview(harness, projectId, repo, { unit: 'e2e-misao-unit', title: 'e2e misao task' });
 
       // タスクの窓は misao に作られ、tmux の窓はそのまま並んでいる。一覧は両方を kind 付きで返す。
       const taskWindows = await harness.api<Array<{ isPrimary: boolean; muxRef?: { kind: string } }>>(`/tasks/${taskId}/windows`);
@@ -269,22 +225,4 @@ async function createRegisteredWindow(
     { label },
   );
   return { windowId, label };
-}
-
-function createGitRepo(): string {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-e2e-repo-'));
-  const git = (...args: string[]): void => {
-    execFileSync('git', args, { cwd: repo, stdio: 'ignore' });
-  };
-  git('init', '-b', 'main');
-  git('config', 'user.email', 'e2e@example.invalid');
-  git('config', 'user.name', 'e2e');
-  fs.writeFileSync(path.join(repo, 'README.md'), 'e2e\n');
-  git('add', '.');
-  git('commit', '-m', 'init');
-  return repo;
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

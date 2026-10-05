@@ -5,6 +5,16 @@ export type MuxDriverKind = 'tmux' | 'misao';
 /** Which tmux binary a server runs: the system one or the hub-managed one. Unrelated to the mux kind (`MuxDriverKind`). */
 export type MuxRuntime = 'system' | 'managed';
 
+/** What `GET /api/servers/:name/status` reports for one mux kind the server can host. */
+export interface MuxStatusItem {
+  /** The mux answers on this server right now (tmux binary runs / misao daemon reachable). */
+  available: boolean;
+  /** tmux: its version string; misao: the daemon's release version (absent from a daemon that predates it). */
+  version?: string;
+  /** Why it is not available (a reason code such as `daemon_unreachable`, or an error message). */
+  detail?: string;
+}
+
 export interface MuxRef {
   kind: MuxDriverKind;
   workspace: string;
