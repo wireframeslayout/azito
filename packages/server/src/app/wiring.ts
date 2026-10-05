@@ -29,6 +29,7 @@ import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
 import { createMisaoServiceController, runCommand } from '../modules/system/misao/MisaoServiceController';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
 import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
@@ -112,6 +113,8 @@ import { SystemUpdateService } from '../modules/system/SystemUpdateService';
 export interface SharedInfra {
   sshClient: SshClient;
   agentInstaller: AgentInstaller;
+  /** Puts the bundled misao on an agent server (through its agent). With no bundled copy (source checkout) it refuses to. */
+  misaoAgentInstaller: MisaoAgentInstaller;
   harnessInstaller: HarnessInstaller;
   tmuxInstaller: TmuxInstaller;
   transportFactory: TransportFactory;
@@ -234,7 +237,9 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
-  const agentInstaller = new AgentInstaller(sshClient, agentBundler);
+  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
+  // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
+  const agentInstaller = new AgentInstaller(sshClient, agentBundler, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
@@ -289,6 +294,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   return {
     sshClient,
     agentInstaller,
+    misaoAgentInstaller,
     harnessInstaller,
     tmuxInstaller,
     transportFactory,

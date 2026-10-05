@@ -23,11 +23,24 @@ export interface AgentMisaoSocket {
  */
 export function resolveAgentMisaoSocket(env: NodeJS.ProcessEnv, homeDir: string): AgentMisaoSocket {
   const configured = env.MISAO_SOCKET;
-  const socketPath = configured !== undefined && configured !== '' ? configured : path.join(homeDir, '.azito', 'misao', 'misao.sock');
+  const socketPath = configured !== undefined && configured !== '' ? configured : agentMisaoManagedSocket(homeDir);
   if (!path.isAbsolute(socketPath)) throw new Error(`MISAO_SOCKET must be an absolute path: ${socketPath}`);
   const bytes = Buffer.byteLength(socketPath);
   if (bytes > MAX_SOCKET_PATH_BYTES) throw new Error(`MISAO_SOCKET is ${bytes} bytes, over the ${MAX_SOCKET_PATH_BYTES}-byte limit of a unix socket: ${socketPath}`);
   return { path: socketPath };
+}
+
+/** What the installer needs to know about the host an agent runs on (reported by the agent itself, never guessed over a shell). */
+export interface AgentMisaoHost {
+  homeDir: string;
+  /** The node that runs the agent: the daemon runs on the same one. */
+  nodePath: string;
+  /** PATH the daemon's panes should see (see buildServicePath). */
+  servicePath: string;
+  /** The agent's node-pty, which the daemon shares (its prebuilt native part is not rebuilt for it). */
+  nodePtyDir: string | null;
+  platform: NodeJS.Platform;
+  arch: string;
 }
 
 /** `GET /api/misao/status` of an agent. */
@@ -37,10 +50,21 @@ export interface MisaoSocketStatus {
   socketPresent: boolean;
   /** The version `<root>/current` points at, when the managed layout is in place. */
   installedVersion?: string;
+  host: AgentMisaoHost;
+}
+
+/** The one place an agent server's misao is installed: `<home>/.azito/misao`, whatever `MISAO_SOCKET` says. */
+export function agentMisaoRoot(homeDir: string): string {
+  return path.join(homeDir, '.azito', 'misao');
+}
+
+/** The managed layout's socket: what the installer sets up, and what the agent relays to unless `MISAO_SOCKET` says otherwise. */
+export function agentMisaoManagedSocket(homeDir: string): string {
+  return path.join(agentMisaoRoot(homeDir), 'misao.sock');
 }
 
 /** What is on disk for the misao daemon; asking the daemon itself (`server.info`) is the hub's job over the relay. */
-export function readMisaoSocketStatus(socket: AgentMisaoSocket): MisaoSocketStatus {
+export function readMisaoSocketStatus(socket: AgentMisaoSocket, host: AgentMisaoHost): MisaoSocketStatus {
   let socketPresent = false;
   try {
     socketPresent = fs.statSync(socket.path).isSocket();
@@ -49,10 +73,10 @@ export function readMisaoSocketStatus(socket: AgentMisaoSocket): MisaoSocketStat
   }
   let installedVersion: string | undefined;
   try {
-    installedVersion = path.basename(fs.readlinkSync(path.join(path.dirname(socket.path), 'current')));
+    installedVersion = path.basename(fs.readlinkSync(path.join(agentMisaoRoot(host.homeDir), 'current')));
   } catch {
     installedVersion = undefined;
   }
-  return { socketPath: socket.path, socketPresent, ...(installedVersion ? { installedVersion } : {}) };
+  return { socketPath: socket.path, socketPresent, ...(installedVersion ? { installedVersion } : {}), host };
 }
 

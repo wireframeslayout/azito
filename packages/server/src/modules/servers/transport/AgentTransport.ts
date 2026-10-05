@@ -21,6 +21,8 @@ export const HEALTH_TIMEOUT_MS = 3_000;
 /** Matches the agent's own default exec timeout (agent/routes.ts); the HTTP deadline is this plus transit slack. */
 const DEFAULT_EXEC_TIMEOUT_MS = 15_000;
 const HTTP_SLACK_MS = 5_000;
+/** One release file over a tailnet link: seconds in practice, with room for a slow one. */
+const MISAO_UPLOAD_TIMEOUT_MS = 120_000;
 
 function classifyFetchError(err: unknown): AgentUnreachableReason | null {
   if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) return 'timeout';
@@ -213,6 +215,23 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     const { status, text } = await this.send('/api/misao/status', { method: 'GET', headers: { authorization: this.authHeader } }, HEALTH_TIMEOUT_MS);
     if (status < 200 || status >= 300) throw new Error(`Agent /api/misao/status failed (${status}): ${text}`);
     return JSON.parse(text) as MisaoSocketStatus;
+  }
+
+  /**
+   * Puts one release file of misao where the agent stages it (`PUT /api/misao/upload`): `<home>/.azito/misao/<version>.upload/`.
+   * The agent decides the location; this side only names the version and which release file it is. Returns what the
+   * agent received (size, sha256) so the caller can compare it with the hash it expects.
+   */
+  async uploadMisaoFile(version: string, name: 'misao.mjs' | 'LICENSES.txt', data: Buffer): Promise<{ name: string; size: number; sha256: string }> {
+    this.assertCircuitClosed();
+    const query = `version=${encodeURIComponent(version)}&name=${encodeURIComponent(name)}`;
+    const { status, text } = await this.send(`/api/misao/upload?${query}`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/octet-stream', authorization: this.authHeader },
+      body: new Blob([Uint8Array.from(data)]),
+    }, MISAO_UPLOAD_TIMEOUT_MS);
+    if (status < 200 || status >= 300) throw new Error(`Agent /api/misao/upload failed (${status}): ${text}`);
+    return JSON.parse(text) as { name: string; size: number; sha256: string };
   }
 
   /** True while the breaker is open (fail-fast window), so callers can skip the network entirely. */

@@ -29,7 +29,7 @@ export interface MisaoServersDeps {
   /** How the SDK reaches the misao of an agent server (a relay over the agent's WebSocket), and what the agent sees on its disk. */
   agent: {
     target: (server: ServerConfig) => MisaoTarget;
-    status: (server: ServerConfig) => Promise<MisaoSocketStatus>;
+    status: (server: ServerConfig) => Promise<Pick<MisaoSocketStatus, 'socketPresent'>>;
   };
 }
 

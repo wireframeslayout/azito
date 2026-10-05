@@ -3,14 +3,23 @@ import * as fs from 'fs';
 import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
+import { AgentTransport } from '../transport/AgentTransport';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 
-export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health';
+export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
 
 export interface InstallProgress {
   step: InstallStep;
   status: 'running' | 'ok' | 'error';
   message: string;
+}
+
+/**
+ * What puts misao on a freshly installed agent: the hub's own copy, through the agent (see MisaoAgentInstaller). Defined here
+ * so this module does not depend on the layer that implements it.
+ */
+export interface AgentMisaoInstaller {
+  install(transport: AgentTransport, onProgress?: (message: string) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'running'; updateAvailable: boolean }>;
 }
 
 export interface InstallResult {
@@ -22,12 +31,18 @@ export interface InstallResult {
   startMethod: 'systemd' | 'nohup';
   steps: InstallProgress[];
   error?: string;
+  /**
+   * Why misao could not be put on the agent. The agent itself is installed and healthy (so `success` stays true): this is
+   * reported beside it, because the server has no pane server until misao is installed (tmux, if the host has it, still works).
+   */
+  misaoError?: string;
 }
 
 interface PreflightInfo {
   tailscaleIp: string;
   nodeVersion: string;
   arch: string;
+  /** Empty when the host has no tmux: not required, misao is the pane server this hub installs. */
   tmuxVersion: string;
 }
 
@@ -39,6 +54,8 @@ export class AgentInstaller {
   constructor(
     private sshClient: SshClient,
     private bundler: AgentBundler,
+    /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
+    private misaoInstaller?: AgentMisaoInstaller,
   ) {}
 
   async install(
@@ -62,7 +79,7 @@ export class AgentInstaller {
     let preflight: PreflightInfo;
     try {
       preflight = await this.preflight(sshHost);
-      report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.arch}, tmux ${preflight.tmuxVersion}`);
+      report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
     } catch (err) {
       const msg = (err as Error).message;
       report('preflight', 'error', msg);
@@ -106,7 +123,26 @@ export class AgentInstaller {
       return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, error: msg };
     }
 
-    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps };
+    // ── misao ──
+    const misaoError = await this.installMisao(preflight.tailscaleIp, token, report);
+
+    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, ...(misaoError ? { misaoError } : {}) };
+  }
+
+  /** Puts misao on the agent that just came up. A failure is reported, not thrown: the agent stays installed. */
+  private async installMisao(host: string, token: string, report: (step: InstallStep, status: InstallProgress['status'], message: string) => void): Promise<string | undefined> {
+    if (!this.misaoInstaller) return undefined;
+    report('misao', 'running', 'Installing misao...');
+    try {
+      const transport = new AgentTransport(host, AGENT_PORT, token, 'system', host);
+      const result = await this.misaoInstaller.install(transport, (message) => report('misao', 'running', message));
+      report('misao', 'ok', `misao ${result.version} (${result.startMethod})`);
+      return undefined;
+    } catch (err) {
+      const message = (err as Error).message;
+      report('misao', 'error', message);
+      return message;
+    }
   }
 
   async update(sshHost: string, tailscaleIp: string, existingToken: string, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
@@ -152,11 +188,9 @@ export class AgentInstaller {
       missing.push(`x86_64 architecture required (found: ${arch || 'unknown'})`);
     }
 
+    // tmux is optional: the pane server this hub installs is misao.
     const tmuxResult = await this.sshClient.execIsolated(sshHost, 'tmux -V');
     const tmuxVersion = tmuxResult.stdout.trim();
-    if (!tmuxVersion) {
-      missing.push('tmux is required but not found');
-    }
 
     const tsResult = await this.sshClient.execIsolated(sshHost, 'tailscale ip -4');
     const tailscaleIp = tsResult.stdout.trim().split('\n')[0];
@@ -243,6 +277,8 @@ export class AgentInstaller {
       `EnvironmentFile=%h/.azito/agent/agent.env`,
       `Environment=PORT=${AGENT_PORT}`,
       `Environment=AZITO_MUX_RUNTIME=${muxRuntime || 'system'}`,
+      // The socket the agent relays to (/ws?mode=misao): where the installed misao listens. Not a setting of the hub's.
+      'Environment=MISAO_SOCKET=%h/.azito/misao/misao.sock',
       'Restart=on-failure',
       'RestartSec=10',
       // agent が子として起動する tmux サーバーを stop 時に道連れにしないため、control-group ではなく main PID のみを TERM する
@@ -298,6 +334,7 @@ export class AgentInstaller {
       `AZITO_AGENT_BIND=${tailscaleIp}`,
       `PORT=${AGENT_PORT}`,
       `AZITO_MUX_RUNTIME=${muxRuntime || 'system'}`,
+      'MISAO_SOCKET="$HOME/.azito/misao/misao.sock"',
       'nohup bash ~/.azito/agent/current/run.sh',
       '> ~/.azito/agent/agent.log 2>&1 &',
       'echo $! > ~/.azito/agent/agent.pid',

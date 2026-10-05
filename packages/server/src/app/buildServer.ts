@@ -47,6 +47,7 @@ import chatCommandsRoutes from '../modules/chat-commands/routes';
 import supervisorsRoutes from '../modules/supervisors/routes';
 import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
+import agentMisaoRoutes from '../modules/system/misao/agentMisaoRoutes';
 import transcriptsRoutes from '../modules/transcripts/routes';
 import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
@@ -499,7 +500,14 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       // An agent server's misao node is bound to the endpoint and token it was made with: any edit, reinstall or delete
       // drops it, and a server that still uses misao gets a fresh one.
       if (next === null) {
-        wiring.misao.servers.discardAgentNode(previous);
+        if (previous) wiring.misao.servers.discardAgentNode(previous);
+        return;
+      }
+      if (previous === null) {
+        // A new agent server may already have a daemon (set up by hand, or by the install that just ran).
+        if (next.type === 'agent') {
+          wiring.misao.servers.discoverAgentNode(next).catch((err) => app.log.debug(`misao discovery on ${next.name}: ${err}`));
+        }
         return;
       }
       syncMisaoNodes(wiring.misao, previous, next, next.defaultMux === 'misao' || wiring.misao.servers.hosts(previous), app.log);
@@ -664,6 +672,17 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     interactionMonitor,
   });
   await app.register(systemRoutes, { systemUpdateService, channelResolver, misaoService: wiring.misaoService });
+  await app.register(agentMisaoRoutes, {
+    serverRepo,
+    transportFactory,
+    installer: wiring.misaoAgentInstaller,
+    misaoServers: wiring.misao.servers,
+    serverIsolationMutex,
+    onInstalled: (srv) => {
+      invalidateSessionCache(srv.name);
+      notificationBus.emit({ type: 'sessions:updated', payload: { serverName: srv.name } });
+    },
+  });
   await app.register(browserRoutes, {
     browserSessionManager,
     serverRepo,

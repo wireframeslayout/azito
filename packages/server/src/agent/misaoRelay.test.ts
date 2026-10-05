@@ -80,27 +80,32 @@ describe('relay to a unix socket', () => {
   });
 });
 
+const HOST = { homeDir: '/nonexistent-home', nodePath: '/usr/bin/node', servicePath: '/usr/bin', nodePtyDir: null, platform: 'linux' as const, arch: 'x64' };
+
 describe('readMisaoSocketStatus', () => {
   it('reports an absent socket', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azrelay-'));
     try {
-      expect(readMisaoSocketStatus({ path: path.join(dir, 'x.sock') })).toEqual({ socketPath: path.join(dir, 'x.sock'), socketPresent: false });
+      expect(readMisaoSocketStatus({ path: path.join(dir, 'x.sock') }, HOST)).toEqual({ socketPath: path.join(dir, 'x.sock'), socketPresent: false, host: HOST });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  it('reports a socket and the version current points at', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azrelay-'));
+  it('reports a socket and the version current points at under the home directory\'s managed layout', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'azrelay-'));
+    const dir = path.join(home, '.azito', 'misao');
+    fs.mkdirSync(dir, { recursive: true });
     const socketPath = path.join(dir, 'x.sock');
     const server = net.createServer();
     await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     fs.symlinkSync('0.2.0', path.join(dir, 'current'));
+    const host = { ...HOST, homeDir: home };
     try {
-      expect(readMisaoSocketStatus({ path: socketPath })).toEqual({ socketPath, socketPresent: true, installedVersion: '0.2.0' });
+      expect(readMisaoSocketStatus({ path: socketPath }, host)).toEqual({ socketPath, socketPresent: true, installedVersion: '0.2.0', host });
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      fs.rmSync(dir, { recursive: true, force: true });
+      fs.rmSync(home, { recursive: true, force: true });
     }
   });
 });

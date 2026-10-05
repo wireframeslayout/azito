@@ -94,7 +94,7 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
 /** For a process that never opens an agent server's misao (the auth doctor CLI, tests): no agent server ever gets a node. */
 export const NO_AGENT_MISAO: MisaoServersDeps['agent'] = {
   target: () => { throw new Error('this process does not open the misao relay of an agent server'); },
-  status: async () => ({ socketPath: '', socketPresent: false }),
+  status: async () => ({ socketPresent: false }),
 };
 
 /**

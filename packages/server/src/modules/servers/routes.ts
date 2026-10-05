@@ -203,10 +203,10 @@ export interface ServersRouteOptions {
   misaoDaemonStatus: (server: ServerConfig) => Promise<{ installed: boolean; version?: string; daemonVersion?: string; detail?: string }>;
   onMuxChanged?: (change: { previous: ServerConfig; next: ServerConfig }) => void;
   /**
-   * A server was edited, its agent was reinstalled, or it was deleted (`next` is null): per-server state bound to its
-   * old endpoint / token (the misao connection) is dropped here.
+   * A server was created (`previous` is null), edited, had its agent reinstalled, or was deleted (`next` is null):
+   * per-server state bound to its endpoint / token (the misao connection) is made, replaced or dropped here.
    */
-  onServerChanged?: (change: { previous: ServerConfig; next: ServerConfig | null }) => void;
+  onServerChanged?: (change: { previous: ServerConfig | null; next: ServerConfig | null }) => void;
 }
 
 // ─── Plugin ───
@@ -328,6 +328,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   const checkIsolationBlockers = (serverName: string, srv: ServerConfig) =>
     checkIsolationBlockersFor({ windowRepo, muxDriverRegistry }, serverName, srv);
 
+  function notifyServerCreated(name: string): void {
+    if (!onServerChanged) return;
+    const next = serverRepo.findByName(name);
+    if (next) onServerChanged({ previous: null, next });
+  }
+
   /** Tells the hub that `previous` was edited or reinstalled, with the row as it is stored now. */
   function notifyServerChanged(previous: ServerConfig): void {
     if (!onServerChanged) return;
@@ -410,7 +416,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
         if (result.success) {
           serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime, validDefaultMux);
-          return { ok: true, type: 'agent', steps, startMethod: result.startMethod };
+          notifyServerCreated(name);
+          return { ok: true, type: 'agent', steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
         }
 
         return reply.status(500).send({ error: result.error, steps });
@@ -427,6 +434,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         return reply.status(409).send({ error: 'Server already exists' });
       try {
         serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime, validDefaultMux);
+        notifyServerCreated(name);
         return { ok: true };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });

@@ -35,7 +35,7 @@ function fakeSdk() {
 const agent = (name: string) => ({ name, type: 'agent', host: 'h', agentPort: 3002, agentToken: 't', defaultMux: 'tmux', isolationIntent: false }) as unknown as ServerConfig;
 const local = { name: 'local', type: 'local', defaultMux: 'tmux', isolationIntent: false } as unknown as ServerConfig;
 
-function setup(status: () => Promise<{ socketPath: string; socketPresent: boolean }> = async () => ({ socketPath: '/x', socketPresent: true })) {
+function setup(status: () => Promise<{ socketPresent: boolean }> = async () => ({ socketPresent: true })) {
   const { sdk, clients } = fakeSdk();
   const log = { warn: vi.fn() };
   const hubEnv = { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' };
@@ -116,18 +116,18 @@ describe('MisaoServers', () => {
   });
 
   it('discovers the node of an agent that reports a daemon socket, and leaves alone one that does not', async () => {
-    const present = setup(async () => ({ socketPath: '/x', socketPresent: true }));
+    const present = setup(async () => ({ socketPresent: true }));
     expect(await present.servers.discoverAgentNode(agent('a1'))).toBe(true);
     expect(present.servers.hosts(agent('a1'))).toBe(true);
     present.servers.closeAgentNodes();
 
-    const absent = setup(async () => ({ socketPath: '/x', socketPresent: false }));
+    const absent = setup(async () => ({ socketPresent: false }));
     expect(await absent.servers.discoverAgentNode(agent('a1'))).toBe(false);
     expect(absent.servers.hosts(agent('a1'))).toBe(false);
   });
 
   it('does not ask the agent again when the node exists, and passes an unreachable agent on to the caller', async () => {
-    const status = vi.fn(async () => ({ socketPath: '/x', socketPresent: true }));
+    const status = vi.fn(async () => ({ socketPresent: true }));
     const { servers } = setup(status);
     servers.ensureAgentNode(agent('a1'));
     expect(await servers.discoverAgentNode(agent('a1'))).toBe(true);

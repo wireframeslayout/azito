@@ -2,7 +2,8 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import systemRoutes from '../routes';
 import { OPERATOR_PRINCIPAL } from '../../../shared/auth/Principal';
-import { MisaoServiceError, type MisaoServiceService } from '../misao/MisaoServiceService';
+import type { MisaoServiceService } from '../misao/MisaoServiceService';
+import { MisaoServiceError } from '../misao/MisaoServiceError';
 
 const STATUS = { managed: true, serviceInstalled: true, daemon: { reachable: true }, socketSetting: 'managed', needsHubRestart: false, updateAvailable: false };
 

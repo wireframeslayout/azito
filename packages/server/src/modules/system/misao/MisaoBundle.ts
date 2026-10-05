@@ -17,10 +17,16 @@ export interface MisaoBundle {
   nodePtyDir: string;
   templatesDir: string;
   files: Record<'misao.mjs' | 'LICENSES.txt', string>;
+  /** The sha256 of each file, from the manifest (checked against the files when the bundle is read). */
+  sha256: Record<'misao.mjs' | 'LICENSES.txt', string>;
+}
+
+export function sha256Buffer(data: Buffer): string {
+  return crypto.createHash('sha256').update(data).digest('hex');
 }
 
 export function sha256File(file: string): string {
-  return crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  return sha256Buffer(fs.readFileSync(file));
 }
 
 /**
@@ -45,5 +51,5 @@ export function readMisaoBundle(bundleRoot: string | null): MisaoBundle | null {
   }
   const nodePtyDir = path.join(bundleRoot, 'node_modules', 'node-pty');
   if (!fs.existsSync(nodePtyDir)) throw new Error(`The hub bundle has no node-pty to share with misao: ${nodePtyDir}`);
-  return { version: manifest.version, dir, nodePtyDir, templatesDir: path.join(bundleRoot, 'deploy'), files };
+  return { version: manifest.version, dir, nodePtyDir, templatesDir: path.join(bundleRoot, 'deploy'), files, sha256: manifest.files };
 }

@@ -20,7 +20,9 @@ import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager'
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
 import { createMisaoRelay } from './misaoRelay';
-import { readMisaoSocketStatus, resolveAgentMisaoSocket, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
+import misaoRoutes from './misaoRoutes';
+import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
+import { buildServicePath } from '../modules/system/misao/misaoPaths';
 
 // ─── Environment validation ───
 
@@ -60,6 +62,25 @@ function resolveVersion(): string {
   }
 }
 const agentVersion = resolveVersion();
+
+/** What the hub's misao installer needs to know about this host: the node and node-pty this agent runs on, and its PATH. */
+function describeMisaoHost(): AgentMisaoHost {
+  const homeDir = os.homedir();
+  let nodePtyDir: string | null = null;
+  try {
+    nodePtyDir = path.dirname(require.resolve('node-pty/package.json'));
+  } catch {
+    nodePtyDir = null;
+  }
+  return {
+    homeDir,
+    nodePath: process.execPath,
+    servicePath: buildServicePath(process.env, homeDir, fs.existsSync),
+    nodePtyDir,
+    platform: process.platform,
+    arch: process.arch,
+  };
+}
 
 // ─── Graceful shutdown ───
 
@@ -109,12 +130,7 @@ async function main(): Promise<void> {
   const relayMisao = createMisaoRelay(misaoSocket, app.log);
 
   // Registered after the auth hook above, so it is covered by it like every other /api route.
-  await app.register(async (fastify) => {
-    fastify.get('/api/misao/status', async (_request, reply) => {
-      if (!misaoSocket) return reply.status(503).send({ error: 'misao relay disabled' });
-      return readMisaoSocketStatus(misaoSocket);
-    });
-  });
+  await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost() });
 
   // WebSocket routes
   await app.register(async (fastify) => {
