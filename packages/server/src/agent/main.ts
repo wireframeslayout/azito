@@ -19,6 +19,8 @@ import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
+import { createMisaoRelay } from './misaoRelay';
+import { readMisaoSocketStatus, resolveAgentMisaoSocket, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 
 // ─── Environment validation ───
 
@@ -90,11 +92,29 @@ async function main(): Promise<void> {
   });
 
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  // Agent servers are tmux-only: the misao mux is local-only (see parseMuxInput / POST /api/servers).
+  // The tmux endpoints (/api/tmux, mode=terminal) are tmux's. misao is reached through its own relay (mode=misao).
   const muxKind = 'tmux';
   const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
 
   const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '');
+
+  // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
+  // socket path disables the relay (tmux keeps working) rather than stopping the agent.
+  let misaoSocket: AgentMisaoSocket | null = null;
+  try {
+    misaoSocket = resolveAgentMisaoSocket(process.env, os.homedir());
+  } catch (err) {
+    app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+  }
+  const relayMisao = createMisaoRelay(misaoSocket, app.log);
+
+  // Registered after the auth hook above, so it is covered by it like every other /api route.
+  await app.register(async (fastify) => {
+    fastify.get('/api/misao/status', async (_request, reply) => {
+      if (!misaoSocket) return reply.status(503).send({ error: 'misao relay disabled' });
+      return readMisaoSocketStatus(misaoSocket);
+    });
+  });
 
   // WebSocket routes
   await app.register(async (fastify) => {
@@ -129,6 +149,12 @@ async function main(): Promise<void> {
         const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
 
         handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
+        return;
+      }
+
+      if (mode === 'misao') {
+        // Same token check as every route (the onRequest hook above). Relays to this agent's own socket only.
+        relayMisao(socket);
         return;
       }
 
