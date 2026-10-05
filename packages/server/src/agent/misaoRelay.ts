@@ -4,7 +4,7 @@ import { createWebSocketStream, type WebSocket } from 'ws';
 import { MISAO_RELAY_CLOSE, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 
 /** The relay hands the daemon's full authority (it runs arbitrary commands) to whoever opens it: bound the fan-out. */
-export const MAX_MISAO_RELAYS = 64;
+export const MAX_MISAO_RELAYS = 128;
 
 export interface MisaoRelayLog {
   warn(message: string): void;

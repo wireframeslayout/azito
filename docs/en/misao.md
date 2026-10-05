@@ -81,7 +81,7 @@ choose tmux under "Default terminal" in the same dialog.
 - Workspace operations such as `POST /api/servers/:name/mux/workspaces` accept `kind` (default: the server's default).
 - A misao window's `tmux_target` is stored as `<workspace>:<window id>` (migration 078 converts existing rows).
 
-The API takes `defaultMux` (`"misao"` / `"tmux"`; misao is local servers only) and `muxRuntime`
+The API takes `defaultMux` (`"misao"` / `"tmux"`) and `muxRuntime`
 (`"system"` / `"managed"`, the tmux executable) separately on `PUT /api/servers/:name`.
 The former `muxRuntime: "misao"` is still accepted as `defaultMux: "misao"` for compatibility, and will be removed in the next release.
 
@@ -95,7 +95,7 @@ server uses the daemon on its host, reached through the agent.
   (`MisaoClient({ connect })`), so windows, terminals, task output lines and activity events work as on a local server.
 - **Security.** The relay hands over the daemon's full authority (it runs arbitrary commands as the agent's user), so it is guarded exactly like
   `/api/exec`: the agent token, and the agent's bind address (a Tailscale IP, never `0.0.0.0`). The socket is fixed by the agent at startup:
-  nothing in the request (a path, a query) can name another one. At most 64 relays are open at once.
+  nothing in the request (a path, a query) can name another one. At most 128 relays are open at once.
 - **Task output.** Lines come from the server's own connection; the completion signal file lives on the agent host and is read through
   the agent's file-tail, like for tmux.
 - **Listing.** An agent server lists misao only where it was set up (default mux, a misao window on record, or a daemon socket the agent

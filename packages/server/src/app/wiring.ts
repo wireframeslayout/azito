@@ -602,7 +602,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const repos = buildRepositories(db);
   const misaoRuntime = await resolveMisaoRuntimeForHub(
     { env: process.env, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' },
-    repos.serverRepo.findAll().some((s) => s.defaultMux === 'misao'),
+    repos.serverRepo.findAll().some((s) => s.type === 'local' && s.defaultMux === 'misao'),
     console,
   );
   const extractHost = (sshHostStr: string): { host: string; port: number } => {

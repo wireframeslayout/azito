@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { WebSocket, WebSocketServer } from 'ws';
-import { createMisaoRelay } from './misaoRelay';
+import { MAX_MISAO_RELAYS, createMisaoRelay } from './misaoRelay';
 import { MISAO_RELAY_CLOSE, readMisaoSocketStatus, resolveAgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 
 describe('resolveAgentMisaoSocket', () => {
@@ -71,6 +71,35 @@ describe('relay to a unix socket', () => {
     const url = await startRelay(path.join(tmpDir(), 'none.sock'));
     const ws = new WebSocket(url);
     expect((await closeInfo(ws)).code).toBe(MISAO_RELAY_CLOSE.daemonUnreachable);
+  });
+
+  it('refuses a relay beyond the limit, and serves again once one has closed', async () => {
+    const dir = tmpDir();
+    const socketPath = path.join(dir, 'm.sock');
+    const server = net.createServer((conn) => conn.on('data', (chunk) => conn.write(chunk)));
+    await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+    cleanups.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+
+    const url = await startRelay(socketPath);
+    const open: WebSocket[] = [];
+    for (let i = 0; i < MAX_MISAO_RELAYS; i++) {
+      const ws = new WebSocket(url);
+      await new Promise<void>((resolve) => ws.once('open', () => resolve()));
+      open.push(ws);
+    }
+    const over = new WebSocket(url);
+    expect((await closeInfo(over)).code).toBe(MISAO_RELAY_CLOSE.busy);
+
+    const closed = closeInfo(open[0]);
+    open[0].close();
+    await closed;
+    await vi.waitFor(async () => {
+      const again = new WebSocket(url);
+      const outcome = await new Promise<string>((resolve) => { again.once('open', () => resolve('open')); again.once('close', () => resolve('closed')); });
+      expect(outcome).toBe('open');
+      again.close();
+    }, { timeout: 5000, interval: 100 });
+    for (const ws of open) ws.terminate();
   });
 
   it('closes with disabled when no socket is configured', async () => {

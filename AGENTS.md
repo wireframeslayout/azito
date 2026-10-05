@@ -108,7 +108,7 @@ packages/
       main.ts                      # Composition root: wires repositories/services, registers routes, starts Fastify
       agent/                       # Lightweight agent entry point (deployed to remote servers)
         main.ts, routes.ts         # Agent process HTTP/WS surface
-        misaoRelay.ts, misaoRoutes.ts  # `/ws?mode=misao` byte relay to the agent's own misao socket (fixed at startup, 64 at once) + `GET /api/misao/status` / `PUT /api/misao/upload` (the two release files, staged under `~/.azito/misao/<version>.upload/`) — all behind the agent token
+        misaoRelay.ts, misaoRoutes.ts  # `/ws?mode=misao` byte relay to the agent's own misao socket (fixed at startup, 128 at once) + `GET /api/misao/status` / `PUT /api/misao/upload` (the two release files, staged under `~/.azito/misao/<version>.upload/`) — all behind the agent token
       modules/                     # Feature modules (1 module = 1 responsibility; routes+service+repository together)
         tmux/                      # [base] TmuxClient, PaneOutputStream/PaneStream(Factory), TmuxHookManager
           routes/, ws/             # HTTP routes (sessions, hooks) + WS handlers (terminal, agent-terminal)
