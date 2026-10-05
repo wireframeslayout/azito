@@ -1,0 +1,21 @@
+# AZITO が同梱する misao デーモン (ヘッドレスのペインサーバー) の systemd ユーザー unit。
+# ハブ (azito.service) とは別のサービス: misao を止めると全ペインが閉じるため、ハブの再起動・更新に巻き込まない。
+# __AZITO_PREFIX__ と __PATH__ は install 時に絶対パスへ置き換える (azito misao install)。
+[Unit]
+Description=misao daemon (headless pane server for AZITO)
+
+[Service]
+Type=simple
+# misao は misao/<version>/ に展開し、明示的な更新のときだけ misao/current を切り替える。
+# 実行ファイルはハブ同梱の node を使う (node-pty はハブ同梱のものを misao/<version>/node_modules に複製して共有する)。
+ExecStart=__AZITO_PREFIX__/hub/current/node __AZITO_PREFIX__/misao/current/misao.mjs serve --socket __AZITO_PREFIX__/misao/misao.sock --data __AZITO_PREFIX__/misao
+# pane の子プロセスが見る PATH とロケール。systemd のユーザーマネージャの既定には nvm / Homebrew / ~/.local/bin が入らない。
+Environment=PATH=__PATH__
+Environment=LC_CTYPE=C.UTF-8
+# 停止時は、デーモンが自分で pane を閉じる (systemd と終了処理を取り合わない)。クラッシュ時に残ったプロセスには systemd が触れない
+KillMode=process
+Restart=on-failure
+RestartSec=1
+
+[Install]
+WantedBy=default.target

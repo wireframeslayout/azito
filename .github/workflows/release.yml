@@ -41,6 +41,14 @@ jobs:
             --arch ${{ matrix.arch }} \
             --repo ${{ github.repository }}
 
+      # The bundled misao runs on the bundled node with the bundled node-pty — the same way the installed
+      # service will start it — so a broken asset or a missing native module fails the release here.
+      - name: Smoke-test bundled misao
+        run: |
+          SMOKE=$(mktemp -d)
+          tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
+          "$SMOKE/node" "$SMOKE/misao/misao.mjs" --version
+
       - name: Verify no data/ in tarball
         run: |
           TARBALL=$(ls packages/server/dist-hub/azito-hub-*.tar.gz)
