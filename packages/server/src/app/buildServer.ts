@@ -650,7 +650,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo,
     interactionMonitor,
   });
-  await app.register(systemRoutes, { systemUpdateService, channelResolver });
+  await app.register(systemRoutes, { systemUpdateService, channelResolver, misaoService: wiring.misaoService });
   await app.register(browserRoutes, {
     browserSessionManager,
     serverRepo,

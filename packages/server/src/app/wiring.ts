@@ -24,7 +24,12 @@ import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClie
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
-import { registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
+import { probeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
+import { getBundleRoot } from '../shared/releaseInfo';
+import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
+import { createMisaoServiceController, runCommand } from '../modules/system/misao/MisaoServiceController';
+import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
@@ -202,6 +207,8 @@ export interface SystemUpdateModule {
   deployModeDetector: DeployModeDetector;
   systemUpdateService: SystemUpdateService;
   channelResolver: UpdateChannelResolver;
+  /** The AZITO-managed misao service. Separate from the hub's own update: a hub update never touches it. */
+  misaoService: MisaoServiceService;
 }
 
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
@@ -510,12 +517,34 @@ function buildExecuteTaskUseCase(
   );
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories): SystemUpdateModule {
+function buildMisaoService(misao: MisaoHandle): MisaoServiceService {
+  const bundleRoot = getBundleRoot();
+  const prefix = resolveInstallPrefix(bundleRoot);
+  let paths: MisaoPaths | null = null;
+  let pathsError: string | undefined;
+  try {
+    paths = prefix ? resolveMisaoPaths(prefix) : null;
+  } catch (err) {
+    // A prefix too long for the daemon's socket must not stop a hub that already runs from it: report it on the misao row.
+    pathsError = err instanceof Error ? err.message : String(err);
+    console.warn(`[misao] the managed misao service is unavailable: ${pathsError}`);
+  }
+  return new MisaoServiceService({
+    paths,
+    ...(pathsError ? { pathsError } : {}),
+    bundle: readMisaoBundle(bundleRoot),
+    controller: createMisaoServiceController(process.platform, runCommand),
+    env: process.env,
+    hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
+  });
+}
+
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog);
   const deployModeDetector = new DeployModeDetector();
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
-  return { deployModeDetector, systemUpdateService, channelResolver };
+  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao) };
 }
 
 function buildAgentActivityMonitor(
@@ -622,7 +651,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao);
 
   return {
     uiToken,

@@ -42,3 +42,10 @@ export {
   MISAO_PANE_ID_RE,
   muxKindOfPaneHandle,
 } from './mux';
+export type {
+  MisaoServiceState,
+  MisaoUnmanagedReason,
+  MisaoSocketSetting,
+  MisaoDaemonInfo,
+  MisaoServiceStatus,
+} from './misaoService';
