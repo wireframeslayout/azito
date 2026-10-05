@@ -100,7 +100,15 @@ const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008,
 // be set before `db.transaction()` begins.
 const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
 
-function runMigrations(db: import('better-sqlite3').Database): void {
+export interface OpenDatabaseOptions {
+  /**
+   * The default mux of the `local` server seeded into a database this call creates (migration 003 seeds it before the
+   * column exists, so it would otherwise be tmux). Applies only to a brand-new database; an existing one keeps what it has.
+   */
+  freshLocalDefaultMux?: 'tmux' | 'misao';
+}
+
+function runMigrations(db: import('better-sqlite3').Database, options: OpenDatabaseOptions): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       version INTEGER PRIMARY KEY,
@@ -114,6 +122,7 @@ function runMigrations(db: import('better-sqlite3').Database): void {
       .map((r) => r.version),
   );
 
+  const isFreshDatabase = applied.size === 0;
   const insertMigration = db.prepare('INSERT INTO _migrations (version, description) VALUES (?, ?)');
 
   for (const migration of migrations) {
@@ -139,13 +148,17 @@ function runMigrations(db: import('better-sqlite3').Database): void {
       }
     }
   }
+
+  if (isFreshDatabase && options.freshLocalDefaultMux) {
+    db.prepare("UPDATE servers SET default_mux = ? WHERE name = 'local' AND type = 'local'").run(options.freshLocalDefaultMux);
+  }
 }
 
 // ─── Exports ───
 
 export type SqliteDatabase = import('better-sqlite3').Database;
 
-export function openDatabase(dbPath: string): SqliteDatabase {
+export function openDatabase(dbPath: string, options: OpenDatabaseOptions = {}): SqliteDatabase {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -154,6 +167,6 @@ export function openDatabase(dbPath: string): SqliteDatabase {
     try { fs.chmodSync(`${dbPath}${suffix}`, 0o600); } catch {}
   }
 
-  runMigrations(db);
+  runMigrations(db, options);
   return db;
 }

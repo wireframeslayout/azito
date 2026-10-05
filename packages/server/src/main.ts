@@ -90,7 +90,9 @@ async function main(): Promise<void> {
     console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
   }
 
-  const db = openDatabase(paths.db);
+  // A release install runs its panes on the bundled misao, so a new installation's local server starts on misao; a
+  // source checkout (`npm run dev`) has no service to rely on and keeps tmux.
+  const db = openDatabase(paths.db, { freshLocalDefaultMux: releaseInfo ? 'misao' : 'tmux' });
   const uiToken = resolveUiToken(paths.uiToken);
   const webhookToken = resolveWebhookToken(paths.webhookToken);
 
