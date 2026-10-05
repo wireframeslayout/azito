@@ -5,7 +5,7 @@ windows and panes of a local server. The hub always registers the misao driver a
 "default terminal" (misao or tmux). The hub starts even when no daemon is running; that server is then
 reported as unable to connect.
 
-It applies to **local servers only** (it cannot be selected for agent / SSH servers).
+It applies to local servers and to agent servers (see [Agent servers](#agent-servers)); it cannot be selected for SSH servers.
 
 ## Getting started
 
@@ -85,6 +85,41 @@ The API takes `defaultMux` (`"misao"` / `"tmux"`; misao is local servers only) a
 (`"system"` / `"managed"`, the tmux executable) separately on `PUT /api/servers/:name`.
 The former `muxRuntime: "misao"` is still accepted as `defaultMux: "misao"` for compatibility, and will be removed in the next release.
 
+## Agent servers
+
+An agent server can run misao too. The hub keeps **one misao connection per server**: a local server uses the hub's own daemon, an agent
+server uses the daemon on its host, reached through the agent.
+
+- **Relay.** The agent serves `/ws?mode=misao`, a byte-for-byte relay between a WebSocket and the agent's own misao socket
+  (`MISAO_SOCKET` in the agent's environment, otherwise `~/.azito/misao/misao.sock`). The hub's SDK speaks its protocol through it
+  (`MisaoClient({ connect })`), so windows, terminals, task output lines and activity events work as on a local server.
+- **Security.** The relay hands over the daemon's full authority (it runs arbitrary commands as the agent's user), so it is guarded exactly like
+  `/api/exec`: the agent token, and the agent's bind address (a Tailscale IP, never `0.0.0.0`). The socket is fixed by the agent at startup:
+  nothing in the request (a path, a query) can name another one. At most 64 relays are open at once.
+- **Task output.** Lines come from the server's own connection; the completion signal file lives on the agent host and is read through
+  the agent's file-tail, like for tmux.
+- **Listing.** An agent server lists misao only where it was set up (default mux, a misao window on record, or a daemon socket the agent
+  reports). A server without it shows no `unavailable` misao entry; asking for a misao window there answers `409 mux_kind_unavailable` with reason `not_installed`.
+- **Isolation.** A misao window of an isolated server gets the same credential mask as a tmux one (`composePaneEnv`): `AZITO_UI_TOKEN`,
+  `AZITO_AGENT_TOKEN` and `AZITO_WEBHOOK_TOKEN` are blanked, whatever the daemon itself inherited. The hub's webhook token is passed as
+  ephemeral env, so the daemon does not persist it.
+
+### Installing misao on an agent server
+
+The hub sends **its own bundled misao** through the agent (the release files are checked against the manifest sha256 on both ends; the
+agent downloads nothing). It is installed under `~/.azito/misao/<version>/` with `current` -> `<version>`, the agent's own node and node-pty,
+and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background process (cleared environment, no
+reboot survival) when the host has no user systemd. Only Linux x86_64 agents are supported.
+
+- When you add an agent server (auto-install), misao is installed after the agent. A host without tmux no longer fails the preflight, and its
+  default mux becomes misao. If only the misao step fails, the agent stays installed and the response carries `misaoError`.
+- When you create a misao window on a server that has none, the UI asks first, then calls `POST /api/servers/:name/install-misao`
+  (operator only, also in compat mode; `GET` on the same path reports the progress). The Setup row of the server has the same button, with progress and errors.
+- An update of the agent (`AgentUpdater`) never stops or restarts the misao daemon. A daemon of another release than the bundled one is left
+  as it is (the Setup row says so): switching it ends every pane.
+- A hub run from a source checkout carries no bundled misao, so it cannot install one on an agent server.
+- Not covered yet: startup recovery of stuck tasks (local servers only), and switching a running agent-side daemon to a newer release.
+
 ## When it cannot connect
 
 If the Overview shows "Cannot connect to misao. You can check it from a terminal with misao status.",
@@ -124,5 +159,4 @@ the hub cannot reach the daemon.
   [activity detection reference](./activity-detection.md) for details.
 - tmux-specific operations such as pane zoom, saving and applying layouts, and setting pane titles are not supported.
 - Restarting the daemon loses the pane processes (only metadata remains, shown as `stopped`).
-- misao on agent / SSH servers, choosing it in the Add Server dialog, and the managed tmux install flow are out of scope.
-  Choosing the mux in the add-window dialog is future work (new windows go to the default mux for now).
+- misao on SSH servers and the managed tmux install flow are out of scope.

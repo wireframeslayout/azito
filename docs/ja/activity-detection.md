@@ -522,7 +522,7 @@ request`）を返します。
 
 ## 13. misao 窓
 
-既定のマルチプレクサ（`servers.default_mux`）が `misao` の local サーバーは tmux ではなく misao デーモンが担う。
+`mux_ref.kind` が `misao` の窓（local サーバー、および misao を持つ agent サーバー。それぞれ自分のデーモン接続と自分の `MisaoActivityBridge` を持つ）は、tmux ではなく misao デーモンが担う。
 tmux のサーバーでは以下は何も生成されず、これまでの tmux の挙動は変わらない。
 
 - **supervisor なし。** `shouldSupervise(serverType, windowType, muxKind)` は misao 窓で false になり、
