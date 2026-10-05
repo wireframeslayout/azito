@@ -479,14 +479,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: async (srv) => {
       if (srv.type === 'local') return describeMisaoDaemon(wiring.misao.connection);
+      // An agent server's row also says whether this hub can install misao there, and when its daemon is another release.
+      const bundled = wiring.misaoAgentInstaller.bundledVersion;
+      const installable = { installable: bundled !== undefined, ...(bundled ? { bundledVersion: bundled } : {}) };
       try {
         // An agent that has a daemon socket but no node yet (set up by hand) gets one here.
         await wiring.misao.servers.discoverAgentNode(srv);
       } catch (err) {
-        return { installed: false, detail: err instanceof Error ? err.message : String(err) };
+        return { installed: false, detail: err instanceof Error ? err.message : String(err), ...installable };
       }
       const node = wiring.misao.servers.agentNode(srv.name);
-      return node ? describeMisaoDaemon(node.connection) : { installed: false, detail: 'not_installed' };
+      if (!node) return { installed: false, detail: 'not_installed', ...installable };
+      const daemon = await describeMisaoDaemon(node.connection);
+      return { ...daemon, ...installable, ...(bundled && daemon.daemonVersion && daemon.daemonVersion !== bundled ? { updateAvailable: true } : {}) };
     },
     onMuxChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);

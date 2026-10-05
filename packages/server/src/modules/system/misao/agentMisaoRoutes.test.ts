@@ -21,7 +21,7 @@ describe('POST /api/servers/:name/install-misao', () => {
 
   beforeEach(async () => {
     principal = OPERATOR_PRINCIPAL;
-    install.mockReset().mockImplementation(async (_transport: unknown, onProgress: (m: string) => void) => { onProgress('Transferring misao'); return RESULT; });
+    install.mockReset().mockImplementation(async (_transport: unknown, onProgress: (m: string) => void) => { onProgress('transfer'); return RESULT; });
     connection.availability.mockReset().mockReturnValue({ available: true });
     connection.request.mockReset().mockResolvedValue({ protocolVersion: '0.3.0', version: '0.2.0' });
     ensureAgentNode.mockReset().mockReturnValue({ connection });
@@ -46,7 +46,7 @@ describe('POST /api/servers/:name/install-misao', () => {
   it('installs through the agent of the server, connects the hub to it and reports the daemon', async () => {
     const res = await post('a1');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, ...RESULT, steps: ['Transferring misao'], daemon: { installed: true, version: '0.3.0', daemonVersion: '0.2.0' } });
+    expect(res.json()).toEqual({ ok: true, ...RESULT, steps: ['transfer'], daemon: { installed: true, version: '0.3.0', daemonVersion: '0.2.0' } });
     expect(getAgentTransport).toHaveBeenCalledWith(agent);
     expect(install).toHaveBeenCalledWith({ kind: 'transport' }, expect.any(Function));
     expect(ensureAgentNode).toHaveBeenCalledWith(agent);
@@ -87,12 +87,40 @@ describe('POST /api/servers/:name/install-misao', () => {
     ['transfer_failed', 502],
     ['daemon_not_ready', 502],
   ] as const)('maps a %s refusal to HTTP %i with its message and the steps taken so far', async (code, status) => {
-    install.mockImplementationOnce(async (_t: unknown, onProgress: (m: string) => void) => { onProgress('Transferring misao'); throw new MisaoServiceError(code, `refused: ${code}`); });
+    install.mockImplementationOnce(async (_t: unknown, onProgress: (m: string) => void) => { onProgress('transfer'); throw new MisaoServiceError(code, `refused: ${code}`); });
     const res = await post('a1');
     expect(res.statusCode).toBe(status);
-    expect(res.json()).toEqual({ error: `refused: ${code}`, code, steps: ['Transferring misao'] });
+    expect(res.json()).toEqual({ error: `refused: ${code}`, code, steps: ['transfer'] });
     expect(ensureAgentNode).not.toHaveBeenCalled();
     expect(onInstalled).not.toHaveBeenCalled();
+  });
+
+  it('reports the progress of a run while it is in flight and its outcome after', async () => {
+    const get = () => app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' });
+    expect((await get()).json()).toEqual({ state: 'idle', steps: [] });
+
+    let release!: () => void;
+    install.mockImplementationOnce(async (_t: unknown, onProgress: (m: string) => void) => {
+      onProgress('transfer');
+      await new Promise<void>((resolve) => { release = resolve; });
+      return RESULT;
+    });
+    const running = post('a1');
+    await vi.waitFor(async () => expect((await get()).json()).toEqual({ state: 'running', steps: ['transfer'] }));
+    release();
+    await running;
+    expect((await get()).json()).toEqual({ state: 'done', steps: ['transfer'] });
+  });
+
+  it('keeps a refusal as the outcome of the run', async () => {
+    install.mockRejectedValueOnce(new MisaoServiceError('unsupported_host', 'not x86_64'));
+    await post('a1');
+    const res = await app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' });
+    expect(res.json()).toEqual({ state: 'failed', steps: [], error: 'not x86_64', code: 'unsupported_host' });
+  });
+
+  it('is 404 for the progress of an unknown server', async () => {
+    expect((await app.inject({ method: 'GET', url: '/api/servers/nope/install-misao' })).statusCode).toBe(404);
   });
 
   it('serializes two installs on the same server', async () => {

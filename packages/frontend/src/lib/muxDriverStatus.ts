@@ -1,5 +1,5 @@
 /** How the hub sees the mux driver of one server (GET /api/servers/:name `mux`). */
-export type MuxDriverStatus = 'ok' | 'unreachable' | 'incompatible' | 'unknown';
+export type MuxDriverStatus = 'ok' | 'unreachable' | 'incompatible' | 'notInstalled' | 'unknown';
 
 /**
  * Interprets the detail API's `mux` field. Anything that is not a well-formed description
@@ -12,5 +12,6 @@ export function parseMuxDriverStatus(mux: unknown): MuxDriverStatus {
   if (driverAvailable !== false) return 'unknown';
   if (reason === 'daemon_unreachable') return 'unreachable';
   if (reason === 'protocol_incompatible') return 'incompatible';
+  if (reason === 'not_installed') return 'notInstalled';
   return 'unknown';
 }

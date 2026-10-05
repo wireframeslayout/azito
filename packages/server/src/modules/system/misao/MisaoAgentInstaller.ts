@@ -15,6 +15,9 @@ export type MisaoInstallTarget = Pick<AgentTransport, 'exec' | 'fetchMisaoStatus
 
 export type MisaoAgentStartMethod = 'systemd' | 'nohup' | 'running';
 
+/** What the installer is doing, in order. A code (not a sentence) so each reader can say it in its own language. */
+export type MisaoInstallStep = 'inspect' | 'transfer' | 'prepare' | 'start';
+
 export interface MisaoAgentInstallResult {
   /** The release this install put on the host (the bundled one). */
   version: string;
@@ -73,10 +76,10 @@ export class MisaoAgentInstaller {
     return this.bundle?.version;
   }
 
-  async install(target: MisaoInstallTarget, onProgress: (message: string) => void = () => undefined): Promise<MisaoAgentInstallResult> {
+  async install(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
     const bundle = this.requireBundle();
 
-    onProgress('Inspecting the agent host');
+    onProgress('inspect');
     const status = await this.inspect(target);
     const { host } = status;
     const root = agentMisaoRoot(host.homeDir);
@@ -94,9 +97,9 @@ export class MisaoAgentInstaller {
     }
 
     if (!(await this.hasVersion(target, root, bundle))) {
-      onProgress('Transferring misao');
+      onProgress('transfer');
       await this.transfer(target, bundle);
-      onProgress('Preparing misao');
+      onProgress('prepare');
       await this.finalize(target, host, root, bundle.version);
     }
 
@@ -105,7 +108,7 @@ export class MisaoAgentInstaller {
       return { version: bundle.version, runningVersion: status.installedVersion!, startMethod: 'running', updateAvailable: true };
     }
 
-    onProgress('Starting misao');
+    onProgress('start');
     const startMethod = await this.start(target, host, root, socket, bundle);
     await this.waitUntilListening(target, host, socket);
     // `current` is not moved by an install, so a host that had an older release installed starts that one.

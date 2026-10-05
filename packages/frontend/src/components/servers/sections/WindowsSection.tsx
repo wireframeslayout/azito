@@ -10,6 +10,7 @@ import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, typ
 import { preferredPaneOrdinal } from '../../../lib/paneState';
 import { refUsesMuxRoutes } from '../../../lib/sessionKind';
 import { muxCreateFailureText } from '../../../lib/muxKindChoice';
+import { useMisaoInstallOffer } from '../../../hooks/useMisaoInstallOffer';
 import { errorMessageOf } from '../../../lib/apiResult';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useToast } from '../../../hooks/useToast';
@@ -84,23 +85,24 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   // Creation always goes through the mux routes with an explicit kind: a new session in the kind the user picked,
   // a new window in the kind of the session it is added to. A refusal comes back as a body, shown as text.
   const failureText = useCallback((res: unknown): string | null => muxCreateFailureText(res, tw), [tw]);
+  const withMisaoInstall = useMisaoInstallOffer();
 
   const handleCreateSession = useCallback(async (name: string, kind: MuxDriverKind): Promise<string | null> => {
-    const res = await api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) });
+    const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) }));
     const failure = failureText(res);
     if (failure === null) refresh();
     return failure;
-  }, [server.name, refresh, failureText]);
+  }, [server.name, refresh, failureText, withMisaoInstall]);
 
   const handleAddWindow = useCallback(async (sessionName: string, kind: MuxDriverKind) => {
-    const res = await api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) });
+    const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) }));
     const failure = failureText(res);
     if (failure !== null) {
       showToast(failure);
       return;
     }
     refresh();
-  }, [server.name, refresh, failureText, showToast]);
+  }, [server.name, refresh, failureText, showToast, withMisaoInstall]);
 
   const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {

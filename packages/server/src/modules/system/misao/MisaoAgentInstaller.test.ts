@@ -126,7 +126,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(fs.statSync(root).mode & 0o777).toBe(0o700);
     expect(fs.existsSync(path.join(root, `${VERSION}.upload`))).toBe(false);
     expect(readMisaoSocketStatus({ path: agentMisaoManagedSocket(home) }, host)).toMatchObject({ socketPresent: true, installedVersion: VERSION });
-    expect(progress).toEqual(['Inspecting the agent host', 'Transferring misao', 'Preparing misao', 'Starting misao']);
+    expect(progress).toEqual(['inspect', 'transfer', 'prepare', 'start']);
 
     // Already running the bundled release: nothing is transferred, started or switched.
     const upload = vi.fn();

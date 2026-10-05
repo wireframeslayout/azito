@@ -6,6 +6,7 @@ import { useServerStatuses } from './useServerStatuses';
 import type { InstallStep } from '../components/ui';
 import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
+import { useMisaoInstallOffer } from './useMisaoInstallOffer';
 import { useConfirm } from './useConfirm';
 import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime, MuxStatusItem } from '@azito/shared';
 import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
@@ -100,6 +101,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     usesMuxRoutes(kind ?? defaultKindOf(serverName)), [defaultKindOf]);
   const kindQuery = (kind?: MuxDriverKind): string => (kind ? `?kind=${kind}` : '');
   const { showToast } = useToast();
+  const withMisaoInstall = useMisaoInstallOffer();
   const confirm = useConfirm();
 
   const [sessions, setSessions] = useState<Record<string, Session[]>>({});
@@ -235,7 +237,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     if (addAutoInstall) {
       setAddLoading(true);
       setAddInstallSteps([]);
-      const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string }>('/servers', {
+      const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string; misaoError?: string }>('/servers', {
         method: 'POST',
         body: JSON.stringify({ name: addName.trim(), host: addHost.trim(), autoInstall: true }),
       });
@@ -248,6 +250,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       if (res.type === 'agent' && res.startMethod === 'nohup') {
         showToast('Agent started via nohup (systemd unavailable). Manual restart required after server reboot.');
       }
+      // The agent is installed and registered; only misao is missing, and the server's Setup row can install it again.
+      if (res.misaoError) showToast(t('setup.misaoInstallFailedOnAdd', { error: res.misaoError }));
       setAddServerModal(false);
       setAddName(''); setAddHost(''); setAddAutoInstall(true);
       setAddType('agent'); setAddPort('3002'); setAddToken('');
@@ -278,7 +282,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setAddAutoInstall(true); setAddType('agent'); setAddPort('3002'); setAddToken('');
     setAddMuxRuntime('system');
     refreshAll();
-  }, [addName, addHost, addAutoInstall, addType, addPort, addToken, addMuxRuntime, refreshAll, showToast]);
+  }, [addName, addHost, addAutoInstall, addType, addPort, addToken, addMuxRuntime, refreshAll, showToast, t]);
 
   const openEditModal = useCallback((srv: Server) => {
     setEditServer(srv);
@@ -415,14 +419,14 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   }, [refreshAll, tabs, closeTab, confirm, t, sessionUsesMuxRoutes]);
 
   const handleAddWindow = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
-    const res = await api<unknown>(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind: kind ?? defaultKindOf(serverName) }) });
+    const res = await withMisaoInstall(serverName, () => api<unknown>(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind: kind ?? defaultKindOf(serverName) }) }));
     const failure = muxCreateFailureText(res, tw);
     if (failure !== null) {
       showToast(failure);
       return;
     }
     refreshAll();
-  }, [refreshAll, defaultKindOf, showToast, tw]);
+  }, [refreshAll, defaultKindOf, showToast, tw, withMisaoInstall]);
 
   const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {

@@ -27,11 +27,11 @@ export function requireOperator(operation: string): (request: FastifyRequest, re
 }
 
 /** Runs a misao operation and answers its refusal as `{ error, code }`; anything else is not this route's to explain. */
-export async function runMisaoOperation(reply: FastifyReply, operation: () => Promise<unknown>, extra: () => Record<string, unknown> = () => ({})): Promise<unknown> {
+export async function runMisaoOperation(reply: FastifyReply, operation: () => Promise<unknown>): Promise<unknown> {
   try {
     return await operation();
   } catch (err) {
     if (!(err instanceof MisaoServiceError)) throw err;
-    return reply.status(MISAO_ERROR_STATUS[err.code]).send({ error: err.message, code: err.code, ...extra() });
+    return reply.status(MISAO_ERROR_STATUS[err.code]).send({ error: err.message, code: err.code });
   }
 }

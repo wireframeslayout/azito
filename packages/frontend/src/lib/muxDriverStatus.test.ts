@@ -14,6 +14,10 @@ describe('parseMuxDriverStatus', () => {
     expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'protocol_incompatible' })).toBe('incompatible');
   });
 
+  it('maps not_installed: an agent server whose default misao was never installed', () => {
+    expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'not_installed' })).toBe('notInstalled');
+  });
+
   it('is unknown for other reasons and malformed bodies', () => {
     expect(parseMuxDriverStatus({ driverAvailable: false, reason: 'driver_not_registered' })).toBe('unknown');
     expect(parseMuxDriverStatus({ driverAvailable: false })).toBe('unknown');

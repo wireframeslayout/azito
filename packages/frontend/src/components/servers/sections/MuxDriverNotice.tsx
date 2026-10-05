@@ -12,6 +12,9 @@ export function MuxDriverNotice({ status }: MuxDriverNoticeProps) {
   if (status === 'unreachable') {
     return <Notice tone="warning" sub={t('overview.misaoUnreachableSub')}>{t('overview.misaoUnreachable')}</Notice>;
   }
+  if (status === 'notInstalled') {
+    return <Notice tone="warning" sub={t('overview.misaoNotInstalledSub')}>{t('overview.misaoNotInstalled')}</Notice>;
+  }
   if (status === 'incompatible') {
     return <Notice tone="warning" sub={t('overview.misaoIncompatibleSub')}>{t('overview.misaoIncompatible')}</Notice>;
   }

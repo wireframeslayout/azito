@@ -102,6 +102,36 @@ describe('POST /api/servers with defaultMux', () => {
   });
 });
 
+describe('POST /api/servers autoInstall: the default mux of a new agent server', () => {
+  const install = (extra: Record<string, unknown>) => vi.fn(async () => ({ success: true, host: '100.64.0.9', port: 3002, token: 'tok', version: 'v1', startMethod: 'systemd', steps: [], ...extra }));
+  const post = async (extra: Record<string, unknown>, payload: Record<string, unknown> = {}) => {
+    const opts = { ...makeOpts(null), agentInstaller: { install: install(extra) } as unknown as ServersRouteOptions['agentInstaller'] };
+    const res = await (await buildApp(opts)).inject({ method: 'POST', url: '/api/servers', payload: { name: 'm', host: 'u@h', autoInstall: true, ...payload } });
+    return { res, create: opts.serverRepo.create as ReturnType<typeof vi.fn> };
+  };
+
+  it('is misao on a host without tmux, where misao was installed: nothing else could run there', async () => {
+    const { create } = await post({ tmuxFound: false });
+    expect(create.mock.calls[0][8]).toBe('misao');
+  });
+
+  it('stays the default (tmux) when the host has tmux', async () => {
+    const { create } = await post({ tmuxFound: true });
+    expect(create.mock.calls[0][8]).toBeUndefined();
+  });
+
+  it('does not move to misao when misao could not be installed, and says why', async () => {
+    const { res, create } = await post({ tmuxFound: false, misaoError: 'The agent has no node-pty' });
+    expect(create.mock.calls[0][8]).toBeUndefined();
+    expect(res.json()).toMatchObject({ ok: true, misaoError: 'The agent has no node-pty' });
+  });
+
+  it('keeps what the request chose', async () => {
+    const { create } = await post({ tmuxFound: false }, { defaultMux: 'tmux' });
+    expect(create.mock.calls[0][8]).toBe('tmux');
+  });
+});
+
 describe('PUT /api/servers/:name with defaultMux', () => {
   it('switches the default mux and keeps the stored tmux runtime', async () => {
     const opts = makeOpts(makeServer({ muxRuntime: 'managed' }));

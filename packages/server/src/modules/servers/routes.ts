@@ -113,6 +113,20 @@ function redactSecrets(message: string): string {
 
 // ─── Types ───
 
+/** The misao row of a server's status / install-status. The last three are for an agent server's row (its install is run from here). */
+export interface MisaoDaemonRow {
+  installed: boolean;
+  version?: string;
+  daemonVersion?: string;
+  detail?: string;
+  /** This hub can put its bundled misao on the server. */
+  installable?: boolean;
+  /** The release this hub would install. */
+  bundledVersion?: string;
+  /** The daemon runs another release than the bundled one (left as it is: switching it ends every pane). */
+  updateAvailable?: boolean;
+}
+
 interface MuxKindStatus {
   kind: MuxDriverKind;
   driverAvailable: boolean;
@@ -200,7 +214,7 @@ export interface ServersRouteOptions {
   scopedAuthEnabled: boolean;
   muxDriverRegistry: MuxDriverRegistry;
   /** Reports the misao daemon of a server for its status / install-status rows. */
-  misaoDaemonStatus: (server: ServerConfig) => Promise<{ installed: boolean; version?: string; daemonVersion?: string; detail?: string }>;
+  misaoDaemonStatus: (server: ServerConfig) => Promise<MisaoDaemonRow>;
   onMuxChanged?: (change: { previous: ServerConfig; next: ServerConfig }) => void;
   /**
    * A server was created (`previous` is null), edited, had its agent reinstalled, or was deleted (`next` is null):
@@ -415,7 +429,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const result = await agentInstaller.install(host, (p) => steps.push(p), validMuxRuntime);
 
         if (result.success) {
-          serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime, validDefaultMux);
+          // A host without tmux can only run misao: unless the request chose, that is the default (when misao is there).
+          const defaultMux = validDefaultMux ?? (result.tmuxFound === false && !result.misaoError ? 'misao' : undefined);
+          serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime, defaultMux);
           notifyServerCreated(name);
           return { ok: true, type: 'agent', steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
         }

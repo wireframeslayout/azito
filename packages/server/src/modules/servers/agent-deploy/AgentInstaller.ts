@@ -18,8 +18,17 @@ export interface InstallProgress {
  * What puts misao on a freshly installed agent: the hub's own copy, through the agent (see MisaoAgentInstaller). Defined here
  * so this module does not depend on the layer that implements it.
  */
+export type AgentMisaoInstallStep = 'inspect' | 'transfer' | 'prepare' | 'start';
+
+const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
+  inspect: 'Inspecting the host...',
+  transfer: 'Transferring misao...',
+  prepare: 'Preparing misao...',
+  start: 'Starting misao...',
+};
+
 export interface AgentMisaoInstaller {
-  install(transport: AgentTransport, onProgress?: (message: string) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'running'; updateAvailable: boolean }>;
+  install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'running'; updateAvailable: boolean }>;
 }
 
 export interface InstallResult {
@@ -31,6 +40,8 @@ export interface InstallResult {
   startMethod: 'systemd' | 'nohup';
   steps: InstallProgress[];
   error?: string;
+  /** The host has tmux (the preflight found one). A host without it can only use misao, so the server must default to it. */
+  tmuxFound?: boolean;
   /**
    * Why misao could not be put on the agent. The agent itself is installed and healthy (so `success` stays true): this is
    * reported beside it, because the server has no pane server until misao is installed (tmux, if the host has it, still works).
@@ -126,7 +137,7 @@ export class AgentInstaller {
     // ── misao ──
     const misaoError = await this.installMisao(preflight.tailscaleIp, token, report);
 
-    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, ...(misaoError ? { misaoError } : {}) };
+    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound: preflight.tmuxVersion !== '', ...(misaoError ? { misaoError } : {}) };
   }
 
   /** Puts misao on the agent that just came up. A failure is reported, not thrown: the agent stays installed. */
@@ -135,7 +146,7 @@ export class AgentInstaller {
     report('misao', 'running', 'Installing misao...');
     try {
       const transport = new AgentTransport(host, AGENT_PORT, token, 'system', host);
-      const result = await this.misaoInstaller.install(transport, (message) => report('misao', 'running', message));
+      const result = await this.misaoInstaller.install(transport, (step) => report('misao', 'running', MISAO_STEP_MESSAGES[step]));
       report('misao', 'ok', `misao ${result.version} (${result.startMethod})`);
       return undefined;
     } catch (err) {

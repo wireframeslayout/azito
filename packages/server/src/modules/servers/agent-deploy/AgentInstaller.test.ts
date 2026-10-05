@@ -46,8 +46,8 @@ describe('AgentInstaller', () => {
   }
 
   const okMisao = (): AgentMisaoInstaller & { install: ReturnType<typeof vi.fn> } => ({
-    install: vi.fn(async (_transport, onProgress?: (m: string) => void) => {
-      onProgress?.('Transferring misao');
+    install: vi.fn(async (_transport, onProgress?: (step: 'transfer') => void) => {
+      onProgress?.('transfer');
       return { version: '0.2.0', startMethod: 'systemd' as const, updateAvailable: false };
     }),
   });
@@ -82,6 +82,7 @@ describe('AgentInstaller', () => {
       'preflight:running', 'preflight:ok', 'transfer:running', 'transfer:ok', 'start:running', 'start:ok',
       'health:running', 'health:ok', 'misao:running', 'misao:running', 'misao:ok',
     ]);
+    expect(steps.filter((s) => s.step === 'misao').map((s) => s.message)).toEqual(['Installing misao...', 'Transferring misao...', 'misao 0.2.0 (systemd)']);
     expect(steps.at(-1)?.message).toBe('misao 0.2.0 (systemd)');
   });
 
