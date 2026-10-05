@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import misaoRoutes from '../../../agent/misaoRoutes';
 import { agentMisaoManagedSocket, readMisaoSocketStatus, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { readMisaoBundle, type MisaoBundle } from './MisaoBundle';
-import { MisaoAgentInstaller, type MisaoInstallTarget } from './MisaoAgentInstaller';
+import { MisaoAgentInstaller, sanitizeServicePath, type MisaoInstallTarget } from './MisaoAgentInstaller';
 import { MisaoServiceError } from './MisaoServiceError';
 
 const REPO_DEPLOY_DIR = path.resolve(__dirname, '../../../../../../deploy');
@@ -249,5 +249,27 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     await installer().install(target({ uploadMisaoFile: upload }));
     expect(upload).toHaveBeenCalledTimes(2);
     expect(fs.readFileSync(path.join(root, VERSION, 'misao.mjs'), 'utf-8')).toBe(FAKE_DAEMON);
+  });
+});
+
+describe('sanitizeServicePath', () => {
+  it('keeps plain absolute directories', () => {
+    expect(sanitizeServicePath('/usr/bin:/home/u/.nvm/versions/node/v24/bin:/bin')).toBe('/usr/bin:/home/u/.nvm/versions/node/v24/bin:/bin');
+  });
+
+  it.each([
+    ['a relative entry', 'bin:/usr/bin'],
+    ['an entry with whitespace', '/opt/my dir:/usr/bin'],
+    ['an entry with a newline (a second unit line)', '/x\nExecStartPre=/bin/evil:/usr/bin'],
+    ['an entry with a control character', '/x\u0007y:/usr/bin'],
+    ['an entry with $ or quotes', '/a$b:/c"d:/usr/bin'],
+    ['an empty entry', ':/usr/bin'],
+    ['a parent reference', '/usr/../etc:/usr/bin'],
+  ])('drops %s and keeps the rest', (_label, input) => {
+    expect(sanitizeServicePath(input)).toBe('/usr/bin');
+  });
+
+  it('refuses a PATH none of whose entries is usable', () => {
+    expect(() => sanitizeServicePath('bin:/a b')).toThrow(MisaoServiceError);
   });
 });

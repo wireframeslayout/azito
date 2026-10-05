@@ -95,6 +95,7 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
 export const NO_AGENT_MISAO: MisaoServersDeps['agent'] = {
   target: () => { throw new Error('this process does not open the misao relay of an agent server'); },
   status: async () => ({ socketPresent: false }),
+  latest: () => null,
 };
 
 /**

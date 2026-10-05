@@ -52,12 +52,28 @@ describe('AgentInstaller', () => {
     }),
   });
 
-  it('does not require tmux: a host without it passes the preflight', async () => {
-    const { installer } = make(undefined, { tmux: '' });
+  it('does not require tmux when misao is installed: a host without it passes', async () => {
+    const { installer } = make(okMisao(), { tmux: '' });
     const steps: InstallProgress[] = [];
     const result = await installer.install('user@host', (p) => steps.push(p));
     expect(result.success).toBe(true);
+    expect(result.tmuxFound).toBe(false);
     expect(steps.find((s) => s.step === 'preflight' && s.status === 'ok')?.message).toContain('no tmux (optional)');
+  });
+
+  it('fails as before, asking for tmux, when the host has no tmux and this hub has no misao to install', async () => {
+    const { installer } = make(undefined, { tmux: '' });
+    const result = await installer.install('user@host');
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/tmux is required/);
+  });
+
+  it('fails when the host has no tmux and misao could not be installed on it', async () => {
+    const misao: AgentMisaoInstaller = { install: vi.fn(async () => { throw new Error('no node-pty'); }) };
+    const { installer } = make(misao, { tmux: '' });
+    const result = await installer.install('user@host');
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/tmux is required.*no node-pty/);
   });
 
   it('shows the tmux version when the host has one', async () => {
@@ -88,7 +104,7 @@ describe('AgentInstaller', () => {
 
   it('keeps the agent installed and reports why when misao could not be installed', async () => {
     const misao: AgentMisaoInstaller = { install: vi.fn(async () => { throw new Error('The agent has no node-pty'); }) };
-    const { installer } = make(misao);
+    const { installer } = make(misao, { tmux: 'tmux 3.4\n' });
     const steps: InstallProgress[] = [];
     const result = await installer.install('user@host', (p) => steps.push(p));
 
@@ -98,7 +114,7 @@ describe('AgentInstaller', () => {
   });
 
   it('installs without a misao step when the hub has no misao to install', async () => {
-    const { installer } = make(undefined);
+    const { installer } = make(undefined, { tmux: 'tmux 3.4\n' });
     const steps: InstallProgress[] = [];
     const result = await installer.install('user@host', (p) => steps.push(p));
     expect(result.success).toBe(true);
@@ -119,7 +135,7 @@ describe('AgentInstaller', () => {
   });
 
   it('tells the agent where its misao socket is (systemd unit)', async () => {
-    const { installer, commands } = make(undefined);
+    const { installer, commands } = make(undefined, { tmux: 'tmux 3.4\n' });
     await installer.install('user@host');
     const unit = commands.find((c) => c.includes('azito-agent.service <<'));
     expect(unit).toContain('Environment=MISAO_SOCKET=%h/.azito/misao/misao.sock');

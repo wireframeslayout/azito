@@ -81,7 +81,7 @@ misao status
 - `POST /api/servers/:name/mux/workspaces` などのワークスペース操作は `kind` を受け付けます（省略時は既定の方式）。
 - misao のウィンドウの `tmux_target` は `<workspace>:<window id>` の形で保存されます（migration 078 で既存の行も変換）。
 
-API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`、misao は local サーバーのみ）と `muxRuntime`（`"system"` / `"managed"`、tmux の実行ファイル）を別々に指定します。
+API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`。エージェントサーバーでも、misao が導入済みで接続できれば使えます）と `muxRuntime`（`"system"` / `"managed"`、tmux の実行ファイル）を別々に指定します。
 以前の `muxRuntime: "misao"` は `defaultMux: "misao"` として今のところ受け付けますが、互換のためで、次のリリースで廃止する予定です。
 
 ## エージェントサーバー

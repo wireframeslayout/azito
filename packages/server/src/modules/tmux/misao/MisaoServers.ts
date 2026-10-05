@@ -30,6 +30,8 @@ export interface MisaoServersDeps {
   agent: {
     target: (server: ServerConfig) => MisaoTarget;
     status: (server: ServerConfig) => Promise<Pick<MisaoSocketStatus, 'socketPresent'>>;
+    /** The server as it is stored now (null once it is gone): a node must not be built from a config read before a slow call. */
+    latest: (name: string) => ServerConfig | null;
   };
 }
 
@@ -99,7 +101,7 @@ export class MisaoServers {
     if (existing) return existing;
     const { sdk, shell, hubEnv, onChange, log } = this.deps;
     const target = this.deps.agent.target(server);
-    const connection = new MisaoConnection({ ...target, sdk, log });
+    const connection = new MisaoConnection({ ...target, sdk, log, logTag: `misao:${server.name}` });
     const driver = new MisaoMuxClient(connection, { shell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(sdk, target) });
     const node: AgentNode = { connection, driver, server, observer: undefined };
     this.agentNodes.set(server.name, node);
@@ -120,7 +122,10 @@ export class MisaoServers {
     if (this.agentNodes.has(server.name)) return true;
     const { socketPresent } = await this.deps.agent.status(server);
     if (!socketPresent) return false;
-    this.ensureAgentNode(server);
+    // The agent call took a while: the server may have been edited (new token) or deleted meanwhile.
+    const latest = this.deps.agent.latest(server.name);
+    if (!latest) return false;
+    this.ensureAgentNode(latest);
     return true;
   }
 

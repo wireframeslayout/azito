@@ -47,6 +47,16 @@ const SERVICE_UNIT_FILE = `${MISAO_SYSTEMD_UNIT}.service`;
 /** Exits 0 when something accepts a connection on the socket. Runs on the agent's own node. */
 const PROBE_SCRIPT = "require('net').connect(process.argv[1]).once('connect',()=>process.exit(0)).once('error',()=>process.exit(1))";
 
+/**
+ * The agent reports its PATH for the daemon's panes, and it lands unquoted in the unit file and in a shell command: only
+ * absolute, plain directories are kept (no whitespace, control characters, quotes or `$`), the rest is dropped.
+ */
+export function sanitizeServicePath(servicePath: string): string {
+  const kept = servicePath.split(':').filter((dir) => SAFE_ABSOLUTE_PATH.test(dir) && !/(?:^|\/)\.\.(?:\/|$)/.test(dir));
+  if (kept.length === 0) throw new MisaoServiceError('unsupported_host', "None of the directories in the agent's PATH can be used in a service definition.");
+  return kept.join(':');
+}
+
 function assertSafePath(value: string, label: string): void {
   if (!SAFE_ABSOLUTE_PATH.test(value) || /(?:^|\/)\.\.(?:\/|$)/.test(value)) {
     throw new MisaoServiceError('unsupported_host', `The agent's ${label} is not a path misao can be installed with (absolute, plain characters only): ${value}`);
@@ -135,7 +145,7 @@ export class MisaoAgentInstaller {
     assertSafePath(host.nodePath, 'node binary');
     if (!host.nodePtyDir) throw new MisaoServiceError('unsupported_host', "The agent has no node-pty to share with misao: reinstall the agent.");
     assertSafePath(host.nodePtyDir, 'node-pty directory');
-    return status;
+    return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath) } };
   }
 
   private async run(target: MisaoInstallTarget, script: string, what: string): Promise<{ stdout: string; stderr: string; code: number }> {

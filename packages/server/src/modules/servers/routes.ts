@@ -429,8 +429,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const result = await agentInstaller.install(host, (p) => steps.push(p), validMuxRuntime);
 
         if (result.success) {
-          // A host without tmux can only run misao: unless the request chose, that is the default (when misao is there).
-          const defaultMux = validDefaultMux ?? (result.tmuxFound === false && !result.misaoError ? 'misao' : undefined);
+          // A host without tmux can only run misao (the installer fails when misao is not there either): unless the request chose, that is the default.
+          const defaultMux = validDefaultMux ?? (result.tmuxFound === false ? 'misao' : undefined);
           serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime, defaultMux);
           notifyServerCreated(name);
           return { ok: true, type: 'agent', steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
@@ -857,7 +857,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         serverRepo.updateAgentVersion(srv.name, result.version);
         transportFactory.invalidate(srv.name);
         notifyServerChanged(srv);
-        return { ok: true, steps, startMethod: result.startMethod };
+        return { ok: true, steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
       }
 
       return reply.status(500).send({ error: result.error, steps });

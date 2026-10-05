@@ -116,6 +116,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
     misao = registerMisaoDriver(registry, { sdk, socketPath: path.join(dir, 'unused-local.sock'), shell: '/bin/bash' }, () => undefined, { warn }, HUB_ENV, {
       target: (srv) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(srv).connectMisaoRelay(signal) }),
       status: (srv) => transportFactory.getAgentTransport(srv).fetchMisaoStatus(),
+      latest: () => server,
     });
 
     expect(await misao.servers.discoverAgentNode(server)).toBe(true);

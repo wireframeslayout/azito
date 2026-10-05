@@ -136,6 +136,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('installing misao on a real agent pro
     misao = registerMisaoDriver(registry, { sdk, socketPath: path.join(dir, 'unused-local.sock'), shell: '/bin/bash' }, () => undefined, { warn }, HUB_ENV, {
       target: (srv) => ({ connect: ({ signal }) => new TransportFactory(HUB_ENV.publicUrl).getAgentTransport(srv).connectMisaoRelay(signal) }),
       status: (srv) => new TransportFactory(HUB_ENV.publicUrl).getAgentTransport(srv).fetchMisaoStatus(),
+      latest: () => server,
     });
     const node = misao.servers.ensureAgentNode(server);
     await vi.waitFor(() => expect(node.connection.availability()).toEqual({ available: true }), { timeout: 15000, interval: 100 });

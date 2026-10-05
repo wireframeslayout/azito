@@ -35,6 +35,9 @@ function fakeSdk() {
 const agent = (name: string) => ({ name, type: 'agent', host: 'h', agentPort: 3002, agentToken: 't', defaultMux: 'tmux', isolationIntent: false }) as unknown as ServerConfig;
 const local = { name: 'local', type: 'local', defaultMux: 'tmux', isolationIntent: false } as unknown as ServerConfig;
 
+const targetsSeen: ServerConfig[] = [];
+let latestOf: (name: string) => ServerConfig | null = (name) => agent(name);
+
 function setup(status: () => Promise<{ socketPresent: boolean }> = async () => ({ socketPresent: true })) {
   const { sdk, clients } = fakeSdk();
   const log = { warn: vi.fn() };
@@ -45,7 +48,7 @@ function setup(status: () => Promise<{ socketPresent: boolean }> = async () => (
   const servers = new MisaoServers({
     sdk, shell: '/bin/bash', hubEnv, onChange: vi.fn(), log,
     local: { connection: localConnection, driver: localDriver },
-    agent: { target: () => ({ connect }), status },
+    agent: { target: (srv) => { targetsSeen.push(srv); return { connect }; }, status, latest: (name) => latestOf(name) },
   });
   return { servers, clients, localConnection, localDriver, connect, log };
 }
@@ -124,6 +127,22 @@ describe('MisaoServers', () => {
     const absent = setup(async () => ({ socketPresent: false }));
     expect(await absent.servers.discoverAgentNode(agent('a1'))).toBe(false);
     expect(absent.servers.hosts(agent('a1'))).toBe(false);
+  });
+
+  it('builds the node from the server as stored after the agent answered, not from the one it was asked with', async () => {
+    const { servers } = setup(async () => { latestOf = (name) => ({ ...agent(name), agentToken: 'rotated' }); return { socketPresent: true }; });
+    targetsSeen.length = 0;
+    expect(await servers.discoverAgentNode(agent('a1'))).toBe(true);
+    expect(targetsSeen.map((s) => s.agentToken)).toEqual(['rotated']);
+    servers.closeAgentNodes();
+    latestOf = (name) => agent(name);
+  });
+
+  it('builds no node for a server that was deleted while the agent was being asked', async () => {
+    const { servers } = setup(async () => { latestOf = () => null; return { socketPresent: true }; });
+    expect(await servers.discoverAgentNode(agent('a1'))).toBe(false);
+    expect(servers.hosts(agent('a1'))).toBe(false);
+    latestOf = (name) => agent(name);
   });
 
   it('does not ask the agent again when the node exists, and passes an unreachable agent on to the caller', async () => {

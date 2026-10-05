@@ -1,15 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { errorMessageOf } from '../lib/apiResult';
-
-/** What the hub reports for the last install-misao run of a server (`GET /servers/:name/install-misao`). */
-interface InstallProgress {
-  state: 'idle' | 'running' | 'done' | 'failed';
-  /** Step codes (`inspect` / `transfer` / `prepare` / `start`), in order. */
-  steps: string[];
-  error?: string;
-  code?: string;
-}
+import { interpretInstallProgress, type MisaoInstallProgress } from '../lib/misaoInstallProgress';
 
 export interface AgentMisaoInstallState {
   /** An install is running (started here, or already running when the row appeared). */
@@ -35,6 +27,8 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
   const [state, setState] = useState<AgentMisaoInstallState>({ installing: false, step: null, error: null });
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const alive = useRef(true);
+  /** True while the POST of this hook is in flight: its answer decides then, not a poll that may still see the previous run. */
+  const ownRun = useRef(false);
   const path = `/servers/${encodeURIComponent(serverName)}/install-misao`;
 
   const stopPolling = useCallback(() => {
@@ -42,15 +36,32 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
     timer.current = null;
   }, []);
 
+  // Applies a progress report. A run this hook did not start ends here (another tab's, or the window offer's).
+  const follow = useCallback((progress: MisaoInstallProgress) => {
+    const outcome = interpretInstallProgress(progress);
+    if (outcome.kind === 'running') {
+      setState((s) => ({ ...s, installing: true, step: outcome.step ?? s.step }));
+      return;
+    }
+    if (ownRun.current || outcome.kind === 'idle') return;
+    stopPolling();
+    if (outcome.kind === 'done') {
+      setState({ installing: false, step: null, error: null });
+      onChanged();
+    } else {
+      setState({ installing: false, step: null, error: outcome.error });
+    }
+  }, [stopPolling, onChanged]);
+
   const poll = useCallback(async () => {
     try {
-      const progress = await api<InstallProgress>(path);
+      const progress = await api<MisaoInstallProgress>(path);
       if (!alive.current || errorMessageOf(progress) !== null) return;
-      if (progress.state === 'running') setState((s) => ({ ...s, installing: true, step: progress.steps.at(-1) ?? s.step }));
+      follow(progress);
     } catch {
       // A poll that fails is not the install failing: the POST below reports that.
     }
-  }, [path]);
+  }, [path, follow]);
 
   const startPolling = useCallback(() => {
     stopPolling();
@@ -63,10 +74,10 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
     if (!enabled) return;
     void (async () => {
       try {
-        const progress = await api<InstallProgress>(path);
+        const progress = await api<MisaoInstallProgress>(path);
         if (!alive.current || errorMessageOf(progress) !== null) return;
         if (progress.state === 'running') {
-          setState({ installing: true, step: progress.steps.at(-1) ?? null, error: null });
+          follow(progress);
           startPolling();
         }
       } catch {
@@ -77,10 +88,11 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
       alive.current = false;
       stopPolling();
     };
-  }, [path, enabled, startPolling, stopPolling]);
+  }, [path, enabled, follow, startPolling, stopPolling]);
 
   const install = useCallback(async () => {
     setState({ installing: true, step: null, error: null });
+    ownRun.current = true;
     startPolling();
     try {
       const res = await api<unknown>(path, { method: 'POST' });
@@ -96,6 +108,8 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
     } catch (err) {
       stopPolling();
       if (alive.current) setState({ installing: false, step: null, error: err instanceof Error ? err.message : String(err) });
+    } finally {
+      ownRun.current = false;
     }
   }, [path, startPolling, stopPolling, onChanged]);
 

@@ -120,8 +120,8 @@ describe('POST /api/servers autoInstall: the default mux of a new agent server',
     expect(create.mock.calls[0][8]).toBeUndefined();
   });
 
-  it('does not move to misao when misao could not be installed, and says why', async () => {
-    const { res, create } = await post({ tmuxFound: false, misaoError: 'The agent has no node-pty' });
+  it('keeps tmux when misao could not be installed, and says why', async () => {
+    const { res, create } = await post({ tmuxFound: true, misaoError: 'The agent has no node-pty' });
     expect(create.mock.calls[0][8]).toBeUndefined();
     expect(res.json()).toMatchObject({ ok: true, misaoError: 'The agent has no node-pty' });
   });

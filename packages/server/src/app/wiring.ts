@@ -235,7 +235,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
@@ -258,9 +258,11 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     invalidateSessionCache(serverName);
     notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
   }, console, { publicUrl, localUrl, webhookToken }, {
-    // The transport is looked up on every (re)connect, so a rotated agent token is picked up by the next attempt.
-    target: (server) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(server).connectMisaoRelay(signal) }),
+    // The server is read again on every (re)connect, so an edited host / token is used by the next attempt even when
+    // the node was built from an older config.
+    target: (server) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(findServer(server.name) ?? server).connectMisaoRelay(signal) }),
     status: (server) => transportFactory.getAgentTransport(server).fetchMisaoStatus(),
+    latest: findServer,
   });
   const paneStreamFactory = new PaneStreamFactory(transportFactory, (server) => misao.servers.nodeFor(server).connection);
   const sidekickPackageLoader = new SidekickPackageLoader(undefined, dataPaths.sidekicks);
@@ -641,7 +643,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, db, fingerprintStore, repos.auditLogService);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   // Constructed here, once, and passed to both `buildFetchDistributionService`

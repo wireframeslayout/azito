@@ -136,8 +136,15 @@ export class AgentInstaller {
 
     // ── misao ──
     const misaoError = await this.installMisao(preflight.tailscaleIp, token, report);
+    const tmuxFound = preflight.tmuxVersion !== '';
+    // A host with neither tmux nor an installed misao has no mux at all: fail as before instead of registering a server nothing can run on.
+    if (!tmuxFound && (!this.misaoInstaller || misaoError)) {
+      const msg = `tmux is required but not found${misaoError ? ` (misao could not be installed either: ${misaoError})` : ' and this hub has no misao to install'}`;
+      report('misao', 'error', msg);
+      return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, error: msg };
+    }
 
-    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound: preflight.tmuxVersion !== '', ...(misaoError ? { misaoError } : {}) };
+    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, ...(misaoError ? { misaoError } : {}) };
   }
 
   /** Puts misao on the agent that just came up. A failure is reported, not thrown: the agent stays installed. */
