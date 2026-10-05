@@ -45,6 +45,7 @@ export class MisaoDaemon {
     readonly pid: number,
     private readonly process: ChildProcess,
     private readonly cli: string,
+    private readonly searchPath: string | undefined,
   ) {}
 
   /** misao CLI のパス。ビルド成果物が無ければ null（spec はこの場合 skip する）。 */
@@ -53,7 +54,8 @@ export class MisaoDaemon {
     return fs.existsSync(cli) ? cli : null;
   }
 
-  static async start(): Promise<MisaoDaemon> {
+  /** `path` を渡すと、デーモン（とそのペイン）の PATH をそれに置き換える。 */
+  static async start(options: { path?: string } = {}): Promise<MisaoDaemon> {
     const cli = MisaoDaemon.cliPath();
     if (cli === null) throw new Error('misao CLI not found (set MISAO_CLI to packages/cli/dist/main.js of a misao checkout)');
 
@@ -64,14 +66,14 @@ export class MisaoDaemon {
       throw new Error(`misao socket path exceeds ${SOCKET_BYTES_MAX} bytes: ${socketPath}`);
     }
     const child = spawn(process.execPath, [cli, 'serve', '--socket', socketPath, '--data', dir], {
-      env: isolatedEnv(socketPath),
+      env: isolatedEnv(socketPath, options.path),
       stdio: 'ignore',
     });
     if (child.pid === undefined) {
       fs.rmSync(dir, { recursive: true, force: true });
       throw new Error('failed to spawn the misao daemon');
     }
-    const daemon = new MisaoDaemon(socketPath, dir, child.pid, child, cli);
+    const daemon = new MisaoDaemon(socketPath, dir, child.pid, child, cli, options.path);
     try {
       await daemon.waitUntilReady();
     } catch (err) {
@@ -99,7 +101,7 @@ export class MisaoDaemon {
   }
 
   private async run(args: string[]): Promise<string> {
-    const { stdout } = await execFileAsync(process.execPath, [this.cli, ...args], { env: isolatedEnv(this.socketPath) });
+    const { stdout } = await execFileAsync(process.execPath, [this.cli, ...args], { env: isolatedEnv(this.socketPath, this.searchPath) });
     return stdout;
   }
 
@@ -141,8 +143,9 @@ export class MisaoDaemon {
 }
 
 /** 常駐デーモンの設定を拾わないよう、MISAO_* を一時ソケットだけに固定した環境。 */
-function isolatedEnv(socketPath: string): NodeJS.ProcessEnv {
+function isolatedEnv(socketPath: string, searchPath?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, MISAO_SOCKET: socketPath };
+  if (searchPath !== undefined) env.PATH = searchPath;
   delete env.MISAO_DIR;
   delete env.MISAO_CONFIG;
   return env;

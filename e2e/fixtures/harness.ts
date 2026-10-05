@@ -116,8 +116,10 @@ export class Harness {
    * `misaoSocket` を渡すと、ハブをそのソケットの misao デーモンへ接続させる（MISAO_SOCKET）。
    * ハブは misao ドライバを常に登録するため、省略時も一時ディレクトリ内の存在しないソケットを指して、
    * 常駐の ~/.misao デーモンへは繋がせない（デーモン不在の扱いになるだけで、tmux 系の検証には影響しない）。
+   *
+   * `path` を渡すと、ハブの PATH をそれに置き換える（tmux を引けないホストの再現: fixtures/tmuxlessPath.ts）。
    */
-  static async start(options: { misaoSocket?: string } = {}): Promise<Harness> {
+  static async start(options: { misaoSocket?: string; path?: string } = {}): Promise<Harness> {
     assertPrerequisites();
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-e2e-'));
@@ -161,6 +163,7 @@ export class Harness {
       NODE_ENV: 'test',
     };
     childEnv.MISAO_SOCKET = options.misaoSocket ?? path.join(root, 'misao-none.sock');
+    if (options.path !== undefined) childEnv.PATH = options.path;
     // 継承した TMUX を残すと、ハーネス自身が tmux 内から起動された場合に tmux CLI が
     // 「現在のセッション」を勝手に解決してしまう。
     delete childEnv.TMUX;
