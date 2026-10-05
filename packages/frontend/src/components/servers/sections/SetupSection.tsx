@@ -212,7 +212,7 @@ export default function SetupSection({ server, installStatus, installStatusError
   // 未導入でも異常扱い（赤）にはしない（S1 デザインの決定④）。
   const progressRows: { installed: boolean }[] = [
     ...(installStatus.tmux && !installStatus.tmux.optional ? [{ installed: installStatus.tmux.installed }] : []),
-    ...(installStatus.misao ? [{ installed: installStatus.misao.installed }] : []),
+    ...(installStatus.misao && !installStatus.misao.optional ? [{ installed: installStatus.misao.installed }] : []),
     { installed: installStatus.node.installed },
     ...(showTailscale ? [{ installed: installStatus.tailscale!.installed }] : []),
     { installed: installStatus.aztHarness.installed },
@@ -286,6 +286,7 @@ export default function SetupSection({ server, installStatus, installStatusError
           label="misao"
           item={describeMisaoItem(installStatus.misao, t)}
           categoryLabel={t('setup.foundation')}
+          optional={installStatus.misao.optional}
           running={false}
         >
           {server.type === 'local' && <MisaoServicePanel onChanged={refresh} />}

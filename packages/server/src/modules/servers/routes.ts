@@ -1193,7 +1193,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       // One row per mux the server can use: its default mux always (missing = to be set up), another mux marked optional.
       const checkMux = (kind: MuxDriverKind) => (kind === 'misao' ? checkMisao() : checkTmux());
-      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || muxDriverRegistry.availabilityFor(kind, srv).available);
+      // A local server always lists misao (even on a tmux default and with no daemon): its row carries the install /
+      // update controls for the bundled service.
+      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || (kind === 'misao' && srv.type === 'local') || muxDriverRegistry.availabilityFor(kind, srv).available);
       const [muxResults, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
         Promise.all(muxKinds.map(checkMux)),
         checkNode(),
@@ -1204,11 +1206,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       ]);
 
       const result: Record<string, unknown> = {};
-      // A kind that is not the default is optional. tmux is always listed (its row tells how to add it); misao only once
-      // its daemon serves the server.
+      // A kind that is not the default is optional, and still listed: tmux's row tells how to add it, misao's carries the
+      // service controls.
       muxKinds.forEach((kind, i) => {
-        if (kind === srv.defaultMux) result[kind] = muxResults[i];
-        else if (kind === 'tmux' || muxResults[i].installed) result[kind] = { ...muxResults[i], optional: true };
+        result[kind] = kind === srv.defaultMux ? muxResults[i] : { ...muxResults[i], optional: true };
       });
       result.node = nodeResult;
       result.aztHarness = harnessResult;

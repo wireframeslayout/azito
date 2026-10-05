@@ -261,16 +261,15 @@ describe('GET /api/servers/:name/install-status', () => {
     expect(res.json().misao).toEqual({ installed: false, detail: 'daemon_unreachable' });
   });
 
-  it('keeps the tmux check for a tmux server', async () => {
+  it('keeps the tmux check for a tmux server, and still lists misao as an optional row (it carries the service controls)', async () => {
     const stored = makeServer();
-    const misaoDaemonStatus = vi.fn();
+    const misaoDaemonStatus = vi.fn(async () => ({ installed: false, detail: 'daemon_unreachable' }));
     const { exec, opts } = withTransport({ ...makeOpts(stored), misaoDaemonStatus });
 
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
 
     expect(res.json()).toHaveProperty('tmux');
-    expect(res.json()).not.toHaveProperty('misao');
+    expect(res.json().misao).toEqual({ installed: false, detail: 'daemon_unreachable', optional: true });
     expect(exec).toHaveBeenCalledWith('tmux -V');
-    expect(misaoDaemonStatus).not.toHaveBeenCalled();
   });
 });
