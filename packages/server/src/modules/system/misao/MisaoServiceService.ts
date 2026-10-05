@@ -189,6 +189,7 @@ export class MisaoServiceService {
 
   /**
    * Switches the service to the bundled misao: stop (closing every pane), point `current` at the bundled version, start.
+   * When `current` already is the bundled version nothing is switched (it only starts a stopped service).
    * The new version is unpacked before the stop, so a damaged bundle fails with the daemon still running.
    */
   update(): Promise<MisaoServiceStatus> {
@@ -200,6 +201,9 @@ export class MisaoServiceService {
     if (!controller.isInstalled() || !this.installedVersion()) {
       throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     }
+
+    // Already on the bundled version: nothing to switch, and stopping would close every pane for no reason.
+    if (this.installedVersion() === bundle.version) return this.doStart();
 
     this.extractVersion(bundle);
     await controller.stop();

@@ -206,6 +206,15 @@ describe('MisaoServiceService', () => {
       expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
     });
 
+    it('does not stop a daemon that already runs the bundled version', async () => {
+      const service = newService();
+      await service.install();
+      controller.calls.length = 0;
+
+      await service.update();
+      expect(controller.calls).toEqual([]);
+    });
+
     it('requires an installed service', async () => {
       await expect(newService().update()).rejects.toMatchObject({ code: 'not_installed' });
     });
