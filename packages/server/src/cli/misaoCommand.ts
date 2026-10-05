@@ -115,8 +115,8 @@ export async function misaoCommand(argv: string[]): Promise<void> {
     console.log(`misao ${args.command}: done`);
     printStatus(status);
   } catch (err) {
-    if (!(err instanceof MisaoServiceError)) throw err;
-    console.error(`azito misao: ${err.message}`);
+    // A refusal, or a service manager that is missing or failing: all are the operator's to fix, so print them plainly.
+    console.error(`azito misao: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;
   }
 }

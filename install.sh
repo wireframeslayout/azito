@@ -138,8 +138,9 @@ echo "  Service:      $([ "$NO_SERVICE" = true ] && echo "skip" || echo "auto")"
 echo ""
 
 # ── Preflight: host dependencies ──
-# Node is bundled, but AZITO drives real tmux sessions and git worktrees on the
-# host, so those must exist. Tailscale is optional (remote access + push).
+# Node and misao (the pane server) are bundled. AZITO runs git worktrees on the
+# host, so git must exist. tmux and Tailscale are optional: tmux only matters if
+# you want tmux windows next to misao ones; Tailscale gives remote access + push.
 PKG_INSTALL=""
 if command -v apt-get >/dev/null 2>&1; then
   PKG_INSTALL="sudo apt-get update && sudo apt-get install -y"
@@ -152,7 +153,7 @@ elif command -v brew >/dev/null 2>&1; then
 fi
 
 MISSING_REQUIRED=""
-for dep in tmux git; do
+for dep in git; do
   command -v "$dep" >/dev/null 2>&1 || MISSING_REQUIRED="${MISSING_REQUIRED} ${dep}"
 done
 MISSING_REQUIRED="${MISSING_REQUIRED# }"
@@ -160,7 +161,7 @@ MISSING_REQUIRED="${MISSING_REQUIRED# }"
 if [ -n "$MISSING_REQUIRED" ]; then
   echo ""
   echo "Missing required dependencies: ${MISSING_REQUIRED// /, }"
-  echo "  AZITO drives tmux sessions and git worktrees on this host, so these are required."
+  echo "  AZITO drives git worktrees on this host, so these are required."
   # Only ever install packages when a human is there to approve the sudo. A
   # piped or --yes run stops with instructions instead of escalating silently.
   if [ "$INTERACTIVE" = true ] && [ -n "$PKG_INSTALL" ] && confirm "Install them now (uses sudo)?" y; then
@@ -176,6 +177,13 @@ if [ -n "$MISSING_REQUIRED" ]; then
     echo "  ${PKG_INSTALL:-<your package manager>} ${MISSING_REQUIRED}"
     exit 1
   fi
+fi
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo ""
+  echo "Note: tmux not found (optional)."
+  echo "  AZITO's panes run on the bundled misao daemon, so tmux is not needed."
+  echo "  Install tmux later if you want to use tmux windows."
 fi
 
 if ! command -v tailscale >/dev/null 2>&1; then
@@ -381,6 +389,10 @@ case "${1:-}" in
     shift
     exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" token "$@"
     ;;
+  misao)
+    shift
+    exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" misao "$@"
+    ;;
   version)
     if [ -f "${CURRENT}/version.txt" ]; then
       head -1 "${CURRENT}/version.txt"
@@ -389,7 +401,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "Usage: azito {start|stop|status|token show|token rotate|version}"
+    echo "Usage: azito {start|stop|status|token show|token rotate|misao status|misao install|misao update|version}"
     ;;
 esac
 WRAPPER
@@ -407,6 +419,26 @@ case ":$PATH:" in
     echo ""
     ;;
 esac
+
+# misao service
+# The pane server is its own service, separate from the hub: stopping misao closes every
+# pane, so the hub's restarts and updates must never take it down with them. The bundled
+# CLI unpacks it into ${PREFIX}/misao/<version>/, installs the unit, starts it and writes
+# MISAO_SOCKET to the hub .env (which the hub service reads when it starts below).
+MISAO_INSTALLED=true
+if [ "$NO_SERVICE" = true ]; then
+  MISAO_INSTALLED=false
+  echo "Skipping the misao service (--no-service). Install it later with: azito misao install"
+else
+  echo "Installing the misao service..."
+  if ! "${INSTALL_DIR}/node" "${INSTALL_DIR}/azito-hub.cjs" misao install --prefix "$PREFIX"; then
+    MISAO_INSTALLED=false
+    echo "" >&2
+    echo "WARNING: the misao service could not be installed (see the error above)." >&2
+    echo "  AZITO is installed, but its panes need misao. Fix the problem and run:" >&2
+    echo "    azito misao install" >&2
+  fi
+fi
 
 # Service setup
 if [ "$NO_SERVICE" = true ]; then
@@ -445,4 +477,5 @@ echo ""
 echo "  Start:   azito start     (or let the service auto-start)"
 echo "  Status:  azito status"
 echo "  Token:   azito token show"
+echo "  misao:   azito misao status$([ "$MISAO_INSTALLED" = true ] || echo "   (not installed yet: azito misao install)")"
 echo "  Version: azito version"
