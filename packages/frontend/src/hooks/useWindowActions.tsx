@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatWindowId } from '@azito/shared';
+import { formatWindowId, type MuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
@@ -10,6 +10,8 @@ import { useToast } from './useToast';
 import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
+import { refTabMatchesTarget } from '../lib/terminalRef';
+import { canActOnMux, canRenamePane } from '../lib/windowRowPlan';
 
 interface ConfirmDialog {
   title: string;
@@ -26,7 +28,8 @@ interface WindowActionDeps {
   closeTab: (tabId: string) => void;
   refreshSessions?: () => Promise<void>;
   togglePin?: (tabId: string) => void;
-  connectPane?: (serverName: string, target: string, projectId?: number, opts?: { reconnect?: boolean }) => void;
+  /** Shows a respawned window again, forcing its terminal to reconnect. */
+  reconnectWindow?: (win: { serverName: string; windowId: number; tmuxTarget: string }) => void | Promise<void>;
   servers?: Server[];
 }
 
@@ -42,7 +45,7 @@ export function useWindowActions(
   const [respawnResourceWarning, setRespawnResourceWarning] = useState<{ resources: ResourceStatus; retry: () => void } | null>(null);
   const { showToast } = useToast();
 
-  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, connectPane, servers } = deps;
+  const { showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab, refreshSessions, togglePin, reconnectWindow, servers } = deps;
 
   const handleDetachWindow = useCallback(async (windowId: number) => {
     setConfirmDialog({
@@ -61,6 +64,29 @@ export function useWindowActions(
     });
   }, [refreshWorkspace]);
 
+  // Closes every terminal tab that addressed the deleted window: by windowId, by ref, or by a target in
+  // name form ("sess:win--xxxx") / index form ("sess:3") — every form the window was known under.
+  const closeDeletedWindowTabs = useCallback((
+    serverName: string,
+    tmuxTarget: string,
+    windowId: number,
+    identity: { sessionName: string; windowIndex: number; windowName: string } | null,
+  ) => {
+    const bases = [tmuxTarget.replace(/\.\d+$/, '')];
+    if (identity) {
+      bases.push(`${identity.sessionName}:${identity.windowName}`, `${identity.sessionName}:${identity.windowIndex}`);
+    }
+    const matchesDeletedTarget = (target: string) =>
+      bases.some((b) => target === b || target.startsWith(`${b}.`));
+    tabs
+      .filter((tab) => tab.type === 'terminal' && tab.serverName === serverName && (
+        (tab.target && matchesDeletedTarget(tab.target)) ||
+        (tab.terminalRef?.kind === 'windowId' && tab.terminalRef.windowId === windowId) ||
+        (tab.terminalRef?.kind === 'ref' && refTabMatchesTarget(tab.terminalRef.ref, tmuxTarget))
+      ))
+      .forEach((tab) => closeTab(tab.id));
+  }, [tabs, closeTab]);
+
   const handleDeleteWindow = useCallback(async (serverName: string, tmuxTarget: string, windowId: number) => {
     setConfirmDialog({
       title: t('windows.deleteTitle'),
@@ -72,7 +98,6 @@ export function useWindowActions(
           // otherwise survive, and pane-index bases vary across servers). The server
           // route also removes matching DB rows; the /windows/:id call below is the
           // fallback cleanup when the tmux window is already gone.
-          const base = tmuxTarget.replace(/\.\d+$/, '');
           let identity: { sessionName: string; windowIndex: number; windowName: string } | null = null;
           try {
             // Use windowId kill route (5-A) which also removes the tmux window and DB rows.
@@ -85,20 +110,7 @@ export function useWindowActions(
             showToast(t('windows.deleteFailed', { error: (e as Error).message }));
             return;
           }
-          // Tabs may address the window in name form ("sess:win--xxxx") or index form
-          // ("sess:3") — match every form the killed window was known under.
-          const bases = [base];
-          if (identity) {
-            bases.push(`${identity.sessionName}:${identity.windowName}`, `${identity.sessionName}:${identity.windowIndex}`);
-          }
-          const matchesDeletedTarget = (target: string) =>
-            bases.some((b) => target === b || target.startsWith(`${b}.`));
-          tabs
-            .filter((tab) => tab.type === 'terminal' && tab.serverName === serverName && (
-              (tab.target && matchesDeletedTarget(tab.target)) ||
-              (tab.terminalRef?.kind === 'windowId' && tab.terminalRef.windowId === windowId)
-            ))
-            .forEach((tab) => closeTab(tab.id));
+          closeDeletedWindowTabs(serverName, tmuxTarget, windowId, identity);
           setConfirmDialog(null);
           refreshWorkspace();
         } finally {
@@ -106,7 +118,15 @@ export function useWindowActions(
         }
       },
     });
-  }, [refreshWorkspace, showToast, tabs, closeTab]);
+  }, [refreshWorkspace, showToast, closeDeletedWindowTabs]);
+
+  // After an empty window's [open pane] / [delete window] inline actions: the DB rows (and tabs) of a deleted
+  // window must go together with its session entry, or it lingers as an offline row.
+  const handleEmptyWindowChanged = useCallback((outcome: 'pane_opened' | 'window_deleted', w: { serverName: string; tmuxTarget: string; id: number }) => {
+    if (outcome === 'window_deleted') closeDeletedWindowTabs(w.serverName, w.tmuxTarget, w.id, null);
+    refreshWorkspace();
+    void refreshSessions?.();
+  }, [closeDeletedWindowTabs, refreshWorkspace, refreshSessions]);
 
   const handleRenameLabel = useCallback(async (w: { id: number; label?: string }) => {
     const newLabel = prompt(t('windows.renameLabelPrompt'), w.label || '');
@@ -165,7 +185,7 @@ export function useWindowActions(
       refreshWorkspace();
       await refreshSessions?.();
       if (serverName) {
-        connectPane?.(serverName, result.tmuxTarget, undefined, { reconnect: true });
+        await reconnectWindow?.({ serverName, windowId, tmuxTarget: result.tmuxTarget });
       }
     } finally {
       setRespawningWindowIds((prev) => {
@@ -174,7 +194,7 @@ export function useWindowActions(
         return next;
       });
     }
-  }, [refreshWorkspace, refreshSessions, connectPane, showToast]);
+  }, [refreshWorkspace, refreshSessions, reconnectWindow, showToast]);
 
   const handleSleepWindow = useCallback(async (windowId: number) => {
     try {
@@ -192,21 +212,23 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
+    // A stale row's mux cannot be reached: the actions that go through it stay listed but disabled.
+    const muxDisabled = !canActOnMux(extra);
     const items: ContextMenuItem[] = [
       { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
     ];
     if (extra?.online && extra.windowName !== undefined) {
-      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
+      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, disabled: muxDisabled, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
     }
-    if (extra?.online && extra.paneTarget) {
-      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
+    if (extra?.online && extra.paneTarget && canRenamePane(w)) {
+      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, disabled: muxDisabled, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
     }
     if (extra?.online) {
-      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => handleCapturePanes(w.id) });
+      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, disabled: muxDisabled, onClick: () => handleCapturePanes(w.id) });
     }
     if (extra?.online && w.windowType === 'agent' && w.agentSessionId && !w.sleeping) {
-      items.push({ label: t('windows.sleep'), icon: <Icon name="moon" size={16} />, onClick: () => handleSleepWindow(w.id) });
+      items.push({ label: t('windows.sleep'), icon: <Icon name="moon" size={16} />, disabled: muxDisabled, onClick: () => handleSleepWindow(w.id) });
     }
     if (!extra?.online) {
       const respawnLabel = w.sleeping ? t('terminal.wake', { ns: 'common' }) : t('windows.respawn');
@@ -218,7 +240,7 @@ export function useWindowActions(
     }
     items.push(
       { label: t('windows.detachFromProject'), icon: <Icon name="external-link" size={16} />, onClick: () => handleDetachWindow(w.id) },
-      { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
+      { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, disabled: muxDisabled, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     );
     items.push(
       { label: '', separator: true, onClick: () => {} },
@@ -275,6 +297,7 @@ export function useWindowActions(
     setRespawnResourceWarning,
     handleDetachWindow,
     handleDeleteWindow,
+    handleEmptyWindowChanged,
     handleRenameLabel,
     handleRenameWindow,
     handleRenamePane,

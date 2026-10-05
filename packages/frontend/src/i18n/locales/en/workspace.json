@@ -89,6 +89,7 @@
     "adding": "Adding...",
     "server": "Server",
     "serverLabel": "Server:",
+    "serverOffline": "offline",
     "session": "Session",
     "windowName": "Window Name (optional)",
     "windowNamePlaceholder": "e.g. dev",
@@ -114,6 +115,7 @@
     "singleWindow": "Single Window",
     "entireSession": "Entire Session",
     "backToNew": "Back to new window",
+    "taskWindowAddFailed": "Failed to add the window to the task",
     "selectWindowError": "Select a window",
     "selectSessionError": "Select a session",
     "sessionNameRequired": "Session name is required",
@@ -121,7 +123,8 @@
     "agentCommandUnavailable": "Could not determine the launch command. Try again once agent definitions finish loading, or enter a command.",
     "window": "Window",
     "sessionWindowCount_one": "{{name}} ({{count}} window)",
-    "sessionWindowCount_other": "{{name}} ({{count}} windows)"
+    "sessionWindowCount_other": "{{name}} ({{count}} windows)",
+    "muxKindUnavailable": "Cannot create in {{kind}} ({{reason}})"
   },
   "serverModals": {
     "addTitle": "Add Server",
@@ -131,7 +134,7 @@
     "hostPlaceholder": "e.g. user@hostname or ssh-config-alias",
     "autoInstall": "Auto-install agent",
     "autoInstallDesc": "Connects via SSH, installs the agent process, and manages it automatically.",
-    "autoInstallReq": "Requires: Node.js 24+, tmux, Tailscale on the remote server.",
+    "autoInstallReq": "Requires: Node.js 24+ and Tailscale on the remote server. tmux is optional (misao is installed with the agent).",
     "type": "Type",
     "agent": "Agent",
     "agentHostPlaceholder": "e.g. 100.64.0.2 (Tailscale IP)",
@@ -142,16 +145,22 @@
     "tokenUnchanged": "(unchanged — enter new value to update)",
     "showToken": "Show token",
     "hideToken": "Hide token",
-    "muxRuntime": "tmux Runtime",
-    "muxSystem": "System tmux",
-    "muxManaged": "AZITO managed tmux",
+    "defaultMux": "Default terminal",
+    "defaultMuxMisao": "misao",
+    "defaultMuxTmux": "tmux",
+    "muxRuntime": "tmux executable",
+    "muxSystem": "System",
+    "muxManaged": "Managed by AZITO",
+    "misaoHint": "Switches this server's terminal to the misao daemon. Windows on tmux are not migrated.",
+    "misaoLeaveNote": "Windows currently on misao will no longer be reachable from the hub after switching back to tmux.",
     "muxMigrationWarning": "Sessions on the previous socket will not be migrated.",
     "displayName": "Display Name",
     "displayNamePlaceholder": "e.g. dev-server",
     "isolationIntent": "Isolated execution",
     "isolationIntentLabel": "Withhold operator credentials from this server",
     "isolationIntentHint": "Enabling attempts to clean up any already-distributed operator token. Use \"Verify isolation\" on the server detail page to confirm no credentials remain.",
-    "isolationRequiresScopedAuth": "Enabling isolation requires scoped auth (AZITO_SCOPED_AUTH) to be on. In compat mode, only disabling it is allowed."
+    "isolationRequiresScopedAuth": "Enabling isolation requires scoped auth (AZITO_SCOPED_AUTH) to be on. In compat mode, only disabling it is allowed.",
+    "muxRuntimeHint": "Only applies when using tmux. misao does not use it."
   },
   "menu": {
     "windows": "Objects",
@@ -226,6 +235,8 @@
     "noTerminalSelected": "No terminal selected",
     "sendKeysFailed": "Failed to send keys: {{error}}",
     "browserTabOpened": "Browser tab opened on {{serverName}}",
+    "taskWindowAddFailed": "Failed to add the window to the task",
+    "taskWindowRefRequired": "This window cannot be added to the task because its identity could not be resolved",
     "taskProjectFailed": "Failed to get task project info",
     "noUnit": "No Unit assigned",
     "startExecution": "Start Execution",
@@ -299,5 +310,26 @@
     "pinTab": "Pin tab",
     "addWindowChip": "Window",
     "addBrowserChip": "Browser"
+  },
+  "muxKind": {
+    "label": "Terminal type",
+    "misao": "misao",
+    "tmux": "tmux",
+    "checking": "Checking which types are available…",
+    "checkFailed": "Could not check which types are available. The hub decides when you create.",
+    "reason": {
+      "misaoUnreachable": "Cannot connect to the misao daemon",
+      "misaoIncompatible": "The misao daemon version does not match this hub",
+      "misaoNotRegistered": "misao is not enabled",
+      "tmuxMissing": "tmux is not installed",
+      "unavailable": "Unavailable",
+      "misaoNotInstalled": "misao is not installed on this server"
+    }
+  },
+  "misaoInstall": {
+    "title": "Install misao on this server?",
+    "message": "{{server}} has no misao yet. The hub sends the misao bundled with it to the server through its agent and starts it as a service (nothing is downloaded on the server). The window is created once it is running.",
+    "confirm": "Install misao",
+    "installing": "Installing misao on {{server}}…"
   }
 }

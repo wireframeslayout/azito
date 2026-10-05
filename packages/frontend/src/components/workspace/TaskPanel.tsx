@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api } from '../../api/client';
+import { api, apiWithStatus } from '../../api/client';
+import { isOperatorRequiredError, reportIfOperatorRequired } from '../../api/operatorRequired';
+import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMutationResult';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { StatusDot } from '../StatusBadge';
@@ -13,7 +15,7 @@ import MarkdownRenderer, { mdStyles } from '../MarkdownRenderer';
 import { TerminalContainer, viewModeStorageKey, type WindowViewMode } from '../TerminalContainer';
 import { DiffViewer, CommitList } from '../diff';
 import { Chip } from '../ui';
-import { resolveTmuxWindow } from '../../lib/tmuxPane';
+import { findSessionWindow } from '../../lib/windowMatch';
 import ContextMenu, { useContextMenu, type ContextMenuItem } from '../ContextMenu';
 import ResourceWarningDialog from '../ResourceWarningDialog';
 import PhaseProgressBar from './PhaseProgressBar';
@@ -42,6 +44,7 @@ import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/window
 import { activityKey, useWorkspaceTargets } from '../../hooks/useWorkspaceTargets';
 import { useGlobalFocus } from '../../hooks/useGlobalFocus';
 import { useToast } from '../../hooks/useToast';
+import type { TerminalRef as LibTerminalRef } from '../../lib/terminalRef';
 import { useConfirm } from '../../hooks/useConfirm';
 import {
   SUB_TAB_KEY, viewTabId, parseViewTabId, windowTabId, parseWindowTabId,
@@ -520,7 +523,7 @@ export default function TaskPanel({
       openTask: onOpenTask ?? (() => {}),
       tabs: tabs ?? [],
       closeTab: closeTab ?? (() => {}),
-      connectPane: handlePaneClick,
+      reconnectWindow: (win) => handlePaneClick(win.serverName, win.tmuxTarget, undefined, { reconnect: true }),
     },
   );
 
@@ -616,9 +619,9 @@ export default function TaskPanel({
   // suffix) — resolve it from `windows` via isSameWindowTarget, the same match
   // resolveWindowContextExtra/buildMiniTab use. Falls back to the encoded (stripped)
   // target when the window isn't found (e.g. briefly, before the first windows fetch).
-  const resolveWindowTabTarget = useCallback((win: TerminalRef): TerminalRef => {
+  const resolveWindowTabTarget = useCallback((win: TerminalRef): { serverName: string; target: string; windowId?: number } => {
     const w = windows.find((x) => x.serverName === win.serverName && isSameWindowTarget(x.tmuxTarget, win.target));
-    return w ? { serverName: w.serverName, target: w.tmuxTarget } : win;
+    return w ? { serverName: w.serverName, target: w.tmuxTarget, windowId: w.id } : win;
   }, [windows]);
 
   const { setFocusedTarget } = useWorkspaceTargets();
@@ -654,9 +657,9 @@ export default function TaskPanel({
     if (!focusedWindowTarget) return null;
     const sessions = sessionData[focusedWindowTarget.serverName];
     if (!sessions) return null;
-    const tw = resolveTmuxWindow(sessions, focusedWindowTarget.target);
+    const tw = focusedWindow ? findSessionWindow(focusedWindow, sessions)?.window : undefined;
     return tw ? tw.panes.length : null;
-  }, [focusedWindowTarget, sessionData]);
+  }, [focusedWindowTarget, focusedWindow, sessionData]);
 
   // SP 端末/チャットセグメント（Issue #69 T5）: 表示モードは TaskPanel が単一の真実源として
   // localStorage（azito.windowView.<windowId>、TerminalContainer と同一キー形式を共有）を
@@ -680,7 +683,7 @@ export default function TaskPanel({
   useEffect(() => {
     if (!isVisible || !isPaneFocused) return;
     const displayed = focusedWindowTarget ?? resolveDisplayedTaskTerminal(taskId, windows);
-    setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, taskId });
+    setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, windowId: displayed?.windowId ?? null, taskId });
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocus]);
 
   useEffect(() => {
@@ -692,21 +695,45 @@ export default function TaskPanel({
     return () => setFocusedTarget(null);
   }, [isVisible, isPaneFocused, focusedWindowTarget, windows, taskId, setFocusedTarget]);
 
+  // Shows a failed delete / archive and tells the caller to stop (nothing changed on the hub).
+  const reportTaskMutationFailure = useCallback((failure: TaskMutationFailure | null): boolean => {
+    if (!failure) return false;
+    showToast(failure.kind === 'mux_driver_unavailable' ? t('tasks:actions.muxUnavailable') : t('tasks:actions.mutationFailed', { error: failure.message }));
+    return true;
+  }, [showToast, t]);
+
+  // Sends a delete / archive and reports whether the caller may carry on (false: it failed and was shown).
+  const requestTaskMutation = useCallback(async (path: string, method: 'DELETE' | 'POST'): Promise<boolean> => {
+    try {
+      const { status, body } = await apiWithStatus(path, { method });
+      if (isOperatorRequiredError(status, body)) {
+        // Its own notice is shown; no second "failed" toast.
+        reportIfOperatorRequired(status, body);
+        return false;
+      }
+      return !reportTaskMutationFailure(taskMutationFailure(status, body));
+    } catch (e) {
+      // Not JSON (a proxy's 502, say) or a network failure: the hub's answer is unknown, so nothing is assumed done.
+      showToast(t('tasks:actions.mutationFailed', { error: (e as Error).message }));
+      return false;
+    }
+  }, [reportTaskMutationFailure, showToast, t]);
+
   const handleDelete = useCallback(async () => {
     const ok = await confirm({ title: t('actions.deleteTask'), message: t('actions.deleteConfirm'), danger: true });
     if (!ok) return;
-    await api(`/tasks/${taskId}`, { method: 'DELETE' });
+    if (!(await requestTaskMutation(`/tasks/${taskId}`, 'DELETE'))) return;
     if (onDelete) onDelete(taskId);
     onRefresh();
-  }, [taskId, onDelete, onRefresh, confirm]);
+  }, [taskId, onDelete, onRefresh, confirm, requestTaskMutation]);
 
   const handleArchive = useCallback(async () => {
     const ok = await confirm({ title: t('actions.archiveTask'), message: t('actions.archiveConfirm'), danger: true });
     if (!ok) return;
-    await api(`/tasks/${taskId}/archive`, { method: 'POST' });
+    if (!(await requestTaskMutation(`/tasks/${taskId}/archive`, 'POST'))) return;
     onRefresh();
     fetchTaskData();
-  }, [taskId, onRefresh, fetchTaskData, confirm]);
+  }, [taskId, onRefresh, fetchTaskData, confirm, requestTaskMutation]);
 
   const handleRestore = useCallback(async () => {
     await api(`/tasks/${taskId}/restore`, { method: 'POST' });
@@ -1082,7 +1109,7 @@ export default function TaskPanel({
       const w = windows.find((x) => x.serverName === focusedWindowTarget.serverName && isSameWindowTarget(x.tmuxTarget, focusedWindowTarget.target));
       if (!w) return focusedWindowTarget.target;
       const sessions = sessionData[w.serverName];
-      const tw = sessions ? resolveTmuxWindow(sessions, w.tmuxTarget) : null;
+      const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
       const pane0 = tw?.panes[0];
       const display = resolveWindowDisplay({
         windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
@@ -1137,7 +1164,7 @@ export default function TaskPanel({
       const w = windows.find((x) => x.serverName === focusedWindowTarget.serverName && isSameWindowTarget(x.tmuxTarget, focusedWindowTarget.target));
       if (!w) return focusedWindowTarget.target;
       const sessions = sessionData[w.serverName];
-      const tw = sessions ? resolveTmuxWindow(sessions, w.tmuxTarget) : null;
+      const tw = sessions ? findSessionWindow(w, sessions)?.window : undefined;
       const pane0 = tw?.panes[0];
       const display = resolveWindowDisplay({
         windowId: w.id, paneTitle: pane0?.title, paneCommand: pane0?.command,
@@ -1409,12 +1436,13 @@ export default function TaskPanel({
     }
     const win = parseWindowTabId(tabId);
     if (win) {
-      const { serverName, target } = resolveWindowTabTarget(win);
+      const { serverName, target, windowId } = resolveWindowTabTarget(win);
       return (
         <TerminalContainer
           key={`terminal-${serverName}-${target}`}
           serverName={serverName}
           target={target}
+          terminalRef={windowId !== undefined ? { kind: 'windowId', serverName, windowId, pane: 1 } satisfies LibTerminalRef : undefined}
           taskId={taskData.id}
           allTasks={allTasks}
           sessions={sessionData[serverName]}

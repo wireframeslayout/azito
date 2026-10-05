@@ -13,6 +13,7 @@ import {
   mergePaneIntoNext,
   closeTab,
   openTab,
+  replaceTabId,
   setActiveTab,
   setRatio,
   type LayoutNode,
@@ -270,6 +271,18 @@ export function usePaneLayout(
     });
   }, [setState]);
 
+  /** Renames a tab id without moving it between panes (see paneLayoutTree.replaceTabId). */
+  const replaceTab = useCallback((oldId: string, newId: string) => {
+    setState((prev) => {
+      const root = replaceTabId(prev.root, oldId, newId);
+      if (root === prev.root) return prev;
+      const focusedPaneId = prev.focusedPaneId && findPane(root, prev.focusedPaneId)
+        ? prev.focusedPaneId
+        : listPanes(root)[0].id;
+      return { root, focusedPaneId };
+    });
+  }, [setState]);
+
   const focusPane = useCallback((paneId: string) => {
     setState((prev) => (prev.focusedPaneId === paneId ? prev : { ...prev, focusedPaneId: paneId }));
   }, [setState]);
@@ -282,5 +295,5 @@ export function usePaneLayout(
     setState((prev) => ({ ...prev, root: setRatio(prev.root, splitPath, ratio) }));
   }, [setState]);
 
-  return { state, split, move, moveToNext, merge, close, open, focusPane, setActive, resize };
+  return { state, split, move, moveToNext, merge, close, open, replaceTab, focusPane, setActive, resize };
 }

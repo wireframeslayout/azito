@@ -6,6 +6,7 @@
 
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
+import * as os from 'os';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
@@ -23,6 +24,14 @@ import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClie
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
+import { probeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
+import { getBundleRoot } from '../shared/releaseInfo';
+import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
+import { createMisaoServiceController, runCommand } from '../modules/system/misao/MisaoServiceController';
+import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
+import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
 import { PaneClassifier } from '../modules/llm/PaneClassifier';
@@ -42,6 +51,7 @@ import { TmuxInstaller } from '../modules/servers/agent-deploy/TmuxInstaller';
 import { NotificationBus } from '../modules/notifications/NotificationBus';
 
 import { SqliteServerRepository } from '../modules/servers/SqliteServerRepository';
+import { SqliteServerAliasRepository } from '../modules/servers/SqliteServerAliasRepository';
 import { SqliteProjectRepository } from '../modules/projects/SqliteProjectRepository';
 import { SqliteProviderRepository } from '../modules/llm/SqliteProviderRepository';
 import { SqliteUnitRepository } from '../modules/units/SqliteUnitRepository';
@@ -103,11 +113,15 @@ import { SystemUpdateService } from '../modules/system/SystemUpdateService';
 export interface SharedInfra {
   sshClient: SshClient;
   agentInstaller: AgentInstaller;
+  /** Puts the bundled misao on an agent server (through its agent). With no bundled copy (source checkout) it refuses to. */
+  misaoAgentInstaller: MisaoAgentInstaller;
   harnessInstaller: HarnessInstaller;
   tmuxInstaller: TmuxInstaller;
   transportFactory: TransportFactory;
   tmuxClient: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
+  /** Created but not started: main.ts starts it. The daemon may be absent; the driver then reports `daemon_unreachable`. */
+  misao: MisaoHandle;
   llmClient: ILlmClient;
   agentRegistry: AgentRegistry;
   paneClassifier: PaneClassifier;
@@ -141,6 +155,7 @@ export interface SharedInfra {
 
 export interface Repositories {
   serverRepo: SqliteServerRepository;
+  serverAliasRepo: SqliteServerAliasRepository;
   windowRepo: SqliteWindowRepository;
   projectRepo: SqliteProjectRepository;
   providerRepo: SqliteProviderRepository;
@@ -195,6 +210,8 @@ export interface SystemUpdateModule {
   deployModeDetector: DeployModeDetector;
   systemUpdateService: SystemUpdateService;
   channelResolver: UpdateChannelResolver;
+  /** The AZITO-managed misao service. Separate from the hub's own update: a hub update never touches it. */
+  misaoService: MisaoServiceService;
 }
 
 export interface Wiring extends SharedInfra, Repositories, PushNotificationModule, ApplicationServices, SystemUpdateModule {
@@ -218,24 +235,36 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService, scopedAuthEnabled: boolean = false): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(fingerprintStore);
-  const agentInstaller = new AgentInstaller(sshClient, agentBundler);
+  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
+  // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
+  const agentInstaller = new AgentInstaller(sshClient, agentBundler, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
+  const muxDriverRegistry = new MuxDriverRegistry();
   const transportFactory = new TransportFactory(publicUrl);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
-  const muxDriverRegistry = new MuxDriverRegistry();
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
   const contentExtractor = new LlmContentExtractor(llmClient);
-  const paneStreamFactory = new PaneStreamFactory(transportFactory);
   const gitProvider = new GitProviderService();
   const worktreeServiceFactory = new WorktreeServiceFactory();
   const storageClient = new MinioStorageClient();
   const notificationBus = new NotificationBus();
+  const misao = registerMisaoDriver(muxDriverRegistry, misaoRuntime, (serverName) => {
+    invalidateSessionCache(serverName);
+    notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
+  }, console, { publicUrl, localUrl, webhookToken }, {
+    // The server is read again on every (re)connect, so an edited host / token is used by the next attempt even when
+    // the node was built from an older config.
+    target: (server) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(findServer(server.name) ?? server).connectMisaoRelay(signal) }),
+    status: (server) => transportFactory.getAgentTransport(server).fetchMisaoStatus(),
+    latest: findServer,
+  });
+  const paneStreamFactory = new PaneStreamFactory(transportFactory, (server) => misao.servers.nodeFor(server).connection);
   const sidekickPackageLoader = new SidekickPackageLoader(undefined, dataPaths.sidekicks);
   const sidekickPackageService = new SidekickPackageService(sidekickPackageLoader, dataPaths.sidekicks);
   const sidekickSyncService = new SidekickSyncService();
@@ -267,11 +296,13 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   return {
     sshClient,
     agentInstaller,
+    misaoAgentInstaller,
     harnessInstaller,
     tmuxInstaller,
     transportFactory,
     tmuxClient,
     muxDriverRegistry,
+    misao,
     llmClient,
     agentRegistry,
     paneClassifier,
@@ -295,6 +326,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
 
 function buildRepositories(db: SqliteDatabase): Repositories {
   const serverRepo = new SqliteServerRepository(db);
+  const serverAliasRepo = new SqliteServerAliasRepository(db);
   const windowRepo = new SqliteWindowRepository(db);
   const projectRepo = new SqliteProjectRepository(db, windowRepo);
   const providerRepo = new SqliteProviderRepository(db);
@@ -315,6 +347,7 @@ function buildRepositories(db: SqliteDatabase): Repositories {
 
   return {
     serverRepo,
+    serverAliasRepo,
     windowRepo,
     projectRepo,
     providerRepo,
@@ -496,12 +529,34 @@ function buildExecuteTaskUseCase(
   );
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories): SystemUpdateModule {
+function buildMisaoService(misao: MisaoHandle): MisaoServiceService {
+  const bundleRoot = getBundleRoot();
+  const prefix = resolveInstallPrefix(bundleRoot);
+  let paths: MisaoPaths | null = null;
+  let pathsError: string | undefined;
+  try {
+    paths = prefix ? resolveMisaoPaths(prefix) : null;
+  } catch (err) {
+    // A prefix too long for the daemon's socket must not stop a hub that already runs from it: report it on the misao row.
+    pathsError = err instanceof Error ? err.message : String(err);
+    console.warn(`[misao] the managed misao service is unavailable: ${pathsError}`);
+  }
+  return new MisaoServiceService({
+    paths,
+    ...(pathsError ? { pathsError } : {}),
+    bundle: readMisaoBundle(bundleRoot),
+    controller: createMisaoServiceController(process.platform, runCommand),
+    env: process.env,
+    hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
+  });
+}
+
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog);
   const deployModeDetector = new DeployModeDetector();
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
-  return { deployModeDetector, systemUpdateService, channelResolver };
+  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao) };
 }
 
 function buildAgentActivityMonitor(
@@ -547,6 +602,11 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   }
 
   const repos = buildRepositories(db);
+  const misaoRuntime = await resolveMisaoRuntimeForHub(
+    { env: process.env, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' },
+    repos.serverRepo.findAll().some((s) => s.type === 'local' && s.defaultMux === 'misao'),
+    console,
+  );
   const extractHost = (sshHostStr: string): { host: string; port: number } => {
     const atIdx = sshHostStr.indexOf('@');
     let rest = atIdx !== -1 ? sshHostStr.substring(atIdx + 1) : sshHostStr;
@@ -583,7 +643,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, db, fingerprintStore, repos.auditLogService, scopedAuthEnabled);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   // Constructed here, once, and passed to both `buildFetchDistributionService`
@@ -603,7 +663,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao);
 
   return {
     uiToken,

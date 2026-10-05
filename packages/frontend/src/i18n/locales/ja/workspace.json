@@ -89,6 +89,7 @@
     "adding": "追加中...",
     "server": "サーバー",
     "serverLabel": "サーバー:",
+    "serverOffline": "オフライン",
     "session": "セッション",
     "windowName": "ウィンドウ名（任意）",
     "windowNamePlaceholder": "例: dev",
@@ -114,6 +115,7 @@
     "singleWindow": "単一ウィンドウ",
     "entireSession": "セッション全体",
     "backToNew": "新規ウィンドウに戻る",
+    "taskWindowAddFailed": "タスクへの窓の追加に失敗しました",
     "selectWindowError": "ウィンドウを選択してください",
     "selectSessionError": "セッションを選択してください",
     "sessionNameRequired": "セッション名は必須です",
@@ -121,7 +123,8 @@
     "agentCommandUnavailable": "起動コマンドを取得できませんでした。エージェント定義の読み込み完了後に再度お試しいただくか、コマンドを入力してください。",
     "window": "ウィンドウ",
     "sessionWindowCount_one": "{{name}} ({{count}} ウィンドウ)",
-    "sessionWindowCount_other": "{{name}} ({{count}} ウィンドウ)"
+    "sessionWindowCount_other": "{{name}} ({{count}} ウィンドウ)",
+    "muxKindUnavailable": "{{kind}} では作成できません（{{reason}}）"
   },
   "serverModals": {
     "addTitle": "サーバーを追加",
@@ -131,7 +134,7 @@
     "hostPlaceholder": "例: user@hostname または ssh-config-alias",
     "autoInstall": "エージェントを自動インストール",
     "autoInstallDesc": "SSH経由で接続し、エージェントプロセスをインストールして自動管理します。",
-    "autoInstallReq": "必要条件: リモートサーバーに Node.js 24+、tmux、Tailscale",
+    "autoInstallReq": "必要条件: リモートサーバーに Node.js 24+ と Tailscale（tmux は任意です。misao をエージェントと一緒に導入します）",
     "type": "種別",
     "agent": "Agent",
     "agentHostPlaceholder": "例: 100.64.0.2 (Tailscale IP)",
@@ -142,16 +145,22 @@
     "tokenUnchanged": "（変更なし — 新しい値を入力して更新）",
     "showToken": "トークンを表示",
     "hideToken": "トークンを隠す",
-    "muxRuntime": "tmux ランタイム",
-    "muxSystem": "システム tmux",
-    "muxManaged": "AZITO 管理の tmux",
+    "defaultMux": "既定のターミナル方式",
+    "defaultMuxMisao": "misao",
+    "defaultMuxTmux": "tmux",
+    "muxRuntime": "tmux の実行ファイル",
+    "muxSystem": "システム",
+    "muxManaged": "管理版",
+    "misaoHint": "このサーバーのターミナル方式を misao デーモンへ切り替えます。tmux 上のウィンドウは移行されません。",
+    "misaoLeaveNote": "tmux へ戻すと、misao 上のウィンドウはハブから操作できなくなります。",
     "muxMigrationWarning": "前のソケットのセッションは移行されません。",
     "displayName": "表示名",
     "displayNamePlaceholder": "例: dev-server",
     "isolationIntent": "隔離実行",
     "isolationIntentLabel": "このサーバーへ運用者の資格情報を配布しない",
     "isolationIntentHint": "有効化時に配布済みの操作トークンの掃除を試みます。実際に資格情報が残っていないかは、サーバー詳細画面の「隔離を検証」で確認できます。",
-    "isolationRequiresScopedAuth": "隔離を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは無効化のみ行えます。"
+    "isolationRequiresScopedAuth": "隔離を宣言するには scoped auth（AZITO_SCOPED_AUTH）の有効化が必要です。互換モードのままでは無効化のみ行えます。",
+    "muxRuntimeHint": "tmux を使うときだけ有効です。misao では使われません。"
   },
   "menu": {
     "windows": "オブジェクト",
@@ -226,6 +235,8 @@
     "noTerminalSelected": "ターミナルが選択されていません",
     "sendKeysFailed": "キー送信に失敗しました: {{error}}",
     "browserTabOpened": "{{serverName}} でブラウザタブを開きました",
+    "taskWindowAddFailed": "タスクへの窓の追加に失敗しました",
+    "taskWindowRefRequired": "窓を特定できなかったため、タスクに追加できませんでした",
     "taskProjectFailed": "タスクの所属プロジェクト情報の取得に失敗しました",
     "noUnit": "Unitが割り当てられていません",
     "startExecution": "実行を開始",
@@ -299,5 +310,26 @@
     "pinTab": "タブをピン止め",
     "addWindowChip": "ウィンドウ",
     "addBrowserChip": "ブラウザ"
+  },
+  "muxKind": {
+    "label": "ターミナル方式",
+    "misao": "misao",
+    "tmux": "tmux",
+    "checking": "利用できる方式を確認中…",
+    "checkFailed": "利用できる方式を確認できませんでした。作成時に判定されます。",
+    "reason": {
+      "misaoUnreachable": "misao デーモンに接続できません",
+      "misaoIncompatible": "misao デーモンのバージョンがこのハブと合いません",
+      "misaoNotRegistered": "misao が有効になっていません",
+      "tmuxMissing": "tmux が入っていません",
+      "unavailable": "利用できません",
+      "misaoNotInstalled": "このサーバーには misao が入っていません"
+    }
+  },
+  "misaoInstall": {
+    "title": "このサーバーに misao をインストールしますか？",
+    "message": "{{server}} にはまだ misao がありません。ハブに同梱の misao をエージェント経由でサーバーへ送り、サービスとして起動します（サーバー側では何もダウンロードしません）。起動したあと、ウィンドウを作成します。",
+    "confirm": "misao をインストール",
+    "installing": "{{server}} に misao をインストール中…"
   }
 }

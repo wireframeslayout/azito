@@ -2,13 +2,20 @@ import type { FastifyPluginCallback } from 'fastify';
 import { execSync } from 'child_process';
 import os from 'os';
 import fs from 'fs';
-import type { IServerRepository, MuxRuntime, ServerConfig } from './Server';
+import type { IServerRepository, ServerConfig } from './Server';
+import type { IServerAliasRepository } from './SqliteServerAliasRepository';
+import { parseMuxInput } from './muxInput';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { muxKindForRuntime, type MuxWorkspace } from '@azito/shared';
+import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../tmux/MuxCapabilityError';
+import { supportedMuxKinds } from './muxKinds';
+import { checkIsolationBlockers as checkIsolationBlockersFor } from './isolationBlockers';
+import type { MuxCapabilities, MuxDriverKind, MuxStatusItem, MuxWorkspace } from '@azito/shared';
+import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem, tmuxVersionCommand } from './muxStatus';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
+import { AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -106,7 +113,48 @@ function redactSecrets(message: string): string {
 
 // ─── Types ───
 
+/** The misao row of a server's status / install-status. The last three are for an agent server's row (its install is run from here). */
+export interface MisaoDaemonRow {
+  installed: boolean;
+  version?: string;
+  daemonVersion?: string;
+  detail?: string;
+  /** This hub can put its bundled misao on the server. */
+  installable?: boolean;
+  /** The release this hub would install. */
+  bundledVersion?: string;
+  /** The daemon runs another release than the bundled one (left as it is: switching it ends every pane). */
+  updateAvailable?: boolean;
+}
+
+interface MuxKindStatus {
+  kind: MuxDriverKind;
+  driverAvailable: boolean;
+  caps: MuxCapabilities | null;
+  reason?: MuxDriverUnavailableReason;
+}
+
+function describeMuxKind(registry: MuxDriverRegistry, srv: ServerConfig, kind: MuxDriverKind): MuxKindStatus {
+  try {
+    return { kind, driverAvailable: true, caps: registry.resolveKind(kind, srv).caps };
+  } catch (err) {
+    if (!(err instanceof MuxDriverUnavailableError)) throw err;
+    return { kind, driverAvailable: false, caps: null, reason: err.reason };
+  }
+}
+
+/**
+ * `kind`/`driverAvailable`/`caps`/`reason` describe the default mux. A server that can host more than one mux (a local
+ * server) also gets `kinds`, one entry per mux; a tmux-only server keeps its former shape.
+ */
+function describeMux(registry: MuxDriverRegistry, srv: ServerConfig): Record<string, unknown> {
+  const kinds = supportedMuxKinds(srv).map((kind) => describeMuxKind(registry, srv, kind));
+  const { kind, driverAvailable, caps, reason } = kinds.find((k) => k.kind === srv.defaultMux)!;
+  return { runtime: srv.muxRuntime, kind, driverAvailable, caps, ...(reason ? { reason } : {}), ...(kinds.length > 1 ? { kinds } : {}) };
+}
+
 export interface ServersRouteOptions {
+  serverAliasRepo: IServerAliasRepository;
   serverRepo: IServerRepository;
   tmux: TmuxClient;
   transportFactory: TransportFactory;
@@ -165,13 +213,20 @@ export interface ServersRouteOptions {
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
   muxDriverRegistry: MuxDriverRegistry;
-  onMuxRuntimeChanged?: (serverName: string) => void;
+  /** Reports the misao daemon of a server for its status / install-status rows. */
+  misaoDaemonStatus: (server: ServerConfig) => Promise<MisaoDaemonRow>;
+  onMuxChanged?: (change: { previous: ServerConfig; next: ServerConfig }) => void;
+  /**
+   * A server was created (`previous` is null), edited, had its agent reinstalled, or was deleted (`next` is null):
+   * per-server state bound to its endpoint / token (the misao connection) is made, replaced or dropped here.
+   */
+  onServerChanged?: (change: { previous: ServerConfig | null; next: ServerConfig | null }) => void;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxRuntimeChanged } = opts;
+  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, onServerChanged, misaoDaemonStatus } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -284,47 +339,20 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // call sites now share this single implementation instead of the gate
   // living inline in only one of them, which is what let the retry path
   // silently skip it in the first place.
-  async function checkIsolationBlockers(
-    serverName: string,
-    srv: ServerConfig,
-  ): Promise<{ status: number; body: Record<string, unknown> } | null> {
-    const riskyWindows = windowRepo
-      .findByServer(serverName)
-      .filter((w) => w.windowType === 'agent' || w.taskId !== null);
-    if (riskyWindows.length > 0) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_windows',
-          message: `${riskyWindows.length} 件のウィンドウがこのサーバー上に登録されているため隔離を有効化できません。対象ウィンドウを閉じてから再度有効化してください。`,
-          windowCount: riskyWindows.length,
-        },
-      };
-    }
-    const driver = muxDriverRegistry.resolve(srv);
-    let liveWorkspaces: MuxWorkspace[];
-    try {
-      liveWorkspaces = await driver.listWorkspacesStrict(srv);
-    } catch (err: unknown) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_session_check_failure',
-          message: `隔離対象サーバーのワークスペース一覧取得に失敗したため、安全側に倒して隔離を有効化できません（${(err as Error).message}）。サーバーの疎通を確認してから再度お試しください。`,
-        },
-      };
-    }
-    if (liveWorkspaces.length > 0) {
-      return {
-        status: 409,
-        body: {
-          error: 'isolation_intent_blocked_by_live_sessions',
-          message: `${liveWorkspaces.length} 件の稼働中ワークスペースがこのサーバー上に存在するため隔離を有効化できません。ワークスペースを終了してから再度有効化してください。`,
-          sessionCount: liveWorkspaces.length,
-        },
-      };
-    }
-    return null;
+  const checkIsolationBlockers = (serverName: string, srv: ServerConfig) =>
+    checkIsolationBlockersFor({ windowRepo, muxDriverRegistry }, serverName, srv);
+
+  function notifyServerCreated(name: string): void {
+    if (!onServerChanged) return;
+    const next = serverRepo.findByName(name);
+    if (next) onServerChanged({ previous: null, next });
+  }
+
+  /** Tells the hub that `previous` was edited or reinstalled, with the row as it is stored now. */
+  function notifyServerChanged(previous: ServerConfig): void {
+    if (!onServerChanged) return;
+    const next = serverRepo.findByName(previous.name);
+    if (next) onServerChanged({ previous, next });
   }
 
   // ── GET /api/servers ──
@@ -336,10 +364,14 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     // JSON verification/cleanup outcome — see Server.ts's doc comments on
     // both, split per review round Important finding 4) — the list endpoint
     // exposes only the intent flag and last-check timestamp.
+    // `aliases`: old names of servers merged into this one by migration 079, so saved browser tabs can be
+    // re-pointed. TODO(#313): compatibility for one release; remove with the `server_aliases` table.
+    const aliases = serverAliasRepo.findAll();
     return serverRepo.findAll().map(({ agentToken, isolationReport, isolationCleanupReport, ...rest }) => ({
       ...rest,
       hasAgentToken: agentToken != null,
       hubVersion: hubBundleHash,
+      aliases: aliases.filter((a) => a.newName === rest.name).map((a) => a.oldName),
     }));
   });
 
@@ -356,10 +388,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     if (!srv) return reply.status(404).send({ error: 'Server not found' });
     const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
     const { agentToken, ...rest } = srv;
-    const kind = muxKindForRuntime(srv.muxRuntime);
-    const driverAvailable = muxDriverRegistry.has(kind);
-    const caps = driverAvailable ? muxDriverRegistry.resolve(srv).caps : null;
-    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash, mux: { runtime: srv.muxRuntime, kind, driverAvailable, caps } };
+    const mux = describeMux(muxDriverRegistry, srv);
+    return { ...rest, hasAgentToken: agentToken != null, hubVersion: hubBundleHash, mux };
   });
 
   // ── POST /api/servers ──
@@ -373,7 +403,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   // against the OLD row — closing that race is the whole point of taking the
   // lock here, not just validating input.
   fastify.post('/api/servers', async (request, reply) => {
-    const { name, type, host, agentPort, agentToken, autoInstall, muxRuntime } = request.body as {
+    const { name, type, host, agentPort, agentToken, autoInstall, muxRuntime, defaultMux } = request.body as {
       name?: string;
       type?: string;
       host?: string;
@@ -381,10 +411,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       agentToken?: string;
       autoInstall?: boolean;
       muxRuntime?: string;
+      defaultMux?: string;
     };
-    const validMuxRuntime = muxRuntime || undefined;
-    if (validMuxRuntime && !['system', 'managed'].includes(validMuxRuntime))
-      return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+    const muxInput = parseMuxInput({ defaultMux, muxRuntime });
+    if (!muxInput.ok) return reply.status(400).send({ error: muxInput.error });
+    const { muxRuntime: validMuxRuntime, defaultMux: validDefaultMux } = muxInput;
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
@@ -398,8 +429,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const result = await agentInstaller.install(host, (p) => steps.push(p), validMuxRuntime);
 
         if (result.success) {
-          serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime as MuxRuntime | undefined);
-          return { ok: true, type: 'agent', steps, startMethod: result.startMethod };
+          // A host without tmux can only run misao (the installer fails when misao is not there either): unless the request chose, that is the default.
+          const defaultMux = validDefaultMux ?? (result.tmuxFound === false ? 'misao' : undefined);
+          serverRepo.create(name, 'agent', result.host, result.port, result.token, result.version, host, validMuxRuntime, defaultMux);
+          notifyServerCreated(name);
+          return { ok: true, type: 'agent', steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
         }
 
         return reply.status(500).send({ error: result.error, steps });
@@ -415,7 +449,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (serverRepo.findByName(name))
         return reply.status(409).send({ error: 'Server already exists' });
       try {
-        serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime as MuxRuntime | undefined);
+        serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime, validDefaultMux);
+        notifyServerCreated(name);
         return { ok: true };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
@@ -436,12 +471,13 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMux, isolationIntent } = request.body as {
-        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; isolationIntent?: boolean;
+      const { type, host, agentPort, agentToken, sshHost, muxRuntime: putMuxRuntime, defaultMux: putDefaultMux, isolationIntent } = request.body as {
+        type?: string; host?: string; agentPort?: number; agentToken?: string; sshHost?: string; muxRuntime?: string; defaultMux?: string; isolationIntent?: boolean;
       };
-      const validPutMux = putMux || undefined;
-      if (validPutMux && !['system', 'managed'].includes(validPutMux))
-        return reply.status(400).send({ error: 'muxRuntime must be "system" or "managed"' });
+      const muxInput = parseMuxInput({ defaultMux: putDefaultMux, muxRuntime: putMuxRuntime });
+      if (!muxInput.ok) return reply.status(400).send({ error: muxInput.error });
+      const effectiveMuxRuntime = muxInput.muxRuntime ?? srv.muxRuntime;
+      const effectiveDefaultMux = muxInput.defaultMux ?? srv.defaultMux;
       // Issue #29 review, Important finding 2: isolationIntent must be an
       // actual boolean, not merely truthy — `"false"` (a string) is truthy
       // in JS and would otherwise be persisted as `true` by
@@ -639,7 +675,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             agentPort ?? srv.agentPort ?? undefined,
             agentToken ?? srv.agentToken ?? undefined,
             sshHost ?? srv.sshHost ?? undefined,
-            (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
+            effectiveMuxRuntime,
+            effectiveDefaultMux,
           );
         } else {
           serverRepo.update(
@@ -649,11 +686,12 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
             agentPort ?? srv.agentPort ?? undefined,
             agentToken ?? srv.agentToken ?? undefined,
             sshHost ?? srv.sshHost ?? undefined,
-            (validPutMux as MuxRuntime | undefined) ?? srv.muxRuntime,
+            effectiveMuxRuntime,
+            effectiveDefaultMux,
           );
         }
-        if (validPutMux !== undefined && validPutMux !== srv.muxRuntime) {
-          onMuxRuntimeChanged?.(request.params.name);
+        if (effectiveDefaultMux !== srv.defaultMux || effectiveMuxRuntime !== srv.muxRuntime) {
+          onMuxChanged?.({ previous: srv, next: { ...srv, type: effectiveType, muxRuntime: effectiveMuxRuntime, defaultMux: effectiveDefaultMux } });
         }
         if (effectiveType !== 'agent') {
           // Issue #29 review, Important finding 1: an isolation-invariant
@@ -747,6 +785,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           }
         }
         transportFactory.invalidate(request.params.name);
+        notifyServerChanged(srv);
         // Issue #29 review, Important finding 2: surfaces the cleanup
         // outcome directly in the PUT response — undefined (field omitted)
         // when no cleanup ran this request, so callers can distinguish "no
@@ -817,7 +856,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         serverRepo.update(srv.name, 'agent', result.host, result.port, result.token, sshHost, srv.muxRuntime);
         serverRepo.updateAgentVersion(srv.name, result.version);
         transportFactory.invalidate(srv.name);
-        return { ok: true, steps, startMethod: result.startMethod };
+        notifyServerChanged(srv);
+        return { ok: true, steps, startMethod: result.startMethod, ...(result.misaoError ? { misaoError: result.misaoError } : {}) };
       }
 
       return reply.status(500).send({ error: result.error, steps });
@@ -1038,6 +1078,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
         serverRepo.delete(request.params.name);
+        transportFactory.invalidate(request.params.name);
+        onServerChanged?.({ previous: srv, next: null });
         return { ok: true };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
@@ -1046,6 +1088,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   );
 
   // ── GET /api/servers/:name/status ──
+  // One entry per mux kind the server can host (`mux`), each checked on its own terms: tmux by running the binary,
+  // misao by asking its daemon. A kind that is down is reported on its entry — it does not make the server offline,
+  // and a missing tmux is not an error on a server whose default mux is misao.
   fastify.get<{ Params: { name: string } }>(
     '/api/servers/:name/status',
     async (request, reply) => {
@@ -1053,51 +1098,43 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
       try {
-        // Bundle content hash (what agents report at /health), read without triggering
-        // a build — this route is polled frequently and must stay cheap. Null (bundle
-        // not built yet) keeps the pre-existing "unknown hub version" semantics.
-        const tmuxVersionCmd = srv.muxRuntime === 'managed'
-          ? '$HOME/.azito/tmux/bin/tmux -L azito -f $HOME/.azito/tmux/azito.conf -V'
-          : 'tmux -V';
-        const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
+        const checkMuxKind = (kind: MuxDriverKind): Promise<MuxStatusItem> => (
+          kind === 'misao'
+            ? misaoDaemonStatus(srv).then(misaoStatusItem)
+            : checkTmuxStatus(transportFactory.getTransport(srv), srv.muxRuntime)
+        );
+        const checkMuxes = async (): Promise<Partial<Record<MuxDriverKind, MuxStatusItem>>> => {
+          const kinds = supportedMuxKinds(srv);
+          const items = await Promise.all(kinds.map(checkMuxKind));
+          return Object.fromEntries(kinds.map((kind, i) => [kind, items[i]]));
+        };
+
         if (srv.type === 'agent') {
+          // Bundle content hash (what agents report at /health), read without triggering
+          // a build — this route is polled frequently and must stay cheap. Null (bundle
+          // not built yet) keeps the pre-existing "unknown hub version" semantics.
+          const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
           try {
-            const res = await fetch(`http://${srv.host}:${srv.agentPort}/health`, { signal: AbortSignal.timeout(5000) });
-            if (!res.ok) return { status: 'offline' as const, tmux: false, message: `Agent returned ${res.status}` };
-            const health = await res.json() as { version: string; pid: number; uptime: number };
+            const health = await transportFactory.getAgentTransport(srv).fetchHealth() as { version: string; pid: number; uptime: number };
             const versionMatch = hubBundleHash ? health.version === hubBundleHash : true;
-            let tmuxAvailable = false;
-            let tmuxVersion = '';
-            try {
-              const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
-              tmuxAvailable = true;
-              tmuxVersion = stdout.trim();
-            } catch { /* tmux not found on agent */ }
+            const mux = await checkMuxes();
             return {
               status: 'online' as const,
-              tmux: tmuxAvailable,
-              tmuxVersion,
+              mux,
               agentVersion: health.version,
               hubVersion: hubBundleHash,
               versionMatch,
-              message: tmuxAvailable ? undefined : 'tmux not found on agent server',
+              message: describeDefaultMuxProblem(srv, mux),
             };
           } catch (err: unknown) {
-            return { status: 'offline' as const, tmux: false, message: `Agent unreachable: ${(err as Error).message}` };
+            if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, mux: {}, message: `Agent returned an error: ${(err as Error).message}` };
+            return { status: 'offline' as const, mux: {}, message: `Agent unreachable: ${err.reason}` };
           }
-        } else {
-          // Check if tmux is available locally
-          let tmuxAvailable = false;
-          let tmuxVersion = '';
-          try {
-            const { stdout } = await transportFactory.getTransport(srv).exec(tmuxVersionCmd);
-            tmuxAvailable = true;
-            tmuxVersion = stdout.trim();
-          } catch { /* tmux not found */ }
-          return { status: 'online' as const, tmux: tmuxAvailable, tmuxVersion, message: tmuxAvailable ? undefined : 'tmux not found' };
         }
+        const mux = await checkMuxes();
+        return { status: 'online' as const, mux, message: describeDefaultMuxProblem(srv, mux) };
       } catch (err: unknown) {
-        return { status: 'error' as const, tmux: false, message: (err as Error).message };
+        return { status: 'error' as const, mux: {}, message: (err as Error).message };
       }
     },
   );
@@ -1110,13 +1147,13 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
 
       const transport = transportFactory.getTransport(srv);
+      const agentTransport = srv.type === 'agent' ? transportFactory.getAgentTransport(srv) : null;
+
+      const checkMisao = async () => misaoDaemonStatus(srv);
 
       const checkTmux = async () => {
         try {
-          const cmd = srv.muxRuntime === 'managed'
-            ? '$HOME/.azito/tmux/bin/tmux -L azito -f $HOME/.azito/tmux/azito.conf -V'
-            : 'tmux -V';
-          const r = await transport.exec(cmd);
+          const r = await transport.exec(tmuxVersionCommand(srv.muxRuntime));
           return { ...parseTmuxVersion(stripTerminalArtifacts(r.stdout), r.code), mode: srv.muxRuntime };
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message, mode: srv.muxRuntime };
@@ -1161,9 +1198,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkAgent = async () => {
         try {
-          const res = await fetch(`http://${srv.host}:${srv.agentPort}/health`, { signal: AbortSignal.timeout(5000) });
-          if (!res.ok) return { installed: false, detail: `Agent returned ${res.status}` };
-          const health = await res.json() as { version: string };
+          if (!agentTransport) throw new Error(`Server "${srv.name}" is not an agent server`);
+          const health = await agentTransport.fetchHealth() as { version: string };
           // Bundle content hash comparison (see /status route); undefined when the
           // local bundle hasn't been built — matches the previous null-hubSha handling.
           const hubBundleHash = agentBundler ? agentBundler.getBundleHashIfBuilt() : null;
@@ -1175,10 +1211,23 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       };
 
       const isRemote = srv.type === 'agent';
-      const osName = (await transport.exec('uname -s')).stdout.trim();
+      let osName: string;
+      try {
+        osName = (await transport.exec('uname -s')).stdout.trim();
+      } catch (err: unknown) {
+        if (err instanceof AgentUnreachableError) {
+          return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline' });
+        }
+        throw err;
+      }
 
-      const [tmuxResult, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
-        checkTmux(),
+      // One row per mux the server can use: its default mux always (missing = to be set up), another mux marked optional.
+      const checkMux = (kind: MuxDriverKind) => (kind === 'misao' ? checkMisao() : checkTmux());
+      // Every server lists misao (even on a tmux default and with no daemon): its row carries the install / update
+      // controls (a local server's bundled service, an agent server's install).
+      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || kind === 'misao' || muxDriverRegistry.availabilityFor(kind, srv).available);
+      const [muxResults, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
+        Promise.all(muxKinds.map(checkMux)),
         checkNode(),
         checkHarness(),
         isRemote ? checkTailscale() : null,
@@ -1186,11 +1235,14 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         checkChromium(osName),
       ]);
 
-      const result: Record<string, unknown> = {
-        tmux: tmuxResult,
-        node: nodeResult,
-        aztHarness: harnessResult,
-      };
+      const result: Record<string, unknown> = {};
+      // A kind that is not the default is optional, and still listed: tmux's row tells how to add it, misao's carries the
+      // service controls.
+      muxKinds.forEach((kind, i) => {
+        result[kind] = kind === srv.defaultMux ? muxResults[i] : { ...muxResults[i], optional: true };
+      });
+      result.node = nodeResult;
+      result.aztHarness = harnessResult;
       if (tailscaleResult) result.tailscale = tailscaleResult;
       if (agentResult) result.agent = agentResult;
       if (chromiumResult) result.chromium = chromiumResult;

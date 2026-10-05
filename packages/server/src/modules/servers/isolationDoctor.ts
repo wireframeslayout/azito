@@ -117,12 +117,10 @@ function errMsg(err: unknown): string {
  * Review round (Minor finding 2): every probe in this module runs while
  * `routes.ts` holds a per-server mutex (`serverIsolationMutex`) for the
  * WHOLE doctor run, and for `agent`-type servers `transport.exec()` is an
- * unbounded `fetch()` under the hood (`AgentTransport`'s `post()` sets no
- * `AbortSignal` — the `timeoutMs` param it forwards only bounds the child
- * process the AGENT runs, not the hub-to-agent HTTP round trip itself). A
- * network partition to that agent (TCP blackhole: SYN/ACK completes but the
- * peer never replies) would otherwise stall on undici's ~300s default,
- * holding the mutex and blocking every OTHER isolation/deploy operation on
+ * HTTP round trip (`AgentTransport.post()` aborts it at `timeoutMs` + 5s,
+ * default 15s + 5s, and fails fast while its circuit breaker is open). This
+ * module still keeps its own explicit per-probe bound so one stuck probe cannot
+ * hold the mutex and block every OTHER isolation/deploy operation on
  * that same server name for minutes. This wraps every doctor-issued
  * `transport.exec()` call in an explicit `Promise.race` against a short
  * timer — a minimal, doctor-local guard (no change to `IServerTransport` or

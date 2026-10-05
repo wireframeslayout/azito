@@ -385,10 +385,13 @@ Settings → System → **Activity detection diagnostics** (3s refresh, read-onl
 | Display | Meaning |
 |---|---|
 | `tier0_supervisor` | A frame from the *current* supervisor connection decides this state (evidence generation already checked) -- objective proof that the supervisor really is detecting it |
+| `tier0_mux` | The mux itself (misao, §13) reported this state. The `mux` material on the row carries the mux's own rule name (`exit` / a profile name / `title` / `bytes`), shown next to the tier chip |
 | Supervisor column "no frame received" | The connection is alive but no activity frame has arrived yet (an old supervisor build, or right after a reconnect). A lower tier is deciding in the meantime |
 | `tier1_hook` … `tier4_probe` | That tier's fallback decided the state. A lot of `tier4_probe` rows means the supervisor / hook wiring is worth checking |
 | `none` (while running) | Running by execution-run registration (registered = running; not a detection tier's verdict) |
-| `refinedBy: tier2_title` | A marker that Tier 2's screen classification refined a Tier 0 `idle` row into `blocked`. `decidedBy` deliberately stays at the deciding tier -- read the row as "Tier 0 idle + Tier 2 blocked" |
+| `heldForStopHook: true` | A misao idle held back while waiting for the Stop hook (§13): the mux says idle but the row still reads as working (up to 4s). The screen check still runs during the hold, so a blocked pane shows blocked at once |
+| `refinedBy: tier1_hook_stop` | A marker that a Claude Stop hook confirmed a misao `tier0_mux` `idle` as a completion (§13). `decidedBy` stays `tier0_mux` |
+| `refinedBy: tier2_title` | A marker that Tier 2's screen classification refined a Tier 0 `idle` row into `blocked` (on a misao window, a `tier0_mux` `working` row as well, §13). `decidedBy` deliberately stays at the deciding tier -- read the row as "Tier 0 idle + Tier 2 blocked" |
 | Last transition | The most recent transition and its reason (§7) -- the trail for "why did it disappear" |
 
 Rows are sorted by state (working → blocked → idle → offline → none). A `tier0_supervisor` row
@@ -541,4 +544,56 @@ permanently locks in the following.
 | Smoke | Login → project creation → window registration → listing |
 
 Corresponding specs: `e2e/specs/activity.spec.ts`, `e2e/specs/question-answer.spec.ts`,
-`e2e/specs/smoke.spec.ts`.
+`e2e/specs/smoke.spec.ts`. misao windows (§13) are covered by `e2e/specs/misao.spec.ts` (with its own daemon on a temporary
+socket), which checks the `pane.state`-driven working row and the finished row produced by process exit.
+
+## 13. misao windows
+
+Windows whose `mux_ref.kind` is `misao` (local servers, and agent servers that have misao: each through its own daemon connection and its own `MisaoActivityBridge`) are served by the misao daemon instead of
+tmux. For tmux servers nothing below is created and the tmux behavior above is unchanged.
+
+- **No supervisor.** `shouldSupervise(serverType, windowType, muxKind)` is false for a misao
+  window, so no `tui-supervisor` is launched and `azs` (which sees `$MISAO_PANE_ID` and no
+  `$TMUX_PANE`) execs the command directly. The daemon does the Tier 0 job.
+- **Tier 0 mux.** `MisaoPaneStateEvents` subscribes to the daemon's `pane.state` events and
+  `MisaoActivityBridge` feeds them to `AgentActivityMonitor.recordMuxSignal()`: `working` →
+  working, `blocked` → blocked, `idle` → idle, `exited` → `done` (a `completed` stop, after which
+  the key is released to the lower tiers), anything else → `unknown` (lower tiers decide). The
+  pane is resolved to its window with `PaneHandleResolver` (pane id → `pane.info` → mux ref →
+  `windows.mux_ref`); only the window's **first pane** is adopted, so a shell pane split beside
+  the agent never overwrites it. A pane whose window row is registered later is re-resolved on
+  `sessions:updated` (for up to 60s). On a gap and on every reconnect the whole `pane.list` is
+  re-read (`agentState` / `decidedBy`); while the connection is down every misao-derived key is
+  `unknown`.
+- **Blocked refinement.** The misao core only ever says working / idle / exited -- `blocked`
+  comes only from an agent profile. So for a misao window the screen is read the same way as
+  the Tier 0 idle refinement (§1), but through the window's mux ref and `driver.captureScreen`
+  (first pane) instead of tmux coordinates, and **without the title pre-check**: a `tier0_mux`
+  `working` row whose screen shows a waiting-for-answer prompt becomes `blocked` (still
+  `decidedBy: tier0_mux`, with `refinedBy: tier2_title`), and a `tier0_mux` `idle` row does the
+  same via the existing idle refinement, announcing no completion. One direction only; an
+  unreadable screen holds the previous status (`heldStatusOnUnknown`). A misao window with no
+  `mux_ref` is never guessed from a tmux target -- its screen check is `unknown`.
+- **Completion by the Stop hook.** A misao `idle` alone is not evidence of completion, but a
+  Claude Stop hook confirms it: when the window's latest hook is a `stop` that arrived after the
+  latest `working` report, the `tier0_mux` idle row stops with `completed` and carries
+  `refinedBy: tier1_hook_stop` (`decidedBy` stays `tier0_mux`). An idle after a hook `start` with
+  no Stop yet, or an idle after the pane went working again following the Stop, is a plain idle.
+  The blocked screen refinement wins: a blocked pane announces no completion. misao reports idle for a Claude window
+  the moment the title leaves the spinner for `✳`, while the Stop hook travels as a detached curl,
+  so the idle often arrives first. When the window's latest hook is still a `start` (no Stop yet),
+  the idle is therefore held back for a short grace (`MISAO_STOP_HOOK_GRACE_MS`, 4s): the key stays
+  running and nothing is announced; a Stop within the grace (after the blocked check) announces
+  `completed` exactly once, and without one the idle is announced as a plain idle (a later Stop
+  does not rewrite it). With no hook, or a Stop already received, nothing is held. Only misao hooks from
+  the window's **first pane** are recorded (the `misaoPaneId` route; a split pane's Claude start / Stop is ignored, the tmux route is unchanged), and the screen check still runs during the hold, and a
+  hook that lands while a tick is running is evaluated again right after it. Agents without hooks (codex etc.) still complete only on
+  `exited`.
+- **Hooks.** With `$TMUX_PANE` absent and `$MISAO_PANE_ID` (`p_` + 26 ULID characters) set, the
+  three hook scripts send `misaoPaneId` instead of the tmux fields. The hub resolves the window
+  through `PaneHandleResolver` and records the Tier 1 hook state / opens the pending question on
+  it. An unknown pane (including one that cannot be resolved because the daemon is unreachable)
+  answers 200 and records nothing; a malformed id is 400. With the flag off `misaoPaneId` is
+  ignored and the tmux fields stay required.
+- **Diagnostics.** `GET /api/debug/activity` rows carry `mux: { status, decidedBy?, at }`, and the
+  panel shows `tier0 misao`.

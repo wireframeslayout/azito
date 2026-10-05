@@ -6,12 +6,15 @@ interface FormFieldProps {
   hint?: string;
   required?: boolean;
   error?: string;
+  /** id of the control the label names. When set, the error text gets the id `<htmlFor>-error` for the control's aria-describedby. */
+  htmlFor?: string;
 }
 
-export default function FormField({ label, children, hint, required, error }: FormFieldProps) {
+export default function FormField({ label, children, hint, required, error, htmlFor }: FormFieldProps) {
   return (
     <div style={{ marginBottom: 14 }}>
       <label
+        htmlFor={htmlFor}
         style={{
           fontSize: 'var(--font-sm)',
           color: 'var(--text-dim)',
@@ -25,6 +28,7 @@ export default function FormField({ label, children, hint, required, error }: Fo
       {children}
       {error && (
         <div
+          id={htmlFor ? `${htmlFor}-error` : undefined}
           role="alert"
           style={{
             fontSize: 'var(--font-xs)',

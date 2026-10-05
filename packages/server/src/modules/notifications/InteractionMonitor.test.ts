@@ -51,6 +51,18 @@ describe('InteractionMonitor', () => {
     );
   });
 
+  it('a signal naming an already-resolved window id opens that window without matching tmux coordinates', () => {
+    findAll.mockReturnValue([]);
+    monitor.recordSignal(makeSignal({ target: { windowId: 1, paneIndex: 1 }, timestamp: now() }));
+    expect(monitor.isPending(1)).toBe(true);
+  });
+
+  it('a resolved window id that no longer exists is not pending', () => {
+    findById.mockReturnValue(undefined);
+    monitor.recordSignal(makeSignal({ target: { windowId: 1, paneIndex: 1 }, timestamp: now() }));
+    expect(monitor.isPending(1)).toBe(false);
+  });
+
   it('is not pending before any signal', () => {
     expect(monitor.isPending(1)).toBe(false);
   });

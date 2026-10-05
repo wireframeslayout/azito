@@ -1,9 +1,11 @@
+import type { MuxDriverKind } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import { resolveSupervisorCommand } from './SupervisorPath';
 import { shellQuote } from '../../shared/shellQuote';
 
-export function shouldSupervise(serverType: ServerConfig['type'], windowType: string): boolean {
-  return windowType === 'agent';
+/** `windowKind` is the mux kind of the window being launched (its `MuxRef.kind`), not the server's default mux. */
+export function shouldSupervise(serverType: ServerConfig['type'], windowType: string, windowKind: MuxDriverKind): boolean {
+  return windowType === 'agent' && windowKind !== 'misao';
 }
 
 export interface WrapWithSupervisorOptions {

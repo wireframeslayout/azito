@@ -39,7 +39,7 @@ const makeServer = (overrides: Record<string, any> = {}): import('../../servers/
   agentToken: 'test-token',
   agentVersion: null,
   sshHost: 'user@host',
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   sshHostFingerprint: null,
   isolationIntent: true,
   isolationVerifiedAt: null,

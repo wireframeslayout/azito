@@ -1,3 +1,5 @@
+import fs from 'fs';
+import os from 'os';
 import Fastify from 'fastify';
 
 import { resolveDataDir, getLegacyPaths } from './shared/dataDir';
@@ -11,12 +13,15 @@ import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
+import { scheduleStartupRecovery } from './modules/tasks/recovery/scheduleStartupRecovery';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
+import { misaoCommand } from './cli/misaoCommand';
+import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
 
 // ─── Graceful shutdown ───
@@ -28,6 +33,11 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 async function main(): Promise<void> {
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3));
+    return;
+  }
+
+  if (process.argv[2] === 'misao') {
+    await misaoCommand(process.argv.slice(3));
     return;
   }
 
@@ -82,7 +92,11 @@ async function main(): Promise<void> {
     console.warn('[azito] Failed to write isolation-doctor FS-boundary canary — the FS-boundary check will report "unknown" for every agent server until the hub restarts with a writable data directory');
   }
 
-  const db = openDatabase(paths.db);
+  // A release install runs its panes on the bundled misao, so a new installation's local server starts on misao, but only
+  // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh sets both up).
+  // Otherwise, and for a source checkout (`npm run dev`), it starts on tmux.
+  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, os.homedir(), fs.existsSync);
+  const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux' });
   const uiToken = resolveUiToken(paths.uiToken);
   const webhookToken = resolveWebhookToken(paths.webhookToken);
 
@@ -104,7 +118,7 @@ async function main(): Promise<void> {
 
   const localUrl = `http://127.0.0.1:${PORT}`;
   const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
-  const { tmuxHookManager, agentEventStreams } = await buildServer(app, wiring, PORT);
+  const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);
 
@@ -147,10 +161,40 @@ async function main(): Promise<void> {
 
   // ─── Startup: install tmux hooks + connect agent event streams ───
 
-  for (const srv of wiring.serverRepo.findAll()) {
+  // A local server hosts both muxes, so it is in both selections; only its default mux is expected to answer.
+  const allServers = wiring.serverRepo.findAll();
+  const tmuxServers = allServers;
+
+  // Not awaited: the daemon may come up later. Change events for a server installed while the daemon is down
+  // start flowing as soon as the connection is established.
+  const misao = wiring.misao;
+  const localServers = allServers.filter((srv) => srv.type === 'local');
+  void misao.connection.start().then(() => Promise.all([
+    ...localServers.map((srv) => misao.driver.installChangeHooks(srv).catch((err) => {
+      const message = `Change events for ${srv.name} are not active yet (will start when the misao daemon is reachable): ${err}`;
+      if (srv.defaultMux === 'misao') app.log.warn(message); else app.log.debug(message);
+    })),
+    misaoPaneStates.start().catch((err) => {
+      app.log.warn(`Activity events are not active yet (will start when the misao daemon is reachable): ${err}`);
+    }),
+  ]));
+
+  // An agent server's misao is reached through its agent: it gets a node now when it uses misao (default mux, or a
+  // misao window on record), and otherwise when the agent reports a daemon socket. Nothing here blocks startup.
+  for (const srv of allServers.filter((s) => s.type === 'agent')) {
+    const usesMisao = srv.defaultMux === 'misao' || wiring.windowRepo.findByServer(srv.name).some((w) => w.muxRef?.kind === 'misao');
+    if (usesMisao) {
+      misao.servers.ensureAgentNode(srv);
+      continue;
+    }
+    void misao.servers.discoverAgentNode(srv).catch((err) => app.log.debug(`misao discovery on ${srv.name}: ${err}`));
+  }
+
+  for (const srv of tmuxServers) {
     if (srv.type === 'local') {
       tmuxHookManager.install(srv).catch((err) => {
-        app.log.warn(`Failed to install tmux hooks on ${srv.name}: ${err}`);
+        const message = `Failed to install tmux hooks on ${srv.name}: ${err}`;
+        if (srv.defaultMux === 'tmux') app.log.warn(message); else app.log.debug(message);
       });
     }
     if (srv.type === 'agent' && srv.host && srv.agentPort && srv.agentToken) {
@@ -164,7 +208,7 @@ async function main(): Promise<void> {
 
   // ─── Startup GC: clean leaked linked sessions ───
 
-  for (const srv of wiring.serverRepo.findAll()) {
+  for (const srv of tmuxServers) {
     wiring.tmuxClient.cleanupLinkedSessions(srv).then((n) => {
       if (n > 0) app.log.info(`Startup GC: cleaned ${n} linked session(s) on ${srv.name}`);
     }).catch(() => {});
@@ -184,8 +228,17 @@ async function main(): Promise<void> {
     wiring.agentTurnRepo,
     app.log,
     wiring.unitTypeLoader,
+    wiring.windowRepo,
   );
-  recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); });
+  // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect (only the tasks the first run skipped).
+  void scheduleStartupRecovery(
+    {
+      recover: () => recoverStuckTasks.run().catch((err) => { app.log.warn(`Startup recovery failed: ${err}`); }),
+      recoverSkipped: () => recoverStuckTasks.runSkippedForDaemon().catch((err) => { app.log.warn(`Startup recovery of misao tasks failed: ${err}`); }),
+      hasPending: () => recoverStuckTasks.hasPendingForDaemon(),
+    },
+    misao.connection,
+  );
 
   setInterval(() => {
     recoverStuckTasks.runPeriodic(wiring.executeTaskUseCase.getRunning()).catch((err) => {

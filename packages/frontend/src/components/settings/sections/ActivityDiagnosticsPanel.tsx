@@ -64,7 +64,7 @@ function SupervisorCell({ row }: { row: ActivityDiagnosticRow }) {
 export default function ActivityDiagnosticsPanel() {
   const { t } = useTranslation('settings');
   const { rows, error } = useActivityDiagnostics(true);
-  const tier0Count = rows?.filter((r) => r.decidedBy === 'tier0_supervisor').length ?? 0;
+  const tier0Count = rows?.filter((r) => r.decidedBy === 'tier0_supervisor' || r.decidedBy === 'tier0_mux').length ?? 0;
   const sectionRef = useRef<HTMLElement>(null);
   // 既に /settings/system を開いている状態でも「全件表示」でスクロールできるよう、mount 時では
   // なく location.hash の変化を見る（同一ページ内では hash だけが変わる）。

@@ -278,6 +278,28 @@ export function closeTab(root: LayoutNode, paneId: string, tabId: string): Layou
   return replacePane(root, paneId, (p) => ({ ...p, tabIds: newTabIds, activeTabId: newActiveTabId }));
 }
 
+/**
+ * Renames a tab id in place, keeping the pane it belongs to, its position and its active state.
+ * When `newId` already lives in some pane, `oldId` is merged into it instead: the old tab is
+ * dropped (an emptied pane folds away) and the existing tab becomes active in its pane.
+ * A no-op when `oldId` is not in the tree (reconcile() will place the new id).
+ */
+export function replaceTabId(root: LayoutNode, oldId: string, newId: string): LayoutNode {
+  if (oldId === newId) return root;
+  const oldPane = findPaneByTab(root, oldId);
+  if (!oldPane) return root;
+  if (!findPaneByTab(root, newId)) {
+    return replacePane(root, oldPane.id, (p) => ({
+      ...p,
+      tabIds: p.tabIds.map((t) => (t === oldId ? newId : t)),
+      activeTabId: p.activeTabId === oldId ? newId : p.activeTabId,
+    }));
+  }
+  const closed = closeTab(root, oldPane.id, oldId);
+  const target = findPaneByTab(closed, newId);
+  return target ? setActiveTab(closed, target.id, newId) : closed;
+}
+
 export function openTab(root: LayoutNode, tabId: string, preferredPaneId: string | null): { root: LayoutNode; paneId: string } {
   const existing = findPaneByTab(root, tabId);
   if (existing) {

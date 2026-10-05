@@ -3,7 +3,7 @@ import type { ITaskRepository } from '../tasks/Task';
 import type { MuxPaneInfo } from '@azito/shared';
 import { asPaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
-import { windowSpecMatches } from '../tmux/types';
+import { paneInfoMatchesRef, windowInfoMatchesRef } from '../tmux/types';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
@@ -570,7 +570,7 @@ export class WindowSessionResolver {
   private async getWindowPanes(server: ServerConfig, window: Window, allPanes?: MuxPaneInfo[]): Promise<MuxPaneInfo[]> {
     const ref = resolveWindowRef(window);
     const panes = allPanes ?? await this.muxDriverRegistry.resolve(server).listAllPanes(server);
-    return panes.filter((p) => p.sessionName === ref.workspace && windowSpecMatches(ref.window, p.windowIndex, p.windowName));
+    return panes.filter((p) => paneInfoMatchesRef(p, ref));
   }
 
   /**
@@ -694,9 +694,10 @@ export class WindowSessionResolver {
     const ref = resolveWindowRef(window);
     const driver = this.muxDriverRegistry.resolve(server);
     const workspaces = await driver.listWorkspaces(server);
-    const ws = workspaces.find((s) => s.name === ref.workspace);
+    // Same-named workspaces can exist in tmux and misao: only the ref's own mux is searched.
+    const ws = workspaces.find((s) => s.name === ref.workspace && (s.kind ?? ref.kind) === ref.kind);
     if (!ws) return null;
-    const win = ws.windows.find((w) => windowSpecMatches(ref.window, w.index, w.name));
+    const win = ws.windows.find((w) => windowInfoMatchesRef(w, ref));
     if (!win) return null;
     return win.panes.find((p) => p.active)?.index ?? null;
   }

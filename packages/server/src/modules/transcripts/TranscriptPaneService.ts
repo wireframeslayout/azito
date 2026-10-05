@@ -40,25 +40,29 @@ export class TranscriptPaneService {
     private readonly serverRepo: IServerRepository,
   ) {}
 
+  /** ローカルサーバー（type=local）の一覧。無いのは構成不整合としてエラーにする。 */
+  private listLocalServers(): ServerConfig[] {
+    const locals = this.serverRepo.findAll().filter((s) => s.type === 'local');
+    if (locals.length === 0) throw new Error('No local server is configured');
+    return locals;
+  }
+
   /**
-   * ローカルサーバーの ServerConfig を取得する。トランスクリプトはローカルの
-   * `~/.claude/projects` 配下のみを走査するため、対応する tmux ペインも常にローカル。
-   * seed migration（003）で必ず1件作成されるため、見つからない場合は構成不整合として
-   * エラーにする（フォールバックで空候補を返して隠さない）。
+   * ペインを引くローカルサーバー 1 台。ローカルサーバーは tmux と misao の両方を扱え（振り分け driver が
+   * ペインの種別で振り分け・併合する）、tmux はどのローカルサーバーから見ても同じ tmux なので、1 台で足りる。
+   * tmux 既定のサーバーがあればそれを優先する。
    */
-  private findLocalServer(): ServerConfig {
-    const server = this.serverRepo.findAll().find((s) => s.type === 'local');
-    if (!server) throw new Error('No local server is configured');
-    return server;
+  private pickLocalServer(): ServerConfig {
+    const locals = this.listLocalServers();
+    return locals.find((s) => s.defaultMux === 'tmux') ?? locals[0];
   }
 
   async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return null;
 
-    const server = this.findLocalServer();
-    const driver = this.muxDriverRegistry.resolve(server);
-    const allPanes = await driver.listAllPanes(server);
+    const server = this.pickLocalServer();
+    const allPanes = await this.muxDriverRegistry.resolve(server).listAllPanes(server);
     const panes: PaneCandidate[] = allPanes.map((pane) => ({
       paneId: pane.paneId,
       sessionName: pane.sessionName,
@@ -77,7 +81,7 @@ export class TranscriptPaneService {
     const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
-    const server = this.findLocalServer();
+    const server = this.pickLocalServer();
     const driver = this.muxDriverRegistry.resolve(server);
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';
@@ -98,7 +102,7 @@ export class TranscriptPaneService {
     const meta = source.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
-    const server = this.findLocalServer();
+    const server = this.pickLocalServer();
     const driver = this.muxDriverRegistry.resolve(server);
     const { alive } = await driver.probePane(server, handle);
     if (!alive) return 'pane_not_found';

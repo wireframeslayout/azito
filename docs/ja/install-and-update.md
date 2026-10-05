@@ -62,11 +62,13 @@ bash "$TMP/install.sh"; rm -rf "$TMP"
 
 | ソフトウェア | 必須度 | 用途 |
 |---|---|---|
-| tmux | **必須** | AZITO はホストの tmux セッションを操作する。`install.sh` は tmux の有無を検出して導入を促す（バージョン検証はしない）。推奨 3.4 以上 |
-| git | **必須** | タスクごとの worktree 作成。同上 |
+| git | **必須** | タスクごとの worktree 作成。`install.sh` は有無を検出して導入を促す（バージョン検証はしない） |
+| tmux | 任意 | tmux のウィンドウを使う場合だけ。AZITO のペインは**同梱の misao** が動かすので、無くてもインストール・利用できる（`install.sh` は無ければ注記を出すだけ）。推奨 3.4 以上 |
 | Node.js v24+ | 機能により必要 | ブラウザランタイム導入（`npx` を使う）、supervised ウィンドウ（`azs` が `node` で supervisor を起動）。**ハブの起動自体には不要** |
 | Tailscale | 任意 | 他端末からのアクセス、HTTPS 経由のプッシュ通知 |
 | claude / codex CLI | 任意 | 対応するワーカーを使う場合のみ |
+
+misao（ヘッドレスのペインサーバー）はリリースに同梱されています。ホストへのインストールは不要で、`install.sh` が[ハブとは別のサービス](#misao-サービス)として設置します。
 
 Servers → 対象サーバー → Setup の Node.js 欄は、同梱 Node ではなくホスト側の Node.js を見ています。上の表の機能を使わないなら未導入のままで構いません。
 
@@ -110,7 +112,10 @@ chmod 600 ~/.azito/hub/.env
 # 7. ダウンロードした一時ファイルを削除
 rm -f azito-hub-${VERSION}-${PLATFORM}-${ARCH}.tar.gz SHA256SUMS
 
-# 8. 起動
+# 8. misao サービスを設置して起動（MISAO_SOCKET を ~/.azito/hub/.env に書く。ハブより先に行う）
+~/.azito/hub/current/node ~/.azito/hub/current/azito-hub.cjs misao install
+
+# 9. 起動
 ~/.azito/hub/current/run.sh
 ```
 
@@ -199,6 +204,41 @@ sed -i '' "s|__AZITO_PREFIX__|$HOME/.azito|g" ~/Library/LaunchAgents/com.azito.h
 launchctl load ~/Library/LaunchAgents/com.azito.hub.plist
 ```
 
+### misao サービス
+
+misao デーモンは**ハブとは別のサービス**（`azito-misao`）として動きます。misao を止めると全ペインが閉じてしまうため、
+ハブの再起動や更新に巻き込まないよう分けています。
+
+| | |
+|---|---|
+| 設置先 | `~/.azito/misao/<version>/`（`misao.mjs`・ライセンス・ハブ同梱の node-pty の複製）。`~/.azito/misao/current` が使用中の版を指す |
+| ソケット | `~/.azito/misao/misao.sock`（ディレクトリは mode 700、パスは 107 バイト以内）。`~/.azito/hub/.env` に `MISAO_SOCKET` として書かれる |
+| 実行 | ハブ同梱の node（`~/.azito/hub/current/node`）で `misao.mjs serve` を実行 |
+| サービス | Linux: systemd ユーザーユニット `azito-misao`（`KillMode=process`、`Restart=on-failure`、linger 有効）。macOS: launchd `com.azito.misao`（`KeepAlive` は `SuccessfulExit=false`、PATH と LANG を設定） |
+| テンプレート | `deploy/azito-misao.service` / `deploy/com.azito.misao.plist`（リリースに同梱） |
+
+```bash
+azito misao status    # サービス・同梱版・稼働中の版・ソケットを表示
+azito misao install   # 設置して起動（実行中のデーモンには触れない。繰り返しても安全）
+azito misao update    # 同梱版へ切り替える。デーモンを止めるので実行中のペインはすべて終了（確認あり、--yes で省略）
+azito misao start     # 設置済みで止まっているときに起動する
+
+systemctl --user status azito-misao       # Linux
+journalctl --user -u azito-misao -f
+launchctl print gui/$UID/com.azito.misao  # macOS
+```
+
+- **新規インストール**: `install.sh` が設置・起動し、`.env` に `MISAO_SOCKET` を書きます（`--no-service` のときは設置せず、後で `azito misao install`）。
+  新規 DB の local サーバーの既定のターミナル方式は **misao** です。
+- **既存のインストール**: ハブを更新しても misao は設置されません。`azito misao install`、または Servers → 対象サーバー → Setup の
+  misao 行の「misao をインストール」で設置します。`.env` を書き換えるので、その後にハブを再起動してください
+  （`systemctl --user restart azito`。ペインは終了しません）。`.env` の `MISAO_SOCKET` が別のデーモンを指しているときは、
+  既定では何も変えずに止まります。置き換えてよければ `azito misao install --replace-socket`（画面では確認ダイアログ）。
+- **ハブの更新**: ハブを更新しても misao は**更新も再起動もされません**（`misao/current` はハブの更新で切り替わりません）。
+  同梱版と稼働中の版が違う、またはプロトコルが合わないときは、Setup の misao 行にその旨と更新ボタンが出ます。
+  更新は利用者が明示的に行います（ペインが不要なときに）。
+- ソース版（`npm run dev`）はサービスを入れません。`MISAO_SOCKET`（未設定なら `~/.misao/misao.sock`）の misao に接続します。
+
 ## アップデート
 
 アップデートは UI から行います（Settings → System → Check for updates）。CLI の `azito update` は未実装です。
@@ -214,7 +254,7 @@ UI からの更新には制約があります。
 | サービス登録なしで起動 | 未対応。手動で切り替える |
 | プレリリース（`v*-rc*`） | rc チャンネルに切り替えると更新対象に含まれる（後述） |
 
-手動で切り替える場合は「手動インストール（tarball）」の手順1〜4を実行し、サービスを再起動してください。`~/.azito/hub/.env` とデータはバージョンディレクトリの外にあるため、そのまま引き継がれます。
+手動で切り替える場合は「手動インストール（tarball）」の手順1〜4を実行し、サービスを再起動してください。misao サービスは再起動されません（更新するときは `azito misao update`）。`~/.azito/hub/.env` とデータはバージョンディレクトリの外にあるため、そのまま引き継がれます。
 
 ### 更新チャンネル
 
@@ -286,6 +326,7 @@ azito stop           # サービス停止
 azito status         # サービス状態確認
 azito token show     # UI トークン表示
 azito token rotate   # UI トークン再生成
+azito misao status   # misao サービスの状態（install / update / start も同じ形）
 azito version        # バージョン表示
 ```
 
@@ -370,6 +411,16 @@ launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
 | Tailscale の URL に接続できない（connection refused） | AZITO が `127.0.0.1` だけで待ち受けている | `~/.azito/hub/.env` に `AZITO_BIND=<tailscale-ip>`（`tailscale ip -4` の出力）を設定して再起動。または `tailscale serve --bg 3001` で HTTPS 終端し `AZITO_BIND` は既定のままにする |
 | 接続はできるが画面が真っ白／ターミナルが切れる | `AZITO_ALLOWED_ORIGINS` にそのオリジンが無い | 開いている URL のオリジンを `AZITO_ALLOWED_ORIGINS` に追加して再起動 |
 
+
+### 「misao に接続できない」
+
+```bash
+azito misao status                    # サービスが動いているか、同梱版との差
+systemctl --user status azito-misao   # Linux（macOS は launchctl print gui/$UID/com.azito.misao）
+```
+
+停止していれば `azito misao start`、未設置なら `azito misao install` です。`azito misao status` に「restart the hub」と出ているときは、
+ハブの `.env` の `MISAO_SOCKET` と、ハブが実際に使っているソケットが違います。ハブを再起動してください。
 
 ### 「Node.js が見つからない」
 

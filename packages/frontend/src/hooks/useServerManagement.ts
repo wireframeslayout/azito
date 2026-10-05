@@ -6,8 +6,13 @@ import { useServerStatuses } from './useServerStatuses';
 import type { InstallStep } from '../components/ui';
 import type { PersistedTab } from './useTabPersistence';
 import { useToast } from './useToast';
+import { useMisaoInstallOffer } from './useMisaoInstallOffer';
 import { useConfirm } from './useConfirm';
-import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import type { MuxDriverKind, MuxPaneProcessState, MuxRuntime, MuxStatusItem } from '@azito/shared';
+import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../lib/muxRuntimeForm';
+import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
+import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
+import { muxCreateFailureText } from '../lib/muxKindChoice';
 
 export interface Server {
   name: string;
@@ -17,7 +22,10 @@ export interface Server {
   hasAgentToken?: boolean;
   agentVersion?: string;
   sshHost?: string;
-  muxRuntime?: 'system' | 'managed';
+  defaultMux: MuxDriverKind;
+  /** Old names of servers merged into this one (migration 079); saved tabs are re-pointed. TODO(#313): remove after one release. */
+  aliases?: string[];
+  muxRuntime?: MuxRuntime;
   hubVersion?: string;
   /** Issue #29: declared isolation intent — see servers.isolationIntent's server-side doc comment. */
   isolationIntent?: boolean;
@@ -27,11 +35,15 @@ export interface Server {
 
 export interface Pane {
   index: number;
+  /** Stable pane handle; unlike `index` it does not shift when a sibling pane is deleted. */
+  handle?: string;
   title: string;
   command: string;
   width: number;
   height: number;
   active: boolean;
+  /** Reported by the misao driver only; absent for tmux panes. */
+  processState?: MuxPaneProcessState;
 }
 
 export interface TmuxWindow {
@@ -45,6 +57,10 @@ export interface TmuxWindow {
 
 export interface Session {
   name: string;
+  /** The mux the session lives in (a tmux and a misao session can share a name). See lib/sessionKind.ts. */
+  kind?: MuxDriverKind;
+  /** Kept from an earlier listing because its mux could not be listed now (see keepUnavailableKinds). */
+  stale?: boolean;
   attached: boolean;
   windowCount: number;
   windows: TmuxWindow[];
@@ -52,8 +68,8 @@ export interface Session {
 
 export interface ServerStatus {
   status: 'online' | 'offline' | 'error' | 'checking';
-  tmux: boolean;
-  tmuxVersion?: string;
+  /** One entry per mux kind the server can host (absent while checking or when the check failed). */
+  mux?: Partial<Record<MuxDriverKind, MuxStatusItem>>;
   agentVersion?: string;
   hubVersion?: string;
   versionMatch?: boolean;
@@ -67,6 +83,7 @@ interface UseServerManagementParams {
 
 export function useServerManagement({ tabs, closeTab }: UseServerManagementParams) {
   const { t } = useTranslation('servers');
+  const { t: tw } = useTranslation('workspace');
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
   const closeTabRef = useRef(closeTab);
@@ -74,14 +91,22 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
 
   const { servers, refresh: refreshStatuses } = useServerStatuses();
 
-  const isTmux = useCallback((serverName: string): boolean => {
+  // What a call without a kind means: the server's default mux (where a new session is created).
+  const defaultKindOf = useCallback((serverName: string): MuxDriverKind => {
     const srv = servers.find((s) => s.name === serverName);
-    return muxKindForRuntime((srv?.muxRuntime ?? 'system') as MuxRuntime) === 'tmux';
+    return srv ? srv.defaultMux : 'tmux';
   }, [servers]);
+  // A session-level call acts on the session of `kind` (sessions of two muxes can share a name); omitted = default mux.
+  const sessionUsesMuxRoutes = useCallback((serverName: string, kind?: MuxDriverKind): boolean =>
+    usesMuxRoutes(kind ?? defaultKindOf(serverName)), [defaultKindOf]);
+  const kindQuery = (kind?: MuxDriverKind): string => (kind ? `?kind=${kind}` : '');
   const { showToast } = useToast();
+  const withMisaoInstall = useMisaoInstallOffer();
   const confirm = useConfirm();
 
   const [sessions, setSessions] = useState<Record<string, Session[]>>({});
+  const sessionsRef = useRef(sessions);
+  sessionsRef.current = sessions;
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
 
   const [addServerModal, setAddServerModal] = useState(false);
@@ -91,7 +116,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [addHost, setAddHost] = useState('');
   const [addPort, setAddPort] = useState('3002');
   const [addToken, setAddToken] = useState('');
-  const [addMuxRuntime, setAddMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [addMuxRuntime, setAddMuxRuntime] = useState<MuxRuntime>('system');
   const [addInstallSteps, setAddInstallSteps] = useState<InstallStep[]>([]);
   const [addLoading, setAddLoading] = useState(false);
 
@@ -100,7 +125,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const [editHost, setEditHost] = useState('');
   const [editPort, setEditPort] = useState('3002');
   const [editToken, setEditToken] = useState('');
-  const [editMuxRuntime, setEditMuxRuntime] = useState<'system' | 'managed'>('system');
+  const [editMuxRuntime, setEditMuxRuntime] = useState<MuxRuntime>('system');
+  const [editDefaultMux, setEditDefaultMux] = useState<MuxDriverKind>('tmux');
   // Issue #29 review (3rd pass), Important finding 4: mirrors
   // useServerEditForm's editIsolationIntent (ServersListPage's edit path,
   // distinct from ServerDetailPage's).
@@ -126,8 +152,12 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const successfulServers = new Set<string>();
     const results = await Promise.allSettled(
       srvs.map(async (srv) => {
-        const result = await api<Session[]>(`/servers/${srv.name}/sessions`);
-        return { name: srv.name, sessions: Array.isArray(result) ? result : [] };
+        // エラー本文（503 agent_unreachable 等）は一覧でないため失敗扱いにする（空配列の成功と取り違えてタブを閉じない）。
+        // 一覧できなかった mux（misao デーモン停止など）のセッションは直前の状態を保つ（削除扱いにしない）
+        const result = keepUnavailableKinds(sessionsRef.current[srv.name], await fetchSessionListing<Session>(srv.name));
+        // 遅いサーバー 1 台を待たず、取得できたサーバーから 1 台ずつ反映する
+        setSessions((prev) => ({ ...prev, [srv.name]: result }));
+        return { name: srv.name, sessions: result };
       }),
     );
     const newSessions: Record<string, Session[]> = {};
@@ -207,7 +237,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     if (addAutoInstall) {
       setAddLoading(true);
       setAddInstallSteps([]);
-      const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string }>('/servers', {
+      const res = await api<{ ok?: boolean; error?: string; steps?: InstallStep[]; type?: string; fallback?: boolean; startMethod?: string; misaoError?: string }>('/servers', {
         method: 'POST',
         body: JSON.stringify({ name: addName.trim(), host: addHost.trim(), autoInstall: true }),
       });
@@ -220,6 +250,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       if (res.type === 'agent' && res.startMethod === 'nohup') {
         showToast('Agent started via nohup (systemd unavailable). Manual restart required after server reboot.');
       }
+      // The agent is installed and registered; only misao is missing, and the server's Setup row can install it again.
+      if (res.misaoError) showToast(t('setup.misaoInstallFailedOnAdd', { error: res.misaoError }));
       setAddServerModal(false);
       setAddName(''); setAddHost(''); setAddAutoInstall(true);
       setAddType('agent'); setAddPort('3002'); setAddToken('');
@@ -250,7 +282,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setAddAutoInstall(true); setAddType('agent'); setAddPort('3002'); setAddToken('');
     setAddMuxRuntime('system');
     refreshAll();
-  }, [addName, addHost, addAutoInstall, addType, addPort, addToken, addMuxRuntime, refreshAll, showToast]);
+  }, [addName, addHost, addAutoInstall, addType, addPort, addToken, addMuxRuntime, refreshAll, showToast, t]);
 
   const openEditModal = useCallback((srv: Server) => {
     setEditServer(srv);
@@ -258,7 +290,8 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditHost(srv.host ?? '');
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
-    setEditMuxRuntime(srv.muxRuntime ?? 'system');
+    setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
+    setEditDefaultMux(editableDefaultMux(srv.defaultMux, defaultMuxOptions(srv.type)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 
@@ -272,6 +305,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
       type: editType,
       host: editHost.trim(),
       muxRuntime: editMuxRuntime,
+      defaultMux: editDefaultMux,
     };
     if (editType === 'agent') {
       body.agentPort = parseInt(editPort.trim(), 10);
@@ -312,7 +346,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     else if (res.isolationCleanup === 'skipped') showToast(t('overview.isolationCleanupToastSkipped'));
     setEditServer(null);
     refreshAll();
-  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editIsolationIntent, refreshAll, showToast, t]);
+  }, [editServer, editType, editHost, editPort, editToken, editMuxRuntime, editDefaultMux, editIsolationIntent, refreshAll, showToast, t]);
 
   const handleReinstall = useCallback(async (serverName: string) => {
     const ok = await confirm({ title: t('confirm.reinstallAgent'), message: t('confirm.reinstallAgentMessage', { name: serverName }) });
@@ -352,104 +386,105 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
   const createSession = useCallback(async (serverName: string) => {
     const name = prompt('New session name:');
     if (!name) return;
-    if (isTmux(serverName)) {
+    if (!sessionUsesMuxRoutes(serverName)) {
       const command = prompt('Initial command (optional):', '');
       await api(`/servers/${serverName}/sessions`, { method: 'POST', body: JSON.stringify({ name, command: command || undefined }) });
     } else {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll, sessionUsesMuxRoutes]);
 
-  const handleRenameSession = useCallback(async (serverName: string, sessionName: string) => {
+  const handleRenameSession = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
     const newName = prompt('Rename session:', sessionName);
     if (!newName || newName === sessionName) return;
-    if (isTmux(serverName)) {
+    if (!sessionUsesMuxRoutes(serverName, kind)) {
       await api(`/servers/${serverName}/sessions/${sessionName}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName, kind }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll, sessionUsesMuxRoutes]);
 
-  const handleKillSession = useCallback(async (serverName: string, sessionName: string) => {
+  const handleKillSession = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
     const ok = await confirm({ title: t('confirm.killSession'), message: t('confirm.killSessionMessage', { name: sessionName }), danger: true });
     if (!ok) return;
-    if (isTmux(serverName)) {
+    if (!sessionUsesMuxRoutes(serverName, kind)) {
       await api(`/servers/${serverName}/sessions/${sessionName}`, { method: 'DELETE' });
     } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}`, { method: 'DELETE' });
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}${kindQuery(kind)}`, { method: 'DELETE' });
     }
     tabs.filter((t) => t.id.startsWith(`terminal:${serverName}/${sessionName}:`)).forEach((t) => closeTab(t.id));
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
+  }, [refreshAll, tabs, closeTab, confirm, t, sessionUsesMuxRoutes]);
 
-  const handleAddWindow = useCallback(async (serverName: string, sessionName: string) => {
-    if (isTmux(serverName)) {
-      await api(`/servers/${serverName}/sessions/${sessionName}/windows`, { method: 'POST' });
-    } else {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
+  const handleAddWindow = useCallback(async (serverName: string, sessionName: string, kind?: MuxDriverKind) => {
+    const res = await withMisaoInstall(serverName, () => api<unknown>(`/servers/${encodeURIComponent(serverName)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind: kind ?? defaultKindOf(serverName) }) }));
+    const failure = muxCreateFailureText(res, tw);
+    if (failure !== null) {
+      showToast(failure);
+      return;
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll, defaultKindOf, showToast, tw, withMisaoInstall]);
 
   const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {
       await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else if (ref && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     } else {
       await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll]);
 
   const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string, windowId?: number, ref?: string) => {
     const newName = prompt('Rename window:', currentName);
     if (!newName || newName === currentName) return;
     if (windowId != null) {
       await api(`/windows/${windowId}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
-    } else if (ref && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     } else {
       await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ name: newName }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll]);
 
   const handleRenamePane = useCallback(async (serverName: string, target: string, currentTitle: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const newTitle = prompt('Rename pane:', currentTitle);
     if (!newTitle || newTitle === currentTitle) return;
     if (windowId != null && paneOrdinal != null) {
       await api(`/windows/${windowId}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
-    } else if (ref && paneOrdinal != null && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref) && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}/rename`, { method: 'PUT', body: JSON.stringify({ name: newTitle }) });
     } else {
       await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}/rename`, { method: 'PUT', body: JSON.stringify({ title: newTitle }) });
     }
     refreshAll();
-  }, [refreshAll, isTmux]);
+  }, [refreshAll]);
 
   const handleKillWindow = useCallback(async (serverName: string, target: string, windowId?: number, ref?: string) => {
     const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: target }), danger: true });
     if (!ok) return;
     if (windowId != null) {
       await api(`/windows/${windowId}/kill`, { method: 'DELETE' });
-    } else if (ref && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/kill`, { method: 'POST' });
     } else {
       await api(`/servers/${serverName}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
     }
     tabs.filter((t) => t.type === 'terminal' && t.serverName === serverName && t.target && (t.target === target || t.target.startsWith(`${target}.`))).forEach((t) => closeTab(t.id));
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
+  }, [refreshAll, tabs, closeTab, confirm, t]);
 
   const handleKillPane = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, ref?: string) => {
     const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: target }), danger: true });
     if (!ok) return;
     if (windowId != null && paneOrdinal != null) {
       await api(`/windows/${windowId}/panes/${paneOrdinal}`, { method: 'DELETE' });
-    } else if (ref && paneOrdinal != null && !isTmux(serverName)) {
+    } else if (refUsesMuxRoutes(ref) && paneOrdinal != null) {
       await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes/${paneOrdinal}`, { method: 'DELETE' });
     } else {
       await api(`/servers/${serverName}/panes/${encodeURIComponent(target)}`, { method: 'DELETE' });
@@ -462,7 +497,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     const matchingTab = tabs.find(matchTarget);
     if (matchingTab) closeTab(matchingTab.id);
     refreshAll();
-  }, [refreshAll, tabs, closeTab, confirm, t, isTmux]);
+  }, [refreshAll, tabs, closeTab, confirm, t]);
 
   return {
     sessions,
@@ -499,6 +534,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     editPort, setEditPort,
     editToken, setEditToken,
     editMuxRuntime, setEditMuxRuntime,
+    editDefaultMux, setEditDefaultMux,
     editIsolationIntent, setEditIsolationIntent,
     reinstalling,
     reinstallSteps,

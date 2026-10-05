@@ -2,7 +2,7 @@ import type { IServerRepository, ServerConfig } from './Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import { KeyedMutex } from '../../shared/keyedMutex';
-import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
+import { ISOLATION_HUB_SECRET_MASK } from '../../shared/auth/isolationMaskedEnv';
 
 // Issue #29 review (independent QC), M-3: this file used to live in
 // `modules/tasks/execution/WindowRotation.ts` — an upper-layer module — even
@@ -41,14 +41,14 @@ import { ISOLATION_MASKED_ENV } from '../../shared/auth/isolationMaskedEnv';
  * tmux SESSION's env.
  *
  * This helper only ever MASKS, never injects: isolated servers get the
- * shared {@link ISOLATION_MASKED_ENV} (explicit empty values are required to
+ * shared {@link ISOLATION_HUB_SECRET_MASK} (explicit empty values are required to
  * override a token an existing session's env may already carry — see
  * `TaskPaneEnvironmentService`'s doc comment), non-isolated servers get `{}`
  * (no keys touched at all — the task-scoped env layered on afterwards is the
  * only source of a token task windows ever see).
  */
 export function isolationMaskForServer(server: Pick<ServerConfig, 'isolationIntent'>): Record<string, string> {
-  return server.isolationIntent ? { ...ISOLATION_MASKED_ENV } : {};
+  return server.isolationIntent ? { ...ISOLATION_HUB_SECRET_MASK } : {};
 }
 
 /**
@@ -91,7 +91,7 @@ export interface ServerIsolationLock {
  * isolationVerifiedAt/Report, sshHostFingerprint, createdAt, ...) is fine to
  * silently pick up fresh, same as before.
  */
-const SECURITY_SNAPSHOT_FIELDS = ['isolationIntent', 'type', 'host', 'sshHost', 'agentPort', 'agentToken', 'muxRuntime'] as const satisfies readonly (keyof ServerConfig)[];
+const SECURITY_SNAPSHOT_FIELDS = ['isolationIntent', 'type', 'host', 'sshHost', 'agentPort', 'agentToken', 'muxRuntime', 'defaultMux'] as const satisfies readonly (keyof ServerConfig)[];
 
 /** Thrown by {@link refetchServer} when `enforceSnapshot` is true and the row that committed while the caller was queued for the lock differs from the one its pre-lock checks ran against. */
 export class ServerSnapshotMismatchError extends Error {
@@ -263,7 +263,9 @@ export async function ensureSessionWithLock(
     const freshServer = refetchServer(lock, server, enforceSnapshot);
     const driver = mux as Pick<IMuxClient, 'listWorkspaces' | 'openWorkspace'>;
     const workspaces = await driver.listWorkspaces(freshServer);
-    const exists = workspaces.some((ws) => ws.name === sessionName);
+    // The session is opened in the server's default mux, so only a session of that mux counts (a same-named session
+    // of the other mux does not). A workspace without a `kind` comes from a single (non-routing) driver.
+    const exists = workspaces.some((ws) => ws.name === sessionName && (ws.kind ?? freshServer.defaultMux) === freshServer.defaultMux);
     if (!exists) {
       await driver.openWorkspace(freshServer, sessionName, { extraEnv: isolationMaskForServer(freshServer) });
       return { created: true, server: freshServer };

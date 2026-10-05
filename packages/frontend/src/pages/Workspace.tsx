@@ -11,6 +11,8 @@ import { LoadingState, TabBar, Button, EmptyState, IconButton } from '../compone
 import type { TabItem } from '../components/ui';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { useTabPersistence, type PersistedTab } from '../hooks/useTabPersistence';
+import { useTerminalTargetOpener } from '../hooks/useTerminalTargetOpener';
+import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 import { useBrowserKeepalive } from '../hooks/useBrowserKeepalive';
 import { useBrowserGroups } from '../hooks/useBrowserGroups';
 import { useBrailleSpinner } from '../hooks/useBrailleSpinner';
@@ -20,6 +22,8 @@ import { useNotificationChannel } from '../hooks/useNotificationChannel';
 import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
+import { findWindowTerminalTabs } from '../lib/retargetTab';
+import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 
@@ -95,7 +99,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, migrateLegacyTerminalTabIds, closeTab, retargetTab, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, migrateServerAliases, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -119,14 +123,6 @@ function WorkspaceInner() {
 
   const data = useWorkspaceData(id, tabs, sidebarMode);
   const { project, allUnits, tasks, servers, sessionData, allProjects, allTasks, projectsLoaded, projectServers, selectedFileServer, setSelectedFileServer, refreshWorkspace } = data;
-
-  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
-  // sessions of their servers are available (per server, so unfetched servers wait).
-  useEffect(() => {
-    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
-    if (byServer.size === 0) return;
-    migrateLegacyTerminalTabIds(byServer);
-  }, [sessionData, migrateLegacyTerminalTabIds]);
 
   // プロジェクトに紐づくサーバー（projectServers）と、ブラウザ対応（local/agent型）サーバー（servers）の積集合。
   // servers は全サーバーなのでそのまま使うと他プロジェクトのサーバーまで拾ってしまう。
@@ -242,7 +238,50 @@ function WorkspaceInner() {
   // would still fire pointlessly every render.
   const allTabIds = useMemo(() => tabs.map((t) => t.id), [tabs]);
   const layout = usePaneLayout('workspace-layout', allTabIds);
+  // A tab id rename must reach the split layout in the same batch as the tab list, or reconcile()
+  // would drop the old id from its pane and re-add the new one to whichever pane has focus.
+  const retargetTabs = useCallback((oldTabIds: string[], serverName: string, windowId: number, sessions?: Session[]) => {
+    for (const { oldId, newId } of retargetTabsRaw(oldTabIds, serverName, windowId, sessions)) layout.replaceTab(oldId, newId);
+  }, [layout.replaceTab, retargetTabsRaw]);
+  // Every open tab of the window follows a respawn (the pane tabs of one window, ref-form tabs
+  // of a driver that mints a new ref), plus `alsoTabId` — the tab the respawn was started from.
+  const retargetWindowTabs = useCallback((serverName: string, windowId: number, sessions: Session[] | undefined, alsoTabId?: string) => {
+    const ids = findWindowTerminalTabs(tabs, serverName, windowId, sessionData[serverName]).map((t) => t.id);
+    if (alsoTabId && !ids.includes(alsoTabId)) ids.push(alsoTabId);
+    retargetTabs(ids, serverName, windowId, sessions);
+  }, [tabs, sessionData, retargetTabs]);
+  const retargetTabPane = useCallback((oldTabId: string, pane: number) => {
+    const newTabId = retargetTabPaneRaw(oldTabId, pane);
+    if (newTabId) layout.replaceTab(oldTabId, newTabId);
+  }, [layout.replaceTab, retargetTabPaneRaw]);
   const paneRects = usePaneRects();
+
+  // 5-B: legacy terminal tab ids are rewritten to the TerminalRef form as soon as the
+  // sessions of their servers are available (per server, so unfetched servers wait).
+  // undefined while the server list has not reported this server yet (migration then waits).
+  const isTmuxServer = useCallback((serverName: string): boolean | undefined => {
+    const server = servers.find((sv) => sv.name === serverName);
+    return server ? server.defaultMux === 'tmux' : undefined;
+  }, [servers]);
+  useEffect(() => {
+    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
+    if (byServer.size === 0) return;
+    const idMap = migrateLegacyTerminalTabIds(byServer, isTmuxServer);
+    // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
+    idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionData, migrateLegacyTerminalTabIds, isTmuxServer]);
+
+  // Tabs saved under the name of a server that was merged into another (#313) follow the merge.
+  // TODO(#313): compatibility for one release; remove with the server-side alias table.
+  useEffect(() => {
+    const aliases = new Map<string, string>();
+    for (const sv of servers) for (const old of sv.aliases ?? []) aliases.set(old, sv.name);
+    if (aliases.size === 0) return;
+    migrateServerAliases(aliases).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [servers, migrateServerAliases]);
+
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
   // Every existing "open a tab" call site funnels through useTabPersistence's
@@ -441,14 +480,23 @@ function WorkspaceInner() {
     }
   }, [layout, handlePaneCloseTab, closeTabAndRefreshBrowser]);
 
-  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectId?: number) => {
-    if (typeof serverNameOrRef === 'object') {
-      connectPaneRaw(serverNameOrRef, (typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined) ?? currentProjectId);
-    } else {
-      connectPaneRaw(serverNameOrRef, targetOrProjectId as string, (projectId ?? currentProjectId));
-    }
+  const connectRef = useCallback((ref: TerminalRef, projectId?: number, opts?: { reconnect?: boolean }) => {
+    connectPaneRaw(ref, projectId ?? currentProjectId, opts);
     if (mobile) setSidebarOpen(false);
   }, [connectPaneRaw, mobile, currentProjectId, setSidebarOpen]);
+  // A target string is resolved against the server's mux kind / sessions (and waits for them) — never into a tmux ref blindly.
+  const connectByTarget = useCallback((req: TerminalOpenTarget, projectId?: number) => {
+    connectTargetRaw(req.serverName, req.target, projectId ?? currentProjectId);
+    if (mobile) setSidebarOpen(false);
+  }, [connectTargetRaw, mobile, currentProjectId, setSidebarOpen]);
+  const openTerminalTarget = useTerminalTargetOpener({ servers, sessionData, connect: connectRef, connectByTarget });
+  const connectPane = useCallback((serverNameOrRef: string | TerminalRef, targetOrProjectId?: string | number, projectIdOrOpts?: number | { reconnect?: boolean }) => {
+    if (typeof serverNameOrRef === 'object') {
+      connectRef(serverNameOrRef, typeof targetOrProjectId === 'number' ? targetOrProjectId : undefined, typeof projectIdOrOpts === 'object' ? projectIdOrOpts : undefined);
+    } else {
+      openTerminalTarget({ serverName: serverNameOrRef, target: targetOrProjectId as string }, typeof projectIdOrOpts === 'number' ? projectIdOrOpts : undefined);
+    }
+  }, [connectRef, openTerminalTarget]);
 
   const { setOnOpenInTerminal, setOnOpenTask, setActiveTabId: setTargetsActiveTabId, setFocusedTarget, setOnOpenTabSwitcher } = useWorkspaceTargets();
   const { shouldShowActivity, shouldShowTaskActivity } = useAgentActivity();
@@ -468,9 +516,9 @@ function WorkspaceInner() {
     return () => setFocusedTarget(null);
   }, [focusedActiveTabId, setFocusedTarget]);
   useEffect(() => {
-    setOnOpenInTerminal(connectPane);
+    setOnOpenInTerminal(openTerminalTarget);
     return () => setOnOpenInTerminal(null);
-  }, [connectPane, setOnOpenInTerminal]);
+  }, [openTerminalTarget, setOnOpenInTerminal]);
   // SP端末クイックキーフッター（Issue #69 T3）の右端▦がタブスイッチャーを開けるよう登録する
   // （TerminalContainer は TabContentRenderer 配下の深い位置にあり、mobileTabSwitcherOpen の
   // setter を prop drilling で届けるより WorkspaceTargetsContext 経由の方が既存の
@@ -544,7 +592,7 @@ function WorkspaceInner() {
 
   useEffect(() => {
     if (!focusedActiveTabId) {
-      setFocus({ serverName: null, tmuxTarget: null, taskId: null });
+      setFocus({ serverName: null, tmuxTarget: null, windowId: null, taskId: null });
       return;
     }
     if (focusedActiveTabId.startsWith('terminal:')) {
@@ -562,7 +610,7 @@ function WorkspaceInner() {
           tmuxTarget = parsed.ref;
         }
         const task = findTaskByTarget(tmuxTarget);
-        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId });
+        setFocus({ serverName, tmuxTarget, taskId: task?.id ?? null, windowId: windowId ?? null });
         return;
       }
     }
@@ -570,10 +618,10 @@ function WorkspaceInner() {
     if (activeTab?.type === 'task' && activeTab.entityId) {
       const task = tasks.find((t) => t.id === activeTab.entityId) ?? allTasks.find((t) => t.id === activeTab.entityId);
       const displayed = resolveDisplayedTaskTerminal(activeTab.entityId, task?.windows ?? []);
-      setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, taskId: activeTab.entityId });
+      setFocus({ serverName: displayed?.serverName ?? null, tmuxTarget: displayed?.target ?? null, windowId: displayed?.windowId ?? null, taskId: activeTab.entityId });
       return;
     }
-    setFocus({ serverName: null, tmuxTarget: null, taskId: null });
+    setFocus({ serverName: null, tmuxTarget: null, windowId: null, taskId: null });
   }, [focusedActiveTabId, tabs, tasks, allTasks, setFocus, findTaskByTarget]);
 
   const openIssue = useCallback((repoId: number, owner: string, repo: string, issueNumber: number, title: string) => {
@@ -735,7 +783,17 @@ function WorkspaceInner() {
     // the pane TabBar via buildPaneTabMenuItems' base and mobile's single
     // TabBar) must go through the same pane-successor/focus handling as the
     // pane TabBar's own ✕ button, not the flat closeTab().
-    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, connectPane, servers,
+    showContextMenu, showContextMenuAt, findTaskByTarget, openTask, tabs, closeTab: closeTabPaneAware, refreshSessions: data.refreshSessions, togglePin, servers,
+    reconnectWindow: async (win) => {
+      // `tabs` / `sessionData` are the pre-respawn view the tab's ref was built from; the ref
+      // itself is re-resolved against a post-respawn session list when it has to be replaced.
+      const open = findWindowTerminalTabs(tabs, win.serverName, win.windowId, sessionData[win.serverName]);
+      if (open.length === 0) {
+        connectPane({ kind: 'windowId', serverName: win.serverName, windowId: win.windowId, pane: 1 }, undefined, { reconnect: true });
+        return;
+      }
+      retargetWindowTabs(win.serverName, win.windowId, await fetchSessionsOrUndefined(win.serverName));
+    },
   });
 
   const handleWindowAddedToTask = useCallback(async (
@@ -746,22 +804,28 @@ function WorkspaceInner() {
     activate: boolean,
     extra?: { windowType?: string; workerType?: string; workerModel?: string; workingDirectory?: string; ref?: string },
   ) => {
+    const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
+    if (extra?.ref) body['ref'] = extra.ref;
+    if (extra?.windowType) body['window_type'] = extra.windowType;
+    if (extra?.workerType) body['worker_type'] = extra.workerType;
+    if (extra?.workerModel) body['worker_model'] = extra.workerModel;
+    if (extra?.workingDirectory) body['working_directory'] = extra.workingDirectory;
+    let res: { error?: string; tmuxTarget?: string };
     try {
-      const body: Record<string, unknown> = { server_name: serverName, tmux_target: tmuxTarget, label: label || null };
-      if (extra?.ref) body['ref'] = extra.ref;
-      if (extra?.windowType) body['window_type'] = extra.windowType;
-      if (extra?.workerType) body['worker_type'] = extra.workerType;
-      if (extra?.workerModel) body['worker_model'] = extra.workerModel;
-      if (extra?.workingDirectory) body['working_directory'] = extra.workingDirectory;
-      await api(`/tasks/${taskId}/windows`, {
-        method: 'POST',
-        body: JSON.stringify(body),
-      });
-    } catch { /* project window was still added */ }
-    if (activate) {
-      selectTaskTerminal(taskId, { serverName, target: tmuxTarget });
+      res = await api<{ error?: string; tmuxTarget?: string }>(`/tasks/${taskId}/windows`, { method: 'POST', body: JSON.stringify(body) });
+    } catch (err) {
+      res = { error: err instanceof Error ? err.message : String(err) };
     }
-  }, []);
+    if (res.error || !res.tmuxTarget) {
+      // The project window was still added; only the task attachment failed.
+      console.error('task window add failed', res.error ?? 'missing tmuxTarget');
+      showToast(t(res.error === 'ref required for this server' ? 'workspace:toast.taskWindowRefRequired' : 'workspace:toast.taskWindowAddFailed'));
+      return;
+    }
+    if (activate) {
+      selectTaskTerminal(taskId, { serverName, target: res.tmuxTarget });
+    }
+  }, [showToast, t]);
 
   const addWindowModal = useAddWindowModal(id, project, servers, projectServers, refreshWorkspace, data.refreshSessions, connectPane, handleWindowAddedToTask);
 
@@ -1142,6 +1206,7 @@ function WorkspaceInner() {
       projectSettings={sidebarProjectSettings}
       onOpenDiff={openDiff}
       respawningWindowIds={windowActions.respawningWindowIds}
+      onWindowsChanged={windowActions.handleEmptyWindowChanged}
       taskWindows={taskWindows}
       allProjects={allProjects}
       onAddWindowToProject={handleAddWindowToProject}
@@ -1172,7 +1237,8 @@ function WorkspaceInner() {
         awLabel={addWindowModal.awLabel}
         setAwLabel={addWindowModal.setAwLabel}
         awSessionData={addWindowModal.awSessionData}
-        setAwSessionData={addWindowModal.setAwSessionData}
+        awOfflineServers={addWindowModal.awOfflineServers}
+        onLoadMissingSessions={addWindowModal.loadMissingSessions}
         awSelectedSession={addWindowModal.awSelectedSession}
         setAwSelectedSession={addWindowModal.setAwSelectedSession}
         awNewSession={addWindowModal.awNewSession}
@@ -1193,6 +1259,8 @@ function WorkspaceInner() {
         servers={servers}
         projectServers={addWindowModal.awEffectiveProjectServers ?? projectServers}
         project={addWindowModal.awEffectiveProject ?? project}
+        muxKind={addWindowModal.muxKindModel}
+        onMuxKindChange={addWindowModal.setAwMuxChoice}
       />
       <QuickAddWindowModal
         open={addWindowModal.awQuickAddOpen}
@@ -1208,6 +1276,8 @@ function WorkspaceInner() {
         onAgentModelChange={addWindowModal.setAwAgentModel}
         workerModels={addWindowModal.awWorkerModels}
         workerType={addWindowModal.awQuickAddAgent}
+        muxKind={addWindowModal.muxKindModel}
+        onMuxKindChange={addWindowModal.setAwMuxChoice}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}
@@ -1418,7 +1488,8 @@ function WorkspaceInner() {
           currentProjectId={currentProjectId}
           handleOpenTask={handleOpenTask}
           closeTab={closeTabFn}
-          retargetTab={retargetTab}
+          retargetWindowTabs={retargetWindowTabs}
+          retargetTabPane={retargetTabPane}
           executeTask={executeTask}
           stopTask={stopTask}
           refreshWorkspace={refreshWorkspace}

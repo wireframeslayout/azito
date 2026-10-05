@@ -6,7 +6,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import { getPushMessage } from '../modules/notifications/push/pushCatalog';
-import { taskPushUrl, agentPushUrl } from '../modules/notifications/push/pushLinks';
+import { taskPushUrl, agentActivityPushUrl } from '../modules/notifications/push/pushLinks';
 import websocket from '@fastify/websocket';
 import multipart from '@fastify/multipart';
 import compress from '@fastify/compress';
@@ -19,6 +19,7 @@ import type { WebSocket } from 'ws';
 import { resolveRoot } from '../shared/releaseInfo';
 import type { Wiring } from './wiring';
 
+import type { ServerConfig } from '../modules/servers/Server';
 import serversRoutes from '../modules/servers/routes';
 import projectsRoutes from '../modules/projects/routes';
 import unitsRoutes from '../modules/units/routes';
@@ -34,8 +35,11 @@ import usageRoutes from '../modules/usage/routes';
 import webhookRoutes from '../modules/notifications/webhooks';
 import agentSignalRoutes from '../modules/tasks/turns/agentSignalRoutes';
 import windowsRoutes from '../modules/windows/routes';
+import { AmbiguousWindowKindError, rawTargetProbeOf } from '../modules/tmux/storedWindowKind';
+import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
+import { resolveTerminalTarget, terminalPaneOrdinal } from './resolveTerminalTarget';
 import hooksRoutes from '../modules/tmux/routes/hooks';
-import sessionsRoutes from '../modules/tmux/routes/sessions';
+import sessionsRoutes, { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import resourceGuardRoutes from '../modules/servers/resources/routes';
 import gitRoutes from '../modules/git/routes';
 import sidekicksRoutes from '../modules/sidekicks/routes';
@@ -43,6 +47,7 @@ import chatCommandsRoutes from '../modules/chat-commands/routes';
 import supervisorsRoutes from '../modules/supervisors/routes';
 import healthRoutes from '../modules/health/routes';
 import systemRoutes from '../modules/system/routes';
+import agentMisaoRoutes from '../modules/system/misao/agentMisaoRoutes';
 import transcriptsRoutes from '../modules/transcripts/routes';
 import { TRANSCRIPT_SOURCES, claudeTranscriptSource } from '../modules/transcripts/sources/registry';
 import { TranscriptPaneService } from '../modules/transcripts/TranscriptPaneService';
@@ -70,21 +75,26 @@ import { RepoDiscoveryService } from '../modules/git/RepoDiscoveryService';
 import { LocalRepoCloneService } from '../modules/git/LocalRepoCloneService';
 import { RenderSkillPromptUseCase } from '../modules/prompt/RenderSkillPromptUseCase';
 import { TaskPromptVarsResolver } from '../modules/prompt/TaskPromptVarsResolver';
-import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
-import { TmuxHookManager } from '../modules/tmux/TmuxHookManager';
+import { mapAppError } from './mapAppError';
+import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookManager';
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
-import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
+import { describeMisaoDaemon, syncMisaoNodes } from '../modules/tmux/misao/misaoDriver';
+import type { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
+import { buildMisaoObservers } from './misaoObservers';
 import { bridgeSupervisorActivityToProgress } from '../modules/tasks/turns/SupervisorProgressBridge';
 
 export interface ServerHandles {
   tmuxHookManager: TmuxHookManager;
   agentEventStreams: AgentEventStream[];
+  /** Created but not started: main.ts starts it once the daemon connection is. */
+  misaoPaneStates: MisaoPaneStateEvents;
 }
 
 export async function buildServer(app: FastifyInstance, wiring: Wiring, port: number): Promise<ServerHandles> {
   const {
-    serverRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
+    serverRepo, serverAliasRepo, windowRepo, projectRepo, projectServerRepo, unitRepo, taskRepo, taskTokenRepo, logRepo,
     projectSecretRepo, storageSettingsRepo, pushSubRepo, agentWatchRepo, resourceGuardSettingsRepo, resourceGuard,
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
@@ -104,9 +114,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // ─── Global error handler for mux driver errors ───
   const defaultErrorHandler = app.errorHandler;
   app.setErrorHandler((err, request, reply) => {
-    if (err instanceof MuxDriverUnavailableError) {
-      return reply.status(503).send({ error: 'mux_driver_unavailable', kind: err.kind });
-    }
+    const mapped = mapAppError(err);
+    if (mapped) return reply.status(mapped.status).send(mapped.body);
     return defaultErrorHandler.call(app, err, request, reply);
   });
 
@@ -169,16 +178,9 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // those is exactly the false-completion class this reason field exists to end.
   notificationBus.on((event) => {
     if (event.type !== 'agent:activity') return;
-    const { serverName, target, label, taskId, projectId, running, status, reason } = event.payload;
+    const { serverName, target, label, taskId, running, status, reason } = event.payload;
 
-    const resolveUrl = (): string => {
-      if (projectId != null) return agentPushUrl({ projectId, serverName, target });
-      if (taskId != null) {
-        const found = taskRepo.findById(taskId);
-        if (found) return agentPushUrl({ projectId: found.projectId, serverName, target });
-      }
-      return agentPushUrl({ serverName, target });
-    };
+    const resolveUrl = (): string => agentActivityPushUrl(event.payload, (id) => taskRepo.findById(id)?.projectId);
 
     if (running === false && reason === 'completed') {
       const url = resolveUrl();
@@ -270,9 +272,25 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     if (win) supervisorRegistry.setWindowId(event.serverName, event.target, win.id);
   });
 
+  const misaoObservers = buildMisaoObservers(wiring.misao, {
+    resolver: paneHandleResolver,
+    findWindowByRef: (serverName, ref) => windowRepo.findByServerAndRef(serverName, ref),
+    monitor: agentActivityMonitor,
+    listLocalServerNames: () => serverRepo.findAll().filter((srv) => srv.type === 'local').map((srv) => srv.name),
+    // The daemon connecting or dropping changes what its server lists (its misao sessions, or misao reported
+    // unavailable): drop those cached listings and let clients refetch.
+    refreshListings: (serverName) => {
+      invalidateSessionCache(serverName);
+      notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
+    },
+    log: app.log,
+  });
+  const misaoPaneStates = misaoObservers.localPaneStates;
+
   notificationBus.on((event) => {
     if (event.type === 'sessions:updated') {
       paneHandleResolver.invalidate(event.payload.serverName);
+      misaoObservers.handleWindowsChanged();
     }
   });
 
@@ -458,13 +476,59 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
-    serverRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
-    onMuxRuntimeChanged: (serverName) => {
-      transportFactory.invalidate(serverName);
-      paneHandleResolver.clearServer(serverName);
-      supervisorRegistry.clearServerPaneRefs(serverName);
+    serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    misaoDaemonStatus: async (srv) => {
+      if (srv.type === 'local') return describeMisaoDaemon(wiring.misao.connection);
+      // An agent server's row also says whether this hub can install misao there, and when its daemon is another release.
+      const bundled = wiring.misaoAgentInstaller.bundledVersion;
+      const installable = { installable: bundled !== undefined, ...(bundled ? { bundledVersion: bundled } : {}) };
+      try {
+        // An agent that has a daemon socket but no node yet (set up by hand) gets one here.
+        await wiring.misao.servers.discoverAgentNode(srv);
+      } catch (err) {
+        return { installed: false, detail: err instanceof Error ? err.message : String(err), ...installable };
+      }
+      const node = wiring.misao.servers.agentNode(srv.name);
+      if (!node) return { installed: false, detail: 'not_installed', ...installable };
+      const daemon = await describeMisaoDaemon(node.connection);
+      return { ...daemon, ...installable, ...(bundled && daemon.daemonVersion && daemon.daemonVersion !== bundled ? { updateAvailable: true } : {}) };
+    },
+    onMuxChanged: ({ previous, next }) => {
+      transportFactory.invalidate(next.name);
+      // The session cache is shared across mux kinds; drop the previous runtime's listing.
+      invalidateSessionCache(next.name);
+      paneHandleResolver.clearServer(next.name);
+      supervisorRegistry.clearServerPaneRefs(next.name);
+      syncTmuxChangeHooks(tmuxHookManager, next, app.log);
+    },
+    onServerChanged: ({ previous, next }) => {
+      // An agent server's misao node is bound to the endpoint and token it was made with: any edit, reinstall or delete
+      // drops it, and a server that still uses misao gets a fresh one.
+      if (next === null) {
+        if (previous) wiring.misao.servers.discardAgentNode(previous);
+        return;
+      }
+      if (previous === null) {
+        // A new agent server may already have a daemon (set up by hand, or by the install that just ran).
+        if (next.type === 'agent') {
+          wiring.misao.servers.discoverAgentNode(next).catch((err) => app.log.debug(`misao discovery on ${next.name}: ${err}`));
+        }
+        return;
+      }
+      syncMisaoNodes(wiring.misao, previous, next, next.defaultMux === 'misao' || wiring.misao.servers.hosts(previous), app.log);
     },
   });
+  const buildSecondaryWindowEnv = (taskId: number, server: ServerConfig): Record<string, string> => {
+    const task = taskRepo.findById(taskId);
+    // Should be unreachable in practice (the caller only reaches here for
+    // a `windowRow.taskId` pulled from the same `windows` table row that
+    // references this task), but a task that no longer exists must not
+    // fall back to a legacy/empty env — mask both credentials exactly as
+    // buildEnvForSecondaryWindow's else-branch does. (The webhook token is not
+    // in this mask; on an isolated server the mux driver blanks it as well.)
+    if (!task) return { ...ISOLATION_MASKED_ENV };
+    return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
+  };
   await app.register(sessionsRoutes, {
     serverRepo, tmux: tmuxClient, uiToken: wiring.uiToken, muxDriverRegistry, windowRepo, notificationBus, resourceGuard, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
@@ -505,16 +569,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         killSession,
       );
     },
-    buildSecondaryWindowEnv: (taskId, server) => {
-      const task = taskRepo.findById(taskId);
-      // Should be unreachable in practice (the caller only reaches here for
-      // a `windowRow.taskId` pulled from the same `windows` table row that
-      // references this task), but a task that no longer exists must not
-      // fall back to a legacy/empty env — mask both credentials exactly as
-      // buildEnvForSecondaryWindow's else-branch does.
-      if (!task) return { ...ISOLATION_MASKED_ENV };
-      return taskPaneEnvironmentService.buildEnvForSecondaryWindow(task, server);
-    },
+    buildSecondaryWindowEnv,
   });
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
@@ -540,7 +595,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
-    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix,
+    windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,
+    uiToken: wiring.uiToken, buildSecondaryWindowEnv, serverIsolationMutex,
     destroyPrimaryTaskWindow: (taskId, windowName, serverName, target, reason, kill, onDestroyed) => {
       const launchId = supervisorRegistry.resolveLaunchForExpiry(serverName, target);
       return destroyPrimaryTaskWindow(taskId, windowName, taskRepo, taskPaneEnvironmentService, reason, kill, () => {
@@ -564,14 +620,29 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
 
   await app.register(phasePromptsRoutes, { sidekickLoader: sidekickPackageLoader, renderSkillPromptUseCase, unitTypeLoader });
   await app.register(storageRoutes, { projectRepo, storageSettingsRepo, storageClient, uploadAuth: storageUploadAuth });
-  await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory, tmuxClient });
+  await app.register(resourceGuardRoutes, { settingsRepo: resourceGuardSettingsRepo, resourceGuard, serverRepo, transportFactory, muxDriverRegistry });
   await app.register(notificationRoutes, { pushSubRepo, pushService, vapidKeys, agentWatchRepo, windowRepo });
   await app.register(usageRoutes, { usageService });
   await app.register(webhookRoutes, {
     taskRepo,
     verifyToken: verifyWebhookToken,
+    resolveServerName: (name) => serverAliasRepo.resolve(name),
     recordAgentActivity: (signal) => agentActivityMonitor.recordHookSignal(signal),
     recordInteractionSignal: (signal) => interactionMonitor.recordSignal(signal),
+    misao: {
+      // A hook is fire-and-forget: an unreachable daemon is answered like an unknown pane (200, nothing recorded).
+      resolvePane: async (serverName, paneId) => {
+        const srv = serverRepo.findByName(serverName);
+        if (!srv || !wiring.misao.servers.hosts(srv)) return null;
+        try {
+          return await paneHandleResolver.resolveWindowByPaneHandle(serverName, asPaneHandle(paneId));
+        } catch (err) {
+          app.log.warn(`[misao] could not resolve hook pane ${paneId} on ${serverName}: ${err instanceof Error ? err.message : String(err)}`);
+          return null;
+        }
+      },
+      recordAgentActivity: (serverName, tmuxTarget, event) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event),
+    },
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });
   await app.register(hooksRoutes, { notificationBus, verifyToken: verifyWebhookToken });
@@ -605,7 +676,18 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     windowRepo,
     interactionMonitor,
   });
-  await app.register(systemRoutes, { systemUpdateService, channelResolver });
+  await app.register(systemRoutes, { systemUpdateService, channelResolver, misaoService: wiring.misaoService });
+  await app.register(agentMisaoRoutes, {
+    serverRepo,
+    transportFactory,
+    installer: wiring.misaoAgentInstaller,
+    misaoServers: wiring.misao.servers,
+    serverIsolationMutex,
+    onInstalled: (srv) => {
+      invalidateSessionCache(srv.name);
+      notificationBus.emit({ type: 'sessions:updated', payload: { serverName: srv.name } });
+    },
+  });
   await app.register(browserRoutes, {
     browserSessionManager,
     serverRepo,
@@ -620,7 +702,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // ─── WebSocket ───
 
   await app.register(async (fastify) => {
-    fastify.get('/ws', { websocket: true }, (socket: WebSocket, request) => {
+    fastify.get('/ws', { websocket: true }, async (socket: WebSocket, request) => {
       const origin = request.headers.origin;
       if (origin && !allowedOrigins.includes(origin)) {
         socket.close(1008, 'Forbidden origin');
@@ -699,33 +781,31 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const refParam = wsUrl.searchParams.get('ref');
       const paneParam = wsUrl.searchParams.get('pane');
 
-      let resolvedRef: MuxRef | null = null;
-      let resolvedServer = serverName ? serverRepo.findByName(serverName) : null;
-      const resolvedOrdinal: PaneOrdinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
-
-      let resolvedWin: import('../modules/windows/Window').Window | undefined;
-
-      if (windowIdParam) {
-        resolvedWin = windowRepo.findById(Number(windowIdParam));
-        if (resolvedWin) {
-          resolvedRef = resolvedWin.muxRef ?? muxRefFromTmuxTarget(resolvedWin.tmuxTarget);
-          resolvedServer = serverRepo.findByName(resolvedWin.serverName) ?? null;
+      const resolvedOrdinal = terminalPaneOrdinal(paneParam, target) as PaneOrdinal;
+      let resolved: Awaited<ReturnType<typeof resolveTerminalTarget>>;
+      try {
+        resolved = await resolveTerminalTarget(
+          { serverName, windowId: windowIdParam, ref: refParam, target },
+          { serverRepo, windowRepo, probe: rawTargetProbeOf(muxDriverRegistry) },
+        );
+      } catch (err) {
+        if (err instanceof MuxDriverUnavailableError) {
+          socket.send(JSON.stringify({ error: `${err.message}; connect by windowId or ref` }));
+          socket.close();
+          return;
         }
-      } else if (refParam) {
-        try {
-          resolvedRef = parseMuxRef(decodeURIComponent(refParam));
-        } catch { /* invalid ref */ }
-      } else if (target) {
-        resolvedRef = muxRefFromTmuxTarget(target);
+        if (!(err instanceof AmbiguousWindowKindError)) throw err;
+        socket.send(JSON.stringify({ error: 'The target names a window in more than one mux; connect by windowId or ref' }));
+        socket.close();
+        return;
       }
-
-      if (!resolvedServer || !resolvedRef) {
+      if (!resolved) {
         socket.send(JSON.stringify({ error: 'Invalid server or target' }));
         socket.close();
         return;
       }
 
-      handleTerminalConnection(socket, resolvedServer, resolvedRef, resolvedOrdinal, cols, rows, transportFactory);
+      handleTerminalConnection(socket, resolved.server, resolved.ref, resolvedOrdinal, cols, rows, muxDriverRegistry);
     });
   });
 
@@ -737,7 +817,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
         socket.close(1008, 'Unauthorized');
         return;
       }
-      handleSupervisorConnection(socket, supervisorRegistry);
+      handleSupervisorConnection(socket, supervisorRegistry, (name) => serverAliasRepo.resolve(name));
     });
   });
 
@@ -809,9 +889,13 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     agentActivityMonitor.stop();
     const localServers = serverRepo.findAll().filter((s) => s.type === 'local');
     await tmuxHookManager.uninstallAll(localServers);
+    misaoObservers.stopLocal();
+    for (const srv of localServers) await wiring.misao.driver.uninstallChangeHooks(srv);
+    wiring.misao.servers.closeAgentNodes();
+    wiring.misao.connection.close();
     for (const stream of agentEventStreams) stream.stop();
     notificationBus.destroy();
   });
 
-  return { tmuxHookManager, agentEventStreams };
+  return { tmuxHookManager, agentEventStreams, misaoPaneStates };
 }

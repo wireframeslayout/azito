@@ -10,7 +10,11 @@ import { WindowActivityIndicator } from '../ui';
 import { buildObjectSections, type BrowserObject } from '../../lib/workspaceObjects';
 import { resolveOperationClick } from '../../lib/operationWindowClick';
 import { resolveWindowContextExtra } from '../task/taskPaneLayout';
-import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
+import { canActOnMux } from '../../lib/windowRowPlan';
+import type { WindowPaneTreeProps } from '../ui/WindowPaneTree';
+import { isTerminalTabActive } from '../../lib/windowMatch';
+import { muxRefJson, type TerminalRef } from '../../lib/terminalRef';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import type { BrowserGroupInfo } from '../../hooks/useBrowserGroups';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import type { Project, Session, Window, Task } from '../../pages/workspace/types';
@@ -81,6 +85,8 @@ interface ObjectsSidebarProps {
   agentDefsError: string | null;
   onCloseMobileSidebar: () => void;
   respawningWindowIds?: Set<number>;
+  /** 空の窓の［ペインを開く］［窓を削除］の後に窓一覧（セッション）を再取得する */
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
   taskWindows?: Array<{ serverName: string; tmuxTarget: string; taskId: number }>;
   /** オペレーションウィンドウ行の副題（サーバー · フェーズ · ブランチ）とタスクバッジのラベル解決に使う */
   tasks: Task[];
@@ -132,6 +138,7 @@ export default function ObjectsSidebar({
   agentDefsError,
   onCloseMobileSidebar,
   respawningWindowIds,
+  onWindowsChanged,
   taskWindows,
   tasks,
   browserGroups,
@@ -154,8 +161,8 @@ export default function ObjectsSidebar({
   const { showToast } = useToast();
   const { collapsed, toggle } = useObjectSectionCollapse();
 
-  const checkActive = useCallback((serverName: string, target: string) =>
-    activeTabId === `terminal:${serverName}/${target}`,
+  const checkActive = useCallback((serverName: string, target: string, level: 'window' | 'pane', windowId?: number) =>
+    isTerminalTabActive(activeTabId, serverName, target, level, windowId),
   [activeTabId]);
 
   // タスク所有ウィンドウ（ownerType='task'）の実体。project.windows には構造上入らない
@@ -294,6 +301,7 @@ export default function ObjectsSidebar({
     label: type === 'terminal' ? t('common:labels.terminal') : (agentByType.get(type)?.label ?? type),
   })), [agentByType, t]);
 
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const handlePaneClick = useCallback(async (serverName: string, target: string, windowId?: number, paneOrdinal?: number, muxRef?: string) => {
     if (mobile) {
       try {
@@ -306,13 +314,12 @@ export default function ObjectsSidebar({
         }
       } catch { /* best-effort */ }
     }
-    const ref: TerminalRef = windowId != null
-      ? { kind: 'windowId' as const, serverName, windowId, pane: paneOrdinal ?? 1 }
-      : terminalRefFromTarget(serverName, target);
-    connectPane(ref);
+    if (windowId != null) connectPane({ kind: 'windowId', serverName, windowId, pane: paneOrdinal ?? 1 });
+    else if (muxRef) connectPane({ kind: 'ref', serverName, ref: muxRef, pane: paneOrdinal ?? 1 });
+    else openTerminal({ serverName, target });
     if (windowId != null) onWindowFocus?.(windowId);
     if (mobile) onCloseMobileSidebar();
-  }, [mobile, connectPane, onCloseMobileSidebar, onWindowFocus]);
+  }, [mobile, connectPane, openTerminal, onCloseMobileSidebar, onWindowFocus]);
 
   const handleOpenBrowser = useCallback((serverName: string, groupId?: string) => {
     openBrowser(serverName, groupId);
@@ -331,7 +338,7 @@ export default function ObjectsSidebar({
   // numeric windows.id. Passing handlePaneClick directly put the row object into
   // `windowId` and produced `terminal:<server>::w[object Object].1` tabs (rc.6 regression).
   const handleTreePaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
-    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined, undefined, w.muxRef);
+    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined, undefined, muxRefJson(w.muxRef));
   }, [handlePaneClick]);
 
   const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
@@ -341,7 +348,7 @@ export default function ObjectsSidebar({
       if (mobile) onCloseMobileSidebar();
       return;
     }
-    handlePaneClick(serverName, target, w.id, undefined, w.muxRef);
+    handlePaneClick(serverName, target, w.id, undefined, muxRefJson(w.muxRef));
   }, [onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
@@ -471,7 +478,7 @@ export default function ObjectsSidebar({
   );
 
   // オペレーションウィンドウ用コンテキストメニュー: タスクを表示 / ターミナルを開く / ペインをキャプチャ / (区切り) / オペレーションを停止
-  const getOperationMenuItems = useCallback((w: WindowItem, extra?: { online: boolean; paneTarget?: string }): ContextMenuItem[] => {
+  const getOperationMenuItems = useCallback((w: WindowItem, extra?: { online: boolean; stale?: boolean; paneTarget?: string }): ContextMenuItem[] => {
     const task = w.taskId != null ? taskById.get(w.taskId) : undefined;
     const items: ContextMenuItem[] = [];
     if (w.taskId != null) {
@@ -483,7 +490,8 @@ export default function ObjectsSidebar({
       onClick: () => handleOperationPaneClick(w.serverName, extra?.paneTarget ?? w.tmuxTarget, w),
     });
     if (extra?.online) {
-      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, onClick: () => onCapturePanes(w.id) });
+      // A stale window's mux cannot be reached: capturing goes through it.
+      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, disabled: !canActOnMux(extra), onClick: () => onCapturePanes(w.id) });
     }
     if (task && RUNNING_STATUSES.has(task.status) && task.unitId != null) {
       items.push({ label: '', separator: true, onClick: () => {} });
@@ -495,11 +503,11 @@ export default function ObjectsSidebar({
     return items;
   }, [taskById, t, handleOpenTask, handleOperationPaneClick, onCapturePanes, onStopOperation]);
 
-  const showOperationContextMenu = useCallback((e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; paneTarget?: string }) => {
+  const showOperationContextMenu = useCallback((e: React.MouseEvent, w: WindowItem, extra?: { online: boolean; stale?: boolean; paneTarget?: string }) => {
     showContextMenu(e, getOperationMenuItems(w, extra));
   }, [showContextMenu, getOperationMenuItems]);
 
-  const showOperationLongPress = useCallback((x: number, y: number, w: WindowItem, extra?: { online: boolean; paneTarget?: string }) => {
+  const showOperationLongPress = useCallback((x: number, y: number, w: WindowItem, extra?: { online: boolean; stale?: boolean; paneTarget?: string }) => {
     showContextMenuAt(x, y, getOperationMenuItems(w, extra));
   }, [showContextMenuAt, getOperationMenuItems]);
 
@@ -688,6 +696,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.active.length > 0 && (
@@ -701,6 +710,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -734,6 +744,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.idle.length > 0 && (
@@ -747,6 +758,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -780,6 +792,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                 </ObjectSection>
@@ -810,6 +823,7 @@ export default function ObjectsSidebar({
                       extra={renderActivityExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                     />
                   ))}
                   {operationsByStatus.offline.length > 0 && (
@@ -823,6 +837,7 @@ export default function ObjectsSidebar({
                       extra={renderOperationExtra}
                       activityClassName={renderActivityClassName}
                       respawningWindowIds={respawningWindowIds}
+                      onWindowsChanged={onWindowsChanged}
                       renderTaskBadge={renderOperationTaskBadge}
                       renderTitle={resolveOperationTitle}
                       renderSubtitle={renderOperationSubtitle}
@@ -899,7 +914,7 @@ interface ServerGroupProps {
   serverName: string;
   windows: Window[];
   sessionData: Record<string, Session[]>;
-  isActive: (serverName: string, target: string, level: 'window' | 'pane') => boolean;
+  isActive: (serverName: string, target: string, level: 'window' | 'pane', windowId?: number) => boolean;
   quickAddButtons: QuickAddButton[];
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
   agentDefsLoading?: boolean;
@@ -911,6 +926,7 @@ interface ServerGroupProps {
   extra?: (w: WindowItem) => React.ReactNode;
   activityClassName?: (w: WindowItem) => string | undefined;
   respawningWindowIds?: Set<number>;
+  onWindowsChanged?: WindowPaneTreeProps['onWindowsChanged'];
 }
 
 function ServerGroup({
@@ -919,6 +935,7 @@ function ServerGroup({
   onPaneClick, onContextMenu, onLongPress,
   onOpenQuickAdd, extra, activityClassName,
   respawningWindowIds,
+  onWindowsChanged,
 }: ServerGroupProps) {
   const { t } = useTranslation('workspace');
   return (
@@ -968,6 +985,7 @@ function ServerGroup({
         extra={extra}
         activityClassName={activityClassName}
         respawningWindowIds={respawningWindowIds}
+        onWindowsChanged={onWindowsChanged}
       />
     </div>
   );

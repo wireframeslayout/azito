@@ -1,5 +1,5 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
-import { asPaneHandle } from '@azito/shared';
+import { asPaneHandle, isPaneHandle, isPaneHandleLike } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
@@ -18,7 +18,6 @@ export interface TranscriptsRouteOptions {
   interactionMonitor: InteractionMonitor;
 }
 
-const PANE_ID_PATTERN = /^%\d+$/;
 const INPUT_TEXT_MIN_LENGTH = 1;
 const INPUT_TEXT_MAX_LENGTH = 32768;
 /** pane 候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみ対応。 */
@@ -147,6 +146,12 @@ async function handleReadSession(
   return { ...result, pendingInteraction, ...(pendingQuestion === undefined ? {} : { pendingQuestion }) };
 }
 
+/** 窓が見つかる場合、その窓の mux 種別（muxRef 無しは tmux）と handle の形式が一致するか。窓が無ければ判定せず true（404 はサービス側）。 */
+function paneHandleMatchesWindow(windowRepo: IWindowRepository, windowId: number, paneId: string): boolean {
+  const window = windowRepo.findById(windowId);
+  return !window || isPaneHandleLike(paneId, window.muxRef?.kind ?? 'tmux');
+}
+
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
   const { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
 
@@ -179,9 +184,10 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
       return reply.status(400).send({ error: 'Invalid windowId' });
     }
-    if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+    if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
       return reply.status(400).send({ error: 'Invalid paneId' });
     }
+    if (!paneHandleMatchesWindow(windowRepo, windowId, paneId)) return reply.status(400).send({ error: 'Invalid paneId' });
     if (typeof text !== 'string' || text.length < INPUT_TEXT_MIN_LENGTH || text.length > INPUT_TEXT_MAX_LENGTH) {
       return reply.status(400).send({ error: 'Invalid text' });
     }
@@ -216,9 +222,10 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
         return reply.status(400).send({ error: 'Invalid windowId' });
       }
-      if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+      if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
         return reply.status(400).send({ error: 'Invalid paneId' });
       }
+      if (!paneHandleMatchesWindow(windowRepo, windowId, paneId)) return reply.status(400).send({ error: 'Invalid paneId' });
       if (action !== 'interrupt' && action !== 'key' && action !== 'answer') {
         return reply.status(400).send({ error: 'Invalid action' });
       }
@@ -342,7 +349,7 @@ async function handleSendInput(
 ) {
   const { paneId, text } = body ?? {};
 
-  if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+  if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
     return reply.status(400).send({ error: 'Invalid paneId' });
   }
   if (typeof text !== 'string' || text.length < INPUT_TEXT_MIN_LENGTH || text.length > INPUT_TEXT_MAX_LENGTH) {
@@ -378,7 +385,7 @@ async function handleSendSignal(
 ) {
   const { paneId, action, key } = body ?? {};
 
-  if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+  if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
     return reply.status(400).send({ error: 'Invalid paneId' });
   }
   if (action !== 'interrupt' && action !== 'key') {

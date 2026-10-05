@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import webhookRoutes, { type WebhookRouteOptions } from './webhooks';
+import webhookRoutes, { type WebhookRouteOptions, type MisaoWebhookOptions } from './webhooks';
 import { createTokenVerifier } from '../servers/auth/tokenAuth';
 import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
+import type { ResolvedWindow } from '../operations/PaneHandleResolver';
 
 const TOKEN = 'test-webhook-token';
 
@@ -10,8 +11,10 @@ function buildOptions(overrides: Partial<WebhookRouteOptions> = {}): WebhookRout
   return {
     taskRepo: { findById: vi.fn().mockReturnValue(undefined) } as unknown as SqliteTaskRepository,
     verifyToken: createTokenVerifier(TOKEN),
+    resolveServerName: (name) => name,
     recordAgentActivity: vi.fn(),
     recordInteractionSignal: vi.fn(),
+    misao: { resolvePane: vi.fn().mockResolvedValue(null), recordAgentActivity: vi.fn() },
     ...overrides,
   };
 }
@@ -411,5 +414,166 @@ describe('POST /api/webhooks/agent-done (unchanged behavior)', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true });
+  });
+});
+
+describe('hook webhooks from a misao pane (misaoPaneId)', () => {
+  const PANE_ID = 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXA';
+  const resolvedWindow: ResolvedWindow = {
+    windowId: 7,
+    ref: { kind: 'misao', workspace: 'azito', window: 'w_01J8ZK3M5N7P9Q2R4S6T8V0WXY' },
+    ordinal: 1,
+    tmuxTarget: 'w_01J8ZK3M5N7P9Q2R4S6T8V0WXY',
+  };
+  let app: FastifyInstance;
+
+  function misaoOptions(resolved: ResolvedWindow | null = resolvedWindow): { misao: MisaoWebhookOptions; options: WebhookRouteOptions } {
+    const misao: MisaoWebhookOptions = {
+      resolvePane: vi.fn().mockResolvedValue(resolved),
+      recordAgentActivity: vi.fn(),
+    };
+    return { misao, options: buildOptions({ misao }) };
+  }
+
+  function post(url: string, payload: unknown) {
+    return app.inject({ method: 'POST', url, headers: { authorization: `Bearer ${TOKEN}` }, payload: payload as Record<string, unknown> });
+  }
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  it('agent-activity resolves the pane and records a Tier 1 hook signal for its window', async () => {
+    const { misao, options } = misaoOptions();
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId: PANE_ID, event: 'start' });
+
+    expect(res.statusCode).toBe(200);
+    expect(misao.resolvePane).toHaveBeenCalledWith('local', PANE_ID);
+    expect(misao.recordAgentActivity).toHaveBeenCalledWith('local', resolvedWindow.tmuxTarget, 'start');
+    expect(options.recordAgentActivity).not.toHaveBeenCalled();
+  });
+
+  it('agent-activity records nothing for a pane other than the first of its window', async () => {
+    const { misao, options } = misaoOptions({ ...resolvedWindow, ordinal: 2 });
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId: PANE_ID, event: 'stop' });
+
+    expect(res.statusCode).toBe(200);
+    expect(misao.recordAgentActivity).not.toHaveBeenCalled();
+  });
+
+  it('agent-activity answers 200 and records nothing when no window owns the pane', async () => {
+    const { misao, options } = misaoOptions(null);
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId: PANE_ID, event: 'stop' });
+
+    expect(res.statusCode).toBe(200);
+    expect(misao.recordAgentActivity).not.toHaveBeenCalled();
+  });
+
+  it.each(['%3', 'p_short', 42])('agent-activity rejects the invalid misaoPaneId %s with 400', async (misaoPaneId) => {
+    const { options } = misaoOptions();
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId, event: 'start' });
+
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('agent-activity still validates serverName and event on the misao branch', async () => {
+    const { options } = misaoOptions();
+    app = await buildApp(options);
+
+    expect((await post('/api/webhooks/agent-activity', { misaoPaneId: PANE_ID, event: 'start' })).statusCode).toBe(400);
+    expect((await post('/api/webhooks/agent-activity', { serverName: 'local', misaoPaneId: PANE_ID, event: 'bogus' })).statusCode).toBe(400);
+  });
+
+  it('agent-activity keeps the tmux path when tmux fields are present, even alongside misaoPaneId', async () => {
+    const { misao, options } = misaoOptions();
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-activity', { ...validActivityBody, misaoPaneId: PANE_ID });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledTimes(1);
+    expect(misao.resolvePane).not.toHaveBeenCalled();
+  });
+
+  it('agent-interaction records the signal against the resolved window id and pane ordinal', async () => {
+    const { options } = misaoOptions();
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-interaction', { serverName: 'local', misaoPaneId: PANE_ID, event: 'open' });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(expect.objectContaining({
+      serverName: 'local',
+      target: { windowId: 7, paneIndex: 1 },
+      event: 'open',
+    }));
+  });
+
+  it('agent-interaction answers 200 and records nothing when no window owns the pane', async () => {
+    const { options } = misaoOptions(null);
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-interaction', { serverName: 'local', misaoPaneId: PANE_ID, event: 'open' });
+
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).not.toHaveBeenCalled();
+  });
+
+  it('agent-interaction rejects an invalid misaoPaneId with 400', async () => {
+    const { options } = misaoOptions();
+    app = await buildApp(options);
+
+    const res = await post('/api/webhooks/agent-interaction', { serverName: 'local', misaoPaneId: 'nope', event: 'open' });
+
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+// TODO(#313): remove with the server_aliases compatibility.
+describe('hook signals from a pane that still carries a merged server\'s old name', () => {
+  let app: FastifyInstance;
+  afterEach(async () => { await app.close(); });
+  const headers = { authorization: `Bearer ${TOKEN}` };
+  const aliasOptions = (): WebhookRouteOptions => buildOptions({ resolveServerName: (name) => (name === 'local-misao' ? 'local' : name) });
+
+  it('resolves the old name for a tmux activity signal', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    const res = await app.inject({ method: 'POST', url: '/api/webhooks/agent-activity', headers, payload: { ...validActivityBody, serverName: 'local-misao' } });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'local' }));
+  });
+
+  it('resolves the old name for a tmux interaction signal', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    const res = await app.inject({ method: 'POST', url: '/api/webhooks/agent-interaction', headers, payload: { ...validInteractionBody, serverName: 'local-misao' } });
+    expect(res.statusCode).toBe(200);
+    expect(options.recordInteractionSignal).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'local' }));
+  });
+
+  it('resolves the old name before looking up a misao pane', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    await app.inject({
+      method: 'POST', url: '/api/webhooks/agent-activity', headers,
+      payload: { serverName: 'local-misao', misaoPaneId: 'p_01J8ZK3M5N7P9Q2R4S6T8V0WXA', event: 'start' },
+    });
+    expect(options.misao.resolvePane).toHaveBeenCalledWith('local', expect.any(String));
+  });
+
+  it('leaves a current name untouched', async () => {
+    const options = aliasOptions();
+    app = await buildApp(options);
+    await app.inject({ method: 'POST', url: '/api/webhooks/agent-activity', headers, payload: validActivityBody });
+    expect(options.recordAgentActivity).toHaveBeenCalledWith(expect.objectContaining({ serverName: 'local' }));
   });
 });

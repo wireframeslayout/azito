@@ -4,9 +4,11 @@ import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
 import { FormInput, FormSelect, baseInputStyle, Button, ModelSelect } from '../ui';
-import { api } from '../../api/client';
-import { muxKindForRuntime, type MuxRuntime } from '@azito/shared';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
+import type { MuxKindSelectModel } from '../../lib/muxKindChoice';
+import MuxKindField from './MuxKindField';
+import { findSessionByKey, hasMixedKinds, sessionKey, sessionOptionLabel, windowTargetSelectOptions } from '../../lib/sessionKind';
 
 interface AddWindowModalProps {
   open: boolean;
@@ -22,7 +24,10 @@ interface AddWindowModalProps {
   awLabel: string;
   setAwLabel: (label: string) => void;
   awSessionData: Record<string, Session[]>;
-  setAwSessionData: (data: Record<string, Session[]>) => void;
+  /** オフライン（到達不能）と判定されたサーバー名。セッションは取得せず「オフライン」と表示する。 */
+  awOfflineServers: string[];
+  /** 未取得のサーバーのセッションを並列取得する（オフラインのサーバーはスキップ）。 */
+  onLoadMissingSessions: () => Promise<void>;
   awSelectedSession: string;
   setAwSelectedSession: (session: string) => void;
   awNewSession: string;
@@ -40,20 +45,17 @@ interface AddWindowModalProps {
   agentPresets: Record<string, { command: string; label: string }>;
   agentPresetsLoading?: boolean;
   agentPresetsError?: string | null;
+  /** 新規作成時のターミナル方式（misao / tmux）の選択状態。サーバーが 1 方式しか持たない場合は表示しない。 */
+  muxKind: MuxKindSelectModel | null;
+  onMuxKindChange: (kind: MuxDriverKind) => void;
   servers: Server[];
   projectServers: { serverName: string; workingDirectory?: string }[];
   project: { workingDirectory?: string } | null;
 }
 
+/** tmux windows keep their `<session>:<index>` value; a misao window is offered by its id (an ordinal shifts, M-022). */
 function getWindowTargets(awSessionData: Record<string, Session[]>, awServer: string): { value: string; label: string }[] {
-  const sessions = awSessionData[awServer] || [];
-  const targets: { value: string; label: string }[] = [];
-  for (const s of sessions) {
-    for (const w of s.windows) {
-      targets.push({ value: `${s.name}:${w.index}`, label: `${s.name} / ${w.index}: ${w.name} (${w.panes.length} panes)` });
-    }
-  }
-  return targets;
+  return windowTargetSelectOptions(awSessionData[awServer] || []);
 }
 
 export default function AddWindowModal({
@@ -62,7 +64,7 @@ export default function AddWindowModal({
   awServer, setAwServer,
   awTarget, setAwTarget,
   awLabel, setAwLabel,
-  awSessionData, setAwSessionData,
+  awSessionData, awOfflineServers, onLoadMissingSessions,
   awSelectedSession, setAwSelectedSession,
   awNewSession,
   awNewWindowName, setAwNewWindowName,
@@ -74,6 +76,7 @@ export default function AddWindowModal({
   agentPresets,
   agentPresetsLoading,
   agentPresetsError,
+  muxKind, onMuxKindChange,
   servers, projectServers, project,
 }: AddWindowModalProps) {
   const { t } = useTranslation(['workspace', 'common']);
@@ -91,27 +94,24 @@ export default function AddWindowModal({
                 const ps = projectServers.find((p) => p.serverName === e.target.value);
                 setAwWorkDir(ps?.workingDirectory || project?.workingDirectory || '');
               }}>
-                {(projectServers.length > 0 ? servers.filter((s) => projectServers.some((ps) => ps.serverName === s.name)) : servers).map((s) => <option key={s.name} value={s.name}>{s.name}</option>)}
+                {(projectServers.length > 0 ? servers.filter((s) => projectServers.some((ps) => ps.serverName === s.name)) : servers).map((s) => <option key={s.name} value={s.name}>{awOfflineServers.includes(s.name) ? `${s.name} (${t('addWindow.serverOffline')})` : s.name}</option>)}
               </FormSelect>
             </FormField>
           )}
           {projectServers.length <= 1 && awServer && (
-            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12 }}>{t('addWindow.serverLabel')}{awServer}</div>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)', marginBottom: 12 }}>{t('addWindow.serverLabel')}{awServer}{awOfflineServers.includes(awServer) && ` (${t('addWindow.serverOffline')})`}</div>
           )}
+          <MuxKindField model={muxKind} onChange={onMuxKindChange} disabled={loading} />
           <FormField label={t('addWindow.session')}>
             <FormInput value={awNewSession} readOnly style={{ opacity: 0.7, cursor: 'default' }} />
           </FormField>
           <FormField label={t('addWindow.windowName')}>
             <FormInput value={awNewWindowName} onChange={(e) => setAwNewWindowName(e.target.value)} placeholder={t('addWindow.windowNamePlaceholder')} />
-            {!awNewWindowName.trim() && (() => {
-              const serverInfo = servers.find((s) => s.name === awServer);
-              const muxKind = muxKindForRuntime((serverInfo?.muxRuntime ?? 'system') as MuxRuntime);
-              return muxKind !== 'tmux' ? (
-                <div style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
-                  {t('addWindow.windowNameAutoGenHint')}
-                </div>
-              ) : null;
-            })()}
+            {!awNewWindowName.trim() && muxKind?.value === 'misao' && (
+              <div style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
+                {t('addWindow.windowNameAutoGenHint')}
+              </div>
+            )}
           </FormField>
           <FormField label={t('addWindow.workingDir')}>
             <DirectoryInput
@@ -190,13 +190,13 @@ export default function AddWindowModal({
           <FormField label={t('addWindow.session')} hint={t('addWindow.sessionHint')}>
             <FormSelect value={awSelectedSession} onChange={(e) => setAwSelectedSession(e.target.value)}>
               <option value="">{t('addWindow.selectSession')}</option>
-              {(awSessionData[awServer] || []).map((s) => (
-                <option key={s.name} value={s.name}>{t('addWindow.sessionWindowCount', { name: s.name, count: s.windows.length })}</option>
+              {(awSessionData[awServer] || []).map((s, _i, all) => (
+                <option key={sessionKey(s)} value={sessionKey(s)}>{t('addWindow.sessionWindowCount', { name: sessionOptionLabel(s, hasMixedKinds(all)), count: s.windows.length })}</option>
               ))}
             </FormSelect>
           </FormField>
           {awSelectedSession && (() => {
-            const sess = (awSessionData[awServer] || []).find((s) => s.name === awSelectedSession);
+            const sess = findSessionByKey(awSessionData[awServer] || [], awSelectedSession);
             if (!sess) return null;
             return (
               <div style={{ marginBottom: 12, padding: '8px 12px', background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-md)' }}>
@@ -222,14 +222,7 @@ export default function AddWindowModal({
           <div style={{ display: 'flex', gap: 4, marginTop: 8, marginBottom: 8 }}>
             {(['existing', 'session'] as const).map((m) => (
               <button key={m} onClick={async () => {
-                const missingServers = servers.filter((s) => !awSessionData[s.name]);
-                if (missingServers.length > 0) {
-                  const data = { ...awSessionData };
-                  for (const srv of missingServers) {
-                    try { const s = await api<Session[]>(`/servers/${srv.name}/sessions`); if (Array.isArray(s)) data[srv.name] = s; } catch {}
-                  }
-                  setAwSessionData(data);
-                }
+                await onLoadMissingSessions();
                 setAwMode(m);
               }}
                 style={{ flex: 1, padding: '6px 10px', fontSize: 'var(--font-sm)', fontWeight: 500, cursor: 'pointer', borderRadius: 'var(--radius-sm)',

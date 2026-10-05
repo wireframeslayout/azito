@@ -47,4 +47,11 @@ describe('GET /api/health', () => {
 
     await app.close();
   });
+
+  it('no longer exposes an experimentalMisao flag', async () => {
+    const app = Fastify();
+    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector(), scopedAuthEnabled: false });
+    expect('experimentalMisao' in (await app.inject({ method: 'GET', url: '/api/health' })).json()).toBe(false);
+    await app.close();
+  });
 });

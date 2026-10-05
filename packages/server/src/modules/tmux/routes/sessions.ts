@@ -1,4 +1,4 @@
-import type { FastifyPluginCallback } from 'fastify';
+import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import type { IServerRepository, ServerConfig } from '../../servers/Server';
 import type { ExecResult } from '../../servers/transport/ServerTransport';
 import type { TmuxClient, TmuxSession } from '../TmuxClient';
@@ -9,11 +9,21 @@ import type { NotificationBus } from '../../notifications/NotificationBus';
 import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
-import { resolveRefFromParam, resolvePaneHandle, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, type MuxDriverKind, type MuxRef, type MuxUnavailableKind, type PaneOrdinal } from '@azito/shared';
+import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
+import { MuxDriverUnavailableError, MUX_BINARY_MISSING, isMissingBinaryError, isMissingBinaryResult } from '../MuxCapabilityError';
+import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+import { muxWindowTarget } from '../muxWindowTarget';
+import { serverSupportsMux } from '../../servers/muxKinds';
+
+/** Generic route failure -> 500; an unreachable agent is rethrown so the app error handler answers 503. */
+function replyRouteError(reply: FastifyReply, err: unknown): FastifyReply {
+  if (err instanceof AgentUnreachableError) throw err;
+  return reply.status(500).send({ error: (err as Error).message });
+}
 
 // ─── Types ───
 
@@ -128,7 +138,7 @@ export interface SessionsRouteOptions {
    * non-null and `isPrimaryTaskWindow(win)` is false — buildServer.ts wires
    * this to look up the task and call `buildEnvForSecondaryWindow` on it.
    */
-  buildSecondaryWindowEnv?: (taskId: number, server: ServerConfig) => Record<string, string>;
+  buildSecondaryWindowEnv: (taskId: number, server: ServerConfig) => Record<string, string>;
 
   /**
    * Issue #29 review (6th pass), Important finding 3: serializes the
@@ -166,9 +176,70 @@ function windowNameFromTarget(tmuxTarget: string): string | undefined {
   return tmuxTarget.slice(idx + 1);
 }
 
+/**
+ * The `kind` a workspace route was asked for (body or query): undefined when omitted (the driver then uses the
+ * server's default mux), null when it is not a mux the server can host (the route answers 400).
+ */
+function requestedMuxKind(value: unknown, srv: ServerConfig): MuxDriverKind | undefined | null {
+  if (value === undefined || value === '') return undefined;
+  if (value !== 'tmux' && value !== 'misao') return null;
+  return serverSupportsMux(srv, value) ? value : null;
+}
+
+/**
+ * The mux kind a create request asks for. `undefined` = not given (the server's default mux applies). Only an absent
+ * `kind` means "not given": an empty string is a 400. The kind that will run the call (the given one, else the
+ * server's default) must be usable now, or the answer is a 409 with the reason.
+ */
+type CreationKind =
+  | { ok: true; kind: MuxDriverKind | undefined }
+  | { ok: false; status: 400 | 409; body: { error: string; kind?: MuxDriverKind; reason?: string } };
+
+function unavailableBody(kind: MuxDriverKind, reason: string): { error: string; kind: MuxDriverKind; reason: string } {
+  return { error: 'mux_kind_unavailable', kind, reason };
+}
+
+function creationMuxKind(value: unknown, srv: ServerConfig, registry: MuxDriverRegistry | undefined): CreationKind {
+  if (value !== undefined && value !== 'tmux' && value !== 'misao') return { ok: false, status: 400, body: { error: 'Invalid kind' } };
+  const effectiveKind: MuxDriverKind = value ?? srv.defaultMux;
+  const availability = registry?.availabilityFor(effectiveKind, srv);
+  if (availability && !availability.available) {
+    return { ok: false, status: 409, body: unavailableBody(effectiveKind, availability.reason) };
+  }
+  return { ok: true, kind: value };
+}
+
+/**
+ * How a failed create call is answered. A driver that cannot serve the call (daemon lost mid-call) or a mux binary
+ * that is not installed is a 409 `mux_kind_unavailable` with the reason; anything else is a 500.
+ */
+function createFailure(kind: MuxDriverKind, err: unknown): { status: 409 | 500; body: Record<string, unknown> } {
+  if (err instanceof MuxDriverUnavailableError) return { status: 409, body: unavailableBody(err.kind, err.reason) };
+  if (kind === 'tmux' && isMissingBinaryError(err)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
+  return { status: 500, body: { error: err instanceof Error ? err.message : String(err) } };
+}
+
+/** An agent/ssh transport resolves with a non-zero ExecResult instead of throwing when the remote mux fails. */
+// A missing tmux on an agent server stays a 500: the agent turns a spawn ENOENT into code 1 with an empty stderr
+// (agent/routes.ts), so there is nothing here to tell it from another failure. An SSH server's code 127 is recognised.
+function createResultFailure(kind: MuxDriverKind, result: ExecResult): { status: 409 | 500; body: Record<string, unknown> } {
+  if (kind === 'tmux' && isMissingBinaryResult(result)) return { status: 409, body: unavailableBody(kind, MUX_BINARY_MISSING) };
+  return { status: 500, body: { error: `create failed: ${result.stderr || result.stdout}` } };
+}
+
+function replyCreateError(reply: FastifyReply, kind: MuxDriverKind, err: unknown): FastifyReply {
+  if (err instanceof AgentUnreachableError) throw err;
+  const failure = createFailure(kind, err);
+  return reply.status(failure.status).send(failure.body);
+}
+
 // ─── Session cache (30 s TTL) ───
 
-interface SessionCacheEntry { data: TmuxSession[]; ts: number }
+/** A listed session, stamped with the mux it lives in (a tmux and a misao session can share a name). */
+type ListedSession = TmuxSession & { kind: MuxDriverKind };
+
+/** One merged listing: the sessions of every mux the server could list, and the muxes it could not. */
+interface SessionCacheEntry { data: ListedSession[]; unavailable: MuxUnavailableKind[]; ts: number }
 const sessionCache = new Map<string, SessionCacheEntry>();
 const SESSION_CACHE_TTL = 30000;
 
@@ -183,11 +254,11 @@ const GC_INTERVAL = 60000;
 
 // ─── Helpers (enrichment) ───
 
-function enrichSessions(sessions: TmuxSession[], serverName: string, windowRepo?: SqliteWindowRepository) {
+function enrichSessions(sessions: ListedSession[], serverName: string, windowRepo?: SqliteWindowRepository) {
   return sessions.map(session => ({
     ...session,
     windows: session.windows.map(win => {
-      const ref: MuxRef = { kind: 'tmux', workspace: session.name, window: win.name };
+      const ref: MuxRef = win.ref ?? { kind: 'tmux', workspace: session.name, window: win.name };
       const dbWin = windowRepo?.findByServerAndRef(serverName, ref);
       return { ...win, ref: formatMuxRef(ref), windowId: dbWin?.id ?? null };
     }),
@@ -210,41 +281,62 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   }
 
   // ── GET /api/servers/:name/sessions ──
-  fastify.get<{ Params: { name: string } }>(
+  // The sessions of every mux the server can use, each stamped with its `kind`. `?detail=1` answers
+  // `{ sessions, unavailable }` instead of the bare array: `unavailable` lists the muxes that could not be listed
+  // (the rest are still returned). A server that can use tmux only is listed exactly as before (tmux, then the
+  // linked-session GC); only the `kind` stamp is added.
+  fastify.get<{ Params: { name: string }; Querystring: { detail?: string } }>(
     '/api/servers/:name/sessions',
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const detail = request.query.detail === '1';
+      const respond = (entry: Pick<SessionCacheEntry, 'data' | 'unavailable'>) => {
+        const sessions = enrichSessions(entry.data, request.params.name, opts.windowRepo);
+        return detail ? { sessions, unavailable: entry.unavailable } : sessions;
+      };
 
-      // tmux path: optimized flow with cache + linked-session GC
+      const registry = opts.muxDriverRegistry;
+      const kinds: MuxDriverKind[] = registry ? registry.supportedKinds(srv) : ['tmux'];
+      const tmuxOnly = kinds.length === 1 && kinds[0] === 'tmux';
+      // Resolved before the cache is read so a lost daemon is a 503 (global handler), not a stale 200 list.
+      const routing = registry && !tmuxOnly ? registry.resolve(srv) : undefined;
+
       const cached = sessionCache.get(request.params.name);
-      if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) {
-        return enrichSessions(cached.data, request.params.name, opts.windowRepo);
-      }
+      if (cached && Date.now() - cached.ts < SESSION_CACHE_TTL) return respond(cached);
 
       try {
-        const sessions = await tmux.listSessions(srv);
-        sessionCache.set(request.params.name, { data: sessions, ts: Date.now() });
+        let entry: SessionCacheEntry;
+        if (routing) {
+          const { workspaces, unavailable } = await routing.listWorkspacesDetailed(srv);
+          entry = { data: workspaces, unavailable, ts: Date.now() };
+        } else {
+          const sessions = await tmux.listSessions(srv);
+          entry = { data: sessions.map((s) => ({ ...s, kind: 'tmux' as const })), unavailable: [], ts: Date.now() };
+        }
+        sessionCache.set(request.params.name, entry);
 
+        // Linked-session GC is tmux work: only while tmux answered this listing.
+        const tmuxListed = kinds.includes('tmux') && !entry.unavailable.some((u) => u.kind === 'tmux');
         const now = Date.now();
         const lastRun = lastGcRun.get(request.params.name) ?? 0;
-        if (now - lastRun > GC_INTERVAL) {
+        if (tmuxListed && now - lastRun > GC_INTERVAL) {
           lastGcRun.set(request.params.name, now);
           tmux.cleanupLinkedSessions(srv).then((n) => {
             if (n > 0) fastify.log.info(`GC: cleaned ${n} linked session(s) on ${request.params.name}`);
           }).catch(() => {});
         }
 
-        return enrichSessions(sessions, request.params.name, opts.windowRepo);
+        return respond(entry);
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
 
+  /** The name-based routes below act on tmux sessions/windows: fine on any server that can host tmux, whatever its default mux. */
   function requireTmuxDriver(srv: ServerConfig, reply: any): boolean {
-    const kind = muxKindForRuntime(srv.muxRuntime ?? 'system');
-    if (kind !== 'tmux') {
+    if (!serverSupportsMux(srv, 'tmux')) {
       reply.status(409).send({ error: 'tmux_only_route' });
       return false;
     }
@@ -290,7 +382,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           notifySessionsChanged(request.params.name);
           return { ok: true, windowName };
         } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       });
     },
@@ -324,7 +416,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const createdRef: MuxRef = { kind: 'tmux', workspace: request.params.session, window: windowName };
           return { ok: true, windowName, windowId: null, ref: formatMuxRef(createdRef) };
         } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       });
     },
@@ -369,47 +461,16 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
             ? opts.windowRepo?.findByServerAndRef(request.params.name, resolvedRef)
             : opts.windowRepo?.findByServerAndTarget(request.params.name, target);
 
-          if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-            // The task's PRIMARY worker window. Its already-running first pane
-            // holds the currently-active AZITO_TASK_TOKEN generation in its
-            // process env, and that plaintext is never persisted anywhere
-            // (design v3 §2 — TaskPaneEnvironmentService issues but never
-            // stores a token's plaintext). There is therefore no value this
-            // route could hand the new pane that is simultaneously (a) the
-            // SAME generation the first pane already holds — required, since
-            // every pane in one tmux window must carry an identical env per
-            // TmuxClient.splitPane's doc comment — and (b) obtained without
-            // rotating, which would revoke that still-in-use generation out
-            // from under the running worker pane. Reject rather than either
-            // silently omitting the token (this finding's original bug) or
-            // minting a fresh, unrelated generation only the new pane would
-            // hold. Respawning the window (which rotates once and applies the
-            // new generation to every pane it recreates) is the supported way
-            // to add a pane here.
-            return reply.status(409).send({
-              error: 'primary_task_window_pane_add_unsupported',
-              message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-            });
-          }
+          // 409 for a task's primary window, the task's masked env for a secondary one, the manual-window env otherwise.
+          const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+          if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
 
-          const extraEnv: Record<string, string> = windowRow && windowRow.taskId !== null
-            // Secondary task-owned window: masked-only env (no task token),
-            // same as its own (re)creation env.
-            ? (opts.buildSecondaryWindowEnv?.(windowRow.taskId, freshSrv) ?? {})
-            // Non-task window (manual/project/etc.) — legacy default,
-            // server-aware (Issue #29 review, Critical finding 1): withholds
-            // the token when this server is declared isolated. Manual/
-            // human-facing pane, so `uiTokenEnvForServer` (inject-capable)
-            // is correct here, unlike task session bootstrap's mask-only
-            // `isolationMaskForServer` (Issue #29 review, 11th pass).
-            : uiTokenEnvForServer(opts.uiToken, freshSrv);
-
-          await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', extraEnv);
+          await tmux.splitPane(freshSrv, target, direction as 'h' | 'v', paneEnv.extraEnv);
           notifySessionsChanged(request.params.name);
           return { ok: true };
         });
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -473,7 +534,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         let sessionRowSnapshot: Array<{ id: number; tmuxTarget: string }> = [];
         let killStartedAt = '';
         const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
-          const rows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+          const rows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session, 'tmux') ?? [];
           sessionRowSnapshot = rows.map((win) => ({ id: win.id, tmuxTarget: win.tmuxTarget }));
           killStartedAt = opts.windowRepo?.now() ?? '';
           const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
@@ -545,7 +606,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // `created_at > killStartedAt`, so its rows are never touched here.
         if (killStartedAt) {
           const knownIds = new Set(sessionRowSnapshot.map((win) => win.id));
-          const postKillRows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session) ?? [];
+          const postKillRows = opts.windowRepo?.findByServerAndSession(request.params.name, request.params.session, 'tmux') ?? [];
           for (const win of postKillRows) {
             if (knownIds.has(win.id) || win.createdAt > killStartedAt) continue;
             opts.windowRepo?.remove(win.id);
@@ -553,7 +614,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -632,7 +693,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         // return the resolved identity so they can close every matching tab.
         return { ok: true, identity };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -661,7 +722,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         opts.windowRepo?.removeByServerAndTarget(request.params.name, target);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -680,7 +741,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -700,7 +761,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -720,7 +781,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         notifySessionsChanged(request.params.name);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -748,7 +809,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           const { stdout } = await tmux.captureScreen(srv, asPaneHandle(decodedTarget), -h, undefined);
           return { content: stdout };
         } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyRouteError(reply, err);
         }
       }
 
@@ -756,7 +817,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const { stdout } = await tmux.captureScreen(srv, asPaneHandle(decodedTarget), startLine, endLine);
         return { content: stdout };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -776,7 +837,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         await tmux.sendKeysToHandle(srv, asPaneHandle(decodeURIComponent(request.params.target)), keys);
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -793,7 +854,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         await tmux.zoomPane(srv, decodeURIComponent(request.params.target));
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -810,7 +871,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         await tmux.unzoomPane(srv, decodeURIComponent(request.params.target));
         return { ok: true };
       } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
+        return replyRouteError(reply, err);
       }
     },
   );
@@ -828,7 +889,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       if (!opts.windowRepo) return reply.status(500).send({ error: 'windowRepo not configured' });
       const dbWindow = opts.windowRepo.findByServerAndRef(request.params.name, ref);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
@@ -848,7 +909,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
@@ -859,29 +920,57 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   // ── POST /api/servers/:name/mux/windows/:ref/panes ──
+  // The server row, the task-window classification and the env are resolved inside the per-server lock
+  // (see serverIsolationMutex's doc comment), like the legacy add-pane route and `panes/open`.
   fastify.post<{ Params: { name: string; ref: string } }>(
     '/api/servers/:name/mux/windows/:ref/panes',
     async (request, reply) => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
-      const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, freshSrv);
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
 
-      if (windowRow && windowRow.taskId !== null && isPrimaryTaskWindow(windowRow)) {
-        return reply.status(409).send({
-          error: 'primary_task_window_pane_add_unsupported',
-          message: "Cannot add a pane to a task's primary window directly — respawn the window first, then add panes.",
-        });
+        const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
+
+        const body = request.body as { ordinal?: number; direction?: string };
+        const direction = (body.direction || 'v') as 'h' | 'v';
+        const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
+        const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const handle = await resolvePaneHandle(muxClient, freshSrv, ref, ordinal);
+        await muxClient.splitPaneByHandle(freshSrv, handle, direction, paneEnv.extraEnv);
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      });
+    },
+  );
+
+  // ── POST /api/servers/:name/mux/windows/:ref/panes/open ──
+  // Opens a new shell pane in an existing window (misao: also the way back from an empty window).
+  // It hands the pane a credential env, so — like the legacy add-pane route — the server row, the task-window
+  // classification and the env are resolved inside the per-server lock (see serverIsolationMutex's doc comment).
+  fastify.post<{ Params: { name: string; ref: string }; Body: { command?: string } | undefined }>(
+    '/api/servers/:name/mux/windows/:ref/panes/open',
+    async (request, reply) => {
+      const command = request.body?.command;
+      if (command !== undefined && (typeof command !== 'string' || command.trim() === '')) {
+        return reply.status(400).send({ error: 'command must be a non-empty string' });
       }
-
-      const body = request.body as { ordinal?: number; direction?: string };
-      const direction = (body.direction || 'v') as 'h' | 'v';
-      const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
-      const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
-      const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.splitPaneByHandle(srv, handle, direction);
-      notifySessionsChanged(request.params.name);
-      return { ok: true };
+      return serverIsolationMutex.withLock(request.params.name, async () => {
+        const freshSrv = serverRepo.findByName(request.params.name);
+        if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const ref = resolveRefForServer(request.params.ref, freshSrv);
+        const windowRow = opts.windowRepo?.findByServerAndRef(request.params.name, ref);
+        const paneEnv = resolvePaneAddEnv(windowRow, freshSrv, { uiToken: opts.uiToken, buildSecondaryWindowEnv: opts.buildSecondaryWindowEnv });
+        if (!paneEnv.ok) return reply.status(paneEnv.status).send(paneEnv.body);
+        // A registered window's panes carry its windowId / task labels (labelWindowPanes); a new pane must too.
+        const labels = windowRow ? { windowId: windowRow.id, ...(windowRow.taskId !== null ? { taskId: windowRow.taskId } : {}) } : undefined;
+        const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        await muxClient.openPaneInWindow(freshSrv, ref, { command, extraEnv: paneEnv.extraEnv, labels });
+        notifySessionsChanged(request.params.name);
+        return { ok: true };
+      });
     },
   );
 
@@ -891,7 +980,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -913,7 +1002,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -931,7 +1020,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -946,7 +1035,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -961,7 +1050,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
@@ -973,16 +1062,15 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   );
 
   // ── DELETE /api/servers/:name/mux/windows/:ref/panes/:ordinal ──
-  fastify.delete<{ Params: { name: string; ref: string; ordinal: string } }>(
+  fastify.delete<{ Params: { name: string; ref: string; ordinal: string }; Querystring: { handle?: string } }>(
     '/api/servers/:name/mux/windows/:ref/panes/:ordinal',
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const ref = resolveRefFromParam(request.params.ref);
+      const ref = resolveRefForServer(request.params.ref, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
-      const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.closePane(srv, handle);
+      await closePaneInWindow(muxClient, srv, ref, { ordinal, handle: request.query.handle });
       notifySessionsChanged(request.params.name);
       return { ok: true };
     },
@@ -996,7 +1084,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { ref: refParam } = request.body as { ref?: string } ?? {};
       if (!refParam) return reply.status(400).send({ error: 'ref is required' });
-      const ref = resolveRefFromParam(refParam);
+      const ref = resolveRefForServer(refParam, srv);
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       await muxClient.focusWindow(srv, ref);
       return { ok: true };
@@ -1012,24 +1100,32 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string } }>(
     '/api/servers/:name/mux/workspaces',
     async (request, reply) => {
-      const { name, windowName, force } = request.body as { name?: string; windowName?: string; force?: boolean };
+      const { name, windowName, force, kind: kindParam } = request.body as { name?: string; windowName?: string; force?: boolean; kind?: unknown };
       if (!name) return reply.status(400).send({ error: 'Workspace name required' });
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
-        const driver = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
+        const requested = creationMuxKind(kindParam, freshSrv, opts.muxDriverRegistry);
+        if (!requested.ok) return reply.status(requested.status).send(requested.body);
+        const kind = requested.kind;
+        const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
           if (!status.ok)
             return reply.status(409).send({ error: 'insufficient_resources', resources: status });
         }
         try {
-          const { ref } = await driver.openWorkspace(freshSrv, name, { windowName });
+          const { ref, result, windowName: createdName } = await driver.openWorkspace(freshSrv, name, { windowName, extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          if (result.code !== 0) {
+            const failure = createResultFailure(kind ?? freshSrv.defaultMux, result);
+            return reply.status(failure.status).send(failure.body);
+          }
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, windowName: ref.window };
+          // `target` is the canonical window target; `windowName` is the display name only (a misao ref.window is an id).
+          return { ok: true, ref: formatMuxRef(ref), workspaceName: name, target: muxWindowTarget(ref), windowName: createdName ?? ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
         }
       });
     },
@@ -1039,10 +1135,13 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
   fastify.post<{ Params: { name: string; workspace: string } }>(
     '/api/servers/:name/mux/workspaces/:workspace/windows',
     async (request, reply) => {
-      const { name, force } = (request.body as { name?: string; force?: boolean } | null) || {};
+      const { name, force, kind: kindParam } = (request.body as { name?: string; force?: boolean; kind?: unknown } | null) || {};
       return serverIsolationMutex.withLock(request.params.name, async () => {
         const freshSrv = serverRepo.findByName(request.params.name);
         if (!freshSrv) return reply.status(404).send({ error: 'Server not found' });
+        const requested = creationMuxKind(kindParam, freshSrv, opts.muxDriverRegistry);
+        if (!requested.ok) return reply.status(requested.status).send(requested.body);
+        const kind = requested.kind;
         const driver: IMuxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         if (opts.resourceGuard && force !== true) {
           const status = await opts.resourceGuard.check(freshSrv);
@@ -1051,12 +1150,16 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         }
         try {
           const workspace = decodeURIComponent(request.params.workspace);
-          const created = await driver.openWindow(freshSrv, workspace, name);
+          const created = await driver.openWindow(freshSrv, workspace, name, { extraEnv: uiTokenEnvForServer(opts.uiToken, freshSrv), ...(kind ? { kind } : {}) });
+          if (created.result.code !== 0) {
+            const failure = createResultFailure(kind ?? freshSrv.defaultMux, created.result);
+            return reply.status(failure.status).send(failure.body);
+          }
           notifySessionsChanged(request.params.name);
-          return { ok: true, ref: formatMuxRef(created.ref), windowName: created.windowName ?? created.ref.window };
+          return { ok: true, ref: formatMuxRef(created.ref), target: muxWindowTarget(created.ref), windowName: created.windowName ?? created.ref.window };
         } catch (err: unknown) {
           if (err instanceof WindowExistsError) return reply.status(409).send({ error: 'window_exists', windowName: err.windowName });
-          return reply.status(500).send({ error: (err as Error).message });
+          return replyCreateError(reply, kind ?? freshSrv.defaultMux, err);
         }
       });
     },
@@ -1068,22 +1171,26 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      const { name } = request.body as { name?: string };
+      const { name, kind: kindParam } = request.body as { name?: string; kind?: unknown };
       if (!name) return reply.status(400).send({ error: 'New name required' });
+      const kind = requestedMuxKind(kindParam, srv);
+      if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });
       const driver: IMuxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const workspace = decodeURIComponent(request.params.workspace);
-      await driver.renameWorkspace(srv, workspace, name);
+      await driver.renameWorkspace(srv, workspace, name, kind ? { kind } : undefined);
       notifySessionsChanged(request.params.name);
       return { ok: true };
     },
   );
 
   // ── DELETE /api/servers/:name/mux/workspaces/:workspace ──
-  fastify.delete<{ Params: { name: string; workspace: string } }>(
+  fastify.delete<{ Params: { name: string; workspace: string }; Querystring: { kind?: string } }>(
     '/api/servers/:name/mux/workspaces/:workspace',
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      const kind = requestedMuxKind(request.query.kind, srv);
+      if (kind === null) return reply.status(400).send({ error: 'Invalid kind' });
       const workspace = decodeURIComponent(request.params.workspace);
       const driver: IMuxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
 
@@ -1093,7 +1200,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       let handledTargets = new Set<string>();
 
       const resolvePrimaryTaskWindows = (): Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> => {
-        const freshRows = opts.windowRepo?.findByServerAndSession(request.params.name, workspace) ?? [];
+        const freshRows = opts.windowRepo?.findByServerAndSession(request.params.name, workspace, kind ?? srv.defaultMux) ?? [];
         rowSnapshot = freshRows.map((win) => ({ id: win.id, tmuxTarget: win.tmuxTarget }));
         const out: Array<{ taskId: number; windowName: string; target: string; onDestroyed: () => void }> = [];
         for (const win of freshRows) {
@@ -1116,7 +1223,7 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
           resolvePrimaryTaskWindows,
           request.params.name,
           'window_killed_via_workspace_delete',
-          () => driver.closeWorkspace(srv, workspace),
+          () => driver.closeWorkspace(srv, workspace, kind ? { kind } : undefined),
         );
         if (!result.outcome.success) {
           return reply.status(500).send({ error: `close-workspace failed: ${result.outcome.result.stderr || result.outcome.result.stdout}` });
@@ -1124,9 +1231,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         handledTargets = result.handledTargets;
       } else {
         resolvePrimaryTaskWindows();
-        const result = await driver.closeWorkspace(srv, workspace);
-        if (result.code !== 0) {
-          return reply.status(500).send({ error: `close-workspace failed: ${result.stderr || result.stdout}` });
+        const outcome = await resolveKillOutcome(driver.closeWorkspace(srv, workspace, kind ? { kind } : undefined));
+        if (!outcome.success) {
+          return reply.status(500).send({ error: `close-workspace failed: ${outcome.result.stderr || outcome.result.stdout}` });
         }
       }
 

@@ -361,7 +361,7 @@ describe('authDoctorCommand', () => {
       await authDoctorCommand();
 
       expect(process.exitCode).toBe(3);
-      expect(allLogLines()).toContain('生存中の tmux ペインはありません');
+      expect(allLogLines()).toContain('生存中のペインはありません');
     });
 
     it('warns (without failing) when a task-owned window has a live tmux pane and AZITO_SCOPED_AUTH is off', async () => {
@@ -387,6 +387,26 @@ describe('authDoctorCommand', () => {
     // DB knows about — and a server it cannot currently reach (down, wrong
     // token, network partition) must be reported as unverifiable, never
     // silently treated as "no live pane found" (clean).
+    it('reports a misao window as unverifiable when its daemon is unreachable, and never probes it with tmux (a tmux "can\'t find" says nothing about it)', async () => {
+      const { openDatabase } = await import('../shared/db/Database.js');
+      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
+      db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
+      db.prepare(
+        "INSERT INTO windows (owner_type, task_id, server_name, tmux_target, mux_ref) VALUES ('task', 1, 'local', 'ws:w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8', '{\"kind\":\"misao\",\"workspace\":\"ws\",\"window\":\"w_01J9Z8Y7X6W5V4T3S2R1Q0P9N8\"}')",
+      ).run();
+      db.close();
+      execFileMock.mockClear();
+
+      const { authDoctorCommand } = await import('./authDoctorCommand.js');
+      await authDoctorCommand();
+
+      expect(process.exitCode).toBe(3);
+      expect(allLogLines()).toContain('到達不能');
+      expect(allLogLines()).not.toContain('生存中のペインはありません');
+      expect(execFileMock).not.toHaveBeenCalled();
+    });
+
     it('reports a server it cannot reach as unverifiable, never as a clean pass', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
       const db = openDatabase(path.join(tmpDir, 'data.db'));
@@ -407,7 +427,7 @@ describe('authDoctorCommand', () => {
       expect(allLogLines()).toContain('[-- ] scoped 認可 有効化前の生存タスクウィンドウ');
       expect(allLogLines()).toContain('検査できないサーバー上にタスク所有ウィンドウが');
       expect(allLogLines()).toContain('到達不能');
-      expect(allLogLines()).not.toContain('生存中の tmux ペインはありません');
+      expect(allLogLines()).not.toContain('生存中のペインはありません');
     });
 
     it('surfaces both a confirmed-live local pane and an unreachable remote server in the same warning', async () => {

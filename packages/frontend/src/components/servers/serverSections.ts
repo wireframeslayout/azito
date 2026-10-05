@@ -1,4 +1,5 @@
 import { paths } from '../../paths';
+import type { TFunction } from 'i18next';
 import type { ServerStatus } from '../../hooks/useServerManagement';
 
 export type { ServerStatus } from '../../hooks/useServerManagement';
@@ -29,10 +30,22 @@ export interface InstallStatusItem {
   installed: boolean;
   version?: string;
   detail?: string;
+  /** The server does not need this component (e.g. tmux on a server whose default mux is misao). */
+  optional?: boolean;
+  /** misao only: the daemon's release version (`version` is its protocol version). */
+  daemonVersion?: string;
+  /** misao on an agent server only: this hub carries a misao it can install there. */
+  installable?: boolean;
+  /** misao on an agent server only: the release this hub would install. */
+  bundledVersion?: string;
+  /** misao on an agent server only: the daemon runs another release than the bundled one (it is not switched on its own). */
+  updateAvailable?: boolean;
 }
 
 export interface InstallStatusResponse {
-  tmux: InstallStatusItem;
+  /** Present for tmux servers; misao servers report `misao` instead. */
+  tmux?: InstallStatusItem;
+  misao?: InstallStatusItem;
   node: InstallStatusItem;
   aztHarness: InstallStatusItem;
   tailscale?: InstallStatusItem;
@@ -40,10 +53,29 @@ export interface InstallStatusResponse {
   chromium?: InstallStatusItem;
 }
 
+const MISAO_DETAIL_KEYS: Record<string, string> = {
+  daemon_unreachable: 'overview.misaoUnreachable',
+  protocol_incompatible: 'overview.misaoIncompatible',
+  driver_not_registered: 'overview.misaoDriverNotRegistered',
+  not_installed: 'overview.misaoNotInstalled',
+};
+
+/** Turns the server's machine-readable misao status into what StepRow prints (protocol label, readable detail). */
+export function describeMisaoItem(item: InstallStatusItem, t: TFunction): InstallStatusItem {
+  const detailKey = item.detail ? MISAO_DETAIL_KEYS[item.detail] : undefined;
+  return {
+    ...item,
+    version: [item.daemonVersion, item.version ? t('setup.misaoProtocol', { version: item.version }) : undefined]
+      .filter((part): part is string => part !== undefined)
+      .join(' · ') || undefined,
+    detail: detailKey ? t(detailKey) : item.detail,
+  };
+}
+
 export interface SectionSummary {
   text: string;
   textParams?: Record<string, string | number>;
-  tone: 'green' | 'dim' | 'orange';
+  tone: 'green' | 'dim' | 'orange' | 'red';
 }
 
 export function getOverviewSummary(status: ServerStatus | null): SectionSummary {
@@ -53,17 +85,20 @@ export function getOverviewSummary(status: ServerStatus | null): SectionSummary 
   return { text: 'servers:status.error', tone: 'orange' };
 }
 
-export function getSetupSummary(installStatus: InstallStatusResponse | null): SectionSummary {
+export function getSetupSummary(installStatus: InstallStatusResponse | null, installStatusError: 'offline' | 'failed' | null = null): SectionSummary {
+  if (!installStatus && installStatusError === 'offline') return { text: 'servers:setup.offline', tone: 'orange' };
+  if (!installStatus && installStatusError === 'failed') return { text: 'servers:setup.checkFailed', tone: 'red' };
   if (!installStatus) return { text: 'servers:status.checking', tone: 'dim' };
   const items = [
     installStatus.tmux,
+    installStatus.misao,
     installStatus.node,
     installStatus.aztHarness,
     installStatus.tailscale,
     installStatus.agent,
     installStatus.chromium,
   ].filter(Boolean);
-  const missing = items.filter((i) => !i!.installed).length;
+  const missing = items.filter((i) => !i!.installed && !i!.optional).length;
   if (missing === 0) return { text: 'servers:setup.allInstalled', tone: 'green' };
   return { text: 'servers:setup.missingCount', textParams: { count: missing }, tone: 'orange' };
 }

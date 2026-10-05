@@ -213,6 +213,7 @@
     "stateOffline": "オフライン",
     "stateNone": "判定なし",
     "tier0": "tier0 supervisor",
+    "tier0Mux": "tier0 misao",
     "tier1": "tier1 hook",
     "tier2": "tier2 title",
     "tier3": "tier3 heuristic",
@@ -223,6 +224,8 @@
     "notDeciding": "下位 Tier が判定中",
     "unbound": "unbound（表示専用）",
     "refinedBlocked": "+ {{tier}} が確認待ちと判定",
+    "refinedCompleted": "+ {{tier}}（Stop）が完了を確認",
+    "heldForStopHook": "mux は idle、Stop hook を待って保留中",
     "transitionStarted": "検知開始",
     "reason": {
       "completed": "完了",

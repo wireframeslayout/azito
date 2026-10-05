@@ -16,7 +16,7 @@ const LOCAL_SERVER: ServerConfig = {
   agentToken: null,
   agentVersion: null,
   sshHost: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -90,6 +90,57 @@ describe('TranscriptPaneService', () => {
       const service = new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo);
       const result = await service.listPaneCandidates(SID);
       expect(result!.panes[0].cwdMatch).toBe(false);
+    });
+
+    describe('with several local servers', () => {
+      const MISAO_LOCAL: ServerConfig = { ...LOCAL_SERVER, name: 'misao-local', defaultMux: 'misao' as const, muxRuntime: 'system' };
+      const TMUX_LOCAL2: ServerConfig = { ...LOCAL_SERVER, name: 'local2' };
+      const MISAO_PANE = 'p_01HZX3K9M2N4P5Q6R7S8T9V0WX';
+
+      function pane(paneId: string): MuxPaneInfo {
+        return { paneId, sessionName: 's', windowIndex: 0, windowName: 'w', paneIndex: 0, currentPath: '/x', currentCommand: 'claude' } as MuxPaneInfo;
+      }
+
+      function build(servers: ServerConfig[]) {
+        const deps = buildDeps({ getSessionCwd: () => ({ cwd: '/x' }), servers });
+        const used: string[] = [];
+        const sent: Array<{ server: string; handle: string }> = [];
+        const registry = {
+          resolve: (s: ServerConfig) => {
+            used.push(s.name);
+            return {
+              listAllPanes: async () => [pane('%1'), pane(MISAO_PANE)],
+              probePane: async () => ({ alive: true, verified: true }),
+              sendTextToHandle: async (_s: ServerConfig, handle: string) => { sent.push({ server: s.name, handle }); },
+              sendKeysToHandle: async () => {},
+            };
+          },
+        } as unknown as MuxDriverRegistry;
+        return { service: new TranscriptPaneService(deps.claudeTranscriptSource, registry, deps.serverRepo), sent, used };
+      }
+
+      it('lists panes of every mux through one local server (the routing driver merges the muxes)', async () => {
+        const { service, used } = build([LOCAL_SERVER, TMUX_LOCAL2, MISAO_LOCAL]);
+        const result = await service.listPaneCandidates(SID);
+        expect(result!.panes.map((p) => p.paneId)).toEqual(['%1', MISAO_PANE]);
+        expect(used).toEqual(['local']);
+      });
+
+      it('prefers a tmux-default local server over a misao-default one', async () => {
+        const { service, used } = build([MISAO_LOCAL, LOCAL_SERVER]);
+        await service.listPaneCandidates(SID);
+        expect(used).toEqual(['local']);
+      });
+
+      it('sends to a pane of either mux through the same local server', async () => {
+        const { service, sent } = build([LOCAL_SERVER, MISAO_LOCAL]);
+        expect(await service.sendInput(SID, asPaneHandle(MISAO_PANE), 'hi')).toBe('ok');
+        expect(await service.sendInput(SID, asPaneHandle('%1'), 'hi')).toBe('ok');
+        expect(sent).toEqual([
+          { server: 'local', handle: MISAO_PANE },
+          { server: 'local', handle: '%1' },
+        ]);
+      });
     });
 
     it('throws when no local server is configured', async () => {
