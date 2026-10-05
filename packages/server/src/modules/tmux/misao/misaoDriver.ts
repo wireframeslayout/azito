@@ -1,10 +1,11 @@
 import type { MisaoDaemonInfo } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
-import { serverSupportsMux } from '../../servers/muxKinds';
-import type { MuxDriverAvailability, MuxDriverRegistry } from '../MuxDriverRegistry';
+import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
+import { MisaoServers, type MisaoServersDeps } from './MisaoServers';
+import { MisaoDriverRouter } from './MisaoDriverRouter';
 import type { HubPaneEnvConfig } from '../hubPaneEnv';
 
 /** Everything the misao driver needs from its environment, resolved once at the composition root. */
@@ -51,10 +52,13 @@ export async function resolveMisaoRuntimeForHub(
 }
 
 export interface MisaoHandle {
+  /** The hub's own daemon connection, shared by every local server. */
   connection: MisaoConnection;
   driver: MisaoMuxClient;
   /** The socket this hub's connection uses (what MISAO_SOCKET / the default resolved to at startup). */
   socketPath: string;
+  /** Every misao the hub talks to: the local one above, plus one per agent server that has misao. */
+  servers: MisaoServers;
 }
 
 export interface MisaoDaemonStatus {
@@ -87,9 +91,16 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
   return { installed: true, version: info.protocolVersion, ...(info.version ? { daemonVersion: info.version } : {}) };
 }
 
+/** For a process that never opens an agent server's misao (the auth doctor CLI, tests): no agent server ever gets a node. */
+export const NO_AGENT_MISAO: MisaoServersDeps['agent'] = {
+  target: () => { throw new Error('this process does not open the misao relay of an agent server'); },
+  status: async () => ({ socketPath: '', socketPresent: false }),
+};
+
 /**
- * Creates the daemon connection and the driver on top of it, and registers the driver as kind 'misao'.
- * The connection is not started: the caller starts it so that startup does not wait for the daemon.
+ * Creates the local daemon connection, the per-server nodes on top of it, and registers the routing driver as kind 'misao'.
+ * No connection is started: the caller starts the local one (so that startup does not wait for the daemon); an agent
+ * server's node starts its own when it is created. `agent` says how the SDK reaches an agent server's daemon and what its agent sees on disk.
  */
 export function registerMisaoDriver(
   registry: MuxDriverRegistry,
@@ -97,37 +108,42 @@ export function registerMisaoDriver(
   onChange: (serverName: string) => void,
   log: { warn(message: string): void },
   hubEnv: HubPaneEnvConfig,
+  agent: MisaoServersDeps['agent'],
 ): MisaoHandle {
   const connection = new MisaoConnection({ socketPath: runtime.socketPath, sdk: runtime.sdk, log });
-  const driver = new MisaoMuxClient(connection, { shell: runtime.shell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, runtime.socketPath) });
-  registry.register('misao', driver, (server): MuxDriverAvailability => {
-    if (server.type !== undefined && server.type !== 'local') return { available: false, reason: 'remote_unsupported' };
-    return connection.availability();
-  });
-  return { connection, driver, socketPath: runtime.socketPath };
+  const driver = new MisaoMuxClient(connection, { shell: runtime.shell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, { socketPath: runtime.socketPath }) });
+  const servers = new MisaoServers({ sdk: runtime.sdk, shell: runtime.shell, hubEnv, onChange, log, local: { connection, driver }, agent });
+  registry.register('misao', new MisaoDriverRouter(servers), (server) => servers.availability(server), (server) => servers.hosts(server));
+  return { connection, driver, socketPath: runtime.socketPath, servers };
 }
 
 /**
- * Keeps the daemon's change-event subscription in step with an edit made while the hub runs (startup installs it
- * for every server that can host misao, i.e. every local server, whatever its default mux). Changing the default
- * mux does not move that; changing the server type does. Failure to install is not fatal: the subscription is
- * established when the daemon becomes reachable.
+ * Keeps misao's per-server state in step with an edit made while the hub runs. A local server's daemon subscription
+ * is the hub's own (installed for every local server at startup, whatever its default mux), so only the server type
+ * moves it. An agent server's node is bound to the endpoint and token it was created with, so any edit drops it; a
+ * server that still uses misao gets a fresh node (`keepAgentNode`), one that does not simply loses it.
+ * Failure to install change hooks is not fatal: the subscription is established when the daemon becomes reachable.
  */
-export function syncMisaoChangeHooks(
+export function syncMisaoNodes(
   misao: MisaoHandle,
   previous: ServerConfig,
   next: ServerConfig,
+  keepAgentNode: boolean,
   log: { warn(message: string): void },
 ): void {
-  const wasMisao = serverSupportsMux(previous, 'misao');
-  const isMisao = serverSupportsMux(next, 'misao');
-  if (isMisao && !wasMisao) {
+  if (previous.type === 'agent') misao.servers.discardAgentNode(previous);
+  if (previous.type === 'local' && next.type === 'agent') {
+    misao.driver.uninstallChangeHooks(previous).catch((err) => {
+      log.warn(`Could not stop change events for ${previous.name}: ${err}`);
+    });
+  }
+  if (next.type === 'agent') {
+    if (keepAgentNode) misao.servers.ensureAgentNode(next);
+    return;
+  }
+  if (previous.type === 'agent') {
     misao.driver.installChangeHooks(next).catch((err) => {
       log.warn(`Change events for ${next.name} are not active yet (will start when the misao daemon is reachable): ${err}`);
-    });
-  } else if (wasMisao && !isMisao) {
-    misao.driver.uninstallChangeHooks(next).catch((err) => {
-      log.warn(`Could not stop change events for ${next.name}: ${err}`);
     });
   }
 }

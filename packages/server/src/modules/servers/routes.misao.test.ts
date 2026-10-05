@@ -42,13 +42,16 @@ function makeOpts(stored: ServerConfig | null, registerMisao = false): ServersRo
   };
 }
 
+/** Gives the already registered misao driver a probe, as the hub's driver has. */
+function muxProbe(opts: ServersRouteOptions, availability: { available: true } | { available: false; reason: 'not_installed' }): void {
+  opts.muxDriverRegistry.register('misao', { kind: 'misao', caps: TMUX_CAPS } as unknown as IMuxClient, () => availability);
+}
+
 async function buildApp(opts: ServersRouteOptions) {
   const app = Fastify();
   await app.register(serversRoutes, opts);
   return app;
 }
-
-const LOCAL_ONLY = { error: 'defaultMux "misao" is only supported on local servers' };
 
 describe('POST /api/servers with defaultMux', () => {
   it('creates a local misao server', async () => {
@@ -83,19 +86,19 @@ describe('POST /api/servers with defaultMux', () => {
     expect(opts.serverRepo.create).not.toHaveBeenCalled();
   });
 
-  it.each(['defaultMux', 'muxRuntime'] as const)('rejects an agent misao server (%s)', async (field) => {
+  it.each(['defaultMux', 'muxRuntime'] as const)('creates an agent server whose default mux is misao (%s)', async (field) => {
     const opts = makeOpts(null);
     const res = await (await buildApp(opts)).inject({ method: 'POST', url: '/api/servers', payload: { name: 'm', type: 'agent', host: 'h', agentPort: 1, agentToken: 't', [field]: 'misao' } });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual(LOCAL_ONLY);
-    expect(opts.serverRepo.create).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.create).toHaveBeenCalledWith('m', 'agent', 'h', 1, 't', undefined, undefined, undefined, 'misao');
   });
 
-  it('rejects autoInstall with misao', async () => {
-    const opts = makeOpts(null);
+  it('installs the agent of a new misao-default server (misao is installed with it by the installer)', async () => {
+    const install = vi.fn(async () => ({ success: true, host: '100.64.0.9', port: 3002, token: 'tok', version: 'v1', startMethod: 'systemd', steps: [] }));
+    const opts = { ...makeOpts(null), agentInstaller: { install } as unknown as ServersRouteOptions['agentInstaller'] };
     const res = await (await buildApp(opts)).inject({ method: 'POST', url: '/api/servers', payload: { name: 'm', host: 'u@h', autoInstall: true, defaultMux: 'misao' } });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual(LOCAL_ONLY);
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.create).toHaveBeenCalledWith('m', 'agent', '100.64.0.9', 3002, 'tok', 'v1', 'u@h', undefined, 'misao');
   });
 });
 
@@ -128,12 +131,11 @@ describe('PUT /api/servers/:name with defaultMux', () => {
     expect(opts.serverRepo.update).not.toHaveBeenCalled();
   });
 
-  it('rejects changing a misao server to an agent', async () => {
+  it('allows changing a misao server to an agent (its misao then runs through the agent)', async () => {
     const opts = makeOpts(makeServer({ defaultMux: 'misao' }));
     const res = await (await buildApp(opts)).inject({ method: 'PUT', url: '/api/servers/srv', payload: { type: 'agent', host: 'h', agentPort: 1, agentToken: 't' } });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual(LOCAL_ONLY);
-    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(opts.serverRepo.update).toHaveBeenCalledWith('srv', 'agent', 'h', 1, 't', undefined, 'system', 'misao');
   });
 
   it('allows moving a misao server to an agent in the same request that sets defaultMux "tmux"', async () => {
@@ -174,22 +176,50 @@ describe('GET /api/servers/:name mux detail', () => {
     });
   });
 
-  it('keeps the tmux-only (agent) server detail shape unchanged', async () => {
+  it('lists both muxes of an agent server too, each with its own availability', async () => {
     const opts = makeOpts(makeServer({ type: 'agent' }), true);
+    muxProbe(opts, { available: false, reason: 'not_installed' });
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv' });
-    expect(res.json().mux).toEqual({ runtime: 'system', kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS });
+    expect(res.json().mux).toEqual({
+      runtime: 'system', kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS,
+      kinds: [
+        { kind: 'tmux', driverAvailable: true, caps: TMUX_CAPS },
+        { kind: 'misao', driverAvailable: false, caps: null, reason: 'not_installed' },
+      ],
+    });
   });
 });
 
-describe('POST /api/servers/:name/agent/install on a misao server', () => {
-  it('rejects before any remote work', async () => {
-    const install = vi.fn();
-    const opts = { ...makeOpts(makeServer({ defaultMux: 'misao', sshHost: 'u@h' })), agentInstaller: { install } as unknown as ServersRouteOptions['agentInstaller'] };
+describe('POST /api/servers/:name/agent/install on a misao-default server', () => {
+  it('reinstalls the agent (the installer sets misao up with it) and reports the change', async () => {
+    const install = vi.fn(async () => ({ success: true, host: '100.64.0.9', port: 3002, token: 'tok', version: 'v1', startMethod: 'systemd', steps: [] }));
+    const onServerChanged = vi.fn();
+    const opts = { ...makeOpts(makeServer({ type: 'agent', defaultMux: 'misao', sshHost: 'u@h' })), agentInstaller: { install } as unknown as ServersRouteOptions['agentInstaller'], onServerChanged };
     const res = await (await buildApp(opts)).inject({ method: 'POST', url: '/api/servers/srv/agent/install' });
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toEqual(LOCAL_ONLY);
-    expect(install).not.toHaveBeenCalled();
-    expect(opts.serverRepo.update).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(install).toHaveBeenCalledTimes(1);
+    expect(onServerChanged).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('onServerChanged', () => {
+  it('is called with the previous and the stored server after a PUT', async () => {
+    const onServerChanged = vi.fn();
+    const opts = { ...makeOpts(makeServer({ type: 'agent', host: 'h', agentPort: 1, agentToken: 't' })), onServerChanged };
+    const res = await (await buildApp(opts)).inject({ method: 'PUT', url: '/api/servers/srv', payload: { host: 'h2' } });
+    expect(res.statusCode).toBe(200);
+    expect(onServerChanged).toHaveBeenCalledTimes(1);
+    expect(onServerChanged.mock.calls[0][0].previous.name).toBe('srv');
+    expect(onServerChanged.mock.calls[0][0].next.name).toBe('srv');
+  });
+
+  it('is called with next null after a DELETE, and the cached transport is dropped', async () => {
+    const onServerChanged = vi.fn();
+    const opts = { ...makeOpts(makeServer({ type: 'agent' })), onServerChanged };
+    const res = await (await buildApp(opts)).inject({ method: 'DELETE', url: '/api/servers/srv' });
+    expect(res.statusCode).toBe(200);
+    expect(onServerChanged).toHaveBeenCalledWith({ previous: expect.objectContaining({ name: 'srv' }), next: null });
+    expect(opts.transportFactory.invalidate).toHaveBeenCalledWith('srv');
   });
 });
 

@@ -18,7 +18,7 @@ function registryWith(has: { tmux: boolean; misao: boolean }, misaoUp = true): M
     resolveRef: vi.fn(async (_s: unknown, target: string) => (has[kind] ? { kind, workspace: target.split(':')[0], window: target.split(':')[1] } : null)),
   }) as unknown as IMuxClient;
   registry.register('tmux', driver('tmux'));
-  registry.register('misao', driver('misao'), () => (misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
+  registry.register('misao', driver('misao'), () => (misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }), (server) => server.type !== 'agent');
   return registry;
 }
 

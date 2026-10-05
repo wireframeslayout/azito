@@ -10,7 +10,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection } from '../misao/MisaoConnection';
-import { registerMisaoDriver } from '../misao/misaoDriver';
+import { NO_AGENT_MISAO, registerMisaoDriver } from '../misao/misaoDriver';
 import type { MisaoMuxClient } from '../misao/MisaoMuxClient';
 import { handleTerminalConnection } from './terminalHandler';
 
@@ -86,7 +86,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
 
     const sdk = await import('@misao/sdk');
     registry = new MuxDriverRegistry();
-    const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
+    const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     connection = handle.connection;
     driver = handle.driver;
     await connection.start();

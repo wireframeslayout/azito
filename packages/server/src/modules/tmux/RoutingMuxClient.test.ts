@@ -37,10 +37,11 @@ function setup(opts: { tmux?: FakeDriver; misao?: FakeDriver; misaoAvailable?: b
   const misao = opts.misao ?? fakeDriver('misao');
   const registry = new MuxDriverRegistry();
   registry.register('tmux', tmux);
+  // An agent server here is one that has no misao (the hub's driver lists misao on an agent only once it was set up).
   registry.register('misao', misao, (s) => {
-    if (s.type !== undefined && s.type !== 'local') return { available: false, reason: 'remote_unsupported' };
+    if (s.type !== undefined && s.type !== 'local') return { available: false, reason: 'not_installed' };
     return opts.misaoAvailable === false ? { available: false, reason: 'daemon_unreachable' } : { available: true };
-  });
+  }, (s) => s.type !== 'agent');
   const srv = { ...server, defaultMux: opts.defaultMux ?? 'tmux' } as ServerConfig;
   return { tmux, misao, registry, routing: registry.resolve(srv), srv };
 }

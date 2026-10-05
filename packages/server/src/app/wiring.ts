@@ -252,8 +252,12 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const misao = registerMisaoDriver(muxDriverRegistry, misaoRuntime, (serverName) => {
     invalidateSessionCache(serverName);
     notificationBus.emit({ type: 'sessions:updated', payload: { serverName } });
-  }, console, { publicUrl, localUrl, webhookToken });
-  const paneStreamFactory = new PaneStreamFactory(transportFactory, misao.connection);
+  }, console, { publicUrl, localUrl, webhookToken }, {
+    // The transport is looked up on every (re)connect, so a rotated agent token is picked up by the next attempt.
+    target: (server) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(server).connectMisaoRelay(signal) }),
+    status: (server) => transportFactory.getAgentTransport(server).fetchMisaoStatus(),
+  });
+  const paneStreamFactory = new PaneStreamFactory(transportFactory, (server) => misao.servers.nodeFor(server).connection);
   const sidekickPackageLoader = new SidekickPackageLoader(undefined, dataPaths.sidekicks);
   const sidekickPackageService = new SidekickPackageService(sidekickPackageLoader, dataPaths.sidekicks);
   const sidekickSyncService = new SidekickSyncService();

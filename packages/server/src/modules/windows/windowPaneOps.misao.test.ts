@@ -20,9 +20,9 @@ describe('isRefKindCompatible', () => {
     expect(isRefKindCompatible(TMUX_REF, LOCAL_MISAO)).toBe(true);
   });
 
-  it('accepts only tmux refs on an agent server', () => {
+  it('accepts both kinds on an agent server (its misao runs through the agent)', () => {
     expect(isRefKindCompatible(TMUX_REF, AGENT_TMUX)).toBe(true);
-    expect(isRefKindCompatible(MISAO_REF, AGENT_TMUX)).toBe(false);
+    expect(isRefKindCompatible(MISAO_REF, AGENT_TMUX)).toBe(true);
   });
 
   it('accepts only tmux refs when the server is unknown', () => {
@@ -37,12 +37,15 @@ describe('resolveRefForServer', () => {
     expect(resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), LOCAL_TMUX)).toEqual(MISAO_REF);
   });
 
-  it('rejects a misao ref on an agent server with a 400', () => {
+  it('accepts a misao ref on an agent server', () => {
+    expect(resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), AGENT_TMUX)).toEqual(MISAO_REF);
+  });
+
+  it('rejects a malformed ref with a 400', () => {
     try {
-      resolveRefForServer(encodeURIComponent(formatMuxRef(MISAO_REF)), AGENT_TMUX);
+      resolveRefForServer('not-a-ref', AGENT_TMUX);
       expect.unreachable();
     } catch (err) {
-      expect((err as Error).message).toBe('Invalid ref parameter');
       expect((err as { statusCode?: number }).statusCode).toBe(400);
     }
   });

@@ -6,7 +6,7 @@ import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
-import { registerMisaoDriver, resolveMisaoRuntimeForHub } from '../modules/tmux/misao/misaoDriver';
+import { NO_AGENT_MISAO, registerMisaoDriver, resolveMisaoRuntimeForHub } from '../modules/tmux/misao/misaoDriver';
 import { hubEnvFilePath, resolveInstallPrefix } from '../modules/system/misao/misaoPaths';
 import type { ServerConfig } from '../modules/servers/Server';
 
@@ -39,7 +39,9 @@ export async function openDoctorMux(): Promise<DoctorMux> {
     false,
     console,
   );
-  const misao = registerMisaoDriver(registry, runtime, () => undefined, console, { publicUrl: '', localUrl: '', webhookToken: '' });
+  // An agent server's misao daemon is not opened from here (no node is ever made for it), so a misao window on an agent
+  // server reads as unverified, never as gone.
+  const misao = registerMisaoDriver(registry, runtime, () => undefined, console, { publicUrl: '', localUrl: '', webhookToken: '' }, NO_AGENT_MISAO);
   let connecting: Promise<void> | undefined;
   return {
     registry,

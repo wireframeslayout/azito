@@ -203,10 +203,6 @@ function creationMuxKind(value: unknown, srv: ServerConfig, registry: MuxDriverR
   if (value !== undefined && value !== 'tmux' && value !== 'misao') return { ok: false, status: 400, body: { error: 'Invalid kind' } };
   const effectiveKind: MuxDriverKind = value ?? srv.defaultMux;
   const availability = registry?.availabilityFor(effectiveKind, srv);
-  if (!serverSupportsMux(srv, effectiveKind)) {
-    const reason = availability && !availability.available ? availability.reason : 'remote_unsupported';
-    return { ok: false, status: 409, body: unavailableBody(effectiveKind, reason) };
-  }
   if (availability && !availability.available) {
     return { ok: false, status: 409, body: unavailableBody(effectiveKind, availability.reason) };
   }

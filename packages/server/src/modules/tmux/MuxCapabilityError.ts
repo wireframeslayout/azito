@@ -1,12 +1,12 @@
 import type { MuxDriverKind } from '@azito/shared';
 
-export type MuxDriverUnavailableReason = 'driver_not_registered' | 'daemon_unreachable' | 'protocol_incompatible' | 'remote_unsupported';
+export type MuxDriverUnavailableReason = 'driver_not_registered' | 'daemon_unreachable' | 'protocol_incompatible' | 'not_installed';
 
 const UNAVAILABLE_MESSAGES: Record<MuxDriverUnavailableReason, (kind: MuxDriverKind) => string> = {
   driver_not_registered: (kind) => `No mux driver registered for kind "${kind}"`,
   daemon_unreachable: (kind) => `The "${kind}" daemon is not reachable`,
   protocol_incompatible: (kind) => `The "${kind}" daemon speaks a protocol this hub cannot use`,
-  remote_unsupported: (kind) => `Mux driver "${kind}" supports local servers only`,
+  not_installed: (kind) => `"${kind}" is not installed on this server`,
 };
 
 export class MuxDriverUnavailableError extends Error {

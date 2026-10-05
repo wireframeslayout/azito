@@ -1292,9 +1292,9 @@ describe('GET /api/servers/:name/sessions merges the muxes a server can use (#31
     registry.register('tmux', drivers.tmux as IMuxClient);
     if (drivers.misao) {
       registry.register('misao', drivers.misao as IMuxClient, (srv) => {
-        if (srv.type !== undefined && srv.type !== 'local') return { available: false, reason: 'remote_unsupported' };
+        if (srv.type !== undefined && srv.type !== 'local') return { available: false, reason: 'not_installed' };
         return drivers.misaoAvailable === false ? { available: false, reason: 'daemon_unreachable' } : { available: true };
-      });
+      }, (srv) => srv.type !== 'agent');
     }
     const tmuxClient = { listSessions: vi.fn(async () => [tmuxSession]), cleanupLinkedSessions: vi.fn(async () => 0), ...tmux };
     app = Fastify();
@@ -1315,7 +1315,7 @@ describe('GET /api/servers/:name/sessions merges the muxes a server can use (#31
     await app.close();
   });
 
-  it('lists an agent (tmux-only) server exactly as before, with only the kind stamp added', async () => {
+  it('lists an agent server that has no misao (tmux-only) exactly as before, with only the kind stamp added', async () => {
     const agent = { name: 'agent1', type: 'agent', defaultMux: 'tmux' } as ServerConfig;
     const misaoList = vi.fn();
     const tmuxClient = await build(agent, { tmux: { listWorkspaces: vi.fn() }, misao: { listWorkspaces: misaoList } });
@@ -1444,8 +1444,9 @@ describe('mux create routes take `kind` and refuse one the server cannot use (#3
     const registry = new MuxDriverRegistry();
     registry.register('tmux', tmuxDriver as unknown as IMuxClient);
     registry.register('misao', misaoDriver as unknown as IMuxClient,
-      (s) => (s.type !== undefined && s.type !== 'local' ? { available: false, reason: 'remote_unsupported' }
-        : misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }));
+      (s) => (s.type !== undefined && s.type !== 'local' ? { available: false, reason: 'not_installed' }
+        : misaoUp ? { available: true } : { available: false, reason: 'daemon_unreachable' }),
+      (s) => s.type !== 'agent');
     app = Fastify();
     await app.register(sessionsRoutes, {
       serverRepo: makeServerRepo(srv),
@@ -1486,11 +1487,11 @@ describe('mux create routes take `kind` and refuse one the server cannot use (#3
     expect(misaoDriver.openWorkspace).not.toHaveBeenCalled();
   });
 
-  it('answers 409 remote_unsupported for misao on an agent server, and 400 for an unknown kind', async () => {
+  it('answers 409 not_installed for misao on an agent server, and 400 for an unknown kind', async () => {
     await build(agentSrv);
     const res = await app.inject({ method: 'POST', url: '/api/servers/agent1/mux/workspaces/dev/windows', payload: { kind: 'misao' } });
     expect(res.statusCode).toBe(409);
-    expect(res.json()).toMatchObject({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'remote_unsupported' });
+    expect(res.json()).toMatchObject({ error: 'mux_kind_unavailable', kind: 'misao', reason: 'not_installed' });
     const bad = await app.inject({ method: 'POST', url: '/api/servers/agent1/mux/workspaces', payload: { name: 'dev', kind: 'zellij' } });
     expect(bad.statusCode).toBe(400);
   });

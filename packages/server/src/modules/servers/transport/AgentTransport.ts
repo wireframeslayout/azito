@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
-import WebSocket from 'ws';
+import WebSocket, { createWebSocketStream } from 'ws';
+import type { Duplex } from 'stream';
 import type {
   ExecResult,
   IServerTransport,
@@ -10,6 +11,7 @@ import type { IPaneStream } from '../../tmux/PaneStream';
 import { AgentPaneStream } from './AgentPaneStream';
 import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
 import type { MuxRuntime } from '../Server';
+import type { MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
@@ -169,6 +171,48 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
 
   createPaneStream(handle: PaneHandle): IPaneStream {
     return new AgentPaneStream(handle as string, this, this.wsBaseUrl, this.authHeader);
+  }
+
+  /**
+   * Opens the agent's misao relay (`/ws?mode=misao`): a byte pipe to the agent's own misao socket, as a Duplex the SDK
+   * can speak its protocol over (`MisaoClient({ connect })`). The agent chooses the socket, never this side. Rejects when
+   * the WebSocket cannot be opened; a relay that is up but has no daemon behind it closes right after opening, which the
+   * SDK sees as a lost connection.
+   */
+  connectMisaoRelay(signal: AbortSignal): Promise<Duplex> {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) {
+        reject(new Error('aborted'));
+        return;
+      }
+      const ws = new WebSocket(`${this.wsBaseUrl}/ws?mode=misao`, { headers: { authorization: this.authHeader } });
+      const abandon = (): void => {
+        ws.removeListener('open', onOpen);
+        ws.on('error', () => { /* the terminate()-induced error: nobody is left to hear it */ });
+        ws.terminate();
+        reject(new Error('aborted'));
+      };
+      const onError = (err: Error): void => {
+        signal.removeEventListener('abort', abandon);
+        reject(err);
+      };
+      const onOpen = (): void => {
+        signal.removeEventListener('abort', abandon);
+        ws.removeListener('error', onError);
+        resolve(createWebSocketStream(ws));
+      };
+      signal.addEventListener('abort', abandon, { once: true });
+      ws.once('error', onError);
+      ws.once('open', onOpen);
+    });
+  }
+
+  /** What is on the agent's disk for misao (`GET /api/misao/status`). Shares the breaker like every agent call. */
+  async fetchMisaoStatus(): Promise<MisaoSocketStatus> {
+    this.assertCircuitClosed();
+    const { status, text } = await this.send('/api/misao/status', { method: 'GET', headers: { authorization: this.authHeader } }, HEALTH_TIMEOUT_MS);
+    if (status < 200 || status >= 300) throw new Error(`Agent /api/misao/status failed (${status}): ${text}`);
+    return JSON.parse(text) as MisaoSocketStatus;
   }
 
   /** True while the breaker is open (fail-fast window), so callers can skip the network entirely. */

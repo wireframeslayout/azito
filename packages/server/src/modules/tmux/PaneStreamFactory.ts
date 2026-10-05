@@ -9,15 +9,15 @@ import { MisaoPaneStream } from './misao/MisaoPaneStream';
 type StreamServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>;
 
 export class PaneStreamFactory implements IPaneStreamFactory {
-  /** `misaoLines` reads the misao daemon's line stream for misao panes. */
+  /** `misaoLines` is the line stream of the misao daemon a server's panes live in (each agent server has its own). */
   constructor(
     private transportFactory: TransportFactory,
-    private misaoLines: MisaoLineSource,
+    private misaoLines: (server: StreamServer) => MisaoLineSource,
   ) {}
 
   create(handle: PaneHandle | string, server: StreamServer, pane?: PaneHandle): IPaneStream {
     // A misao pane's output comes from the daemon's line stream (told by the pane's handle, not by the server's default mux).
-    if (pane && muxKindOfPaneHandle(pane) === 'misao') return new MisaoPaneStream(pane, this.misaoLines);
+    if (pane && muxKindOfPaneHandle(pane) === 'misao') return new MisaoPaneStream(pane, this.misaoLines(server));
 
     const paneHandle = typeof handle === 'string' ? asPaneHandle(handle) : handle;
 

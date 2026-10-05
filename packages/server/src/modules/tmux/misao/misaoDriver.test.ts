@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
-import { describeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntime, resolveMisaoRuntimeForHub, syncMisaoChangeHooks, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
+import { describeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntime, resolveMisaoRuntimeForHub, syncMisaoNodes, NO_AGENT_MISAO, type MisaoHandle, type MisaoRuntime } from './misaoDriver';
 
 function runtime(connect: () => Promise<void>): MisaoRuntime {
   class FakeConnectionError extends Error {}
@@ -29,7 +29,7 @@ function runtime(connect: () => Promise<void>): MisaoRuntime {
 describe('registerMisaoDriver', () => {
   it('registers a misao driver whose availability follows the daemon connection', async () => {
     const registry = new MuxDriverRegistry();
-    const { connection, driver } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
+    const { connection, driver } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     const local = { defaultMux: 'misao' as const, muxRuntime: 'system' as const, type: 'local' as const };
 
     expect(registry.availability(local)).toEqual({ available: false, reason: 'daemon_unreachable' });
@@ -41,23 +41,43 @@ describe('registerMisaoDriver', () => {
     connection.close();
   });
 
-  it('reports remote_unsupported for non-local servers regardless of the daemon', async () => {
+  it('reports not_installed for an agent server that has no misao node, whatever the local daemon does', async () => {
     const registry = new MuxDriverRegistry();
-    const { connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
+    const { connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     await connection.start();
-    expect(registry.availability({ defaultMux: 'misao' as const, type: 'agent' })).toEqual({ available: false, reason: 'remote_unsupported' });
+    expect(registry.availability({ defaultMux: 'misao' as const, type: 'agent', name: 'a1' })).toEqual({ available: false, reason: 'not_installed' });
+    connection.close();
+  });
+
+  it('lists misao on an agent server only once it has a node, and on a local server always', () => {
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', { kind: 'tmux' } as never);
+    const { servers, connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, {
+      target: () => ({ connect: async () => { throw new Error('no relay in this test'); } }),
+      status: async () => ({ socketPath: '/x', socketPresent: true }),
+    });
+    const agent = { name: 'a1', type: 'agent' as const, defaultMux: 'tmux' as const, host: 'h', agentPort: 1, agentToken: 't' } as never;
+    expect(registry.supportedKinds({ defaultMux: 'tmux', type: 'local', name: 'l' })).toEqual(['tmux', 'misao']);
+    expect(registry.supportedKinds({ defaultMux: 'tmux', type: 'agent', name: 'a1' })).toEqual(['tmux']);
+    expect(registry.downKinds({ defaultMux: 'tmux', type: 'agent', name: 'a1' })).toEqual([]);
+
+    servers.ensureAgentNode(agent);
+    expect(registry.supportedKinds({ defaultMux: 'tmux', type: 'agent', name: 'a1' })).toEqual(['tmux', 'misao']);
+    expect(registry.supportedKinds({ defaultMux: 'misao', type: 'agent', name: 'a2' })).toEqual(['misao', 'tmux']);
+    servers.discardAgentNode({ name: 'a1' });
+    expect(registry.supportedKinds({ defaultMux: 'tmux', type: 'agent', name: 'a1' })).toEqual(['tmux']);
     connection.close();
   });
 
   it('reports daemon_unreachable, not a disabled driver, while no daemon is running', () => {
     const registry = new MuxDriverRegistry();
-    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
+    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     expect(registry.availability({ defaultMux: 'misao' as const, type: 'local' })).toEqual({ available: false, reason: 'daemon_unreachable' });
   });
 
   it('does not touch tmux servers', () => {
     const registry = new MuxDriverRegistry();
-    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
+    registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     expect(registry.availability({ defaultMux: 'tmux' as const, type: 'local' })).toEqual({ available: false, reason: 'driver_not_registered' });
   });
 });
@@ -77,7 +97,7 @@ describe('resolveMisaoRuntimeForHub', () => {
     const resolved = await resolveMisaoRuntimeForHub(input, false, { warn });
     expect(warn).toHaveBeenCalledTimes(1);
     const registry = new MuxDriverRegistry();
-    const { connection } = registerMisaoDriver(registry, resolved, vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://h', localUrl: 'http://l', webhookToken: 'w' });
+    const { connection } = registerMisaoDriver(registry, resolved, vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://h', localUrl: 'http://l', webhookToken: 'w' }, NO_AGENT_MISAO);
     expect(registry.availability({ defaultMux: 'misao', type: 'local' })).toEqual({ available: false, reason: 'daemon_unreachable' });
     connection.close();
   });
@@ -105,40 +125,57 @@ describe('resolveMisaoRuntime', () => {
   });
 });
 
-describe('syncMisaoChangeHooks', () => {
-  const srv = (defaultMux: 'tmux' | 'misao', type: 'local' | 'agent' = 'local') => ({ name: 's', type, defaultMux, muxRuntime: 'system' }) as never;
+describe('syncMisaoNodes', () => {
+  const srv = (type: 'local' | 'agent', defaultMux: 'tmux' | 'misao' = 'tmux') => ({ name: 's', type, defaultMux, muxRuntime: 'system' }) as never;
   const handle = () => {
     const driver = { installChangeHooks: vi.fn(async () => {}), uninstallChangeHooks: vi.fn(async () => {}) };
-    return { misao: { driver } as unknown as MisaoHandle, driver };
+    const servers = { discardAgentNode: vi.fn(), ensureAgentNode: vi.fn() };
+    return { misao: { driver, servers } as unknown as MisaoHandle, driver, servers };
   };
   const log = { warn: vi.fn() };
 
-  it('installs change events when a server becomes one that can host misao (agent to local)', () => {
-    const { misao, driver } = handle();
-    syncMisaoChangeHooks(misao, srv('tmux', 'agent'), srv('tmux'), log);
+  it('installs the local change events when a server becomes local (agent to local) and drops its agent node', () => {
+    const { misao, driver, servers } = handle();
+    syncMisaoNodes(misao, srv('agent'), srv('local'), false, log);
+    expect(servers.discardAgentNode).toHaveBeenCalledTimes(1);
     expect(driver.installChangeHooks).toHaveBeenCalledTimes(1);
-    expect(driver.uninstallChangeHooks).not.toHaveBeenCalled();
+    expect(servers.ensureAgentNode).not.toHaveBeenCalled();
   });
 
-  it('uninstalls change events when a server stops being one that can host misao (local to agent)', () => {
-    const { misao, driver } = handle();
-    syncMisaoChangeHooks(misao, srv('tmux'), srv('tmux', 'agent'), log);
+  it('uninstalls the local change events when a server becomes an agent (local to agent), and makes its node when it uses misao', () => {
+    const { misao, driver, servers } = handle();
+    syncMisaoNodes(misao, srv('local'), srv('agent'), true, log);
     expect(driver.uninstallChangeHooks).toHaveBeenCalledTimes(1);
+    expect(servers.ensureAgentNode).toHaveBeenCalledTimes(1);
     expect(driver.installChangeHooks).not.toHaveBeenCalled();
   });
 
-  it('does nothing when only the default mux changes: both muxes stay usable on a local server', () => {
-    const { misao, driver } = handle();
-    syncMisaoChangeHooks(misao, srv('tmux'), srv('misao'), log);
-    syncMisaoChangeHooks(misao, srv('misao'), srv('tmux'), log);
+  it('replaces the node of an agent server that is edited and still uses misao', () => {
+    const { misao, servers } = handle();
+    syncMisaoNodes(misao, srv('agent'), srv('agent'), true, log);
+    expect(servers.discardAgentNode).toHaveBeenCalledTimes(1);
+    expect(servers.ensureAgentNode).toHaveBeenCalledTimes(1);
+  });
+
+  it('only drops the node of an agent server that no longer uses misao', () => {
+    const { misao, servers } = handle();
+    syncMisaoNodes(misao, srv('agent'), srv('agent'), false, log);
+    expect(servers.discardAgentNode).toHaveBeenCalledTimes(1);
+    expect(servers.ensureAgentNode).not.toHaveBeenCalled();
+  });
+
+  it('does nothing for a local server whose default mux changes: both muxes stay usable', () => {
+    const { misao, driver, servers } = handle();
+    syncMisaoNodes(misao, srv('local', 'tmux'), srv('local', 'misao'), false, log);
     expect(driver.installChangeHooks).not.toHaveBeenCalled();
     expect(driver.uninstallChangeHooks).not.toHaveBeenCalled();
+    expect(servers.discardAgentNode).not.toHaveBeenCalled();
   });
 
   it('warns instead of throwing when the daemon is unreachable', async () => {
     const { misao, driver } = handle();
     driver.installChangeHooks.mockRejectedValueOnce(new Error('down'));
-    syncMisaoChangeHooks(misao, srv('tmux', 'agent'), srv('tmux'), log);
+    syncMisaoNodes(misao, srv('agent'), srv('local'), false, log);
     await new Promise((r) => setImmediate(r));
     expect(log.warn).toHaveBeenCalled();
   });

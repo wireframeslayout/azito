@@ -12,7 +12,7 @@ import { TransportFactory } from '../servers/transport/TransportFactory';
 import { TmuxClient } from './TmuxClient';
 import { MuxDriverRegistry } from './MuxDriverRegistry';
 import type { MisaoConnection } from './misao/MisaoConnection';
-import { registerMisaoDriver } from './misao/misaoDriver';
+import { NO_AGENT_MISAO, registerMisaoDriver } from './misao/misaoDriver';
 import { handleTerminalConnection } from './ws/terminalHandler';
 import sessionsRoutes, { invalidateSessionCache } from './routes/sessions';
 import { KeyedMutex } from '../../shared/keyedMutex';
@@ -80,7 +80,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('one local server with a tmux and a m
     tmuxClient = new TmuxClient(new TransportFactory('http://127.0.0.1:1'), 'http://127.0.0.1:1', 'ui', 'http://127.0.0.1:1', 'wh');
     registry.register('tmux', tmuxClient);
     const sdk = await import('@misao/sdk');
-    const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' });
+    const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     connection = handle.connection;
     await connection.start();
     expect(connection.availability()).toEqual({ available: true });

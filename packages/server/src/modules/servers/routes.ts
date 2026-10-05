@@ -113,8 +113,6 @@ function redactSecrets(message: string): string {
 
 // ─── Types ───
 
-const MISAO_LOCAL_ONLY_ERROR = 'defaultMux "misao" is only supported on local servers';
-
 interface MuxKindStatus {
   kind: MuxDriverKind;
   driverAvailable: boolean;
@@ -201,15 +199,20 @@ export interface ServersRouteOptions {
   // declaration as if scoped auth were already on.
   scopedAuthEnabled: boolean;
   muxDriverRegistry: MuxDriverRegistry;
-  /** Reports the misao daemon for install-status of misao servers. */
-  misaoDaemonStatus: () => Promise<{ installed: boolean; version?: string; detail?: string }>;
+  /** Reports the misao daemon of a server for its status / install-status rows. */
+  misaoDaemonStatus: (server: ServerConfig) => Promise<{ installed: boolean; version?: string; daemonVersion?: string; detail?: string }>;
   onMuxChanged?: (change: { previous: ServerConfig; next: ServerConfig }) => void;
+  /**
+   * A server was edited, its agent was reinstalled, or it was deleted (`next` is null): per-server state bound to its
+   * old endpoint / token (the misao connection) is dropped here.
+   */
+  onServerChanged?: (change: { previous: ServerConfig; next: ServerConfig | null }) => void;
 }
 
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, misaoDaemonStatus } = opts;
+  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, onServerChanged, misaoDaemonStatus } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -325,6 +328,13 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
   const checkIsolationBlockers = (serverName: string, srv: ServerConfig) =>
     checkIsolationBlockersFor({ windowRepo, muxDriverRegistry }, serverName, srv);
 
+  /** Tells the hub that `previous` was edited or reinstalled, with the row as it is stored now. */
+  function notifyServerChanged(previous: ServerConfig): void {
+    if (!onServerChanged) return;
+    const next = serverRepo.findByName(previous.name);
+    if (next) onServerChanged({ previous, next });
+  }
+
   // ── GET /api/servers ──
   fastify.get('/api/servers', async () => {
     // Bundle content hash (what deployed agents report at /health) — not the hub git
@@ -386,8 +396,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     const muxInput = parseMuxInput({ defaultMux, muxRuntime });
     if (!muxInput.ok) return reply.status(400).send({ error: muxInput.error });
     const { muxRuntime: validMuxRuntime, defaultMux: validDefaultMux } = muxInput;
-    if (validDefaultMux === 'misao' && autoInstall)
-      return reply.status(400).send({ error: MISAO_LOCAL_ONLY_ERROR });
     if (!name) return reply.status(400).send({ error: 'Server name required' });
     if (!/^[\w.@ -]{1,64}$/.test(name)) return reply.status(400).send({ error: 'Invalid server name' });
 
@@ -410,8 +418,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       if (!type || !['local', 'agent'].includes(type))
         return reply.status(400).send({ error: 'Type must be "local" or "agent"' });
-      if (validDefaultMux === 'misao' && type !== 'local')
-        return reply.status(400).send({ error: MISAO_LOCAL_ONLY_ERROR });
       if (type === 'agent') {
         if (!host) return reply.status(400).send({ error: 'Host required for agent servers' });
         if (!agentPort) return reply.status(400).send({ error: 'Port required for agent servers' });
@@ -476,9 +482,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       // when effectiveType !== 'agent', with no way to explicitly express
       // "and clear it too" in the same request.
       const effectiveType = (type || srv.type) as 'local' | 'agent';
-      if (effectiveDefaultMux === 'misao' && effectiveType !== 'local') {
-        return reply.status(400).send({ error: MISAO_LOCAL_ONLY_ERROR });
-      }
       if (effectiveType !== 'agent' && isolationIntent === true) {
         return reply.status(400).send({ error: 'isolationIntent is only settable for agent servers' });
       }
@@ -758,6 +761,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           }
         }
         transportFactory.invalidate(request.params.name);
+        notifyServerChanged(srv);
         // Issue #29 review, Important finding 2: surfaces the cleanup
         // outcome directly in the PUT response — undefined (field omitted)
         // when no cleanup ran this request, so callers can distinguish "no
@@ -795,7 +799,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      if (srv.defaultMux === 'misao') return reply.status(400).send({ error: MISAO_LOCAL_ONLY_ERROR });
 
       // Issue #29 review, 14th pass, Important finding 2: `PUT /api/servers/:name`
       // rejects ANY connection-info change while `isolationIntent` is (or
@@ -829,6 +832,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         serverRepo.update(srv.name, 'agent', result.host, result.port, result.token, sshHost, srv.muxRuntime);
         serverRepo.updateAgentVersion(srv.name, result.version);
         transportFactory.invalidate(srv.name);
+        notifyServerChanged(srv);
         return { ok: true, steps, startMethod: result.startMethod };
       }
 
@@ -1050,6 +1054,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
         serverRepo.delete(request.params.name);
+        transportFactory.invalidate(request.params.name);
+        onServerChanged?.({ previous: srv, next: null });
         return { ok: true };
       } catch (err: unknown) {
         return reply.status(500).send({ error: (err as Error).message });
@@ -1070,7 +1076,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       try {
         const checkMuxKind = (kind: MuxDriverKind): Promise<MuxStatusItem> => (
           kind === 'misao'
-            ? misaoDaemonStatus().then(misaoStatusItem)
+            ? misaoDaemonStatus(srv).then(misaoStatusItem)
             : checkTmuxStatus(transportFactory.getTransport(srv), srv.muxRuntime)
         );
         const checkMuxes = async (): Promise<Partial<Record<MuxDriverKind, MuxStatusItem>>> => {
@@ -1119,7 +1125,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const transport = transportFactory.getTransport(srv);
       const agentTransport = srv.type === 'agent' ? transportFactory.getAgentTransport(srv) : null;
 
-      const checkMisao = async () => misaoDaemonStatus();
+      const checkMisao = async () => misaoDaemonStatus(srv);
 
       const checkTmux = async () => {
         try {
@@ -1193,9 +1199,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       // One row per mux the server can use: its default mux always (missing = to be set up), another mux marked optional.
       const checkMux = (kind: MuxDriverKind) => (kind === 'misao' ? checkMisao() : checkTmux());
-      // A local server always lists misao (even on a tmux default and with no daemon): its row carries the install /
-      // update controls for the bundled service.
-      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || (kind === 'misao' && srv.type === 'local') || muxDriverRegistry.availabilityFor(kind, srv).available);
+      // Every server lists misao (even on a tmux default and with no daemon): its row carries the install / update
+      // controls (a local server's bundled service, an agent server's install).
+      const muxKinds = supportedMuxKinds(srv).filter((kind) => kind === srv.defaultMux || kind === 'misao' || muxDriverRegistry.availabilityFor(kind, srv).available);
       const [muxResults, nodeResult, harnessResult, tailscaleResult, agentResult, chromiumResult] = await Promise.all([
         Promise.all(muxKinds.map(checkMux)),
         checkNode(),

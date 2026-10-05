@@ -133,7 +133,7 @@ describe('AgentActivityMonitor holds only a mux that could not be listed, never 
       listWorkspaces: vi.fn(async () => { if (!reachable) throw new Error('agent unreachable'); return windowListing(target); }),
       captureScreen: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
     } as unknown as IMuxClient);
-    registry.register('misao', { kind: 'misao' } as unknown as IMuxClient, (s) => (s.type !== 'local' ? { available: false, reason: 'remote_unsupported' } : { available: true }));
+    registry.register('misao', { kind: 'misao' } as unknown as IMuxClient, (s) => (s.type !== 'local' ? { available: false, reason: 'not_installed' } : { available: true }));
     const agent = { name: 'agent1', type: 'agent', defaultMux: 'tmux', muxRuntime: 'system' } as ServerConfig;
     const emit = vi.fn();
     const monitor = new AgentActivityMonitor(

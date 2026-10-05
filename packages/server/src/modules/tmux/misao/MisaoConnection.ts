@@ -1,4 +1,4 @@
-import type { MisaoClient, EventHandler, LineHandler, GapInfo, Subscription, SubscriptionErrorInfo, ConnectionState } from '@misao/sdk' with { 'resolution-mode': 'import' };
+import type { MisaoClient, EventHandler, LineHandler, GapInfo, Subscription, SubscriptionErrorInfo, ConnectionState, ConnectFunction } from '@misao/sdk' with { 'resolution-mode': 'import' };
 import type { MethodName, MethodParams, MethodResult } from '@misao/protocol' with { 'resolution-mode': 'import' };
 import type { MuxDriverAvailability } from '../MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
@@ -59,11 +59,13 @@ interface LineRegistration {
 
 type MisaoProtocolVersionErrorLike = InstanceType<MisaoSdk['MisaoProtocolVersionError']>;
 
-export interface MisaoConnectionOptions {
-  socketPath: string;
+/** How the SDK reaches a daemon: a unix socket path, or a function that opens a Duplex to it (a relay through an agent). */
+export type MisaoTarget = { socketPath: string; connect?: never } | { connect: ConnectFunction; socketPath?: never };
+
+export type MisaoConnectionOptions = MisaoTarget & {
   sdk: MisaoSdk;
   log: { warn(message: string): void };
-}
+};
 
 type Status = 'idle' | 'connected' | 'disconnected';
 
@@ -120,7 +122,7 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 
   private createClient(): MisaoClient {
-    const client = new this.options.sdk.MisaoClient({ socketPath: this.options.socketPath });
+    const client = new this.options.sdk.MisaoClient(clientTarget(this.options));
     this.client = client;
     client.onStateChange((state) => this.handleState(state));
     client.onGap((gap) => { for (const listener of this.gapListeners) listener(gap); });
@@ -447,9 +449,13 @@ export class MisaoConnection implements MisaoRpc, MisaoEventSource, MisaoDisconn
   }
 }
 
+function clientTarget(target: MisaoTarget): { socketPath: string } | { connect: ConnectFunction } {
+  return target.connect ? { connect: target.connect } : { socketPath: target.socketPath };
+}
+
 /** Opens a connection that is not shared with the driver, so closing it detaches only that terminal. */
-export async function connectDedicatedMisaoClient(sdk: MisaoSdk, socketPath: string): Promise<MisaoAttachClient> {
-  const client = new sdk.MisaoClient({ socketPath });
+export async function connectDedicatedMisaoClient(sdk: MisaoSdk, target: MisaoTarget): Promise<MisaoAttachClient> {
+  const client = new sdk.MisaoClient(clientTarget(target));
   try {
     await client.connect();
   } catch (err) {

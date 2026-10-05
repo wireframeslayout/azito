@@ -8,21 +8,28 @@ const MUX_DRIVER_KINDS: readonly MuxDriverKind[] = ['tmux', 'misao'];
 
 export type MuxDriverAvailability = { available: true } | { available: false; reason: MuxDriverUnavailableReason };
 
-/** What a driver probe looks at. `type` is optional: callers that only know the kind skip type-dependent probe checks. */
-export type MuxProbeTarget = Partial<Pick<ServerConfig, 'type'>>;
+/** What a driver probe looks at. Both are optional: callers that only know the kind skip type/server-dependent probe checks. */
+export type MuxProbeTarget = Partial<Pick<ServerConfig, 'type' | 'name'>>;
 
 /** A server as the registry sees it: its default mux kind plus the probe target fields. */
 export type MuxServerRef = Pick<ServerConfig, 'defaultMux'> & MuxProbeTarget;
 
-/** Evaluated last by `availabilityFor()`; lets a driver report a runtime condition (remote server, daemon down). */
+/** Evaluated last by `availabilityFor()`; lets a driver report a runtime condition (daemon down, not installed on that server). */
 export type MuxDriverProbe = (server: MuxProbeTarget) => MuxDriverAvailability;
 
+/**
+ * Whether a server hosts the kind, for a kind that is not its default: a server that never had it set up (misao on an
+ * agent server that has none) does not list it, so it does not show up as `unavailable` on every listing. A kind
+ * without this check is listed on every server.
+ */
+export type MuxDriverHosted = (server: MuxProbeTarget) => boolean;
+
 export class MuxDriverRegistry {
-  private drivers = new Map<MuxDriverKind, { driver: IMuxClient; probe?: MuxDriverProbe }>();
+  private drivers = new Map<MuxDriverKind, { driver: IMuxClient; probe?: MuxDriverProbe; hosted?: MuxDriverHosted }>();
   private routing = new Map<MuxDriverKind, RoutingMuxClient>();
 
-  register(kind: MuxDriverKind, driver: IMuxClient, probe?: MuxDriverProbe): void {
-    this.drivers.set(kind, { driver, probe });
+  register(kind: MuxDriverKind, driver: IMuxClient, probe?: MuxDriverProbe, hosted?: MuxDriverHosted): void {
+    this.drivers.set(kind, { driver, probe, hosted });
   }
 
   availabilityFor(kind: MuxDriverKind, server: MuxProbeTarget): MuxDriverAvailability {
@@ -39,12 +46,15 @@ export class MuxDriverRegistry {
 
   /**
    * The kinds a server hosts, its default kind first: the default always, another kind when its driver is registered
-   * and the server type can host it (a local server hosts tmux and misao; an agent/ssh server tmux only). Whether a
-   * kind answers right now is `usableKinds`; a supported kind that does not is unavailable, not absent.
+   * and says the server hosts it (misao: every local server, and an agent server where it was set up). Whether a kind
+   * answers right now is `usableKinds`; a supported kind that does not is unavailable, not absent.
    */
   supportedKinds(server: MuxServerRef): MuxDriverKind[] {
-    const others = MUX_DRIVER_KINDS.filter((kind) => kind !== server.defaultMux && this.drivers.has(kind)
-      && (kind === 'tmux' || server.type === undefined || server.type === 'local'));
+    const others = MUX_DRIVER_KINDS.filter((kind) => {
+      if (kind === server.defaultMux) return false;
+      const entry = this.drivers.get(kind);
+      return entry !== undefined && (entry.hosted?.(server) ?? true);
+    });
     return [server.defaultMux, ...others];
   }
 
