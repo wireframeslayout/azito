@@ -9,6 +9,26 @@ It applies to **local servers only** (it cannot be selected for agent / SSH serv
 
 ## Getting started
 
+### Release builds (install.sh)
+
+Release builds **bundle** misao. `install.sh` sets it up and starts it as the `azito-misao` service (systemd / launchd) and writes
+`MISAO_SOCKET` to the hub's `.env`, so there is nothing to prepare by hand. tmux is optional (you can use AZITO without it).
+On a fresh install the local server's default terminal is misao.
+
+- Check its state with `azito misao status`, or on the misao row under Servers → your server → Setup.
+- **Existing installs** (set up before misao was bundled): install it with `azito misao install`, or "Install misao" on the Setup row.
+  It edits `.env`, so restart the hub afterwards (panes are not affected).
+- **Updates**: updating the hub neither updates nor restarts misao (restarting it would end every pane). When the running version differs
+  from the bundled one, the Setup row says so. You switch explicitly with `azito misao update`, or "Update misao (running panes will end)".
+- On a host without tmux, the "Terminal" choice when adding a window disables tmux (with the reason), and the Setup tmux row is labelled "Optional".
+
+For the service layout, commands and manual setup see [Install and update](./install-and-update.md#misao-service).
+
+### Source checkouts (npm run dev) and self-managed daemons
+
+A source checkout (`npm run dev`) installs no service. Prepare misao yourself as below and connect through `MISAO_SOCKET` (or the default socket).
+A release build uses the same setting when you want it to talk to another daemon.
+
 ### 1. Install and start misao
 
 misao lives in its own repository ([wireframeslayout/misao](https://github.com/wireframeslayout/misao)).
@@ -32,7 +52,7 @@ misao status
 
 ### 2. Check where the hub connects
 
-The hub connects to `~/.misao/misao.sock` by default. To use a daemon on another socket, set
+The hub connects to `~/.misao/misao.sock` by default (on a release build, install.sh writes `~/.azito/misao/misao.sock` to `.env`). To use a daemon on another socket, set
 `MISAO_SOCKET=<absolute socket path>` in **the hub's environment** (the socket path must be at most 107 bytes).
 The hub and the `misao` command must see the same socket. Set it in `packages/server/.env` for a source checkout
 (`npm run dev`), or in `~/.azito/hub/.env` for a release build (systemd / launchd).
@@ -72,6 +92,7 @@ the hub cannot reach the daemon.
 
 - Run `misao status` to check that the daemon is running.
 - Check that `MISAO_SOCKET` in the hub's environment (or `~/.misao/misao.sock` when unset) is the daemon's socket.
+- On a release build, `azito misao status` shows whether the service is running, how it differs from the bundled version, and whether the hub needs a restart. If the protocol does not match it says "incompatible"; switch to the bundled version with `azito misao update`.
 - The hub reconnects automatically when the daemon comes back.
 
 ## Stopped panes and empty windows

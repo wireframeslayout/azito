@@ -9,6 +9,26 @@ local サーバーのウィンドウとペインを misao デーモンへ任せ�
 
 ## 使い始める手順
 
+### リリース版（install.sh）
+
+リリース版は misao を**同梱**しています。`install.sh` が `azito-misao` サービス（systemd / launchd）として設置・起動し、
+ハブの `.env` に `MISAO_SOCKET` を書くので、手動の準備は要りません。tmux は任意です（無くても使えます）。
+新規インストールの local サーバーは、既定のターミナル方式が misao になります。
+
+- 状態の確認: `azito misao status`、または Servers → 対象サーバー → Setup の misao 行。
+- **既存のインストール**（misao 同梱前に入れた環境）: `azito misao install`、または Setup の「misao をインストール」で設置します。
+  `.env` を書き換えるので、その後にハブを再起動してください（ペインは終了しません）。
+- **更新**: ハブを更新しても misao は更新・再起動されません（再起動するとペインがすべて終了するため）。同梱版と稼働中の版が違うときは
+  Setup の misao 行に表示が出ます。`azito misao update`、または「misao を更新（実行中のペインは終了します）」で、利用者が明示的に切り替えます。
+- tmux が無いホストでは、窓追加の「ターミナル方式」で tmux が選べず（理由つきで disabled）、Setup の tmux 行は「任意」と表示されます。
+
+サービスの構成・コマンド・手動設置は [インストールとアップデート](./install-and-update.md#misao-サービス) を参照してください。
+
+### ソース版（npm run dev）・手動管理
+
+ソース版（`npm run dev`）はサービスを入れません。次の手順で自分で misao を用意し、`MISAO_SOCKET`（未設定なら既定のソケット）で接続します。
+リリース版でも、別のデーモンへ繋ぎたいときは同じ設定になります。
+
 ### 1. misao をインストールして起動する
 
 misao は別リポジトリ（[wireframeslayout/misao](https://github.com/wireframeslayout/misao)）です。
@@ -32,7 +52,7 @@ misao status
 
 ### 2. ハブの接続先を確認する
 
-ハブは既定で `~/.misao/misao.sock` に接続します。別のソケットを使うデーモンへ繋ぐときは、
+ハブは既定で `~/.misao/misao.sock` に接続します（リリース版は install.sh が `~/.azito/misao/misao.sock` を `.env` に書きます）。別のソケットを使うデーモンへ繋ぐときは、
 **ハブの環境**に `MISAO_SOCKET=<ソケットの絶対パス>` を設定します（ソケットパスは 107 バイト以内）。
 ハブと `misao` コマンドで同じソケットを見ている必要があります。設定場所は、ソース版（`npm run dev`）なら
 `packages/server/.env`、リリース版（systemd / launchd）なら `~/.azito/hub/.env` です。
@@ -71,6 +91,7 @@ API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`、mi
 
 - `misao status` でデーモンが動いているか確認します。
 - ハブの環境の `MISAO_SOCKET`（未設定なら `~/.misao/misao.sock`）が、デーモンのソケットと一致しているか確認します。
+- リリース版は `azito misao status` で、サービスが動いているか・同梱版との差・ハブの再起動が要るかを確認できます。プロトコルが合わないときは「非互換」と出るので、`azito misao update` で同梱版へ切り替えます。
 - デーモンが復帰すると、ハブは自動で再接続します。
 
 ## 停止中のペインと空のウィンドウ

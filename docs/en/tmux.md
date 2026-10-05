@@ -1,6 +1,7 @@
 # tmux Configuration Guide
 
-AZITO runs on top of tmux, and a few tmux settings are prerequisites for correct operation.
+Release builds work without tmux (panes run on the bundled [misao](./misao.md)). This guide is for **when you use tmux windows**.
+When AZITO runs on top of tmux, a few tmux settings are prerequisites for correct operation.
 This guide separates them into required settings, recommended settings, and things you do
 NOT need to configure (AZITO sets them at runtime).
 
