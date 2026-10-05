@@ -177,7 +177,8 @@
     "deployingBinary": "バイナリ配備中…",
     "rollingBack": "mux runtime を system に戻しています…",
     "rolledBack": "system に戻しました",
-    "installComplete": "完了 v{{version}}"
+    "installComplete": "完了 v{{version}}",
+    "tmuxOptionalNote": "任意。tmux の窓を使う場合だけ必要です（AZITO のペインは同梱の misao で動きます）"
   },
   "windows": {
     "noSessions": "このサーバーにセッションはありません。",
@@ -216,5 +217,46 @@
     "killWindowMessage": "ウィンドウ \"{{name}}\" を終了しますか？",
     "killPane": "ペインを終了",
     "killPaneMessage": "ペイン \"{{name}}\" を終了しますか？"
+  },
+  "misaoService": {
+    "loading": "misao のサービスを確認中…",
+    "loadFailed": "misao のサービス状態を取得できませんでした。",
+    "service": "サービス",
+    "stateActive": "稼働中",
+    "stateInactive": "停止中",
+    "stateFailed": "異常終了",
+    "stateUnknown": "状態不明",
+    "stateNotInstalled": "未設置",
+    "bundledVersion": "同梱版 {{version}}",
+    "runningVersion": "稼働中 {{version}}",
+    "install": "misao をインストール",
+    "installing": "インストール中…",
+    "start": "misao を起動",
+    "starting": "起動中…",
+    "update": "misao を更新（実行中のペインは終了します）",
+    "updating": "更新中…",
+    "updateConfirmTitle": "misao を更新しますか？",
+    "updateConfirmMessage": "更新のために misao を停止します。実行中のペインはすべて終了し、エージェントの作業も中断されます。続ける前に、必要な作業を済ませてください。",
+    "updateConfirmLabel": "停止して更新",
+    "replaceSocketTitle": "ハブの接続先を切り替えますか？",
+    "replaceSocketMessage": "ハブの設定（MISAO_SOCKET）は、AZITO が管理する misao とは別のデーモンを指しています。インストールすると、設定を管理下のソケットに書き換えます（ハブの再起動後に反映）。",
+    "replaceSocketConfirm": "書き換えてインストール",
+    "notice": {
+      "incompatible": "misao のプロトコルがこのハブと合いません",
+      "incompatibleSub": "同梱版の misao へ更新すると解消します。更新すると実行中のペインは終了します。",
+      "updateAvailable": "同梱版（{{bundled}}）と異なる misao が動いています（{{running}}）",
+      "updateAvailableSub": "ハブの更新では misao は入れ替わりません。更新は上のボタンから、ペインが不要なときに行ってください。",
+      "needsHubRestart": "ハブを再起動すると、AZITO が管理する misao に接続します",
+      "needsHubRestartSub": "ハブの再起動で misao のペインは終了しません。",
+      "customSocket": "ハブの設定（MISAO_SOCKET）は別のデーモンを指しています",
+      "customSocketSub": "インストールすると、その設定を管理下のソケットに書き換えます。"
+    },
+    "unmanaged": {
+      "sourceInstall": "ソース版のハブはサービスを入れません。MISAO_SOCKET か既定のソケットの misao に接続します。",
+      "noBundledMisao": "このハブのリリースには misao が同梱されていません。",
+      "unsupportedPlatform": "systemd も launchd も無いため、misao のサービスは管理できません。",
+      "invalidPrefix": "インストール先のパスが長すぎて、misao のソケットを作れません。",
+      "unknown": "このハブでは misao のサービスを管理できません。"
+    }
   }
 }

@@ -20,6 +20,11 @@ describe('getSetupSummary', () => {
     expect(getSetupSummary(status).textParams).toEqual({ count: 1 });
   });
 
+  it('does not count a missing optional tmux (a misao server) as a setup gap', () => {
+    const status: InstallStatusResponse = { ...base, misao: { installed: true }, tmux: { installed: false, optional: true } };
+    expect(getSetupSummary(status)).toEqual({ text: 'servers:setup.allInstalled', tone: 'green' });
+  });
+
   it('reports offline when install-status failed because the agent is unreachable', () => {
     expect(getSetupSummary(null, 'offline')).toEqual({ text: 'servers:setup.offline', tone: 'orange' });
     expect(getSetupSummary(null, 'failed')).toEqual({ text: 'servers:setup.checkFailed', tone: 'red' });
@@ -32,6 +37,10 @@ describe('describeMisaoItem', () => {
 
   it('labels the protocol version', () => {
     expect(describeMisaoItem({ installed: true, version: '0.2.0' }, t)).toEqual({ installed: true, version: 'setup.misaoProtocol:0.2.0', detail: undefined });
+  });
+
+  it('puts the daemon release before its protocol version', () => {
+    expect(describeMisaoItem({ installed: true, version: '0.3.0', daemonVersion: '0.2.0' }, t).version).toBe('0.2.0 · setup.misaoProtocol:0.3.0');
   });
 
   it.each([

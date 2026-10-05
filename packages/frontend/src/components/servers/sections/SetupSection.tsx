@@ -8,6 +8,7 @@ import type { Server } from '../../../hooks/useServerManagement';
 import { describeMisaoItem, type InstallStatusResponse, type InstallStatusItem } from '../serverSections';
 import { useToast } from '../../../hooks/useToast';
 import { useConfirm } from '../../../hooks/useConfirm';
+import { MisaoServicePanel } from './MisaoServicePanel';
 
 const URL_PATTERN = /^https?:\/\/[\w.:\-[\]]+\/?$/;
 
@@ -210,7 +211,7 @@ export default function SetupSection({ server, installStatus, installStatusError
   // 進捗計算: 表示中の行のみを母数にする。任意コンポーネント（chromium）も母数に含めるが、
   // 未導入でも異常扱い（赤）にはしない（S1 デザインの決定④）。
   const progressRows: { installed: boolean }[] = [
-    ...(installStatus.tmux ? [{ installed: installStatus.tmux.installed }] : []),
+    ...(installStatus.tmux && !installStatus.tmux.optional ? [{ installed: installStatus.tmux.installed }] : []),
     ...(installStatus.misao ? [{ installed: installStatus.misao.installed }] : []),
     { installed: installStatus.node.installed },
     ...(showTailscale ? [{ installed: installStatus.tailscale!.installed }] : []),
@@ -267,6 +268,8 @@ export default function SetupSection({ server, installStatus, installStatusError
           label="tmux"
           item={installStatus.tmux}
           categoryLabel={t('setup.foundation')}
+          optional={installStatus.tmux.optional}
+          description={installStatus.tmux.optional ? t('setup.tmuxOptionalNote') : undefined}
           running={false}
           action={
             server.muxRuntime === 'system' && installStatus.tmux.installed ? (
@@ -284,7 +287,9 @@ export default function SetupSection({ server, installStatus, installStatusError
           item={describeMisaoItem(installStatus.misao, t)}
           categoryLabel={t('setup.foundation')}
           running={false}
-        />
+        >
+          {server.type === 'local' && <MisaoServicePanel onChanged={refresh} />}
+        </StepRow>
       )}
 
       <StepRow

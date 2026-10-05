@@ -59,14 +59,14 @@ describe('agent server health routes (circuit breaker)', () => {
       String(url).endsWith('/health') ? json({ version: 'abc', pid: 1, uptime: 2 }) : json({ stdout: 'tmux 3.4', stderr: '', code: 0 })
     ));
     const res = await (await buildApp(transport)).inject({ method: 'GET', url: '/api/servers/srv7/status' });
-    expect(res.json()).toMatchObject({ status: 'online', tmux: true, agentVersion: 'abc' });
+    expect(res.json()).toMatchObject({ status: 'online', mux: { tmux: { available: true, version: 'tmux 3.4' } }, agentVersion: 'abc' });
   });
 
   it('GET /status reports offline on the first failure, then without touching the network while the breaker is open', async () => {
     fetchMock.mockRejectedValue(refused());
     const app = await buildApp(transport);
     const first = await app.inject({ method: 'GET', url: '/api/servers/srv7/status' });
-    expect(first.json()).toMatchObject({ status: 'offline', tmux: false, message: 'Agent unreachable: refused' });
+    expect(first.json()).toMatchObject({ status: 'offline', mux: {}, message: 'Agent unreachable: refused' });
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     const second = await app.inject({ method: 'GET', url: '/api/servers/srv7/status' });

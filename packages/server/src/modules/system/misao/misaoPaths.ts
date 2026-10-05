@@ -23,6 +23,11 @@ export interface MisaoPaths {
   hubEnvFile: string;
 }
 
+/** The hub's stable `.env`, beside the versioned bundle directories (the installer creates it; run.sh loads it). */
+export function hubEnvFilePath(prefix: string): string {
+  return path.join(prefix, 'hub', '.env');
+}
+
 export function resolveMisaoPaths(prefix: string): MisaoPaths {
   if (!path.isAbsolute(prefix)) throw new Error(`AZITO prefix must be an absolute path: ${prefix}`);
   const root = path.join(prefix, 'misao');
@@ -37,7 +42,7 @@ export function resolveMisaoPaths(prefix: string): MisaoPaths {
     current: path.join(root, 'current'),
     socket,
     log: path.join(root, 'misao.log'),
-    hubEnvFile: path.join(prefix, 'hub', '.env'),
+    hubEnvFile: hubEnvFilePath(prefix),
   };
 }
 

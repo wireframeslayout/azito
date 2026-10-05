@@ -227,7 +227,7 @@ describe('GET /api/servers/:name/install-status', () => {
     return { exec, opts: { ...opts, transportFactory } };
   }
 
-  it('reports the misao daemon for a misao server, and tmux only when it is installed (it is optional there)', async () => {
+  it('reports the misao daemon for a misao server, and tmux as an optional row (installed or not)', async () => {
     const stored = makeServer({ defaultMux: 'misao' });
     const misaoDaemonStatus = vi.fn(async () => ({ installed: true, version: '0.2.0' }));
     const { opts } = withTransport({ ...makeOpts(stored), misaoDaemonStatus });
@@ -236,7 +236,7 @@ describe('GET /api/servers/:name/install-status', () => {
 
     const body = res.json();
     expect(body.misao).toEqual({ installed: true, version: '0.2.0' });
-    expect(body).not.toHaveProperty('tmux');
+    expect(body.tmux).toMatchObject({ installed: false, optional: true });
     expect(body).toHaveProperty('node');
   });
 
@@ -248,7 +248,7 @@ describe('GET /api/servers/:name/install-status', () => {
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
 
     expect(res.json()).toHaveProperty('tmux');
-    expect(res.json().misao).toEqual({ installed: true, version: '0.2.0' });
+    expect(res.json().misao).toEqual({ installed: true, version: '0.2.0', optional: true });
   });
 
   it('reports an unreachable daemon as not installed', async () => {

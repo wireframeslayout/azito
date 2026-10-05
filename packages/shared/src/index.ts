@@ -27,6 +27,7 @@ export {
   type MuxWindowInfo,
   type MuxWorkspace,
   type MuxUnavailableKind,
+  type MuxStatusItem,
   type MuxPaneInfo,
   type MuxExecRequest,
   asPaneHandle,
