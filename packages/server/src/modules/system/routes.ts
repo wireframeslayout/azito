@@ -74,7 +74,7 @@ const systemRoutes: FastifyPluginCallback<SystemRouteOptions> = (fastify, opts, 
   // passes it. These three can end every pane, so they require the operator principal themselves, in both modes.
   const requireOperator = async (request: FastifyRequest, reply: FastifyReply): Promise<void> => {
     if (request.principal?.class !== 'operator') {
-      return reply.status(403).send({ error: 'operator_required', operation: 'system.misao' });
+      await reply.status(403).send({ error: 'operator_required', operation: 'system.misao' });
     }
   };
 
