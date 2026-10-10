@@ -15,7 +15,7 @@ WORK="$(mktemp -d "${TMPDIR:-/tmp}/azs.XXXXXX")"
 chmod 700 "$WORK"
 PID=""
 cleanup() {
-  [ -n "$PID" ] && kill "$PID" 2>/dev/null || true
+  if [ -n "$PID" ]; then kill "$PID" 2>/dev/null || true; fi
   rm -rf "$WORK"
 }
 trap cleanup EXIT

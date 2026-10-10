@@ -153,10 +153,7 @@ elif command -v brew >/dev/null 2>&1; then
 fi
 
 MISSING_REQUIRED=""
-for dep in git; do
-  command -v "$dep" >/dev/null 2>&1 || MISSING_REQUIRED="${MISSING_REQUIRED} ${dep}"
-done
-MISSING_REQUIRED="${MISSING_REQUIRED# }"
+command -v git >/dev/null 2>&1 || MISSING_REQUIRED="git"
 
 if [ -n "$MISSING_REQUIRED" ]; then
   echo ""
