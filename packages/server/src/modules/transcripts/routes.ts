@@ -3,6 +3,8 @@ import { asPaneHandle, isPaneHandle, isPaneHandleLike } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
 import type { IServerRepository } from '../servers/Server';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { AnswerKey, WindowInputService } from './WindowInputService';
@@ -22,6 +24,16 @@ export interface TranscriptsRouteOptions {
   windowInputService: WindowInputService;
   windowRepo: IWindowRepository;
   interactionMonitor: InteractionMonitor;
+}
+
+/**
+ * 会話ログの読み取り先（エージェントサーバー）に届かない／古いエージェントのときの応答。それ以外の例外は
+ * そのまま投げる。503 / 501 の error 文字列は resolve-window の reason と同じで、フロントが区別して表示する。
+ */
+function replyHostReadError(err: unknown, reply: FastifyReply): FastifyReply {
+  if (err instanceof AgentUnreachableError) return reply.status(503).send({ error: 'agent_unreachable' });
+  if (err instanceof TranscriptAgentOutdatedError) return reply.status(501).send({ error: 'agent_outdated' });
+  throw err;
 }
 
 const INPUT_TEXT_MIN_LENGTH = 1;
@@ -300,7 +312,11 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       const source = findSource(scoped, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      return handleReadSession(source, request.params.id, request.query, reply, interactionMonitor, windowRepo);
+      try {
+        return await handleReadSession(source, request.params.id, request.query, reply, interactionMonitor, windowRepo);
+      } catch (err) {
+        return replyHostReadError(err, reply);
+      }
     },
   );
 

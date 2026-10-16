@@ -42,6 +42,20 @@ describe('AgentTransport circuit breaker', () => {
     await expect(make().exec('echo')).rejects.toMatchObject({ reason: 'timeout' });
   });
 
+  it('getJson returns the status and parsed body, sends the token, and shares the breaker', async () => {
+    const t = make();
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'session_not_found' }, 404));
+    await expect(t.getJson('/api/transcripts/claude/sessions/x/meta')).resolves.toEqual({ status: 404, body: { error: 'session_not_found' } });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toBe('http://10.0.0.1:4021/api/transcripts/claude/sessions/x/meta');
+    expect((init as RequestInit).headers).toMatchObject({ authorization: 'Bearer tok' });
+
+    fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));
+    await expect(t.getJson('/api/transcripts/claude/sessions')).rejects.toBeInstanceOf(AgentUnreachableError);
+    await expect(t.getJson('/api/transcripts/claude/sessions')).rejects.toMatchObject({ reason: 'circuit_open' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('fails fast with circuit_open for 15s without calling fetch again', async () => {
     const t = make();
     fetchMock.mockRejectedValueOnce(fetchFailure('ECONNREFUSED'));

@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import transcriptsRoutes from './routes';
 import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
-import { HostTranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
@@ -13,6 +15,7 @@ import type { InteractionMonitor } from '../notifications/InteractionMonitor';
 const SID = '11111111-1111-1111-1111-111111111111';
 const PANE_ID = '%3';
 const LOCAL_SERVER = { name: 'local', type: 'local' } as unknown as ServerConfig;
+const noAgentTransports = { getAgentTransport: (): never => { throw new Error('no agent transport in this test'); } };
 
 function buildClaudeSource(overrides: Partial<TranscriptReader> = {}): TranscriptSource {
   return {
@@ -86,7 +89,7 @@ function buildApp(
   } as unknown as IServerRepository;
 
   const app = Fastify();
-  app.register(transcriptsRoutes, { sources, sourceProvider: new HostTranscriptSourceProvider(sources), serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
+  app.register(transcriptsRoutes, { sources, sourceProvider: new HostTranscriptSourceProvider(sources, noAgentTransports), serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
   return app;
 }
 
@@ -1279,5 +1282,77 @@ describe('window routes: pane handle format follows the window mux kind', () => 
     const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: 'p_short', text: 'hi' } });
     expect(res.statusCode).toBe(400);
     await app.close();
+  });
+});
+
+describe('GET /api/transcripts/:agent/:id for a window on another server', () => {
+  const AGENT_SERVER = { name: 'agent1', type: 'agent' } as unknown as ServerConfig;
+  const SSH_SERVER = { name: 'ssh1', type: 'ssh' } as unknown as ServerConfig;
+
+  function appFor(provider: TranscriptSourceProvider) {
+    const windows: Record<number, Partial<Window>> = {
+      10: { id: 10, serverName: 'agent1', workerType: 'claude' },
+      11: { id: 11, serverName: 'ssh1', workerType: 'claude' },
+    };
+    const servers = [LOCAL_SERVER, AGENT_SERVER, SSH_SERVER];
+    const app = Fastify();
+    app.register(transcriptsRoutes, {
+      sources: [buildClaudeSource({ readSession: () => ({ entries: [], nextOffset: 1, truncated: false, startOffset: 0, hasOlder: false }) })],
+      sourceProvider: provider,
+      serverRepo: { findByName: (name: string) => servers.find((s) => s.name === name) } as unknown as IServerRepository,
+      transcriptPaneService: {} as unknown as TranscriptPaneService,
+      windowSessionResolver: {} as unknown as WindowSessionResolver,
+      windowInputService: {} as unknown as WindowInputService,
+      windowRepo: { findById: (id: number) => windows[id] } as unknown as IWindowRepository,
+      interactionMonitor: { isPending: () => false, getOpenedAt: () => undefined, clear: () => {} } as unknown as InteractionMonitor,
+    });
+    return app;
+  }
+
+  const agentSource = (overrides: Partial<TranscriptSource> = {}): TranscriptSource => ({
+    agentType: 'claude',
+    readSession: async () => ({ entries: [], nextOffset: 77, truncated: false, startOffset: 0, hasOlder: false }),
+    readSessionBefore: async () => ({ entries: [], prevOffset: 0, hasOlder: false }),
+    getSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
+    ...overrides,
+  }) as unknown as TranscriptSource;
+
+  const providerFor = (sources: TranscriptSource[] | null): TranscriptSourceProvider => ({
+    forServer: (server) => (server.name === 'agent1' ? sources : null),
+  });
+
+  it('reads from the window\'s server (the agent), not from the hub', async () => {
+    const app = appFor(providerFor([agentSource()]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().nextOffset).toBe(77);
+  });
+
+  it('keeps reading from the hub when no windowId is given', async () => {
+    const app = appFor(providerFor([agentSource()]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().nextOffset).toBe(1);
+  });
+
+  it('answers 501 unsupported_server when the window\'s server has no readable conversation logs', async () => {
+    const app = appFor({ forServer: () => null });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=11` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'unsupported_server' });
+  });
+
+  it('answers 503 agent_unreachable when the agent cannot be reached', async () => {
+    const app = appFor(providerFor([agentSource({ readSession: async () => { throw new AgentUnreachableError('agent1', 'timeout'); } })]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'agent_unreachable' });
+  });
+
+  it('answers 501 agent_outdated when the agent has no transcript API', async () => {
+    const app = appFor(providerFor([agentSource({ readSessionBefore: async () => { throw new TranscriptAgentOutdatedError('agent1'); } })]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=5&windowId=10` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'agent_outdated' });
   });
 });

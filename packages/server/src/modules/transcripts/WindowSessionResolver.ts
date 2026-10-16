@@ -8,17 +8,28 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TailState, TranscriptSource } from './sources/TranscriptSource';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
 import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
 import type { PsEntry } from './agentProcessDetection';
 
 // ─── Types ───
 
+/**
+ * セッションを解決できなかった理由。
+ * - unsupported_server: 会話ログを読めないサーバー種別（ssh）、またはサーバーが見つからない。
+ * - no_recent_session: 読めるが、このウィンドウに対応するセッションが見つからない。
+ * - agent_unreachable: エージェントサーバーに届かない（offline、タイムアウト、サーキットブレーカー開放中）。
+ * - agent_outdated: エージェントが会話ログ API を持たない（エージェントの更新が必要）。
+ */
+export type UnresolvedReason = 'unsupported_server' | 'no_recent_session' | 'agent_unreachable' | 'agent_outdated';
+
 export type WindowSessionResolution =
   | { resolved: true; agentType: string; sessionId: string; paneId: string; agentDetected: boolean }
   | {
       resolved: false;
-      reason: 'unsupported_server' | 'no_recent_session';
+      reason: UnresolvedReason;
       /** best-effort な pane 解決結果（セッション未解決でもウィンドウ直接入力のために提供する。Issue #69 仕様調整3）。 */
       paneId?: string;
       agentType?: string;
@@ -242,6 +253,17 @@ export class WindowSessionResolver {
   ) {}
 
   async resolve(window: Window): Promise<WindowSessionResolution> {
+    try {
+      return await this.resolveWindow(window);
+    } catch (err) {
+      // pane の解決（mux 経由）がエージェントに届かない。ハブ全体を遅くしないよう、例外ではなく
+      // 「届かない」という未解決として返す（フロントは offline 表示にする）。
+      if (err instanceof AgentUnreachableError) return { resolved: false, reason: 'agent_unreachable', agentDetected: false };
+      throw err;
+    }
+  }
+
+  private async resolveWindow(window: Window): Promise<WindowSessionResolution> {
     const server = this.serverRepo.findByName(window.serverName);
     if (!server) {
       return { resolved: false, reason: 'unsupported_server', agentDetected: false };
@@ -254,6 +276,7 @@ export class WindowSessionResolver {
     let gate: ProcessGateState = { kind: 'unavailable' };
     let psEntries: PsEntry[] | null = null;
     let rootPids: number[] = [];
+    let unresolvedReason: UnresolvedReason = sources !== null ? 'no_recent_session' : 'unsupported_server';
 
     if (sources !== null) {
       const detection = await this.detectWindowAgentProcess(server, windowPanes);
@@ -261,59 +284,85 @@ export class WindowSessionResolver {
       psEntries = detection?.entries ?? null;
       rootPids = detection?.rootPids ?? [];
 
-      const windowLinked = await this.resolveViaWindow(sources, window);
-      if (windowLinked && await this.passesSessionGate(sources, gate, windowLinked.agentType, windowLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
-        const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, windowLinked.sessionId, windowLinked.agentType, psEntries);
-        if (pane) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, ...pane };
-      }
-
-      const taskLinked = await this.resolveViaTask(sources, window);
-      if (taskLinked && await this.passesSessionGate(sources, gate, taskLinked.agentType, taskLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
-        const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, taskLinked.sessionId, taskLinked.agentType, psEntries);
-        if (pane) return { resolved: true, agentType: taskLinked.agentType, sessionId: taskLinked.sessionId, ...pane };
-      }
-
-      // gate が 'not_detected'（このウィンドウのどの pane にも claude/codex が居ない）の場合、
-      // cwd 照合フォールバックは行わない。tier1/2 はウィンドウ/タスクがそのセッションと明示的に
-      // 紐付いている記録なので存置する一方、tier3 は cwd が一致するだけで他ウィンドウ由来の
-      // セッションを拾ってしまい得るため、エージェントが実際には動いていない pane（bash に戻った
-      // 等）に別セッションの会話を誤って紐付けるバグ（今回の実機報告と同型）を再発させないため。
-      if (gate.kind !== 'not_detected') {
-        // gate が 'detected' の場合、cwd 照合フォールバックの候補ソースを実際にこのウィンドウで
-        // 検出できたエージェント種別に限定する（Issue #338フォロー）。同 cwd に「別ウィンドウで
-        // 生きている別種エージェントのセッション」が存在しても、そちらは mtime が新しいだけで
-        // このウィンドウの実行体とは無関係なため拾わない。
-        const allowedAgentTypes = gate.kind === 'detected' ? gate.agentTypes : null;
-        const processStartMs = gate.kind === 'detected' ? gate.processStartMs : null;
-        const cwdMatched = await this.resolveViaCwdMatch(sources, windowPanes, allowedAgentTypes, processStartMs);
-        // 作成時刻一致で採用した候補（cwdMatched.viaCreationMatch）は、mtime が古くても
-        // 「このプロセスが作ったセッション」という決定的な証拠で既に採用可否を判定済みなので、
-        // 通常の mtime ベースの passesSessionGate は再適用しない（適用すると古い mtime で
-        // 棄却されてしまい、この tier3 拡張の意味がなくなる）。
-        if (cwdMatched && (cwdMatched.viaCreationMatch || await this.passesSessionGate(sources, gate, cwdMatched.agentType, cwdMatched.sessionId, CWD_MATCH_SKEW_MS, psEntries, rootPids))) {
-          const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType, psEntries);
-          if (pane) {
-            // tier3（cwd 照合フォールバック）でのみ解決結果を windows テーブルへ書き戻す（Issue #338）。
-            // window.agentSessionId が未設定のウィンドウで respawn 後の再解決コストを下げるため。
-            // tier1（window 由来）は既に書き込み済みで対象外。tier2（task 由来）は
-            // SessionCaptureService.adoptResolvedSession 内の isAssigned ガードが「そのタスク自身への
-            // 割当」を検出して常に書き込みを拒否するため、自然に書き戻しをスキップする。
-            this.sessionCaptureService.adoptResolvedSession(window.id, cwdMatched.sessionId);
-            return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
-          }
-        }
+      try {
+        const resolved = await this.resolveSessionTiers(server, sources, window, windowPanes, gate, psEntries, rootPids);
+        if (resolved) return resolved;
+      } catch (err) {
+        // 会話ログの読み取り先（エージェント）に届かない／会話ログ API を持たない古いエージェント。
+        // 会話ログは読めないが、pane の解決とウィンドウ直接入力は下の best-effort で続ける。
+        if (err instanceof AgentUnreachableError) unresolvedReason = 'agent_unreachable';
+        else if (err instanceof TranscriptAgentOutdatedError) unresolvedReason = 'agent_outdated';
+        else throw err;
       }
     }
 
-    const reason: 'unsupported_server' | 'no_recent_session' = sources !== null ? 'no_recent_session' : 'unsupported_server';
     // best-effort な agentType の既定は workerType > プロセス検出（単一種別のみ判明している場合）
     // > 既定なし。既定を 'claude' 等に倒すと未検出時に誤表示するため、判明しなければ undefined のまま
     // フロントの警告表示に委ねる（Issue #338フォロー）。
     const detectedType = gate.kind === 'detected' && gate.agentTypes.size === 1 ? [...gate.agentTypes][0] : undefined;
     const fallbackAgentType = window.workerType ?? detectedType;
     const fallback = await this.resolvePaneWithDetection(server, sources, window, windowPanes, '', fallbackAgentType ?? '', psEntries);
-    if (!fallback) return { resolved: false, reason, agentDetected: false };
-    return { resolved: false, reason, paneId: fallback.paneId, agentType: fallbackAgentType, agentDetected: fallback.agentDetected };
+    if (!fallback) return { resolved: false, reason: unresolvedReason, agentDetected: false };
+    return { resolved: false, reason: unresolvedReason, paneId: fallback.paneId, agentType: fallbackAgentType, agentDetected: fallback.agentDetected };
+  }
+
+  /**
+   * 優先順位1〜3（window 由来 → task 由来 → cwd 照合）でセッションを解決する。どの層でも解決できなければ null。
+   * 会話ログの読み取りに失敗した場合（エージェントに届かない等）は例外をそのまま投げ、呼び出し元（resolve）が
+   * 未解決の理由に変換する。
+   */
+  private async resolveSessionTiers(
+    server: ServerConfig,
+    sources: TranscriptSource[],
+    window: Window,
+    windowPanes: MuxPaneInfo[],
+    gate: ProcessGateState,
+    psEntries: PsEntry[] | null,
+    rootPids: number[],
+  ): Promise<WindowSessionResolution | null> {
+    const windowLinked = await this.resolveViaWindow(sources, window);
+    if (windowLinked && await this.passesSessionGate(sources, gate, windowLinked.agentType, windowLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
+      const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, windowLinked.sessionId, windowLinked.agentType, psEntries);
+      if (pane) return { resolved: true, agentType: windowLinked.agentType, sessionId: windowLinked.sessionId, ...pane };
+    }
+
+    const taskLinked = await this.resolveViaTask(sources, window);
+    if (taskLinked && await this.passesSessionGate(sources, gate, taskLinked.agentType, taskLinked.sessionId, EXPLICIT_LINK_SKEW_MS, psEntries, rootPids)) {
+      const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, taskLinked.sessionId, taskLinked.agentType, psEntries);
+      if (pane) return { resolved: true, agentType: taskLinked.agentType, sessionId: taskLinked.sessionId, ...pane };
+    }
+
+    // gate が 'not_detected'（このウィンドウのどの pane にも claude/codex が居ない）の場合、
+    // cwd 照合フォールバックは行わない。tier1/2 はウィンドウ/タスクがそのセッションと明示的に
+    // 紐付いている記録なので存置する一方、tier3 は cwd が一致するだけで他ウィンドウ由来の
+    // セッションを拾ってしまい得るため、エージェントが実際には動いていない pane（bash に戻った
+    // 等）に別セッションの会話を誤って紐付けるバグ（今回の実機報告と同型）を再発させないため。
+    if (gate.kind !== 'not_detected') {
+      // gate が 'detected' の場合、cwd 照合フォールバックの候補ソースを実際にこのウィンドウで
+      // 検出できたエージェント種別に限定する（Issue #338フォロー）。同 cwd に「別ウィンドウで
+      // 生きている別種エージェントのセッション」が存在しても、そちらは mtime が新しいだけで
+      // このウィンドウの実行体とは無関係なため拾わない。
+      const allowedAgentTypes = gate.kind === 'detected' ? gate.agentTypes : null;
+      const processStartMs = gate.kind === 'detected' ? gate.processStartMs : null;
+      const cwdMatched = await this.resolveViaCwdMatch(sources, windowPanes, allowedAgentTypes, processStartMs);
+      // 作成時刻一致で採用した候補（cwdMatched.viaCreationMatch）は、mtime が古くても
+      // 「このプロセスが作ったセッション」という決定的な証拠で既に採用可否を判定済みなので、
+      // 通常の mtime ベースの passesSessionGate は再適用しない（適用すると古い mtime で
+      // 棄却されてしまい、この tier3 拡張の意味がなくなる）。
+      if (cwdMatched && (cwdMatched.viaCreationMatch || await this.passesSessionGate(sources, gate, cwdMatched.agentType, cwdMatched.sessionId, CWD_MATCH_SKEW_MS, psEntries, rootPids))) {
+        const pane = await this.resolvePaneWithDetection(server, sources, window, windowPanes, cwdMatched.sessionId, cwdMatched.agentType, psEntries);
+        if (pane) {
+          // tier3（cwd 照合フォールバック）でのみ解決結果を windows テーブルへ書き戻す（Issue #338）。
+          // window.agentSessionId が未設定のウィンドウで respawn 後の再解決コストを下げるため。
+          // tier1（window 由来）は既に書き込み済みで対象外。tier2（task 由来）は
+          // SessionCaptureService.adoptResolvedSession 内の isAssigned ガードが「そのタスク自身への
+          // 割当」を検出して常に書き込みを拒否するため、自然に書き戻しをスキップする。
+          this.sessionCaptureService.adoptResolvedSession(window.id, cwdMatched.sessionId);
+          return { resolved: true, agentType: cwdMatched.agentType, sessionId: cwdMatched.sessionId, ...pane };
+        }
+      }
+    }
+    return null;
   }
 
   /**
