@@ -226,9 +226,11 @@ function selectPane(
  *    agentDetected は detectAgent() が別途多層判定する（コマンド完全一致 → プロセス実体検査 →
  *    セッション活動シグナル）。
  *
- * セッション自動解決自体はローカルサーバーのみ対応（Phase E-1 時点。SSH/agent サーバーは
- * 'unsupported_server'）。ただし pane 解決（優先順位4のロジック）自体は tmux コマンドの
- * トランスポート抽象化により全サーバー種別で動作するため、セッションが解決できない場合でも
+ * セッション自動解決は、会話ログを読めるサーバー（local と agent。TranscriptSourceProvider.forServer が
+ * 非 null を返すもの）で行う。agent サーバーの会話ログ・プロセス検出（ps）はエージェント経由（Issue #361）。
+ * 読めないサーバー種別は 'unsupported_server'、エージェントに届かなければ 'agent_unreachable'、会話ログ API を
+ * 持たない古いエージェントは 'agent_outdated'。pane 解決（優先順位4のロジック）自体は mux driver の
+ * 抽象化により全サーバー種別で動作するため、セッションが解決できない場合でも
  * best-effort で paneId・window.workerType 由来の agentType を返す（Issue #69 仕様調整3。
  * ウィンドウ直接入力 API がセッション JSONL 未作成でもチャットを開始できるようにするため）。
  * server 自体が見つからない場合（window.serverName が指す ServerConfig が存在しない）は

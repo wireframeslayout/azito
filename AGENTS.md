@@ -233,6 +233,21 @@ packages/
   via `renderForSkill`) each append that protocol on top of the rendered body, gated by
   `signalCapabilitiesForPhase(phase)`; the standalone `/api/sidekicks/:name?render=1` path applies no envelope at all
 
+### Chat mode conversation logs (Issue #361)
+- `modules/transcripts/`: `TranscriptReader` (sync; Claude/Codex JSONL parsing, runs on the machine that owns the files) is
+  wrapped for the hub as the async `TranscriptSource`: `LocalTranscriptSource` (hub's own `~/.claude`/Codex dir) or
+  `AgentTranscriptSource` (HTTP to the agent). `TranscriptSourceProvider.forServer(server)` picks per server
+  (`local` -> hub files, `agent` -> agent API, anything else -> `null` = `unsupported_server`)
+- The agent serves its own readers at `/api/transcripts/:agent/sessions[/:id/{meta,entries,tail}]` (`agent/transcriptRoutes.ts`,
+  registered after the token `onRequest` hook, `agent/authHook.ts`). No endpoint takes a file path; `entries` is offset/before
+  ranged. HOME / `CLAUDE_CONFIG_DIR` / `CODEX_HOME` are the agent process's own. Changing it changes the agent bundle
+  (agents update via the normal version-hash redeploy; an older agent yields `agent_outdated`)
+- `WindowSessionResolver.resolve()` does session resolution (window/task link -> cwd match, process start-time gate) for agent
+  servers too; `ps` goes through `transport.exec`, pane pids through the mux driver. Unresolved reasons: `unsupported_server`,
+  `no_recent_session`, `agent_unreachable` (offline / breaker open), `agent_outdated`. `GET /api/transcripts/:agent/:id`
+  takes `windowId` to pick the window's server (503 `agent_unreachable`, 501 `agent_outdated`). Activity probing
+  (`getActivityStatus`) stays local-only. Isolated servers are not special-cased: docs/{en,ja}/isolated-execution.md section 8
+
 ### Token Usage Tracking
 - `UsageService` aggregates Claude/Codex token usage from local JSONL session files (`ClaudeUsageCollector`, `CodexUsageCollector`)
 - Exposed via `GET /api/usage`; rendered in the header `UsageDropdown`
