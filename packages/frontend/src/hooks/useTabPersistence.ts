@@ -524,7 +524,7 @@ export function useTabPersistence(storageKey?: string) {
     openTab({
       id: tabId,
       type: 'task-form',
-      label: opts.mode === 'edit' ? 'Edit Task' : 'New Task',
+      label: opts.mode === 'edit' ? 'Edit Task.' : 'New Task',
       projectId: opts.projectId,
       taskFormData: opts,
       openerTabId,
