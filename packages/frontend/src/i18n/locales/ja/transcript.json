@@ -78,12 +78,15 @@
     "notFound": {
       "unsupported_server": "このサーバーではチャット表示に対応していません",
       "no_recent_session": "最近のセッションが見つかりません",
-      "error": "セッションの解決に失敗しました"
+      "error": "セッションの解決に失敗しました",
+      "agent_unreachable": "エージェントサーバーに接続できません（オフライン）",
+      "agent_outdated": "このサーバーのエージェントが古いため、チャット表示には更新が必要です"
     },
     "retry": "再試行",
     "empty": {
       "title": "まだ会話がありません",
       "description": "ここから話しかけられます。"
-    }
+    },
+    "hostUnavailableDescription": "下の入力欄からの送信は引き続き使えます。接続が戻ると会話が表示されます。"
   }
 }

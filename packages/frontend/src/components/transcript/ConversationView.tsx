@@ -5,6 +5,7 @@ import { EmptyState, LoadingState } from '../ui';
 import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
+import { hostUnavailableReason } from './hostUnavailable';
 import { deriveContextHistory } from './inputHistory';
 import { InteractionAnswerCard } from './InteractionAnswerCard';
 import { InteractionPendingBanner } from './InteractionPendingBanner';
@@ -116,6 +117,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const lingeringCardQuestion = answeredQuestion !== null && entries.length <= answeredQuestion.entryCount ? answeredQuestion : null;
   const cardQuestion = liveCardQuestion ?? lingeringCardQuestion;
 
+  const hostUnavailable = hostUnavailableReason(error ?? undefined);
+
   const liveStatus = deriveLiveStatus(entries, Date.now());
   const hasLiveStatus = liveStatus !== null;
   const lastEntryTimestamp = liveStatus && entries.length > 0 ? entries[entries.length - 1].timestamp : null;
@@ -146,7 +149,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     setLoadingOlder(true);
     try {
       const { status, body } = await apiWithStatus<ReadSessionBeforeResult | TranscriptErrorResponse>(
-        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}`,
+        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}&windowId=${windowId}`,
       );
       if (generationRef.current !== myGeneration) return; // 別セッションへ切替済み: 破棄
       if (status !== 200 || isErrorResponse(body)) return; // 一時的なエラー: 次回のスクロール到達で再試行
@@ -167,7 +170,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         setLoadingOlder(false);
       }
     }
-  }, [sessionId, agentType]);
+  }, [sessionId, agentType, windowId]);
 
   // 初回読み込み: セッション切り替え毎に全状態をリセットして末尾から取得する。
   useEffect(() => {
@@ -354,7 +357,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           ) : notFound ? (
             <EmptyState title={t('conversation.notFound')} />
           ) : error ? (
-            <EmptyState title={t('conversation.loadError')} description={error} />
+            <EmptyState title={t('conversation.loadError')} description={hostUnavailable ? t(`windowChat.notFound.${hostUnavailable}`) : error} />
           ) : entries.length === 0 ? (
             <EmptyState title={t('conversation.empty')} />
           ) : (

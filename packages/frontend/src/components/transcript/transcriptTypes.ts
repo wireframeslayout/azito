@@ -131,6 +131,13 @@ export interface TranscriptErrorResponse {
   error: string;
 }
 
+/**
+ * セッションを解決できなかった理由（サーバー側 WindowSessionResolver の UnresolvedReason と一致させる）。
+ * unsupported_server: 会話ログを読めないサーバー / no_recent_session: 対応するセッションが無い /
+ * agent_unreachable: エージェントサーバーに届かない（offline）/ agent_outdated: エージェントが古く会話ログ API が無い。
+ */
+export type UnresolvedReason = 'unsupported_server' | 'no_recent_session' | 'agent_unreachable' | 'agent_outdated';
+
 // GET /api/transcripts/resolve-window のレスポンス型（Issue #69 Phase E-1/E-2、仕様調整3で
 // best-effort フィールドを追加）。サーバー側の型
 // （packages/server/src/modules/transcripts/WindowSessionResolver.ts）とフィールドを一致させる。
@@ -146,7 +153,7 @@ export type ResolveWindowResult =
     }
   | {
       resolved: false;
-      reason: 'unsupported_server' | 'no_recent_session';
+      reason: UnresolvedReason;
       /** セッション未解決でもウィンドウ直接入力（/transcripts/window-input）のために提供される best-effort な pane 解決結果。 */
       paneId?: string;
       agentType?: string;
