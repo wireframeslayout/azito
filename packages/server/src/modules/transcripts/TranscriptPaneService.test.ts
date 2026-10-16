@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import { TranscriptPaneService } from './TranscriptPaneService';
-import type { TranscriptSource } from './sources/TranscriptSource';
+import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { MuxPaneInfo } from '@azito/shared';
@@ -25,7 +25,7 @@ const LOCAL_SERVER: ServerConfig = {
 };
 
 function buildDeps(overrides: {
-  getSessionCwd?: TranscriptSource['getSessionCwd'];
+  getSessionCwd?: TranscriptReader['getSessionCwd'];
   listAllPanes?: IMuxClient['listAllPanes'];
   probePane?: IMuxClient['probePane'];
   sendKeysToHandle?: IMuxClient['sendKeysToHandle'];

@@ -1,6 +1,8 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
 import { asPaneHandle, isPaneHandle, isPaneHandleLike } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
+import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import type { IServerRepository } from '../servers/Server';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { AnswerKey, WindowInputService } from './WindowInputService';
@@ -10,7 +12,11 @@ import type { TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
+  /** ハブ自身のマシン（local）の会話ログ。windowId の無い読み取り・一覧・旧ルートの対象。 */
   sources: TranscriptSource[];
+  /** windowId が指すウィンドウのサーバーごとの会話ログ（リモートはエージェント経由）。 */
+  sourceProvider: TranscriptSourceProvider;
+  serverRepo: IServerRepository;
   transcriptPaneService: TranscriptPaneService;
   windowSessionResolver: WindowSessionResolver;
   windowInputService: WindowInputService;
@@ -103,7 +109,7 @@ async function handleReadSession(
   if (beforeRaw !== undefined) {
     const before = parseNonNegativeInt(beforeRaw);
     if (before === 'invalid' || before === undefined) return reply.status(400).send({ error: 'Invalid before' });
-    const result = source.readSessionBefore(sessionId, before);
+    const result = await source.readSessionBefore(sessionId, before);
     if (!result) return reply.status(404).send({ error: 'Session not found' });
     return result;
   }
@@ -111,7 +117,7 @@ async function handleReadSession(
   const offset = parseNonNegativeInt(offsetRaw);
   if (offset === 'invalid') return reply.status(400).send({ error: 'Invalid offset' });
 
-  const result = source.readSession(sessionId, offset);
+  const result = await source.readSession(sessionId, offset);
   if (!result) return reply.status(404).send({ error: 'Session not found' });
 
   if (windowId === undefined) return result;
@@ -153,7 +159,21 @@ function paneHandleMatchesWindow(windowRepo: IWindowRepository, windowId: number
 }
 
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
-  const { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
+  const { sources, sourceProvider, serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
+
+  /**
+   * 読み取りの対象にする会話ログ。windowId が指すウィンドウのサーバーのもの（リモートはエージェント上）。
+   * windowId が無い／不正（不正は handleReadSession が 400 にする）／ウィンドウやサーバーが見つからない
+   * 場合は従来どおりハブ自身（local）。サーバーが会話ログを読めない種別（ssh）なら 'unsupported'。
+   */
+  function sourcesForRead(windowIdRaw: string | undefined): TranscriptSource[] | 'unsupported' {
+    const windowId = parsePositiveInt(windowIdRaw);
+    if (windowId === undefined || windowId === 'invalid') return sources;
+    const window = windowRepo.findById(windowId);
+    const server = window ? serverRepo.findByName(window.serverName) : undefined;
+    if (!server) return sources;
+    return sourceProvider.forServer(server) ?? 'unsupported';
+  }
 
   // ── GET /api/transcripts/resolve-window ── ウィンドウからエージェント会話セッションを自動解決する
   // （Issue #69 Phase E-1）。windowId は数値検証、該当ウィンドウが存在しなければ 404。
@@ -265,7 +285,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   fastify.get<{ Querystring: { agent?: string } }>('/api/transcripts', async (request) => {
     const { agent } = request.query;
     const targetSources = agent ? sources.filter((s) => s.agentType === agent) : sources;
-    const sessions = targetSources.flatMap((s) => s.listSessions());
+    const sessions = (await Promise.all(targetSources.map((s) => s.listSessions()))).flat();
     sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
     return { sessions };
   });
@@ -275,7 +295,9 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string; windowId?: string } }>(
     '/api/transcripts/:agent/:id',
     async (request, reply) => {
-      const source = findSource(sources, request.params.agent);
+      const scoped = sourcesForRead(request.query.windowId);
+      if (scoped === 'unsupported') return reply.status(501).send({ error: 'unsupported_server' });
+      const source = findSource(scoped, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
       return handleReadSession(source, request.params.id, request.query, reply, interactionMonitor, windowRepo);

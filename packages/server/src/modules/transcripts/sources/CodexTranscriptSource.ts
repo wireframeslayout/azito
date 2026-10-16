@@ -11,7 +11,7 @@ import type {
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEntryType,
-  TranscriptSource,
+  TranscriptReader,
 } from './TranscriptSource';
 
 // ─── Codex CLI (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl) 用ソース ───
@@ -398,7 +398,7 @@ function buildParseLine(windowKey: string, seedModel?: string): ParseLineHandle 
 
 // ─── Source ───
 
-export class CodexTranscriptSource implements TranscriptSource {
+export class CodexTranscriptSource implements TranscriptReader {
   readonly agentType = 'codex';
 
   private readonly initialReadMaxBytes: number;

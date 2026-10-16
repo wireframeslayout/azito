@@ -12,7 +12,7 @@ import type {
   TranscriptEntry,
   TranscriptEntryType,
   TranscriptInteraction,
-  TranscriptSource,
+  TranscriptReader,
 } from './TranscriptSource';
 
 // ─── Constants ───
@@ -722,7 +722,7 @@ function buildParseLine(
 
 // ─── Source ───
 
-export class ClaudeTranscriptSource implements TranscriptSource {
+export class ClaudeTranscriptSource implements TranscriptReader {
   readonly agentType = 'claude';
 
   private readonly initialReadMaxBytes: number;

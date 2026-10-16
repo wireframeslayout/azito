@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import transcriptsRoutes from './routes';
-import type { TranscriptSource } from './sources/TranscriptSource';
+import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
+import { HostTranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { WindowInputService } from './WindowInputService';
@@ -10,8 +12,9 @@ import type { InteractionMonitor } from '../notifications/InteractionMonitor';
 
 const SID = '11111111-1111-1111-1111-111111111111';
 const PANE_ID = '%3';
+const LOCAL_SERVER = { name: 'local', type: 'local' } as unknown as ServerConfig;
 
-function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): TranscriptSource {
+function buildClaudeSource(overrides: Partial<TranscriptReader> = {}): TranscriptSource {
   return {
     agentType: 'claude',
     listSessions: () => [],
@@ -23,7 +26,7 @@ function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): Transcrip
   } as unknown as TranscriptSource;
 }
 
-function buildCodexSource(overrides: Partial<TranscriptSource> = {}): TranscriptSource {
+function buildCodexSource(overrides: Partial<TranscriptReader> = {}): TranscriptSource {
   return {
     agentType: 'codex',
     listSessions: () => [],
@@ -78,8 +81,12 @@ function buildApp(
     ...windowOverrides.interactionMonitor,
   } as unknown as InteractionMonitor;
 
+  const serverRepo = {
+    findByName: (name: string) => (name === LOCAL_SERVER.name ? LOCAL_SERVER : undefined),
+  } as unknown as IServerRepository;
+
   const app = Fastify();
-  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
+  app.register(transcriptsRoutes, { sources, sourceProvider: new HostTranscriptSourceProvider(sources), serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
   return app;
 }
 
