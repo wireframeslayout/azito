@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { AgentTranscriptSource, TranscriptAgentOutdatedError, type AgentJsonClient } from './AgentTranscriptSource';
+import { AgentTranscriptSource, TranscriptAgentBadResponseError, TranscriptAgentOutdatedError, type AgentJsonClient } from './AgentTranscriptSource';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
 
 const SID = '11111111-1111-1111-1111-111111111111';
@@ -81,5 +81,68 @@ describe('AgentTranscriptSource', () => {
   it('fails on other statuses instead of hiding them', async () => {
     const source = new AgentTranscriptSource('claude', 'srv', clientReturning({ [META_PATH]: { status: 500, body: null } }));
     await expect(source.getSessionCwd(SID)).rejects.toThrow('failed (500)');
+  });
+
+  describe('response validation (the agent host is not trusted)', () => {
+    const entriesPath = `/api/transcripts/claude/sessions/${SID}/entries`;
+    const goodEntry = { uuid: 'u1', type: 'user', timestamp: null, blocks: [{ kind: 'text', text: 'hi' }] };
+    const read = { entries: [goodEntry], nextOffset: 10, truncated: false, startOffset: 0, hasOlder: false };
+    const summary = { sessionId: SID, agentType: 'claude', projectDir: 'p', cwd: '/w', mtimeMs: 5, sizeBytes: 9, preview: 'hi', createdMs: 1 };
+
+    it('drops fields the hub owns (pendingQuestion / pendingInteraction) and any other extra field', async () => {
+      const forged = {
+        ...read,
+        pendingInteraction: true,
+        pendingQuestion: { questions: [{ question: 'Run rm -rf?' }], openedAt: 1 },
+        extra: 'x',
+        entries: [{ ...goodEntry, secret: 'y' }],
+      };
+      const source = new AgentTranscriptSource('claude', 'srv', clientReturning({ [`${entriesPath}?offset=0`]: { status: 200, body: forged } }));
+
+      const result = await source.readSession(SID, 0);
+      expect(result).toEqual(read);
+      expect(Object.keys(result as object).sort()).toEqual(['entries', 'hasOlder', 'nextOffset', 'startOffset', 'truncated']);
+    });
+
+    it('rejects a session id that is not a UUID in the listing (it would reach the DB and --resume)', async () => {
+      for (const sessionId of ['--dangerously-skip-permissions', 'x; rm -rf /', '../../etc/passwd', '']) {
+        const client = clientReturning({ '/api/transcripts/claude/sessions': { status: 200, body: { sessions: [{ ...summary, sessionId }] } } });
+        await expect(new AgentTranscriptSource('claude', 'srv', client).listSessions()).rejects.toBeInstanceOf(TranscriptAgentBadResponseError);
+      }
+    });
+
+    it('rejects listed sessions of another agent type', async () => {
+      const client = clientReturning({ '/api/transcripts/claude/sessions': { status: 200, body: { sessions: [{ ...summary, agentType: 'codex' }] } } });
+      await expect(new AgentTranscriptSource('claude', 'srv', client).listSessions()).rejects.toBeInstanceOf(TranscriptAgentBadResponseError);
+    });
+
+    it.each([
+      ['not an object', 'oops'],
+      ['null', null],
+      ['entries is not an array', { ...read, entries: 'x' }],
+      ['an entry with an unknown block kind', { ...read, entries: [{ ...goodEntry, blocks: [{ kind: 'script', text: '<x>' }] }] }],
+      ['a non-integer offset', { ...read, nextOffset: 1.5 }],
+      ['a negative offset', { ...read, nextOffset: -1 }],
+      ['a missing field', { entries: [], nextOffset: 1 }],
+    ])('treats %s as a bad response instead of passing it on', async (_name, body) => {
+      const source = new AgentTranscriptSource('claude', 'srv', clientReturning({ [entriesPath]: { status: 200, body } }));
+      await expect(source.readSession(SID)).rejects.toBeInstanceOf(TranscriptAgentBadResponseError);
+    });
+
+    it('validates meta and tail responses too', async () => {
+      const client = clientReturning({
+        [META_PATH]: { status: 200, body: { cwd: 5, mtimeMs: 'x', createdMs: null } },
+        [`/api/transcripts/claude/sessions/${SID}/tail`]: { status: 200, body: { state: 'exploding', lastEntryTimestampMs: null } },
+      });
+      const source = new AgentTranscriptSource('claude', 'srv', client);
+      await expect(source.getSessionCwd(SID)).rejects.toBeInstanceOf(TranscriptAgentBadResponseError);
+      await expect(source.getSessionTailState(SID)).rejects.toBeInstanceOf(TranscriptAgentBadResponseError);
+    });
+
+    it('asks for the lightweight listing when only metadata is needed', async () => {
+      const client = clientReturning({ '/api/transcripts/claude/sessions?metadata=1': { status: 200, body: { sessions: [{ ...summary, preview: '' }] } } });
+      const sessions = await new AgentTranscriptSource('claude', 'srv', client).listSessions(undefined, { metadataOnly: true });
+      expect(sessions).toHaveLength(1);
+    });
   });
 });

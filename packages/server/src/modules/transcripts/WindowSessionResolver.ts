@@ -9,7 +9,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 import type { TailState, TranscriptSource } from './sources/TranscriptSource';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
-import { TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
+import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
 import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
 import type { PsEntry } from './agentProcessDetection';
@@ -22,8 +22,9 @@ import type { PsEntry } from './agentProcessDetection';
  * - no_recent_session: 読めるが、このウィンドウに対応するセッションが見つからない。
  * - agent_unreachable: エージェントサーバーに届かない（offline、タイムアウト、サーキットブレーカー開放中）。
  * - agent_outdated: エージェントが会話ログ API を持たない（エージェントの更新が必要）。
+ * - agent_bad_response: エージェントの応答が取り決め（スキーマ）に合わない。応答は使わない。
  */
-export type UnresolvedReason = 'unsupported_server' | 'no_recent_session' | 'agent_unreachable' | 'agent_outdated';
+export type UnresolvedReason = 'unsupported_server' | 'no_recent_session' | 'agent_unreachable' | 'agent_outdated' | 'agent_bad_response';
 
 export type WindowSessionResolution =
   | { resolved: true; agentType: string; sessionId: string; paneId: string; agentDetected: boolean }
@@ -294,6 +295,7 @@ export class WindowSessionResolver {
         // 会話ログは読めないが、pane の解決とウィンドウ直接入力は下の best-effort で続ける。
         if (err instanceof AgentUnreachableError) unresolvedReason = 'agent_unreachable';
         else if (err instanceof TranscriptAgentOutdatedError) unresolvedReason = 'agent_outdated';
+        else if (err instanceof TranscriptAgentBadResponseError) unresolvedReason = 'agent_bad_response';
         else throw err;
       }
     }
@@ -602,7 +604,7 @@ export class WindowSessionResolver {
     const eligibleSources = sources.filter(
       (source) => allowedAgentTypes === null || allowedAgentTypes.has(source.agentType as 'claude' | 'codex'),
     );
-    const candidates = (await Promise.all(eligibleSources.map((source) => source.listSessions())))
+    const candidates = (await Promise.all(eligibleSources.map((source) => source.listSessions(undefined, { metadataOnly: true }))))
       .flat()
       .filter((session) => session.cwd !== null && windowCwds.has(session.cwd));
     if (candidates.length === 0) return null;

@@ -1,6 +1,7 @@
 import type {
   ReadSessionBeforeResult,
   ReadSessionResult,
+  ListSessionsOptions,
   SessionSummary,
   SessionTailState,
   TranscriptReader,
@@ -19,8 +20,8 @@ export class LocalTranscriptSource implements TranscriptSource {
     return this.reader.agentType;
   }
 
-  async listSessions(limit?: number): Promise<SessionSummary[]> {
-    return this.reader.listSessions(limit);
+  async listSessions(limit?: number, options?: ListSessionsOptions): Promise<SessionSummary[]> {
+    return this.reader.listSessions(limit, options);
   }
 
   async readSession(sessionId: string, offset?: number): Promise<ReadSessionResult | null> {

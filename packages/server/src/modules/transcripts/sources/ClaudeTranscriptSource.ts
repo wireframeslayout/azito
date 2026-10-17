@@ -13,11 +13,15 @@ import type {
   TranscriptEntryType,
   TranscriptInteraction,
   TranscriptReader,
+  ReadBudget,
+  ListSessionsOptions,
 } from './TranscriptSource';
 
 // ─── Constants ───
 
 const PREVIEW_LENGTH = 120;
+/** 軽量一覧（metadataOnly）で cwd を拾うために先頭から読む最大バイト数。 */
+const METADATA_SCAN_BYTES = 128 * 1024;
 const PREVIEW_SCAN_LINES = 20;
 const TAIL_ENTRY_LIMIT = 500;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -416,13 +420,13 @@ interface SessionScanResult {
 }
 
 /** 一覧表示用に、ファイル先頭 previewScanBytes 分だけを走査して preview テキストと cwd を拾う。 */
-function scanSessionMeta(file: string, previewScanBytes: number): SessionScanResult {
+function scanSessionMeta(file: string, previewScanBytes: number, metadataOnly = false): SessionScanResult {
   let content: string;
   try {
     const fd = fs.openSync(file, 'r');
     try {
       const size = fs.fstatSync(fd).size;
-      content = readChunk(fd, size, 0, previewScanBytes).toString('utf-8');
+      content = readChunk(fd, size, 0, metadataOnly ? Math.min(previewScanBytes, METADATA_SCAN_BYTES) : previewScanBytes).toString('utf-8');
     } finally {
       fs.closeSync(fd);
     }
@@ -448,7 +452,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
       cwd = record.cwd;
     }
 
-    if (!preview && record.type === 'user') {
+    if (!metadataOnly && !preview && record.type === 'user') {
       const message = record.message;
       if (isRecord(message)) {
         const previewText = extractPreviewText(message.content);
@@ -456,7 +460,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
       }
     }
 
-    if (preview && cwd !== null) break;
+    if (metadataOnly ? cwd !== null : preview && cwd !== null) break;
   }
   return { preview, cwd };
 }
@@ -773,7 +777,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     }
   }
 
-  listSessions(limit = 50): SessionSummary[] {
+  listSessions(limit = 50, options: ListSessionsOptions = {}): SessionSummary[] {
     const files = listSessionFiles(this.projectsDir());
     this.warmSessionFileCache(files);
 
@@ -793,7 +797,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     const limited = stated.slice(0, limit);
 
     return limited.map(({ file, projectDir, sessionId, stat }) => {
-      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes);
+      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes, options.metadataOnly === true);
       return {
         sessionId,
         agentType: this.agentType,
@@ -883,7 +887,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     }
   }
 
-  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null {
+  readSessionBefore(sessionId: string, before: number, budget: ReadBudget = {}): ReadSessionBeforeResult | null {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;
 
@@ -897,7 +901,7 @@ export class ClaudeTranscriptSource implements TranscriptReader {
     try {
       const size = fs.fstatSync(fd).size;
       const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId), { io: { fd, size }, allowCacheWrite: false });
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine, budget);
     } finally {
       fs.closeSync(fd);
     }

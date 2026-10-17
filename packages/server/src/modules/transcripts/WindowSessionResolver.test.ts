@@ -1233,4 +1233,22 @@ describe('WindowSessionResolver on an agent server (conversation logs read throu
     const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
     expect(result).toMatchObject({ resolved: false, reason: 'no_recent_session' });
   });
+
+  it('reports agent_bad_response when the agent answers outside the contract, keeping the pane for direct input', async () => {
+    const client = { getJson: async () => ({ status: 200, body: { cwd: 123 } }) };
+    const { resolver } = build(client);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toMatchObject({ resolved: false, reason: 'agent_bad_response', paneId: '%1', agentType: 'claude' });
+  });
+
+  it('lists candidates for the cwd match without previews', async () => {
+    const client = fakeAgent({ claude: { [SID_CLAUDE]: { cwd: '/proj', mtimeMs: Date.now(), createdMs: Date.now() - 90 * 1000 } } });
+    const { resolver } = build(client);
+
+    await resolver.resolve(agentWindow());
+    const listings = client.getJson.mock.calls.map(([p]) => p).filter((p) => p.includes('/sessions') && !p.includes('/sessions/'));
+    expect(listings.length).toBeGreaterThan(0);
+    expect(listings.every((p) => p.includes('metadata=1'))).toBe(true);
+  });
 });

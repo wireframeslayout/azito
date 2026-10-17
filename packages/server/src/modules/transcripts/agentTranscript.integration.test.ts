@@ -34,8 +34,8 @@ const CWD = '/work/proj';
 const SERVER_DIR = path.resolve(__dirname, '../../..');
 const REPO_ROOT = path.resolve(SERVER_DIR, '../..');
 
-function userLine(uuid: string, text: string): string {
-  return JSON.stringify({ type: 'user', uuid, timestamp: new Date().toISOString(), cwd: CWD, message: { role: 'user', content: text } }) + '\n';
+function userLine(uuid: string, text: string, cwd = CWD): string {
+  return JSON.stringify({ type: 'user', uuid, timestamp: new Date().toISOString(), cwd, message: { role: 'user', content: text } }) + '\n';
 }
 
 function freePort(): Promise<number> {
@@ -88,7 +88,7 @@ describe('chat API over a real agent process', () => {
     sessionFile = path.join(projectDir, `${SID_LIVE}.jsonl`);
     fs.writeFileSync(sessionFile, userLine('u1', 'first message on the agent host'));
     const stale = path.join(projectDir, `${SID_STALE}.jsonl`);
-    fs.writeFileSync(stale, userLine('old1', 'an older conversation'));
+    fs.writeFileSync(stale, userLine('old1', 'an older conversation', '/work/elsewhere'));
     const hourAgo = (Date.now() - 60 * 60 * 1000) / 1000;
     fs.utimesSync(stale, hourAgo, hourAgo);
 

@@ -120,6 +120,16 @@ export interface ReadSessionBeforeResult {
   hasOlder: boolean;
 }
 
+/** 後方ページングの読み取り予算。maxExpandWindows: 1 で、巨大行のためのウィンドウ拡張（既定は最大8窓）を無効にする。 */
+export interface ReadBudget {
+  maxExpandWindows?: number;
+}
+
+export interface ListSessionsOptions {
+  /** true なら preview を作らず（空文字）、cwd を拾うのに足りる先頭だけを読む。cwd 照合用の軽量一覧。 */
+  metadataOnly?: boolean;
+}
+
 /**
  * 1エージェント種別分のトランスクリプト読み取りを提供するアダプタ。
  * 実装はファイル走査・行パースの詳細を持つが、返す値は上記の正規化スキーマに従う。
@@ -136,10 +146,13 @@ export interface ReadSessionBeforeResult {
  */
 export interface TranscriptReader {
   readonly agentType: string;
-  listSessions(limit?: number): SessionSummary[];
+  listSessions(limit?: number, options?: ListSessionsOptions): SessionSummary[];
   readSession(sessionId: string, offset?: number): ReadSessionResult | null;
-  /** before（既知の行境界バイト位置）より前を後方ページングで読む。セッション未検出は null。 */
-  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null;
+  /**
+   * before（既知の行境界バイト位置）より前を後方ページングで読む。セッション未検出は null。
+   * budget を渡すと1回の読み取り量に上限を課せる（エージェント上の同期読み用）。省略時は reader の既定。
+   */
+  readSessionBefore(sessionId: string, before: number, budget?: ReadBudget): ReadSessionBeforeResult | null;
   getSessionCwd(sessionId: string): { cwd: string | null } | null;
   /**
    * セッション JSONL の最終更新時刻（epoch ms）。WindowSessionResolver の agentDetected 判定
@@ -214,7 +227,7 @@ export interface SessionTailState {
  */
 export interface TranscriptSource {
   readonly agentType: string;
-  listSessions(limit?: number): Promise<SessionSummary[]>;
+  listSessions(limit?: number, options?: ListSessionsOptions): Promise<SessionSummary[]>;
   readSession(sessionId: string, offset?: number): Promise<ReadSessionResult | null>;
   readSessionBefore(sessionId: string, before: number): Promise<ReadSessionBeforeResult | null>;
   getSessionCwd(sessionId: string): Promise<{ cwd: string | null } | null>;

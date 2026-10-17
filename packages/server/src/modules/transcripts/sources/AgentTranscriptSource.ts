@@ -1,4 +1,6 @@
+import type { z } from 'zod';
 import type {
+  ListSessionsOptions,
   ReadSessionBeforeResult,
   ReadSessionResult,
   SessionSummary,
@@ -9,8 +11,12 @@ import {
   AGENT_SESSION_NOT_FOUND,
   agentSessionPath,
   agentSessionsPath,
+  agentSessionMetaSchema,
+  agentSessionsResponseSchema,
+  readSessionBeforeResultSchema,
+  readSessionResultSchema,
+  sessionTailStateSchema,
   type AgentSessionMeta,
-  type AgentSessionsResponse,
 } from './agentTranscriptProtocol';
 
 /** エージェントへの GET。届かないときは AgentUnreachableError を投げる（AgentTransport の実装）。 */
@@ -23,6 +29,14 @@ export class TranscriptAgentOutdatedError extends Error {
   constructor(readonly serverName: string) {
     super(`Agent server "${serverName}" does not support the transcript API (update the agent)`);
     this.name = 'TranscriptAgentOutdatedError';
+  }
+}
+
+/** エージェントの応答がスキーマに合わない（形が崩れている、sessionId が UUID でない等）。応答は使わない。 */
+export class TranscriptAgentBadResponseError extends Error {
+  constructor(readonly serverName: string, readonly path: string) {
+    super(`Agent server "${serverName}" returned an invalid response for ${path}`);
+    this.name = 'TranscriptAgentBadResponseError';
   }
 }
 
@@ -50,9 +64,15 @@ export class AgentTranscriptSource implements TranscriptSource {
     private readonly client: AgentJsonClient,
   ) {}
 
-  async listSessions(limit?: number): Promise<SessionSummary[]> {
-    const query = limit === undefined ? '' : `?limit=${limit}`;
-    const body = await this.fetchOk<AgentSessionsResponse>(`${agentSessionsPath(this.agentType)}${query}`);
+  async listSessions(limit?: number, options: ListSessionsOptions = {}): Promise<SessionSummary[]> {
+    const params = new URLSearchParams();
+    if (limit !== undefined) params.set('limit', String(limit));
+    if (options.metadataOnly) params.set('metadata', '1');
+    const query = params.size > 0 ? `?${params.toString()}` : '';
+    const path = `${agentSessionsPath(this.agentType)}${query}`;
+    const body = await this.fetchOk(path, agentSessionsResponseSchema);
+    // 要求した agentType 以外のセッションは受け付けない（ハブ側の agentType と取り違えない）。
+    if (body.sessions.some((s) => s.agentType !== this.agentType)) throw new TranscriptAgentBadResponseError(this.serverName, path);
     this.createdMsBySession.clear();
     for (const { createdMs, sessionId } of body.sessions) this.createdMsBySession.set(sessionId, createdMs);
     return body.sessions.map(({ createdMs: _createdMs, ...summary }) => summary);
@@ -60,11 +80,11 @@ export class AgentTranscriptSource implements TranscriptSource {
 
   readSession(sessionId: string, offset?: number): Promise<ReadSessionResult | null> {
     const query = offset === undefined ? '' : `?offset=${offset}`;
-    return this.fetchOrNull<ReadSessionResult>(`${agentSessionPath(this.agentType, sessionId, 'entries')}${query}`);
+    return this.fetchOrNull(`${agentSessionPath(this.agentType, sessionId, 'entries')}${query}`, readSessionResultSchema);
   }
 
   readSessionBefore(sessionId: string, before: number): Promise<ReadSessionBeforeResult | null> {
-    return this.fetchOrNull<ReadSessionBeforeResult>(`${agentSessionPath(this.agentType, sessionId, 'entries')}?before=${before}`);
+    return this.fetchOrNull(`${agentSessionPath(this.agentType, sessionId, 'entries')}?before=${before}`, readSessionBeforeResultSchema);
   }
 
   async getSessionCwd(sessionId: string): Promise<{ cwd: string | null } | null> {
@@ -83,7 +103,7 @@ export class AgentTranscriptSource implements TranscriptSource {
   }
 
   async getSessionTailState(sessionId: string): Promise<SessionTailState> {
-    const state = await this.fetchOrNull<SessionTailState>(agentSessionPath(this.agentType, sessionId, 'tail'));
+    const state = await this.fetchOrNull(agentSessionPath(this.agentType, sessionId, 'tail'), sessionTailStateSchema);
     // セッションが無い場合の契約（TranscriptReader.getSessionTailState）は 'unknown'。
     return state ?? { state: 'unknown', lastEntryTimestampMs: null };
   }
@@ -91,27 +111,33 @@ export class AgentTranscriptSource implements TranscriptSource {
   private async getMeta(sessionId: string): Promise<AgentSessionMeta | null> {
     const cached = this.metaCache.get(sessionId);
     if (cached && Date.now() - cached.at < META_TTL_MS) return cached.meta;
-    const meta = await this.fetchOrNull<AgentSessionMeta>(agentSessionPath(this.agentType, sessionId, 'meta'));
+    const meta = await this.fetchOrNull(agentSessionPath(this.agentType, sessionId, 'meta'), agentSessionMetaSchema);
     this.metaCache.set(sessionId, { at: Date.now(), meta });
     if (this.metaCache.size > 256) this.metaCache.delete(this.metaCache.keys().next().value as string);
     return meta;
   }
 
-  private async fetchOk<T>(path: string): Promise<T> {
+  private async fetchOk<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S>> {
     const { status, body } = await this.client.getJson(path);
     if (status === 404) throw new TranscriptAgentOutdatedError(this.serverName);
     if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status})`);
-    return body as T;
+    return this.parse(path, schema, body);
   }
 
   /** 200 は本文、セッション不在の 404 は null。経路自体が無い 404（古いエージェント）は TranscriptAgentOutdatedError。 */
-  private async fetchOrNull<T>(path: string): Promise<T | null> {
+  private async fetchOrNull<S extends z.ZodType>(path: string, schema: S): Promise<z.infer<S> | null> {
     const { status, body } = await this.client.getJson(path);
     if (status === 404) {
       if (isSessionNotFound(body)) return null;
       throw new TranscriptAgentOutdatedError(this.serverName);
     }
     if (status < 200 || status >= 300) throw new Error(`Agent ${path} failed (${status})`);
-    return body as T;
+    return this.parse(path, schema, body);
+  }
+
+  private parse<S extends z.ZodType>(path: string, schema: S, body: unknown): z.infer<S> {
+    const parsed = schema.safeParse(body);
+    if (!parsed.success) throw new TranscriptAgentBadResponseError(this.serverName, path);
+    return parsed.data;
   }
 }

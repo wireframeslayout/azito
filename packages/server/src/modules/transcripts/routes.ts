@@ -4,13 +4,13 @@ import type { TranscriptSource } from './sources/TranscriptSource';
 import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
 import type { IServerRepository } from '../servers/Server';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
-import { TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
+import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { AnswerKey, WindowInputService } from './WindowInputService';
 import type { IWindowRepository } from '../windows/Window';
 import type { InteractionMonitor, InteractionQuestion } from '../notifications/InteractionMonitor';
-import type { TranscriptEntry } from './sources/TranscriptSource';
+import type { ReadSessionBeforeResult, ReadSessionResult, TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
@@ -33,6 +33,7 @@ export interface TranscriptsRouteOptions {
 function replyHostReadError(err: unknown, reply: FastifyReply): FastifyReply {
   if (err instanceof AgentUnreachableError) return reply.status(503).send({ error: 'agent_unreachable' });
   if (err instanceof TranscriptAgentOutdatedError) return reply.status(501).send({ error: 'agent_outdated' });
+  if (err instanceof TranscriptAgentBadResponseError) return reply.status(502).send({ error: 'agent_bad_response' });
   throw err;
 }
 
@@ -59,6 +60,25 @@ function parsePositiveInt(raw: string | undefined): number | undefined | 'invali
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) return 'invalid';
   return value;
+}
+
+/**
+ * 読み取り結果から、クライアントへ返すフィールドを明示的に組み立てる。source（特にエージェント経由）の
+ * 戻り値をそのまま展開すると、ハブが InteractionMonitor から付ける pendingInteraction / pendingQuestion
+ * のようなハブ固有のフィールドを、source 側が偽装して素通りさせられる。
+ */
+function toReadResponse(result: ReadSessionResult): ReadSessionResult {
+  return {
+    entries: result.entries,
+    nextOffset: result.nextOffset,
+    truncated: result.truncated,
+    startOffset: result.startOffset,
+    hasOlder: result.hasOlder,
+  };
+}
+
+function toReadBeforeResponse(result: ReadSessionBeforeResult): ReadSessionBeforeResult {
+  return { entries: result.entries, prevOffset: result.prevOffset, hasOlder: result.hasOlder };
 }
 
 /**
@@ -123,14 +143,15 @@ async function handleReadSession(
     if (before === 'invalid' || before === undefined) return reply.status(400).send({ error: 'Invalid before' });
     const result = await source.readSessionBefore(sessionId, before);
     if (!result) return reply.status(404).send({ error: 'Session not found' });
-    return result;
+    return toReadBeforeResponse(result);
   }
 
   const offset = parseNonNegativeInt(offsetRaw);
   if (offset === 'invalid') return reply.status(400).send({ error: 'Invalid offset' });
 
-  const result = await source.readSession(sessionId, offset);
-  if (!result) return reply.status(404).send({ error: 'Session not found' });
+  const read = await source.readSession(sessionId, offset);
+  if (!read) return reply.status(404).send({ error: 'Session not found' });
+  const result = toReadResponse(read);
 
   if (windowId === undefined) return result;
 
@@ -175,15 +196,17 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
 
   /**
    * 読み取りの対象にする会話ログ。windowId が指すウィンドウのサーバーのもの（リモートはエージェント上）。
-   * windowId が無い／不正（不正は handleReadSession が 400 にする）／ウィンドウやサーバーが見つからない
-   * 場合は従来どおりハブ自身（local）。サーバーが会話ログを読めない種別（ssh）なら 'unsupported'。
+   * windowId が無い／不正（不正は handleReadSession が 400 にする）なら従来どおりハブ自身（local）。windowId
+   * 指定でウィンドウが無ければ 'window_not_found'、サーバーが無い・会話ログを読めない種別なら 'unsupported'
+   * （同じ UUID のハブ上の会話を誤って返さないため、local へはフォールバックしない）。
    */
-  function sourcesForRead(windowIdRaw: string | undefined): TranscriptSource[] | 'unsupported' {
+  function sourcesForRead(windowIdRaw: string | undefined): TranscriptSource[] | 'window_not_found' | 'unsupported' {
     const windowId = parsePositiveInt(windowIdRaw);
     if (windowId === undefined || windowId === 'invalid') return sources;
     const window = windowRepo.findById(windowId);
-    const server = window ? serverRepo.findByName(window.serverName) : undefined;
-    if (!server) return sources;
+    if (!window) return 'window_not_found';
+    const server = serverRepo.findByName(window.serverName);
+    if (!server) return 'unsupported';
     return sourceProvider.forServer(server) ?? 'unsupported';
   }
 
@@ -308,6 +331,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     '/api/transcripts/:agent/:id',
     async (request, reply) => {
       const scoped = sourcesForRead(request.query.windowId);
+      if (scoped === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
       if (scoped === 'unsupported') return reply.status(501).send({ error: 'unsupported_server' });
       const source = findSource(scoped, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });

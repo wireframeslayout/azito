@@ -1,6 +1,7 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { TranscriptReader } from '../modules/transcripts/sources/TranscriptSource';
 import {
+  AGENT_LIST_MAX_LIMIT,
   AGENT_SESSION_NOT_FOUND,
   AGENT_TRANSCRIPT_API_PREFIX,
   type AgentSessionMeta,
@@ -12,7 +13,12 @@ export interface AgentTranscriptRoutesOptions {
   readers: TranscriptReader[];
 }
 
-const MAX_LIST_LIMIT = 200;
+/**
+ * 後方ページングの1回あたりの読み取り予算。窓の拡張（巨大行のための最大8窓 = 最大40MB の同期読み）を無効にし、
+ * 1回を reader の窓1つ（5MB）の範囲に閉じ込める。エージェントのイベントループ（ターミナル中継・health）を
+ * 止めないため。読めないほど巨大な行はページ単位で飛ばされ、hasOlder で続きを辿れる。
+ */
+const BEFORE_READ_BUDGET = { maxExpandWindows: 1 } as const;
 
 /** 非負整数のクエリ。未指定は undefined、不正値は 'invalid'。 */
 function parseNonNegativeInt(raw: string | undefined): number | undefined | 'invalid' {
@@ -37,12 +43,16 @@ const transcriptRoutes: FastifyPluginCallback<AgentTranscriptRoutesOptions> = (f
     return readers.find((r) => r.agentType === agentType);
   }
 
-  fastify.get<{ Params: { agent: string }; Querystring: { limit?: string } }>(prefix, async (request, reply) => {
+  fastify.get<{ Params: { agent: string }; Querystring: { limit?: string; metadata?: string } }>(prefix, async (request, reply) => {
     const reader = findReader(request.params.agent);
     if (!reader) return reply.status(404).send({ error: 'unknown_agent' });
     const limit = parseNonNegativeInt(request.query.limit);
     if (limit === 'invalid' || limit === 0) return reply.status(400).send({ error: 'Invalid limit' });
-    const sessions = reader.listSessions(Math.min(limit ?? MAX_LIST_LIMIT, MAX_LIST_LIMIT));
+    // 件数の指定が無ければ reader の既定（50）。指定があっても AGENT_LIST_MAX_LIMIT まで。metadata=1 は preview を
+    // 作らない軽量一覧（cwd 照合用。preview の走査で Codex だと1件 512KB を読むのを避ける）。
+    const sessions = reader.listSessions(limit === undefined ? undefined : Math.min(limit, AGENT_LIST_MAX_LIMIT), {
+      metadataOnly: request.query.metadata === '1',
+    });
     const body: AgentSessionsResponse = {
       sessions: sessions.map((s) => ({ ...s, createdMs: reader.getSessionCreatedMs(s.sessionId) })),
     };
@@ -74,7 +84,7 @@ const transcriptRoutes: FastifyPluginCallback<AgentTranscriptRoutesOptions> = (f
       if (beforeRaw !== undefined) {
         const before = parseNonNegativeInt(beforeRaw);
         if (before === 'invalid' || before === undefined) return reply.status(400).send({ error: 'Invalid before' });
-        const result = reader.readSessionBefore(request.params.id, before);
+        const result = reader.readSessionBefore(request.params.id, before, BEFORE_READ_BUDGET);
         if (!result) return reply.status(404).send({ error: AGENT_SESSION_NOT_FOUND });
         return result;
       }

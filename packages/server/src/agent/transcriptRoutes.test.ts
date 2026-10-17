@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fs from 'fs';
 import os from 'os';
@@ -167,6 +167,96 @@ describe('agent-side directory resolution', () => {
     await app.register(transcriptRoutes, { readers: [new ClaudeTranscriptSource()] });
     const res = await app.inject({ method: 'GET', url: '/api/transcripts/claude/sessions' });
     expect((res.json() as { sessions: { sessionId: string }[] }).sessions.map((s) => s.sessionId)).toEqual([SID]);
+    await app.close();
+  });
+});
+
+describe('agent read budgets', () => {
+  const SID_BIG = '33333333-3333-3333-3333-333333333333';
+  let root: string;
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-budget-'));
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  function uuid(n: number): string {
+    return `${String(n).padStart(8, '0')}-0000-0000-0000-000000000000`;
+  }
+
+  function sumRequestedBytes(spy: { mock: { calls: unknown[][] } }): number {
+    return spy.mock.calls.reduce((sum, call) => sum + (call[3] as number), 0);
+  }
+
+  async function appWith(reader: ClaudeTranscriptSource | CodexTranscriptSource): Promise<FastifyInstance> {
+    const app = Fastify();
+    await app.register(transcriptRoutes, { readers: [reader] });
+    return app;
+  }
+
+  it('reads at most one window for a before-read even when the previous line is far larger than the window', async () => {
+    const projects = path.join(root, 'projects');
+    fs.mkdirSync(path.join(projects, 'p'), { recursive: true });
+    const small = userLine('s1', 'small');
+    const huge = userLine('huge', 'x'.repeat(40 * 1024));
+    fs.writeFileSync(path.join(projects, 'p', `${SID_BIG}.jsonl`), small + huge + userLine('tail', 'tail'));
+    const before = Buffer.byteLength(small) + Buffer.byteLength(huge);
+    const WINDOW = 1024;
+    const reader = new ClaudeTranscriptSource(projects, { incrementalReadMaxBytes: WINDOW });
+    const app = await appWith(reader);
+
+    const spy = vi.spyOn(fs, 'readSync');
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/sessions/${SID_BIG}/entries?before=${before}` });
+    const viaAgent = sumRequestedBytes(spy);
+    expect(res.statusCode).toBe(200);
+    // The window is skipped as unreadable but paging can continue (hasOlder), instead of expanding up to 8 windows.
+    expect(res.json()).toMatchObject({ entries: [], hasOlder: true });
+    expect(viaAgent).toBeLessThanOrEqual(WINDOW);
+
+    spy.mockClear();
+    reader.readSessionBefore(SID_BIG, before);
+    expect(sumRequestedBytes(spy)).toBeGreaterThan(viaAgent);
+    await app.close();
+  });
+
+  it('returns the reader\'s default number of sessions when no limit is given, and never more than the cap', async () => {
+    const projects = path.join(root, 'projects');
+    fs.mkdirSync(path.join(projects, 'p'), { recursive: true });
+    for (let i = 1; i <= 130; i++) fs.writeFileSync(path.join(projects, 'p', `${uuid(i)}.jsonl`), userLine(`u${i}`, 'hi'));
+    const app = await appWith(new ClaudeTranscriptSource(projects));
+
+    const def = await app.inject({ method: 'GET', url: '/api/transcripts/claude/sessions' });
+    expect((def.json() as { sessions: unknown[] }).sessions).toHaveLength(50);
+    const big = await app.inject({ method: 'GET', url: '/api/transcripts/claude/sessions?limit=500' });
+    expect((big.json() as { sessions: unknown[] }).sessions).toHaveLength(100);
+    await app.close();
+  });
+
+  it('metadata=1 lists without building previews and reads far less of each file than the preview listing', async () => {
+    const sessions = path.join(root, 'sessions', '2026', '01', '01');
+    fs.mkdirSync(sessions, { recursive: true });
+    const meta = JSON.stringify({ type: 'session_meta', payload: { id: SID, cwd: '/work/proj' } }) + '\n';
+    // The first user message (the preview) only appears after a large amount of other records.
+    const filler = JSON.stringify({ type: 'turn_context', payload: { pad: 'y'.repeat(200 * 1024) } }) + '\n';
+    const user = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'late preview' }] } }) + '\n';
+    fs.writeFileSync(path.join(sessions, `rollout-2026-01-01T00-00-00-${SID}.jsonl`), meta + filler + user);
+    const app = await appWith(new CodexTranscriptSource(path.join(root, 'sessions')));
+
+    const spy = vi.spyOn(fs, 'readSync');
+    const full = await app.inject({ method: 'GET', url: '/api/transcripts/codex/sessions' });
+    const fullBytes = sumRequestedBytes(spy);
+    spy.mockClear();
+    const light = await app.inject({ method: 'GET', url: '/api/transcripts/codex/sessions?metadata=1' });
+    const lightBytes = sumRequestedBytes(spy);
+
+    const lightSession = (light.json() as { sessions: { cwd: string | null; preview: string }[] }).sessions[0];
+    expect(lightSession).toMatchObject({ cwd: '/work/proj', preview: '' });
+    expect((full.json() as { sessions: { preview: string }[] }).sessions[0].preview).toBe('late preview');
+    expect(lightBytes).toBeLessThan(fullBytes);
     await app.close();
   });
 });

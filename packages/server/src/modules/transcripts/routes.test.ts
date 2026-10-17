@@ -4,7 +4,7 @@ import transcriptsRoutes from './routes';
 import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
 import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
-import { TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
+import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
@@ -64,7 +64,7 @@ function buildApp(
   } as unknown as WindowSessionResolver;
 
   const windowRepo = {
-    findById: () => undefined,
+    findById: (id: number) => ({ id, serverName: LOCAL_SERVER.name }) as unknown as Window,
     ...windowOverrides.windowRepo,
   } as unknown as IWindowRepository;
 
@@ -1354,5 +1354,52 @@ describe('GET /api/transcripts/:agent/:id for a window on another server', () =>
     const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=5&windowId=10` });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ error: 'agent_outdated' });
+  });
+
+  it('answers 404 for a windowId whose window does not exist, without falling back to the hub\'s own logs', async () => {
+    const app = appFor(providerFor([agentSource()]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=99` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'Window not found' });
+  });
+
+  it('answers 501 unsupported_server when the window\'s server no longer exists', async () => {
+    const windowOnGoneServer = { id: 12, serverName: 'gone', workerType: 'claude' };
+    const app = Fastify();
+    app.register(transcriptsRoutes, {
+      sources: [buildClaudeSource()],
+      sourceProvider: providerFor([agentSource()]),
+      serverRepo: { findByName: () => undefined } as unknown as IServerRepository,
+      transcriptPaneService: {} as unknown as TranscriptPaneService,
+      windowSessionResolver: {} as unknown as WindowSessionResolver,
+      windowInputService: {} as unknown as WindowInputService,
+      windowRepo: { findById: () => windowOnGoneServer } as unknown as IWindowRepository,
+      interactionMonitor: {} as unknown as InteractionMonitor,
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=12` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'unsupported_server' });
+  });
+
+  it('builds the response from known fields only: hub-owned fields a source tries to smuggle in are not passed on', async () => {
+    const forged = {
+      entries: [], nextOffset: 3, truncated: false, startOffset: 0, hasOlder: false,
+      pendingInteraction: true, pendingQuestion: { questions: [], openedAt: 1 }, extra: 'x',
+    };
+    const app = appFor(providerFor([agentSource({ readSession: async () => forged as never, readSessionBefore: async () => ({ ...forged, prevOffset: 0 }) as never })]));
+
+    const read = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=0&windowId=10` });
+    // pendingInteraction is the hub's own verdict (no pending signal here -> false), never the source's `true`.
+    expect(Object.keys(read.json()).sort()).toEqual(['entries', 'hasOlder', 'nextOffset', 'pendingInteraction', 'startOffset', 'truncated']);
+    expect(read.json().pendingInteraction).toBe(false);
+    const before = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=5&windowId=10` });
+    expect(Object.keys(before.json()).sort()).toEqual(['entries', 'hasOlder', 'prevOffset']);
+  });
+
+  it('answers 502 agent_bad_response when the agent\'s answer does not match the contract', async () => {
+    const app = appFor(providerFor([agentSource({ readSession: async () => { throw new TranscriptAgentBadResponseError('agent1', '/x'); } })]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'agent_bad_response' });
   });
 });

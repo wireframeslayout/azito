@@ -12,6 +12,8 @@ import type {
   TranscriptEntry,
   TranscriptEntryType,
   TranscriptReader,
+  ReadBudget,
+  ListSessionsOptions,
 } from './TranscriptSource';
 
 // ─── Codex CLI (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl) 用ソース ───
@@ -37,6 +39,8 @@ import type {
 // ─── Constants ───
 
 const PREVIEW_LENGTH = 120;
+/** 軽量一覧（metadataOnly）で cwd を拾うために先頭から読む最大バイト数。 */
+const METADATA_SCAN_BYTES = 128 * 1024;
 /** session_meta は先頭行、最初のユーザー発話は developer/environment_context に続く数行後に来るため、
  * Claude（20行）より広めに走査する。 */
 const PREVIEW_SCAN_LINES = 200;
@@ -163,13 +167,13 @@ function extractUserPreviewText(content: unknown): string | null {
 }
 
 /** 一覧表示用に、ファイル先頭 previewScanBytes 分だけを走査して preview テキストと cwd を拾う。 */
-function scanSessionMeta(file: string, previewScanBytes: number): SessionScanResult {
+function scanSessionMeta(file: string, previewScanBytes: number, metadataOnly = false): SessionScanResult {
   let content: string;
   try {
     const fd = fs.openSync(file, 'r');
     try {
       const size = fs.fstatSync(fd).size;
-      content = readChunk(fd, size, 0, previewScanBytes).toString('utf-8');
+      content = readChunk(fd, size, 0, metadataOnly ? Math.min(previewScanBytes, METADATA_SCAN_BYTES) : previewScanBytes).toString('utf-8');
     } finally {
       fs.closeSync(fd);
     }
@@ -196,6 +200,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
     }
 
     if (
+      !metadataOnly &&
       !preview &&
       record.type === 'response_item' &&
       isRecord(record.payload) &&
@@ -206,7 +211,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
       if (text) preview = text.slice(0, PREVIEW_LENGTH);
     }
 
-    if (preview && cwd !== null) break;
+    if (metadataOnly ? cwd !== null : preview && cwd !== null) break;
   }
   return { preview, cwd };
 }
@@ -451,7 +456,7 @@ export class CodexTranscriptSource implements TranscriptReader {
     }
   }
 
-  listSessions(limit = 50): SessionSummary[] {
+  listSessions(limit = 50, options: ListSessionsOptions = {}): SessionSummary[] {
     const files = this.scanSessionFiles();
     this.warmSessionFileCache(files);
 
@@ -470,7 +475,7 @@ export class CodexTranscriptSource implements TranscriptReader {
     const limited = stated.slice(0, limit);
 
     return limited.map(({ file, sessionId, stat }) => {
-      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes);
+      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes, options.metadataOnly === true);
       return {
         sessionId,
         agentType: this.agentType,
@@ -557,7 +562,7 @@ export class CodexTranscriptSource implements TranscriptReader {
     this.lastKnownModel.set(sessionId, { offset: nextOffset, model });
   }
 
-  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null {
+  readSessionBefore(sessionId: string, before: number, budget: ReadBudget = {}): ReadSessionBeforeResult | null {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;
 
@@ -573,7 +578,7 @@ export class CodexTranscriptSource implements TranscriptReader {
       // 後方ページングは lastKnownModel を seed も更新もしない（過去分の読み直しであり、直前の
       // turn_context が窓外なら model 無し表示のままでよい。フォールバック合成はしない）。
       const { parseLine } = buildParseLine(`b${before}`);
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine, budget);
     } finally {
       fs.closeSync(fd);
     }
