@@ -36,13 +36,6 @@ function resolveTmuxWindowMatch(sessions: Session[], target: string): WindowMatc
   return strippedWin ? { window: strippedWin, matchedRaw: false } : null;
 }
 
-// Shared by resolveActivePane (below) and any caller that only needs the live tmux window
-// (e.g. its current pane count) rather than a specific pane — see TaskPanel's SP window bar
-// ("▣ win ▾ Nペイン", Issue #69 T5).
-export function resolveTmuxWindow(sessions: Session[], target: string): TmuxWindow | null {
-  return resolveTmuxWindowMatch(sessions, target)?.window ?? null;
-}
-
 export function resolveActivePane(
   sessions: Session[],
   target: string,
@@ -93,7 +86,8 @@ function findWindowByRef(sessions: Session[], ref: TerminalRef): TmuxWindow | un
 function checkWindowExistsByRef(sessions: Session[], ref: TerminalRef): WindowExistsResult {
   const win = findWindowByRef(sessions, ref);
   if (!win) return { found: false, paneFound: false };
-  const paneFound = win.panes.some(p => p.index === ref.pane);
+  // A window without panes (misao) is not a missing pane: the terminal socket answers it with its own close code (4412).
+  const paneFound = win.panes.length === 0 || win.panes.some(p => p.index === ref.pane);
   return { found: true, paneFound };
 }
 
@@ -126,6 +120,12 @@ export function checkWindowExists(
 ): WindowExistsResult {
   if (terminalRef) return checkWindowExistsByRef(sessions, terminalRef);
   return checkWindowExistsByTarget(sessions, target);
+}
+
+/** Handle of the pane `ref` points at, or undefined when the sessions do not list it (or the driver reports no handles). */
+export function findPaneHandle(sessions: Session[] | undefined, ref: TerminalRef): string | undefined {
+  if (!sessions) return undefined;
+  return findWindowByRef(sessions, ref)?.panes.find((p) => p.index === ref.pane)?.handle;
 }
 
 export function resolveActivePaneByRef(

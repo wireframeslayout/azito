@@ -39,7 +39,7 @@ fi
 # package-manager and version-manager locations are invisible. launchd is the
 # harshest: it exports no PATH at all, leaving /usr/bin:/bin:/usr/sbin:/sbin,
 # which excludes Homebrew entirely. The hub itself runs on the bundled node, but
-# it shells out to host tools — tmux (required), `node`/`npx` for the browser
+# it shells out to host tools — tmux (optional), git, `node`/`npx` for the browser
 # runtime and the supervisor, plus the claude/codex CLIs — so those have to be
 # reachable. Without this the Setup screen reports tmux/Node.js as missing on a
 # host where both work fine in a login shell.

@@ -16,10 +16,17 @@ import type { PaneHandleResolver } from '../operations/PaneHandleResolver';
  */
 export interface InteractionSignal {
   serverName: string;
+  /**
+   * A tmux pane's coordinates, matched against the `windows` table here — or, for a signal
+   * whose sender the hub already resolved to a window (a misao pane id), that window.
+   */
   target: {
     sessionName: string;
     windowIndex: number;
     windowName: string;
+    paneIndex: number;
+  } | {
+    windowId: number;
     paneIndex: number;
   };
   event: 'open' | 'cancel';
@@ -292,6 +299,9 @@ export class InteractionMonitor {
 
   /** Resolve the signal to every matching window ID (see recordSignal's doc comment on why more than one row can match). */
   private resolveWindowIds(signal: InteractionSignal): number[] {
+    const { target } = signal;
+    if ('windowId' in target) return [target.windowId];
+
     if (signal.muxPaneRef && this.paneHandleResolver) {
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) return [resolved.windowId];
@@ -306,11 +316,11 @@ export class InteractionMonitor {
       if (w.serverName !== signal.serverName) continue;
 
       const { sessionName, windowSpec } = parseWindowTarget(w.tmuxTarget);
-      if (sessionName !== signal.target.sessionName) continue;
-      if (!windowSpecMatches(windowSpec, signal.target.windowIndex, signal.target.windowName)) continue;
+      if (sessionName !== target.sessionName) continue;
+      if (!windowSpecMatches(windowSpec, target.windowIndex, target.windowName)) continue;
 
-      const paneIndex = extractPaneIndex(windowSpec, signal.target.windowIndex, signal.target.windowName);
-      if (paneIndex !== null && paneIndex !== signal.target.paneIndex) continue;
+      const paneIndex = extractPaneIndex(windowSpec, target.windowIndex, target.windowName);
+      if (paneIndex !== null && paneIndex !== target.paneIndex) continue;
 
       windowIds.push(w.id);
     }

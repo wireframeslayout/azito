@@ -63,4 +63,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: shellcheck
-        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh
+        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh

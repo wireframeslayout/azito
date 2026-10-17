@@ -11,7 +11,7 @@ function makeClient(handler: (args: string[]) => Promise<{ stdout: string; stder
   return new TmuxClient(factory, '', '', '', 'wh-tok');
 }
 
-const server = { name: 'local', type: 'local' as const, muxRuntime: 'system' as const } as any;
+const server = { name: 'local', type: 'local' as const, defaultMux: 'tmux' as const, muxRuntime: 'system' as const } as any;
 
 describe('TmuxClient IMuxClient', () => {
   describe('resolvePane', () => {

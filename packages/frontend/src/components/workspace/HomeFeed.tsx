@@ -6,6 +6,7 @@ import { useActiveWindowRows } from '../../hooks/useActiveWindowRows';
 import type { ActiveWindowRow } from '../../hooks/useActiveWindowRows';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import type { Task } from '../../pages/workspace/types';
 import { getProjectColorFallback } from '../../pages/workspace/types';
@@ -57,6 +58,7 @@ function statusLabelKey(status: string): string {
 }
 
 export default function HomeFeed({ allTasks, allProjects, openTask, connectPane, onAddWindow }: HomeFeedProps) {
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common']);
   const { rows } = useActiveWindowRows();
 
@@ -110,7 +112,7 @@ export default function HomeFeed({ allTasks, allProjects, openTask, connectPane,
       { taskId: group.taskId, windowId: group.primaryRow.windowId, serverName: group.primaryRow.serverName, target: group.primaryRow.target, projectId: group.projectId },
       group.title,
       openTask,
-      connectPane,
+      openTerminal,
     );
   };
 

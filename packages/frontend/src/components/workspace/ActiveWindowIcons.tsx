@@ -7,7 +7,8 @@ import { ActiveWindowDot } from '../ui/ActiveWindowDot';
 import { buildWindowTaskMap, lookupWindowTask } from '../../lib/windowTask';
 import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import { selectTaskTerminal } from './TaskPanel';
-import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
+import type { TerminalRef } from '../../lib/terminalRef';
 
 interface ActiveWindowIconsProps {
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
@@ -35,6 +36,7 @@ function useMaxVisible(containerRef: React.RefObject<HTMLDivElement | null>): nu
 }
 
 export default function ActiveWindowIcons({ connectPane, openTask, taskWindows }: ActiveWindowIconsProps) {
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { rows } = useActiveWindowRows();
   const { dismissFinished } = useAgentActivity();
@@ -50,10 +52,7 @@ export default function ActiveWindowIcons({ connectPane, openTask, taskWindows }
       selectTaskTerminal(taskId, { serverName: row.serverName, target: row.target });
       openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), row.projectId);
     } else {
-      const ref: TerminalRef = row.windowId != null
-        ? { kind: 'windowId', serverName: row.serverName, windowId: row.windowId, pane: 1 }
-        : terminalRefFromTarget(row.serverName, row.target);
-      connectPane(ref, row.projectId);
+      openTerminal({ serverName: row.serverName, target: row.target, windowId: row.windowId }, row.projectId);
     }
     if (row.status === 'finished') dismissFinished(row.serverName, row.target, row.windowId);
   };

@@ -361,7 +361,10 @@ Settings → System → **稼働検知診断**（3秒更新・読み取り専用
 | supervisor 列「フレーム未受信」 | 接続は生きているが activity フレームがまだ来ていない（旧ビルド supervisor／再接続直後）。判定は下位層が代行中 |
 | `tier1_hook` 〜 `tier4_probe` | その層のフォールバックが判定した状態。`tier4_probe` 表示が多い場合は supervisor / hook の配線を確認 |
 | `none`（稼働中） | 実行ラン登録による稼働（登録 = 稼働。検知層の判定ではない） |
-| `refinedBy: tier2_title` | Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した印。`decidedBy` は判定した層のまま残る（「Tier 0 idle ＋ Tier 2 blocked」と読む） |
+| `tier0_mux` | マルチプレクサ自身（misao、§13）が報告した状態で判定された行。行の `mux` 材料にある misao 側の判定ルール名（`exit` / プロファイル名 / `title` / `bytes`）が Tier チップの横に出る |
+| `heldForStopHook: true` | misao の idle を Stop hook 待ちで保留している行（§13）。mux は idle だが行はまだ稼働として見える（最長 4 秒）。保留中も画面確認は行い、blocked ならその場で blocked になる |
+| `refinedBy: tier1_hook_stop` | misao 窓で `tier0_mux` の idle を Claude の Stop hook が完了と確認した印（§13）。`decidedBy` は `tier0_mux` のまま |
+| `refinedBy: tier2_title` | Tier 0 が idle と判定した行を Tier 2 の画面分類が blocked へ精緻化した印（misao 窓では `tier0_mux` の working 行も対象、§13）。`decidedBy` は判定した層のまま残る（「Tier 0 idle ＋ Tier 2 blocked」と読む） |
 | 最終遷移 | 直近の遷移とその reason（§7）-- 「なぜ消えたか」の証跡 |
 
 行の並びは state 順（working → blocked → idle → offline → none）です。
@@ -514,4 +517,50 @@ request`）を返します。
 | スモーク | ログイン → プロジェクト作成 → ウィンドウ登録 → 一覧表示の基本導線 |
 
 対応するスペック: `e2e/specs/activity.spec.ts`、`e2e/specs/question-answer.spec.ts`、
-`e2e/specs/smoke.spec.ts`。
+`e2e/specs/smoke.spec.ts`。misao 窓（§13）は `e2e/specs/misao.spec.ts`（一時ソケットの自前デーモンを使用）が
+`pane.state` 由来の稼働行と、プロセス終了による完了行を検証する。
+
+## 13. misao 窓
+
+`mux_ref.kind` が `misao` の窓（local サーバー、および misao を持つ agent サーバー。それぞれ自分のデーモン接続と自分の `MisaoActivityBridge` を持つ）は、tmux ではなく misao デーモンが担う。
+tmux のサーバーでは以下は何も生成されず、これまでの tmux の挙動は変わらない。
+
+- **supervisor なし。** `shouldSupervise(serverType, windowType, muxKind)` は misao 窓で false になり、
+  `tui-supervisor` は起動しない。`azs` も `$MISAO_PANE_ID` があって `$TMUX_PANE` が無いペインでは
+  直接 exec する。Tier 0 の役はデーモンが担う。
+- **Tier 0 mux。** `MisaoPaneStateEvents` がデーモンの `pane.state` イベントを購読し、
+  `MisaoActivityBridge` が `AgentActivityMonitor.recordMuxSignal()` へ流す。写像は `working` → 稼働、
+  `blocked` → blocked、`idle` → idle、`exited` → `done`（`completed` で停止し、以後は下位 Tier へ明け渡す）、
+  それ以外 → `unknown`（下位 Tier が判定）。ペイン→窓の解決は `PaneHandleResolver`（pane id →
+  `pane.info` → mux ref → `windows.mux_ref`）で、採用するのは窓の**第1ペインだけ**（横に分割した
+  シェルペインがエージェントの状態を上書きしない）。窓の行が後から登録されるペインは
+  `sessions:updated` で再解決する（最大60秒）。gap と再接続のたびに `pane.list`（`agentState` /
+  `decidedBy`）で全ペインを再同期し、接続が切れている間は misao 由来のキーを `unknown` にする。
+- **blocked 補正。** misao のコアは working / idle / exited しか出さず、`blocked` はエージェント
+  プロファイルからしか出ない。そのため misao 窓では、Tier 0 idle の精緻化（§1）と同じ画面確認を、
+  tmux 座標ではなく窓の mux ref と `driver.captureScreen`（第1ペイン）で行う。**タイトルの前置確認は
+  しない。** `tier0_mux` の working 行で画面が応答待ちなら blocked になり（`decidedBy` は
+  `tier0_mux` のまま、`refinedBy: tier2_title`）、`tier0_mux` の idle 行も既存の idle 精緻化で同様に
+  blocked となって完了を出さない。向きは一方向のみで、画面を読めないときは直前の状態を保持する
+  （`heldStatusOnUnknown`）。`mux_ref` を持たない misao 窓は tmux ターゲットから推測せず、画面確認は
+  `unknown` になる。
+- **Stop hook による完了。** misao の `idle` 単体は完了の証拠にしない。ただし Claude の Stop hook が届いていれば
+  完了とする: 窓の最新の hook が `stop` で、その時刻が直近の `working` 報告より後のとき、`tier0_mux` の
+  idle 行は `completed` で停止し、`refinedBy: tier1_hook_stop` が付く（`decidedBy` は `tier0_mux` のまま）。
+  hook の `start` 以降に idle になっても Stop が来ていなければ、Stop の後に再び working になっていれば、
+  完了にならない通常の idle。blocked の画面補正が優先で、blocked なら完了は出ない。misao は Claude の窓ではタイトルが
+  スピナーから `✳` に変わった瞬間に idle を出す一方、Stop hook は切り離した curl で届くため、idle が Stop より
+  先に届くことがよくある。そこで窓の最新の hook がまだ `start`（Stop 未着）のときは、idle を受けてから短い猶予
+  （`MISAO_STOP_HOOK_GRACE_MS`、4 秒）だけキーを稼働のまま保留して何も announce せず、猶予内に Stop が来れば
+  （blocked 確認の後）`completed` を 1 回だけ announce、猶予切れなら通常の idle として announce する（その後の
+  Stop は完了へ書き換えない）。hook が無い、または既に Stop 済みなら保留せず即時。misao の hook は窓の**第1ペインのもの
+  だけ**を記録する（`misaoPaneId` 経路。分割ペインの Claude の start / Stop は無視。tmux の経路は従来どおり）。保留中も画面確認は行う。tick 実行中に届いた hook は、その tick の後に
+  もう一度評価される。hook の無いエージェント（codex 等）は
+  従来どおり `exited` だけが完了。
+- **hook。** `$TMUX_PANE` が無く `$MISAO_PANE_ID`（`p_` + ULID 26文字）がある場合、3つの hook は
+  tmux のフィールドの代わりに `misaoPaneId` を送る。ハブは `PaneHandleResolver` で窓を解決し、
+  Tier 1 の hook 状態の記録・保留中質問の記録をその窓に対して行う。解決できないペイン（デーモンに
+  届かない場合を含む）は 200 で何も記録せず、形式不正の ID は 400。フラグオフでは `misaoPaneId` は
+  無視され、tmux のフィールドが必須のまま。
+- **診断。** `GET /api/debug/activity` の行に `mux: { status, decidedBy?, at }` が載り、パネルでは
+  `tier0 misao` と表示される。

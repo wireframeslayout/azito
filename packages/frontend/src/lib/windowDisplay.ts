@@ -9,7 +9,7 @@
  * ウィンドウラベル → タスクタイトル → tmux ターゲット の順。
  */
 
-import { formatWindowId, isInternalWindowName, stripGeneratedSuffix } from '@azito/shared';
+import { formatWindowId, isInternalWindowName, parseMuxRef, stripGeneratedSuffix } from '@azito/shared';
 
 /**
  * ペインの実タイトル（エージェントが設定した動的タイトル）。タイトル未設定のペインでは
@@ -124,4 +124,12 @@ export function formatActiveWindowLabel(row: {
     tmuxTarget: row.target,
   });
   return formatWindowDisplayLabel(display);
+}
+
+/**
+ * Label of a window in a session list. A misao window is addressed by its own id and named on its own, so only the
+ * window name is shown; a tmux window keeps `<session>:<window>`.
+ */
+export function sessionWindowLabel(sessionName: string, win: { name: string; ref: string }): string {
+  return parseMuxRef(win.ref).kind === 'misao' ? win.name : `${sessionName}:${win.name}`;
 }

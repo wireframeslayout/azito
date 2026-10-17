@@ -28,6 +28,31 @@ export function readEnvValue(filePath: string, key: string): string | undefined 
   return undefined;
 }
 
+/**
+ * Sets `KEY=value` in an env file: replaces the existing assignment in place, otherwise appends one (creating the
+ * file with mode 600 when it does not exist). Other lines, comments included, are kept as they are.
+ */
+export function upsertEnvValue(filePath: string, key: string, value: string): void {
+  const line = `${key}=${value}`;
+  if (!fs.existsSync(filePath)) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${line}\n`, { mode: 0o600 });
+    return;
+  }
+  const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+  const index = lines.findIndex((l) => l.trim().startsWith(`${key}=`));
+  if (index >= 0) {
+    lines[index] = line;
+  } else {
+    // the last element is '' when the file ends with a newline: keep that ending
+    if (lines[lines.length - 1] === '') lines.pop();
+    lines.push(line, '');
+  }
+  fs.writeFileSync(filePath, lines.join('\n'));
+  // The file holds secrets (tokens): writeFileSync keeps an existing file's mode, so tighten one that was looser.
+  fs.chmodSync(filePath, 0o600);
+}
+
 export function resolveServerEnvPath(): string {
   if (isReleaseMode()) {
     return path.join(resolveRoot(), '.env');

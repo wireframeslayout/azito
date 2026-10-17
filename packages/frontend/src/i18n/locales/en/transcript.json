@@ -78,12 +78,20 @@
     "notFound": {
       "unsupported_server": "Chat view is not supported on this server",
       "no_recent_session": "No recent session found",
-      "error": "Failed to resolve the session"
+      "error": "Failed to resolve the session",
+      "agent_unreachable": "The agent server is offline",
+      "agent_outdated": "The agent on this server is outdated — update it to use the chat view",
+      "agent_bad_response": "The agent server returned an unexpected response"
     },
     "retry": "Retry",
     "empty": {
       "title": "No conversation yet",
       "description": "You can start chatting from here."
+    },
+    "hostUnavailableDescription": {
+      "agent_unreachable": "You can still type below. Press Retry once the server is reachable again to show the conversation.",
+      "agent_outdated": "Update the agent on this server (use Reinstall in the server details) to show the conversation here. You can still type below.",
+      "agent_bad_response": "The conversation cannot be shown. Check the agent version on this server, then press Retry. You can still type below."
     }
   }
 }

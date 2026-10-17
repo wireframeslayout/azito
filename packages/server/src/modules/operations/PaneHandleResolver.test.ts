@@ -27,7 +27,7 @@ function makeWindowRepo(win: { id: number; tmuxTarget: string } | undefined = un
 
 function makeServerRepo(exists = true) {
   return {
-    findByName: vi.fn().mockReturnValue(exists ? { name: 'local', type: 'local', muxRuntime: 'system' } : undefined),
+    findByName: vi.fn().mockReturnValue(exists ? { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } : undefined),
   } as any;
 }
 

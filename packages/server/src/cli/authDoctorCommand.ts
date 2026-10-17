@@ -8,8 +8,7 @@ import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
 import { openDatabase } from '../shared/db/Database';
 import { open } from '../shared/crypto/SecretBox';
-import { TmuxClient } from '../modules/tmux/TmuxClient';
-import { TransportFactory } from '../modules/servers/transport/TransportFactory';
+import { openDoctorMux, probeWindowLiveness, type DoctorMux } from './doctorMuxRegistry';
 import type { ServerConfig, MuxRuntime } from '../modules/servers/Server';
 
 // ─── azito auth doctor (Issue #28 Phase B, design §12 step 1) ───
@@ -355,8 +354,9 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
 // was unsatisfiable and every non-local task window went unchecked forever
 // while still being reported as a clean/green drain. This now runs FROM the
 // hub, over every server the hub's DB knows about (any `type`), driving each
-// one through its own transport (`TmuxClient.checkPaneLiveness` — local via
-// `execFile`, `agent` via HTTP to that server's agent process). A server
+// one through its own transport (`probeWindowLiveness` through the MuxDriverRegistry: each window by the
+// driver of the mux that owns it — tmux via its transport, local via `execFile` and `agent` via HTTP to that
+// server's agent process; misao via its daemon). A server
 // this process cannot currently reach — down, wrong token, network partition
 // — is reported as `notice` (unverifiable), NEVER folded into a green
 // result: "we couldn't check" must stay visibly different from "we checked
@@ -398,18 +398,19 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
   }
 
   let db: ReturnType<typeof openDatabase> | undefined;
+  let mux: DoctorMux | undefined;
   try {
     db = openDatabase(paths.db);
 
     const taskWindows = db
-      .prepare("SELECT task_id AS taskId, server_name AS serverName, tmux_target AS tmuxTarget FROM windows WHERE owner_type = 'task'")
-      .all() as { taskId: number; serverName: string; tmuxTarget: string }[];
+      .prepare("SELECT task_id AS taskId, server_name AS serverName, tmux_target AS tmuxTarget, mux_ref AS muxRef FROM windows WHERE owner_type = 'task'")
+      .all() as { taskId: number; serverName: string; tmuxTarget: string; muxRef: string | null }[];
     if (taskWindows.length === 0) {
       return { ok: true, label, detail: 'タスク所有ウィンドウの登録がありません（ハブ管理下の全サーバー）' };
     }
 
     const serverRowStmt = db.prepare(
-      'SELECT name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, ssh_host_fingerprint, created_at FROM servers WHERE name = ?',
+      'SELECT name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux, ssh_host_fingerprint, created_at FROM servers WHERE name = ?',
     );
     // Fix 1 (Issue #28 third-party review, Important): `open()` throws both
     // when SecretBox hasn't been initialized at all AND when a given
@@ -444,6 +445,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
         agentVersion: (row.agent_version as string) ?? null,
         sshHost: (row.ssh_host as string) ?? null,
         muxRuntime: (row.mux_runtime as MuxRuntime) ?? 'system',
+        defaultMux: row.default_mux as ServerConfig['defaultMux'],
         sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
         isolationIntent: false,
         isolationVerifiedAt: null,
@@ -454,7 +456,9 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       return config;
     }
 
-    const tmux = new TmuxClient(new TransportFactory(''), '', '', '', '');
+    // Every window is probed through the registry, by the driver of the mux that owns it. The misao daemon is
+    // connected to only when a misao window is registered, so a tmux-only host never touches it.
+    mux = await openDoctorMux();
 
     const alive: string[] = [];
     const unverifiable: string[] = [];
@@ -474,7 +478,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
         );
         continue;
       }
-      const { alive: isAlive, verified } = await tmux.checkPaneLiveness(config, w.tmuxTarget);
+      const { alive: isAlive, verified } = await probeWindowLiveness(mux!, config, w);
       if (!verified) {
         unverifiable.push(`${descriptor}（到達不能）`);
       } else if (isAlive) {
@@ -486,7 +490,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
       return {
         ok: true,
         label,
-        detail: 'タスク所有ウィンドウの登録はありますが、生存中の tmux ペインはありません（全サーバーで確認済み）',
+        detail: 'タスク所有ウィンドウの登録はありますが、生存中のペインはありません（全サーバーで確認済み）',
       };
     }
 
@@ -517,6 +521,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
     }
     return { ok: true, warning: true, label, detail: lines.join('\n') };
   } finally {
+    mux?.close();
     db?.close();
   }
 }

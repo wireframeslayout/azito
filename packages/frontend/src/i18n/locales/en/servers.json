@@ -5,6 +5,7 @@
     "error": "Error",
     "checking": "Checking…",
     "connectedVia": "─ Connected to Hub · {{transport}}",
+    "localTransport": "Local · separate tmux socket",
     "disconnected": "- - Disconnected",
     "versionDrift": "⚠ {{version}} (outdated)"
   },
@@ -103,16 +104,30 @@
     "isolationNotApplicableHint": "Only available for agent-type servers",
     "isolationScopedAuthRequiredHint": "Enabling requires scoped auth (AZITO_SCOPED_AUTH)",
     "isolationScopedAuthUnknownHint": "Confirming authorization mode…",
-    "muxRuntimeLabel": "mux runtime",
-    "muxManaged": "AZITO managed tmux",
-    "muxSystem": "system tmux",
+    "defaultMuxLabel": "Default terminal",
+    "defaultMuxMisao": "misao",
+    "defaultMuxTmux": "tmux",
+    "muxRuntimeLabel": "tmux executable",
+    "muxManaged": "Managed",
+    "muxSystem": "System",
+    "misaoConnected": "Connected",
+    "misaoUnreachableChip": "Unreachable",
+    "misaoUnreachable": "Cannot connect to misao. You can check it from a terminal with misao status.",
+    "misaoUnreachableSub": "Check that the daemon is running and that MISAO_SOCKET is correct.",
+    "misaoIncompatibleChip": "Incompatible",
+    "misaoIncompatible": "The misao daemon's protocol does not match this hub",
+    "misaoIncompatibleSub": "Reinstall the daemon at a version this hub supports. The hub keeps retrying at an interval, so it recovers without a restart once that is fixed.",
+    "misaoDriverNotRegistered": "The misao driver is not registered in the hub",
     "agentVersionLabel": "Agent version",
     "browserSupport": "Browser runtime",
     "supported": "Supported",
     "notSupported": "Not supported",
     "sessionsLabel": "Sessions",
     "sessionsSummary": "Sessions {{sessionCount}} · Windows {{windowCount}}",
-    "hubVersionLabel": "Hub version"
+    "hubVersionLabel": "Hub version",
+    "muxRuntimeNote": "Only applies when using tmux",
+    "misaoNotInstalled": "misao is not installed on this server",
+    "misaoNotInstalledSub": "Install it from Setup (Install misao). The hub sends its own copy through the agent."
   },
   "setup": {
     "title": "Setup",
@@ -122,9 +137,15 @@
     "recheck": "Recheck",
     "rechecking": "Checking…",
     "foundation": "Foundation",
+    "misaoProtocol": "protocol {{version}}",
     "agentLabel": "Agent",
     "applySettings": "Apply Settings",
     "allInstalled": "All installed",
+    "offline": "Offline",
+    "checkFailed": "Check failed",
+    "checkFailedNotice": "Failed to load the setup status.",
+    "retry": "Retry",
+    "offlineNotice": "The server is unreachable, so the setup status cannot be checked.",
     "missingCount": "Missing {{count}}",
     "reinstall": "Reinstall",
     "reinstalling": "Reinstalling...",
@@ -158,7 +179,9 @@
     "deployingBinary": "Deploying binary…",
     "rollingBack": "Rolling back mux runtime to system…",
     "rolledBack": "Rolled back to system",
-    "installComplete": "Done v{{version}}"
+    "installComplete": "Done v{{version}}",
+    "tmuxOptionalNote": "Optional. Only needed for tmux windows (AZITO panes run on the bundled misao).",
+    "misaoInstallFailedOnAdd": "The agent was installed, but misao could not be installed: {{error}}. Install it from the server's Setup."
   },
   "windows": {
     "noSessions": "No sessions found on this server.",
@@ -168,7 +191,13 @@
     "split": "Split",
     "session": "Session",
     "metaFetchError": "Couldn't load window names.",
-    "retry": "Retry"
+    "retry": "Retry",
+    "noPanes": "No panes",
+    "openPane": "Open a pane",
+    "killWindow": "Delete window",
+    "deletePane": "Delete pane {{name}}",
+    "sessionName": "Session name",
+    "creating": "Creating…"
   },
   "danger": {
     "resetFingerprint": "Reset SSH Fingerprint",
@@ -191,5 +220,63 @@
     "killWindowMessage": "Kill window \"{{name}}\"?",
     "killPane": "Kill Pane",
     "killPaneMessage": "Kill pane \"{{name}}\"?"
+  },
+  "misaoService": {
+    "loading": "Checking the misao service…",
+    "loadFailed": "Could not read the misao service state.",
+    "service": "Service",
+    "stateActive": "Running",
+    "stateInactive": "Stopped",
+    "stateFailed": "Failed",
+    "stateUnknown": "Unknown",
+    "stateNotInstalled": "Not installed",
+    "bundledVersion": "bundled {{version}}",
+    "runningVersion": "running {{version}}",
+    "install": "Install misao",
+    "installing": "Installing…",
+    "start": "Start misao",
+    "starting": "Starting…",
+    "update": "Update misao (running panes will end)",
+    "updating": "Updating…",
+    "updateConfirmTitle": "Update misao?",
+    "updateConfirmMessage": "misao is stopped to update it. Every running pane ends and agent work in them is interrupted. Finish what you need before continuing.",
+    "updateConfirmLabel": "Stop and update",
+    "replaceSocketTitle": "Switch the hub to the managed misao?",
+    "replaceSocketMessage": "The hub setting (MISAO_SOCKET) points at another daemon than the misao AZITO manages. Installing rewrites it to the managed socket (applied when the hub restarts).",
+    "replaceSocketConfirm": "Rewrite and install",
+    "notice": {
+      "incompatible": "The misao protocol does not match this hub",
+      "incompatibleSub": "Updating to the bundled misao fixes this. The update ends every running pane.",
+      "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",
+      "updateAvailableSub": "A hub update does not replace misao. Update it with the button above when you do not need the panes.",
+      "needsHubRestart": "Restart the hub to connect to the misao AZITO manages",
+      "needsHubRestartSub": "Restarting the hub does not end misao panes.",
+      "customSocket": "The hub setting (MISAO_SOCKET) points at another daemon",
+      "customSocketSub": "Installing rewrites that setting to the managed socket."
+    },
+    "unmanaged": {
+      "sourceInstall": "A source checkout does not install the service. It connects to the misao at MISAO_SOCKET or the default socket.",
+      "noBundledMisao": "This hub release does not bundle misao.",
+      "unsupportedPlatform": "This host has neither systemd nor launchd, so the misao service cannot be managed.",
+      "invalidPrefix": "The install path is too long to create the misao socket.",
+      "unknown": "This hub cannot manage the misao service."
+    },
+    "stateActiveUnreachable": "Running (not reachable)"
+  },
+  "agentMisao": {
+    "install": "Install misao",
+    "retry": "Try again",
+    "installing": "Installing misao…",
+    "installDesc": "Sends the misao bundled with this hub to the server through its agent and starts it as a service. Nothing is downloaded on the server.",
+    "notInstallable": "This hub does not bundle misao, so it cannot install it on a server.",
+    "failed": "misao could not be installed",
+    "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",
+    "updateAvailableSub": "It is not switched automatically: switching ends every pane on this server. Update it when no work is running there.",
+    "step": {
+      "inspect": "Checking the server…",
+      "transfer": "Sending misao to the server…",
+      "prepare": "Preparing misao…",
+      "start": "Starting misao…"
+    }
   }
 }

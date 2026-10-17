@@ -28,11 +28,18 @@ interface AllServersResourceData {
   servers: ServerResourceEntry[];
 }
 
+/** `ref` is the window's formatted MuxRef, which the ref-based window routes take (works for every mux driver). */
+export interface ServerResourceWindow {
+  target: string;
+  ref: string;
+  rssBytes: number;
+}
+
 export interface ServerResourceDetail {
   serverName: string;
   type: string;
   measurement: ResourceMeasurement | null;
-  windows?: Array<{ target: string; rssBytes: number }>;
+  windows?: ServerResourceWindow[];
 }
 
 export function getHealthLevel(measurement: ResourceMeasurement | null): HealthLevel {
@@ -110,10 +117,10 @@ export function useServerResourceDetail(serverName: string) {
     return () => clearInterval(id);
   }, [fetchDetail]);
 
-  const handleDeleteWindow = useCallback(async (target: string) => {
-    setDeleteLoading(target);
+  const handleDeleteWindow = useCallback(async (window: ServerResourceWindow) => {
+    setDeleteLoading(window.target);
     try {
-      await api(`/servers/${encodeURIComponent(serverName)}/windows/${encodeURIComponent(target)}`, { method: 'DELETE' });
+      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(window.ref)}/kill`, { method: 'POST' });
       fetchDetail();
     } catch (e) {
       showToast(t('statusbar.deleteFailed', { error: (e as Error).message }));

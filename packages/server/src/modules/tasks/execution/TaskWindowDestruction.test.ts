@@ -61,6 +61,26 @@ describe('destroyPrimaryTaskWindow', () => {
     expect(onDestroyed).toHaveBeenCalledTimes(1);
   });
 
+  it('treats a misao NotFound (alreadyGone flag, no tmux wording) as success and revokes', async () => {
+    const { repo } = makeTaskRepo('task-1');
+    const paneEnvService = makePaneEnvServiceSpy();
+    const onDestroyed = vi.fn();
+
+    const outcome = await destroyPrimaryTaskWindow(
+      1,
+      'task-1',
+      repo,
+      paneEnvService,
+      'retry_abandoned_window',
+      async () => ({ stdout: '', stderr: 'window not found: w_1', code: 1, alreadyGone: true }),
+      onDestroyed,
+    );
+
+    expect(outcome.success).toBe(true);
+    expect(paneEnvService.revokeForDestroyedWindow).toHaveBeenCalledWith(1, 'retry_abandoned_window');
+    expect(onDestroyed).toHaveBeenCalledTimes(1);
+  });
+
   it('does NOT revoke (or fail) when the kill fails for a reason other than "already gone"', async () => {
     const { repo, clearTmuxWindowIfMatches } = makeTaskRepo('task-1');
     const paneEnvService = makePaneEnvServiceSpy();

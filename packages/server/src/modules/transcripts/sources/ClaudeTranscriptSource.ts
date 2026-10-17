@@ -12,12 +12,16 @@ import type {
   TranscriptEntry,
   TranscriptEntryType,
   TranscriptInteraction,
-  TranscriptSource,
+  TranscriptReader,
+  ReadBudget,
+  ListSessionsOptions,
 } from './TranscriptSource';
 
 // ─── Constants ───
 
 const PREVIEW_LENGTH = 120;
+/** 軽量一覧（metadataOnly）の最初の試行で先頭から読むバイト数。cwd が見つからなければ previewScanBytes まで読み直す。 */
+const METADATA_QUICK_SCAN_BYTES = 64 * 1024;
 const PREVIEW_SCAN_LINES = 20;
 const TAIL_ENTRY_LIMIT = 500;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -416,7 +420,16 @@ interface SessionScanResult {
 }
 
 /** 一覧表示用に、ファイル先頭 previewScanBytes 分だけを走査して preview テキストと cwd を拾う。 */
-function scanSessionMeta(file: string, previewScanBytes: number): SessionScanResult {
+function scanSessionMeta(file: string, previewScanBytes: number, metadataOnly = false): SessionScanResult {
+  if (!metadataOnly) return scanSessionMetaOnce(file, previewScanBytes, false);
+  // 軽量一覧: preview を作らないだけで、cwd の探索範囲は通常の一覧と同じ（previewScanBytes）。多くは先頭の
+  // 小さな読み取りで cwd が見つかるので、まずそれで試し、見つからないときだけ通常の範囲まで読み直す。
+  const quick = scanSessionMetaOnce(file, Math.min(previewScanBytes, METADATA_QUICK_SCAN_BYTES), true);
+  if (quick.cwd !== null || previewScanBytes <= METADATA_QUICK_SCAN_BYTES) return quick;
+  return scanSessionMetaOnce(file, previewScanBytes, true);
+}
+
+function scanSessionMetaOnce(file: string, previewScanBytes: number, metadataOnly: boolean): SessionScanResult {
   let content: string;
   try {
     const fd = fs.openSync(file, 'r');
@@ -448,7 +461,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
       cwd = record.cwd;
     }
 
-    if (!preview && record.type === 'user') {
+    if (!metadataOnly && !preview && record.type === 'user') {
       const message = record.message;
       if (isRecord(message)) {
         const previewText = extractPreviewText(message.content);
@@ -456,7 +469,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
       }
     }
 
-    if (preview && cwd !== null) break;
+    if (metadataOnly ? cwd !== null : preview && cwd !== null) break;
   }
   return { preview, cwd };
 }
@@ -722,7 +735,7 @@ function buildParseLine(
 
 // ─── Source ───
 
-export class ClaudeTranscriptSource implements TranscriptSource {
+export class ClaudeTranscriptSource implements TranscriptReader {
   readonly agentType = 'claude';
 
   private readonly initialReadMaxBytes: number;
@@ -773,7 +786,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     }
   }
 
-  listSessions(limit = 50): SessionSummary[] {
+  listSessions(limit = 50, options: ListSessionsOptions = {}): SessionSummary[] {
     const files = listSessionFiles(this.projectsDir());
     this.warmSessionFileCache(files);
 
@@ -793,7 +806,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     const limited = stated.slice(0, limit);
 
     return limited.map(({ file, projectDir, sessionId, stat }) => {
-      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes);
+      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes, options.metadataOnly === true);
       return {
         sessionId,
         agentType: this.agentType,
@@ -883,7 +896,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     }
   }
 
-  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null {
+  readSessionBefore(sessionId: string, before: number, budget: ReadBudget = {}): ReadSessionBeforeResult | null {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;
 
@@ -897,7 +910,7 @@ export class ClaudeTranscriptSource implements TranscriptSource {
     try {
       const size = fs.fstatSync(fd).size;
       const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId), { io: { fd, size }, allowCacheWrite: false });
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine, budget);
     } finally {
       fs.closeSync(fd);
     }

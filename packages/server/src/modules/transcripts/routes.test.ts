@@ -1,7 +1,11 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import transcriptsRoutes from './routes';
-import type { TranscriptSource } from './sources/TranscriptSource';
+import type { TranscriptReader, TranscriptSource } from './sources/TranscriptSource';
+import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { WindowInputService } from './WindowInputService';
@@ -10,8 +14,10 @@ import type { InteractionMonitor } from '../notifications/InteractionMonitor';
 
 const SID = '11111111-1111-1111-1111-111111111111';
 const PANE_ID = '%3';
+const LOCAL_SERVER = { name: 'local', type: 'local' } as unknown as ServerConfig;
+const noAgentTransports = { getAgentTransport: (): never => { throw new Error('no agent transport in this test'); } };
 
-function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): TranscriptSource {
+function buildClaudeSource(overrides: Partial<TranscriptReader> = {}): TranscriptSource {
   return {
     agentType: 'claude',
     listSessions: () => [],
@@ -23,7 +29,7 @@ function buildClaudeSource(overrides: Partial<TranscriptSource> = {}): Transcrip
   } as unknown as TranscriptSource;
 }
 
-function buildCodexSource(overrides: Partial<TranscriptSource> = {}): TranscriptSource {
+function buildCodexSource(overrides: Partial<TranscriptReader> = {}): TranscriptSource {
   return {
     agentType: 'codex',
     listSessions: () => [],
@@ -58,7 +64,7 @@ function buildApp(
   } as unknown as WindowSessionResolver;
 
   const windowRepo = {
-    findById: () => undefined,
+    findById: (id: number) => ({ id, serverName: LOCAL_SERVER.name }) as unknown as Window,
     ...windowOverrides.windowRepo,
   } as unknown as IWindowRepository;
 
@@ -78,8 +84,12 @@ function buildApp(
     ...windowOverrides.interactionMonitor,
   } as unknown as InteractionMonitor;
 
+  const serverRepo = {
+    findByName: (name: string) => (name === LOCAL_SERVER.name ? LOCAL_SERVER : undefined),
+  } as unknown as IServerRepository;
+
   const app = Fastify();
-  app.register(transcriptsRoutes, { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
+  app.register(transcriptsRoutes, { sources, sourceProvider: new HostTranscriptSourceProvider(sources, noAgentTransports), serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor });
   return app;
 }
 
@@ -1194,5 +1204,202 @@ describe('POST /api/transcripts/window-signal', () => {
     expect(res.statusCode).toBe(200);
     expect(receivedKey).toBe('C-c');
     await app.close();
+  });
+});
+
+describe('window routes: pane handle format follows the window mux kind', () => {
+  const MISAO_PANE = 'p_01HZX3K9M2N4P5Q6R7S8T9V0WX';
+  const misaoWindow = { muxRef: { kind: 'misao', workspace: 'w', window: 'w_01HZX3K9M2N4P5Q6R7S8T9V0WX' } };
+  const tmuxWindow = { muxRef: { kind: 'tmux', workspace: 's', window: '0' } };
+
+  it('window-input passes a misao pane handle through to the service', async () => {
+    const sendInput = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never }, windowInputService: { sendInput } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: MISAO_PANE, text: 'hi' } });
+    expect(res.statusCode).toBe(200);
+    expect(sendInput).toHaveBeenCalledWith(42, MISAO_PANE, 'hi');
+    await app.close();
+  });
+
+  it('window-signal passes a misao pane handle, action and key through to the service', async () => {
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never }, windowInputService: { sendSignal } });
+    const interrupt = await app.inject({ method: 'POST', url: '/api/transcripts/window-signal', payload: { windowId: 42, paneId: MISAO_PANE, action: 'interrupt' } });
+    const key = await app.inject({ method: 'POST', url: '/api/transcripts/window-signal', payload: { windowId: 42, paneId: MISAO_PANE, action: 'key', key: 'Escape' } });
+    expect(interrupt.statusCode).toBe(200);
+    expect(key.statusCode).toBe(200);
+    expect(sendSignal).toHaveBeenNthCalledWith(1, 42, MISAO_PANE, 'interrupt', undefined);
+    expect(sendSignal).toHaveBeenNthCalledWith(2, 42, MISAO_PANE, 'key', 'Escape');
+    await app.close();
+  });
+
+  it('window-signal answer resolves the misao pane ordinal, consumes the question and sends the digit', async () => {
+    const resolvePaneIndex = vi.fn(async () => 2);
+    const sendSignal = vi.fn(async () => 'ok' as const);
+    const consumePendingAnswer = vi.fn(() => true);
+    const app = buildApp([buildClaudeSource()], {}, {
+      windowRepo: { findById: () => misaoWindow as never },
+      windowInputService: { resolvePaneIndex, sendSignal },
+      interactionMonitor: { consumePendingAnswer },
+    });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-signal', payload: { windowId: 42, paneId: MISAO_PANE, action: 'answer', key: '2', openedAt: 1000 } });
+    expect(res.statusCode).toBe(200);
+    expect(resolvePaneIndex).toHaveBeenCalledWith(42, MISAO_PANE);
+    expect(consumePendingAnswer).toHaveBeenCalledWith(42, { openedAt: 1000, optionNumber: 2, paneIndex: 2 });
+    expect(sendSignal).toHaveBeenCalledWith(42, MISAO_PANE, 'key', '2');
+    await app.close();
+  });
+
+  it('treats a window row without muxRef as tmux: %n passes, p_... is rejected', async () => {
+    const legacy = { muxRef: undefined };
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => legacy as never } });
+    const ok = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: '%5', text: 'hi' } });
+    const bad = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: MISAO_PANE, text: 'hi' } });
+    expect(ok.statusCode).toBe(200);
+    expect(bad.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it.each([
+    ['window-input', { text: 'hi' }],
+    ['window-signal', { action: 'interrupt' }],
+  ])('%s rejects a misao pane handle for a tmux window', async (route, extra) => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => tmuxWindow as never } });
+    const res = await app.inject({ method: 'POST', url: `/api/transcripts/${route}`, payload: { windowId: 42, paneId: MISAO_PANE, ...extra } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a tmux pane handle for a misao window', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: '%5', text: 'hi' } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+
+  it('rejects a malformed misao-looking handle', async () => {
+    const app = buildApp([buildClaudeSource()], {}, { windowRepo: { findById: () => misaoWindow as never } });
+    const res = await app.inject({ method: 'POST', url: '/api/transcripts/window-input', payload: { windowId: 42, paneId: 'p_short', text: 'hi' } });
+    expect(res.statusCode).toBe(400);
+    await app.close();
+  });
+});
+
+describe('GET /api/transcripts/:agent/:id for a window on another server', () => {
+  const AGENT_SERVER = { name: 'agent1', type: 'agent' } as unknown as ServerConfig;
+  const SSH_SERVER = { name: 'ssh1', type: 'ssh' } as unknown as ServerConfig;
+
+  function appFor(provider: TranscriptSourceProvider) {
+    const windows: Record<number, Partial<Window>> = {
+      10: { id: 10, serverName: 'agent1', workerType: 'claude' },
+      11: { id: 11, serverName: 'ssh1', workerType: 'claude' },
+    };
+    const servers = [LOCAL_SERVER, AGENT_SERVER, SSH_SERVER];
+    const app = Fastify();
+    app.register(transcriptsRoutes, {
+      sources: [buildClaudeSource({ readSession: () => ({ entries: [], nextOffset: 1, truncated: false, startOffset: 0, hasOlder: false }) })],
+      sourceProvider: provider,
+      serverRepo: { findByName: (name: string) => servers.find((s) => s.name === name) } as unknown as IServerRepository,
+      transcriptPaneService: {} as unknown as TranscriptPaneService,
+      windowSessionResolver: {} as unknown as WindowSessionResolver,
+      windowInputService: {} as unknown as WindowInputService,
+      windowRepo: { findById: (id: number) => windows[id] } as unknown as IWindowRepository,
+      interactionMonitor: { isPending: () => false, getOpenedAt: () => undefined, clear: () => {} } as unknown as InteractionMonitor,
+    });
+    return app;
+  }
+
+  const agentSource = (overrides: Partial<TranscriptSource> = {}): TranscriptSource => ({
+    agentType: 'claude',
+    readSession: async () => ({ entries: [], nextOffset: 77, truncated: false, startOffset: 0, hasOlder: false }),
+    readSessionBefore: async () => ({ entries: [], prevOffset: 0, hasOlder: false }),
+    getSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
+    ...overrides,
+  }) as unknown as TranscriptSource;
+
+  const providerFor = (sources: TranscriptSource[] | null): TranscriptSourceProvider => ({
+    forServer: (server) => (server.name === 'agent1' ? sources : null),
+  });
+
+  it('reads from the window\'s server (the agent), not from the hub', async () => {
+    const app = appFor(providerFor([agentSource()]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().nextOffset).toBe(77);
+  });
+
+  it('keeps reading from the hub when no windowId is given', async () => {
+    const app = appFor(providerFor([agentSource()]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().nextOffset).toBe(1);
+  });
+
+  it('answers 501 unsupported_server when the window\'s server has no readable conversation logs', async () => {
+    const app = appFor({ forServer: () => null });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=11` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'unsupported_server' });
+  });
+
+  it('answers 503 agent_unreachable when the agent cannot be reached', async () => {
+    const app = appFor(providerFor([agentSource({ readSession: async () => { throw new AgentUnreachableError('agent1', 'timeout'); } })]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toEqual({ error: 'agent_unreachable' });
+  });
+
+  it('answers 501 agent_outdated when the agent has no transcript API', async () => {
+    const app = appFor(providerFor([agentSource({ readSessionBefore: async () => { throw new TranscriptAgentOutdatedError('agent1'); } })]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=5&windowId=10` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'agent_outdated' });
+  });
+
+  it('answers 404 for a windowId whose window does not exist, without falling back to the hub\'s own logs', async () => {
+    const app = appFor(providerFor([agentSource()]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=99` });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toEqual({ error: 'Window not found' });
+  });
+
+  it('answers 501 unsupported_server when the window\'s server no longer exists', async () => {
+    const windowOnGoneServer = { id: 12, serverName: 'gone', workerType: 'claude' };
+    const app = Fastify();
+    app.register(transcriptsRoutes, {
+      sources: [buildClaudeSource()],
+      sourceProvider: providerFor([agentSource()]),
+      serverRepo: { findByName: () => undefined } as unknown as IServerRepository,
+      transcriptPaneService: {} as unknown as TranscriptPaneService,
+      windowSessionResolver: {} as unknown as WindowSessionResolver,
+      windowInputService: {} as unknown as WindowInputService,
+      windowRepo: { findById: () => windowOnGoneServer } as unknown as IWindowRepository,
+      interactionMonitor: {} as unknown as InteractionMonitor,
+    });
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?windowId=12` });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'unsupported_server' });
+  });
+
+  it('builds the response from known fields only: hub-owned fields a source tries to smuggle in are not passed on', async () => {
+    const forged = {
+      entries: [], nextOffset: 3, truncated: false, startOffset: 0, hasOlder: false,
+      pendingInteraction: true, pendingQuestion: { questions: [], openedAt: 1 }, extra: 'x',
+    };
+    const app = appFor(providerFor([agentSource({ readSession: async () => forged as never, readSessionBefore: async () => ({ ...forged, prevOffset: 0 }) as never })]));
+
+    const read = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=0&windowId=10` });
+    // pendingInteraction is the hub's own verdict (no pending signal here -> false), never the source's `true`.
+    expect(Object.keys(read.json()).sort()).toEqual(['entries', 'hasOlder', 'nextOffset', 'pendingInteraction', 'startOffset', 'truncated']);
+    expect(read.json().pendingInteraction).toBe(false);
+    const before = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?before=5&windowId=10` });
+    expect(Object.keys(before.json()).sort()).toEqual(['entries', 'hasOlder', 'prevOffset']);
+  });
+
+  it('answers 502 agent_bad_response when the agent\'s answer does not match the contract', async () => {
+    const app = appFor(providerFor([agentSource({ readSession: async () => { throw new TranscriptAgentBadResponseError('agent1', '/x'); } })]));
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/${SID}?offset=5&windowId=10` });
+    expect(res.statusCode).toBe(502);
+    expect(res.json()).toEqual({ error: 'agent_bad_response' });
   });
 });

@@ -5,7 +5,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { PaneClassifier, PaneClassification } from '../../llm/PaneClassifier';
 import type { IContentExtractor } from '../../llm/ContentExtractor';
-import type { IPaneStream, IPaneStreamFactory } from '../../tmux/PaneStream';
+import type { IPaneStream, IPaneStreamFactory, PaneStreamGapEvent } from '../../tmux/PaneStream';
 import type { LogType } from '../ExecutionLog';
 import type { WorkerInputService } from './WorkerInputService';
 import { removeCompletionSignalBlock, extractPlanMarkdown } from './PromptExpander';
@@ -67,7 +67,14 @@ export class WorkerWaiter {
     unitId: number,
   ): IPaneStream | null {
     const paneId = `${taskId}-${Date.now()}`;
-    const paneStream = this.paneStreamFactory.create(paneId, server);
+    const paneStream = this.paneStreamFactory.create(paneId, server, handle);
+    // Attached before start(): a subscribe failure is reported right away, before waitForWorker runs.
+    paneStream.on('gap', ({ reason }: PaneStreamGapEvent) => {
+      this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_gap', reason });
+    });
+    paneStream.on('subscription_error', (err: Error) => {
+      this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_subscription_error', message: err.message });
+    });
     paneStream.start();
     const filePath = paneStream.getFilePath();
     if (filePath) {
@@ -197,7 +204,9 @@ export class WorkerWaiter {
         if (autoConfirmTimer) clearInterval(autoConfirmTimer);
         if (phaseMaxTimer) clearTimeout(phaseMaxTimer);
         if (quiescenceTimer) clearInterval(quiescenceTimer);
-        try { this.resolveDriver(server).stopOutputStream(server, handle).catch(() => {}); } catch {}
+        if (paneStream.getFilePath()) {
+          try { this.resolveDriver(server).stopOutputStream(server, handle).catch(() => {}); } catch {}
+        }
         paneStream.stop();
         if (signalStream) signalStream.stop();
       };

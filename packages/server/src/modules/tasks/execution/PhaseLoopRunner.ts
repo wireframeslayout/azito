@@ -29,7 +29,7 @@ import { buildSubagentDelegationBlock, buildSubagentRulesFileContent } from '../
 import { loadPromptModules } from '../../prompt/PromptModuleLoader';
 import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
 import type { IUnitRepository } from '../../units/Unit';
-import type { WorkerWaiter, AppendLogFn } from './WorkerWaiter';
+import type { WorkerWaiter, AppendLogFn, WaitResult } from './WorkerWaiter';
 import type { WorkerInputService } from './WorkerInputService';
 import type { PushVerifier } from './PushVerifier';
 import type { GitInfoCollector } from './GitInfoCollector';
@@ -505,111 +505,119 @@ export class PhaseLoopRunner {
 
       const outputFilePath = `/tmp/azito-output-${task.id}-${nonce}.md`;
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
-      const capability = { questions: phaseDef.questions, testFailed: phaseDef.testFailed };
-
-      const runtime = this.runtimeRegistry.get(unit.workerRuntime);
-      const envelopeResult = runtime.buildEnvelope({
-        phase, capability, nonce,
-        taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
-        server, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
-        doneMarker, questionsMarker, testFailedMarker,
-      });
-      const phaseSignalStream = envelopeResult.signalStream;
-      const markerizedPromptWithSignal = envelopeResult.markerizedPrompt;
-      let httpSignalTurn = envelopeResult.httpSignalTurn;
-
-      this.appendLog(task.id, unit.id, 'command', { type: 'phase_prompt', phase, text: markerizedPromptWithSignal, doneMarker, questionsMarker, outputFilePath });
-
-      const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
-      try {
-        await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
-      } catch (err: unknown) {
-        phaseStream.stop();
-        phaseSignalStream.stop();
-        this.appendLog(task.id, unit.id, 'status_change', { status: 'send_error', message: (err as Error).message });
-        this.taskRepo.updateStatus(task.id, 'failed');
-        return;
-      }
-      if (!isFirstPromptSent) {
-        await this.verifyPromptDelivery(runtime, workerContext, markerizedPromptWithSignal, phase);
-        isFirstPromptSent = true;
-      }
-
+      let httpSignalTurn: AgentTurn | null;
       let pushingProbe: (() => Promise<boolean>) | undefined;
-      if (phaseDef.pushVerify && !(currentIsolationIntent && this.pushNotaryService)) {
-        const currentTaskForProbe = this.taskRepo.findById(task.id);
-        const probeDir = await (async () => {
-          const wtPath = currentTaskForProbe?.worktreePath;
-          if (wtPath && await this.getWorktreeService(server).exists(wtPath)) return wtPath;
-          return currentTaskForProbe?.workingDirectory || projectServer?.workingDirectory;
-        })();
-        const probeBranch = currentTaskForProbe?.worktreeBranch ?? currentTaskForProbe?.branch;
-        if (probeDir && probeBranch) {
-          // Issue #87 13th-round review, Important finding: must agree with
-          // whichever repository distribution actually pulled onto this
-          // server, not always `repositories[0]` — uses the caller-locked
-          // `distributionRepoEntry` (Issue #87 review, forge/87-mirror
-          // follow-up, Important finding 1), never a fresh re-resolution —
-          // see this method's parameter doc comment.
-          const probeRepo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : null;
-          // #423 review: resolve actual HEAD branch on every probe
-          // invocation — the worker may switch branches mid-phase. Only
-          // log/update DB when the resolved value changes from the last
-          // observation to avoid noise.
-          let lastResolvedBranch: string | undefined;
-          pushingProbe = async () => {
-            // Issue #87 review (forge/87-mirror follow-up), Important
-            // finding 2: fail closed — same rule as
-            // ExecuteTaskUseCase.isPushCompleted(), shared via
-            // `isDistributionRequiredButRepositoryUnresolved` (see its doc
-            // comment) — when distribution is required but the target
-            // repository could not be resolved, never call PR creation or
-            // push verification (which would otherwise accept a SHA-only
-            // match against nothing in particular); treat the phase as
-            // not-yet-completed instead. Uses the caller-locked
-            // `distributionRequired` parameter (second-round fix), not a
-            // fresh `isDistributionRequired(server, projectServer)`
-            // re-derivation — see this method's `distributionRequired`
-            // parameter doc comment.
-            if (isDistributionRequiredButRepositoryUnresolved(distributionRequired, probeRepo)) {
-              this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
-              return false;
-            }
-            // #423 review: resolve on every invocation; log only on change.
-            const headBranch = await this.getWorktreeService(server).getBranch(probeDir);
-            const resolvedEffectiveBranch = (headBranch && headBranch !== probeBranch) ? headBranch : probeBranch;
-            if (resolvedEffectiveBranch !== lastResolvedBranch) {
-              if (resolvedEffectiveBranch !== probeBranch) {
-                this.appendLog(task.id, unit.id, 'command', {
-                  type: 'push_branch_mismatch', expected: probeBranch, actual: resolvedEffectiveBranch,
-                });
-                this.taskRepo.update(task.id, { worktreeBranch: resolvedEffectiveBranch });
-              }
-              lastResolvedBranch = resolvedEffectiveBranch;
-            }
-            // Create the PR (if due) before verifying — verifyPushCompleted's own
-            // PR-existence check then sees what this call just created.
-            // PullRequestCreator itself never rejects (best-effort, self-contained
-            // try/catch), but this probe stays defensive regardless: a rejection
-            // here must never take down the pushing completion check with it.
-            if (!currentTaskForProbe?.skipPr) {
-              try {
-                await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, resolvedEffectiveBranch, {
-                  title: currentTaskForProbe?.title ?? task.title,
-                  description: currentTaskForProbe?.description ?? null,
-                  targetBranch: currentTaskForProbe?.targetBranch ?? null,
-                });
-              } catch { /* best-effort: never block push verification on PR creation */ }
-            }
-            return this.pushVerifier.verifyPushCompleted(server, probeDir, resolvedEffectiveBranch, currentTaskForProbe?.skipPr, probeRepo);
-          };
-        }
-      }
+      let waitResult: WaitResult;
+      // Until waitForWorker owns it (its cleanup stops it), a throw here must not leave the pane stream running.
+      let streamHandedToWaiter = false;
+      try {
+        const capability = { questions: phaseDef.questions, testFailed: phaseDef.testFailed };
 
-      const waitResult = await this.workerWaiter.waitForWorker(server, handle, task.id, unit.id, signal, phaseStream, doneMarker, phaseSignalStream, pushingProbe, supervisorTarget, {
-        stillWorkingLimit: phaseDef.stillWorkingLimit,
-        activitySource: this.activitySource ? { isWorking: () => this.activitySource!.isKeyWorking(serverName, supervisorTarget) } : undefined,
-      });
+        const runtime = this.runtimeRegistry.get(unit.workerRuntime);
+        const envelopeResult = runtime.buildEnvelope({
+          phase, capability, nonce,
+          taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
+          server, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
+          doneMarker, questionsMarker, testFailedMarker,
+        });
+        const phaseSignalStream = envelopeResult.signalStream;
+        const markerizedPromptWithSignal = envelopeResult.markerizedPrompt;
+        httpSignalTurn = envelopeResult.httpSignalTurn;
+
+        this.appendLog(task.id, unit.id, 'command', { type: 'phase_prompt', phase, text: markerizedPromptWithSignal, doneMarker, questionsMarker, outputFilePath });
+
+        const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+        try {
+          await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
+        } catch (err: unknown) {
+          phaseSignalStream.stop();
+          this.appendLog(task.id, unit.id, 'status_change', { status: 'send_error', message: (err as Error).message });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
+        if (!isFirstPromptSent) {
+          await this.verifyPromptDelivery(runtime, workerContext, markerizedPromptWithSignal, phase);
+          isFirstPromptSent = true;
+        }
+
+        if (phaseDef.pushVerify && !(currentIsolationIntent && this.pushNotaryService)) {
+          const currentTaskForProbe = this.taskRepo.findById(task.id);
+          const probeDir = await (async () => {
+            const wtPath = currentTaskForProbe?.worktreePath;
+            if (wtPath && await this.getWorktreeService(server).exists(wtPath)) return wtPath;
+            return currentTaskForProbe?.workingDirectory || projectServer?.workingDirectory;
+          })();
+          const probeBranch = currentTaskForProbe?.worktreeBranch ?? currentTaskForProbe?.branch;
+          if (probeDir && probeBranch) {
+            // Issue #87 13th-round review, Important finding: must agree with
+            // whichever repository distribution actually pulled onto this
+            // server, not always `repositories[0]` — uses the caller-locked
+            // `distributionRepoEntry` (Issue #87 review, forge/87-mirror
+            // follow-up, Important finding 1), never a fresh re-resolution —
+            // see this method's parameter doc comment.
+            const probeRepo = distributionRepoEntry ? this.projectRepo.findRepositoryById(distributionRepoEntry.id) : null;
+            // #423 review: resolve actual HEAD branch on every probe
+            // invocation — the worker may switch branches mid-phase. Only
+            // log/update DB when the resolved value changes from the last
+            // observation to avoid noise.
+            let lastResolvedBranch: string | undefined;
+            pushingProbe = async () => {
+              // Issue #87 review (forge/87-mirror follow-up), Important
+              // finding 2: fail closed — same rule as
+              // ExecuteTaskUseCase.isPushCompleted(), shared via
+              // `isDistributionRequiredButRepositoryUnresolved` (see its doc
+              // comment) — when distribution is required but the target
+              // repository could not be resolved, never call PR creation or
+              // push verification (which would otherwise accept a SHA-only
+              // match against nothing in particular); treat the phase as
+              // not-yet-completed instead. Uses the caller-locked
+              // `distributionRequired` parameter (second-round fix), not a
+              // fresh `isDistributionRequired(server, projectServer)`
+              // re-derivation — see this method's `distributionRequired`
+              // parameter doc comment.
+              if (isDistributionRequiredButRepositoryUnresolved(distributionRequired, probeRepo)) {
+                this.appendLog(task.id, unit.id, 'command', { type: 'pushing_probe_blocked_unresolved_repository' });
+                return false;
+              }
+              // #423 review: resolve on every invocation; log only on change.
+              const headBranch = await this.getWorktreeService(server).getBranch(probeDir);
+              const resolvedEffectiveBranch = (headBranch && headBranch !== probeBranch) ? headBranch : probeBranch;
+              if (resolvedEffectiveBranch !== lastResolvedBranch) {
+                if (resolvedEffectiveBranch !== probeBranch) {
+                  this.appendLog(task.id, unit.id, 'command', {
+                    type: 'push_branch_mismatch', expected: probeBranch, actual: resolvedEffectiveBranch,
+                  });
+                  this.taskRepo.update(task.id, { worktreeBranch: resolvedEffectiveBranch });
+                }
+                lastResolvedBranch = resolvedEffectiveBranch;
+              }
+              // Create the PR (if due) before verifying — verifyPushCompleted's own
+              // PR-existence check then sees what this call just created.
+              // PullRequestCreator itself never rejects (best-effort, self-contained
+              // try/catch), but this probe stays defensive regardless: a rejection
+              // here must never take down the pushing completion check with it.
+              if (!currentTaskForProbe?.skipPr) {
+                try {
+                  await this.pullRequestCreator.ensureCreated(task.id, unit.id, probeRepo, resolvedEffectiveBranch, {
+                    title: currentTaskForProbe?.title ?? task.title,
+                    description: currentTaskForProbe?.description ?? null,
+                    targetBranch: currentTaskForProbe?.targetBranch ?? null,
+                  });
+                } catch { /* best-effort: never block push verification on PR creation */ }
+              }
+              return this.pushVerifier.verifyPushCompleted(server, probeDir, resolvedEffectiveBranch, currentTaskForProbe?.skipPr, probeRepo);
+            };
+          }
+        }
+
+        streamHandedToWaiter = true;
+        waitResult = await this.workerWaiter.waitForWorker(server, handle, task.id, unit.id, signal, phaseStream, doneMarker, phaseSignalStream, pushingProbe, supervisorTarget, {
+          stillWorkingLimit: phaseDef.stillWorkingLimit,
+          activitySource: this.activitySource ? { isWorking: () => this.activitySource!.isKeyWorking(serverName, supervisorTarget) } : undefined,
+        });
+      } finally {
+        if (!streamHandedToWaiter) phaseStream.stop();
+      }
       const output = waitResult.output;
       let classification = waitResult.classification;
       let httpSignalFinalTurn: AgentTurn | null = httpSignalTurn;

@@ -11,7 +11,9 @@ import type {
   TranscriptBlock,
   TranscriptEntry,
   TranscriptEntryType,
-  TranscriptSource,
+  TranscriptReader,
+  ReadBudget,
+  ListSessionsOptions,
 } from './TranscriptSource';
 
 // ─── Codex CLI (~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl) 用ソース ───
@@ -37,6 +39,8 @@ import type {
 // ─── Constants ───
 
 const PREVIEW_LENGTH = 120;
+/** 軽量一覧（metadataOnly）の最初の試行で先頭から読むバイト数。cwd が見つからなければ previewScanBytes まで読み直す。 */
+const METADATA_QUICK_SCAN_BYTES = 64 * 1024;
 /** session_meta は先頭行、最初のユーザー発話は developer/environment_context に続く数行後に来るため、
  * Claude（20行）より広めに走査する。 */
 const PREVIEW_SCAN_LINES = 200;
@@ -163,7 +167,16 @@ function extractUserPreviewText(content: unknown): string | null {
 }
 
 /** 一覧表示用に、ファイル先頭 previewScanBytes 分だけを走査して preview テキストと cwd を拾う。 */
-function scanSessionMeta(file: string, previewScanBytes: number): SessionScanResult {
+function scanSessionMeta(file: string, previewScanBytes: number, metadataOnly = false): SessionScanResult {
+  if (!metadataOnly) return scanSessionMetaOnce(file, previewScanBytes, false);
+  // 軽量一覧: preview を作らないだけで、cwd の探索範囲は通常の一覧と同じ（previewScanBytes）。多くは先頭の
+  // 小さな読み取りで cwd が見つかるので、まずそれで試し、見つからないときだけ通常の範囲まで読み直す。
+  const quick = scanSessionMetaOnce(file, Math.min(previewScanBytes, METADATA_QUICK_SCAN_BYTES), true);
+  if (quick.cwd !== null || previewScanBytes <= METADATA_QUICK_SCAN_BYTES) return quick;
+  return scanSessionMetaOnce(file, previewScanBytes, true);
+}
+
+function scanSessionMetaOnce(file: string, previewScanBytes: number, metadataOnly: boolean): SessionScanResult {
   let content: string;
   try {
     const fd = fs.openSync(file, 'r');
@@ -196,6 +209,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
     }
 
     if (
+      !metadataOnly &&
       !preview &&
       record.type === 'response_item' &&
       isRecord(record.payload) &&
@@ -206,7 +220,7 @@ function scanSessionMeta(file: string, previewScanBytes: number): SessionScanRes
       if (text) preview = text.slice(0, PREVIEW_LENGTH);
     }
 
-    if (preview && cwd !== null) break;
+    if (metadataOnly ? cwd !== null : preview && cwd !== null) break;
   }
   return { preview, cwd };
 }
@@ -398,7 +412,7 @@ function buildParseLine(windowKey: string, seedModel?: string): ParseLineHandle 
 
 // ─── Source ───
 
-export class CodexTranscriptSource implements TranscriptSource {
+export class CodexTranscriptSource implements TranscriptReader {
   readonly agentType = 'codex';
 
   private readonly initialReadMaxBytes: number;
@@ -451,7 +465,7 @@ export class CodexTranscriptSource implements TranscriptSource {
     }
   }
 
-  listSessions(limit = 50): SessionSummary[] {
+  listSessions(limit = 50, options: ListSessionsOptions = {}): SessionSummary[] {
     const files = this.scanSessionFiles();
     this.warmSessionFileCache(files);
 
@@ -470,7 +484,7 @@ export class CodexTranscriptSource implements TranscriptSource {
     const limited = stated.slice(0, limit);
 
     return limited.map(({ file, sessionId, stat }) => {
-      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes);
+      const { preview, cwd } = scanSessionMeta(file, this.previewScanBytes, options.metadataOnly === true);
       return {
         sessionId,
         agentType: this.agentType,
@@ -557,7 +571,7 @@ export class CodexTranscriptSource implements TranscriptSource {
     this.lastKnownModel.set(sessionId, { offset: nextOffset, model });
   }
 
-  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null {
+  readSessionBefore(sessionId: string, before: number, budget: ReadBudget = {}): ReadSessionBeforeResult | null {
     const file = this.findSessionFile(sessionId);
     if (!file) return null;
 
@@ -573,7 +587,7 @@ export class CodexTranscriptSource implements TranscriptSource {
       // 後方ページングは lastKnownModel を seed も更新もしない（過去分の読み直しであり、直前の
       // turn_context が窓外なら model 無し表示のままでよい。フォールバック合成はしない）。
       const { parseLine } = buildParseLine(`b${before}`);
-      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine);
+      return readBeforeWindow(fd, size, before, this.incrementalReadMaxBytes, parseLine, budget);
     } finally {
       fs.closeSync(fd);
     }

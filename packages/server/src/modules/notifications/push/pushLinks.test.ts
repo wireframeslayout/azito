@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { taskPushUrl, agentPushUrl } from './pushLinks';
+import { taskPushUrl, agentPushUrl, agentActivityPushUrl } from './pushLinks';
 
 describe('taskPushUrl', () => {
   it('returns /workspace/:projectId?task=:taskId', () => {
@@ -34,5 +34,18 @@ describe('agentPushUrl', () => {
       expect(url).toContain('server=');
       expect(url).toContain('target=');
     }
+  });
+});
+
+describe('agentActivityPushUrl', () => {
+  it('carries the windowId so a misao window opens by id', () => {
+    expect(agentActivityPushUrl({ projectId: 5, serverName: 'srv1', target: 'ws:w_01', windowId: 9 }, () => undefined))
+      .toBe('/workspace/5?server=srv1&target=ws%3Aw_01&windowId=9');
+  });
+
+  it('takes the project from the task when the event has none, and omits windowId when unknown', () => {
+    expect(agentActivityPushUrl({ taskId: 3, serverName: 's', target: 't' }, (id) => (id === 3 ? 7 : undefined)))
+      .toBe('/workspace/7?server=s&target=t');
+    expect(agentActivityPushUrl({ taskId: 4, serverName: 's', target: 't' }, () => undefined)).toBe('/?server=s&target=t');
   });
 });

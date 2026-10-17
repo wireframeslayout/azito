@@ -93,7 +93,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
     createdAt: '2026-06-16T00:00:00Z',
     ...overrides,
   };
@@ -242,8 +242,8 @@ function createMocks(): Mocks {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createUseCase(mocks: Mocks, registry?: any): RecoverStuckTasksUseCase {
-  const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient } as any;
+function createUseCase(mocks: Mocks, registry?: any, windowRows: unknown[] = []): RecoverStuckTasksUseCase {
+  const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient, availabilityFor: () => ({ available: true }), supportedKinds: () => ['tmux'] } as any;
   return new RecoverStuckTasksUseCase(
     mocks.taskRepo as any,
     mocks.unitRepo as any,
@@ -265,6 +265,7 @@ function createUseCase(mocks: Mocks, registry?: any): RecoverStuckTasksUseCase {
       ] };
       return { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) };
     })() as any,
+    { findByTask: vi.fn().mockReturnValue(windowRows) } as any,
   );
 }
 
@@ -847,6 +848,22 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.tmuxClient.resolvePane).toHaveBeenCalled();
     expect(mocks.tmuxClient.probePane).toHaveBeenCalled();
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 41);
+  });
+
+  it('tmux: resolves the pane from task.tmuxWindow in the project workspace even when the window row disagrees (behaviour unchanged)', async () => {
+    const task = makeTask({ id: 43, tmuxWindow: 'task-43' });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    mocks.unitRepo.findById.mockReturnValue(makeUnit({ workerExecutionMode: 'http-signal' }));
+    mocks.turnRepo.findLatestByTaskPhase.mockReturnValue(
+      makeAgentTurn({ id: 22, taskId: 43, phase: 'implementing', status: 'completed' }),
+    );
+    const staleRow = { isPrimary: true, ownerType: 'task', tmuxTarget: 'other:stale', muxRef: { kind: 'tmux', workspace: 'other', window: 'stale' } };
+
+    await createUseCase(mocks, undefined, [staleRow]).run();
+
+    expect(mocks.tmuxClient.resolvePane).toHaveBeenCalledWith(expect.anything(), { kind: 'tmux', workspace: 'operation-bucky', window: 'task-43' }, 1);
   });
 
   it('should skip recovery when probePane returns verified: false (unverified pane state)', async () => {

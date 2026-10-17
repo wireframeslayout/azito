@@ -3,7 +3,8 @@ import { asPaneHandle, type MuxPaneInfo } from '@azito/shared';
 import { WindowInputService } from './WindowInputService';
 import type { IWindowRepository, Window } from '../windows/Window';
 import type { IMuxClient } from '../tmux/IMuxClient';
-import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { MuxOperationUnsupportedError } from '../tmux/MuxCapabilityError';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 
 const LOCAL_SERVER: ServerConfig = {
@@ -14,7 +15,7 @@ const LOCAL_SERVER: ServerConfig = {
   agentToken: null,
   agentVersion: null,
   sshHost: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -83,7 +84,7 @@ function buildDeps(opts: {
     cancelPaneModeByHandle: async (...args: unknown[]) => { calls.cancelPaneModeByHandle.push(args); },
   } as unknown as IMuxClient;
 
-  const muxDriverRegistry = { resolve: () => driver } as unknown as MuxDriverRegistry;
+  const muxDriverRegistry = { resolve: () => driver, resolveKind: () => driver } as unknown as MuxDriverRegistry;
 
   const serverRepo = {
     findByName: (name: string) => (opts.servers ?? [LOCAL_SERVER]).find((s) => s.name === name) ?? null,
@@ -154,7 +155,7 @@ describe('WindowInputService', () => {
         isPaneInModeByHandle: async () => false,
         cancelPaneModeByHandle: async () => { order.push('cancelPaneModeByHandle'); },
       } as unknown as IMuxClient;
-      const registry = { resolve: () => driver } as unknown as MuxDriverRegistry;
+      const registry = { resolve: () => driver, resolveKind: () => driver } as unknown as MuxDriverRegistry;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
       const service = new WindowInputService(windowRepo, registry, serverRepo, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'reply with OK only');
@@ -173,7 +174,7 @@ describe('WindowInputService', () => {
         sendTextToHandle: async () => { order.push('sendTextToHandle'); },
         sendKeysToHandle: async () => { order.push('sendKeysToHandle'); },
       } as unknown as IMuxClient;
-      const registry = { resolve: () => driver } as unknown as MuxDriverRegistry;
+      const registry = { resolve: () => driver, resolveKind: () => driver } as unknown as MuxDriverRegistry;
       const wait = async (ms: number) => { order.push(`wait:${ms}`); };
       const service = new WindowInputService(windowRepo, registry, serverRepo, wait);
       const result = await service.sendInput(42, asPaneHandle('%1'), 'echo hello');
@@ -294,5 +295,63 @@ describe('WindowInputService', () => {
       const service = new WindowInputService(windowRepo, muxDriverRegistry, serverRepo);
       expect(await service.resolvePaneIndex(42, asPaneHandle('%9'))).toBe('pane_not_found');
     });
+  });
+});
+
+describe('WindowInputService on a server holding tmux and misao windows (#311)', () => {
+  const MISAO_PANE = asPaneHandle('p_01M3XFD8H97JCPKS5Y5BH3JZQK');
+  const MISAO_WINDOW = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
+
+  function mixedRegistry(misaoInMode?: boolean) {
+    const sent: Array<[string, unknown]> = [];
+    const tmux = {
+      kind: 'tmux', caps: { copyMode: true }, supportsPaneLabels: false,
+      listAllPanes: async () => [buildPane({ paneId: '%1' })],
+      isPaneInModeByHandle: vi.fn(async () => true),
+      cancelPaneModeByHandle: vi.fn(async () => { sent.push(['tmux:cancel', null]); }),
+      sendTextToHandle: async (_s: unknown, h: string, t: string) => { sent.push([`tmux:${h}`, t]); },
+      sendKeysToHandle: async (_s: unknown, h: string, k: string[]) => { sent.push([`tmux:${h}`, k]); },
+    };
+    // Same workspace name, window index and name as the tmux window: only its kind tells it apart.
+    const misao = {
+      kind: 'misao', caps: { copyMode: false }, supportsPaneLabels: true,
+      listAllPanes: async () => [buildPane({ paneId: MISAO_PANE, ref: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW } })],
+      isPaneInModeByHandle: vi.fn(async () => { if (misaoInMode === undefined) throw new MuxOperationUnsupportedError('misao', 'isPaneInModeByHandle'); return misaoInMode; }),
+      sendTextToHandle: async (_s: unknown, h: string, t: string) => { sent.push([`misao:${h}`, t]); },
+      sendKeysToHandle: async (_s: unknown, h: string, k: string[]) => { sent.push([`misao:${h}`, k]); },
+    };
+    const registry = new MuxDriverRegistry();
+    registry.register('tmux', tmux as unknown as IMuxClient);
+    registry.register('misao', misao as unknown as IMuxClient);
+    return { registry, tmux, misao, sent };
+  }
+
+  const serversOf = (defaultMux: 'tmux' | 'misao') => ({ findByName: () => ({ ...LOCAL_SERVER, defaultMux }) }) as unknown as IServerRepository;
+  const tmuxWindowRepo = { findById: () => buildWindow({ tmuxTarget: 'main:0', muxRef: { kind: 'tmux', workspace: 'main', window: '0' }, workerType: null }) } as unknown as IWindowRepository;
+  const misaoWindowRepo = { findById: () => buildWindow({ tmuxTarget: `main:${MISAO_WINDOW}`, muxRef: { kind: 'misao', workspace: 'main', window: MISAO_WINDOW }, workerType: null }) } as unknown as IWindowRepository;
+  const noWait = async () => {};
+
+  it('sends to a misao pane on a tmux-default server without asking misao about copy-mode', async () => {
+    const { registry, misao, sent } = mixedRegistry();
+    const service = new WindowInputService(misaoWindowRepo, registry, serversOf('tmux'), noWait);
+    expect(await service.sendInput(42, MISAO_PANE, 'hi')).toBe('ok');
+    expect(misao.isPaneInModeByHandle).not.toHaveBeenCalled();
+    expect(sent).toEqual([[`misao:${MISAO_PANE}`, 'hi'], [`misao:${MISAO_PANE}`, ['Enter']]]);
+  });
+
+  it('leaves copy-mode of a tmux pane on a misao-default server before sending', async () => {
+    const { registry, tmux, sent } = mixedRegistry();
+    const service = new WindowInputService(tmuxWindowRepo, registry, serversOf('misao'), noWait);
+    expect(await service.sendInput(42, asPaneHandle('%1'), 'hi')).toBe('ok');
+    expect(tmux.cancelPaneModeByHandle).toHaveBeenCalledTimes(1);
+    expect(sent[0]).toEqual(['tmux:cancel', null]);
+  });
+
+  it('refuses a misao pane of a same-named workspace for a tmux window (no input into another window)', async () => {
+    const { registry, sent } = mixedRegistry();
+    const service = new WindowInputService(tmuxWindowRepo, registry, serversOf('tmux'), noWait);
+    expect(await service.sendInput(42, MISAO_PANE, 'rm -rf')).toBe('pane_not_found');
+    expect(await service.sendSignal(42, MISAO_PANE, 'interrupt')).toBe('pane_not_found');
+    expect(sent).toEqual([]);
   });
 });

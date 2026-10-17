@@ -1,9 +1,22 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { MuxDriverKind } from '@azito/shared';
 import type { Session } from '../../hooks/useServerManagement';
+import { hasMixedKinds, sessionKey, sessionKindOf } from '../../lib/sessionKind';
+import { canActOnMux } from '../../lib/windowRowPlan';
+
+/** A text action that cannot run now: shown dimmed, not clickable. */
+function disabledStyle(enabled: boolean): React.CSSProperties {
+  return enabled ? { cursor: 'pointer' } : { cursor: 'not-allowed', opacity: DIMMED_PANE_OPACITY };
+}
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
-import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
+import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
+import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
 import { Icon } from '../ui/Icon';
+import { IconButton } from '../ui/IconButton';
+import { Button } from '../ui/Button';
+import { Chip } from '../ui/Chip';
+import { PaneStateChip, DIMMED_PANE_OPACITY } from '../ui/PaneStateChip';
 
 interface WindowTreePopoverProps {
   sessions: Session[];
@@ -12,8 +25,13 @@ interface WindowTreePopoverProps {
   onSelect: (ref: TerminalRef) => void;
   onClose: () => void;
   onCreateSession: () => void;
-  onAddWindow: (sessionName: string) => void;
+  /** `kind`: the mux of the session (a tmux and a misao session can share a name). */
+  onAddWindow: (sessionName: string, kind: MuxDriverKind) => void;
   onSplitPane: (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => void;
+  /** Deletes one pane (a stopped or exited one, from its row). `label` names it in the confirmation. */
+  onDeletePane: (ref: TerminalRef, label: string, handle?: string) => void;
+  /** Deletes a whole window (the way out of a window without panes). `label` names it in the confirmation. */
+  onKillWindow: (ref: TerminalRef, label: string) => void;
   isMobile: boolean;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
@@ -21,21 +39,23 @@ interface WindowTreePopoverProps {
 
 export default function WindowTreePopover({
   sessions, serverName, selectedRef,
-  onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, isMobile,
+  onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, onDeletePane, onKillWindow, isMobile,
   windowById, taskById,
 }: WindowTreePopoverProps) {
   const { t } = useTranslation('servers');
-  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(() => new Set(sessions.map((s) => s.name)));
+  const [expandedSessions, setExpandedSessions] = useState<Set<string>>(() => new Set(sessions.map(sessionKey)));
 
-  const toggleSession = (name: string) => {
+  const toggleSession = (key: string) => {
     setExpandedSessions((prev) => {
       const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
+      if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
   };
 
   const totalWindows = sessions.reduce((sum, s) => sum + s.windows.length, 0);
+  // Only when two muxes are listed is the mux named on each session (it is what tells same-named sessions apart).
+  const showKind = hasMixedKinds(sessions);
   const selectedId = selectedRef ? terminalTabId(selectedRef) : null;
 
   const content = (
@@ -51,31 +71,42 @@ export default function WindowTreePopover({
       </div>
 
       {sessions.map((sess) => {
-        const expanded = expandedSessions.has(sess.name);
+        const key = sessionKey(sess);
+        const kind = sessionKindOf(sess);
+        // A stale session's mux cannot be reached: its windows still open, but nothing goes through the mux.
+        const actionable = canActOnMux(sess);
+        const expanded = expandedSessions.has(key);
         return (
-          <div key={sess.name}>
+          <div key={key}>
             <TreeRow
               indent={0}
-              onClick={() => toggleSession(sess.name)}
+              onClick={() => toggleSession(key)}
               selected={false}
             >
               <span style={{ display: 'inline-flex', alignItems: 'center', width: 10, color: 'var(--text-dim)' }}>
                 <Icon name="chevron-right" size={14} rotate={expanded ? 90 : 0} />
               </span>
-              <span style={{ fontFamily: 'var(--mono)' }}>{sess.name}</span>
+              <span style={{ fontFamily: 'var(--mono)', opacity: sess.stale ? DIMMED_PANE_OPACITY : undefined }}>{sess.name}</span>
+              {showKind && <Chip>{t(kind === 'misao' ? 'overview.defaultMuxMisao' : 'overview.defaultMuxTmux')}</Chip>}
+              {/* Kept from an earlier listing: its mux cannot be listed right now. */}
+              {sess.stale && <Chip>{t('status.offline')}</Chip>}
               <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', whiteSpace: 'nowrap' }}>
                 {sess.windows.length} windows
               </span>
               <span
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
-                onClick={(e) => { e.stopPropagation(); onAddWindow(sess.name); }}
+                aria-disabled={!actionable}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(actionable) }}
+                onClick={(e) => { e.stopPropagation(); if (actionable) onAddWindow(sess.name, kind); }}
               >
                 <Icon name="plus" size={14} />Window
               </span>
             </TreeRow>
             {expanded && sess.windows.map((win) => {
-              const winRef = terminalRefFromWindow(serverName, win.windowId, win.ref, 1);
+              // A window opens on a live pane when it has one (a restarted misao daemon leaves stopped panes first).
+              const winRef = terminalRefFromWindow(serverName, win.windowId, win.ref, preferredPaneOrdinal(win) ?? 1);
               const winRefId = terminalTabId(winRef);
+              const winLabel = sessionWindowLabel(sess.name, win);
+              const isEmptyWindow = win.panes.length === 0;
               return (
                 <div key={win.index}>
                   <TreeRow
@@ -97,24 +128,34 @@ export default function WindowTreePopover({
                           workerType: regWin?.workerType,
                           windowType: regWin?.windowType,
                           taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
-                          tmuxTarget: `${sess.name}:${win.name}`,
+                          tmuxTarget: winLabel,
                         });
                         return formatWindowDisplayLabel(display);
                       })()
                     }</span>
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
-                      {win.panes.length} pane{win.panes.length > 1 ? 's' : ''}
+                      {isEmptyWindow ? t('windows.noPanes') : `${win.panes.length} pane${win.panes.length > 1 ? 's' : ''}`}
                     </span>
-                    <span
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, cursor: 'pointer' }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
-                      }}
-                    >
-                      <Icon name="split-h" size={14} /> {t('windows.split')}
-                    </span>
+                    {!isEmptyWindow && (
+                      <span
+                        aria-disabled={!actionable}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(actionable) }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (actionable) onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
+                        }}
+                      >
+                        <Icon name="split-h" size={14} /> {t('windows.split')}
+                      </span>
+                    )}
                   </TreeRow>
+                  {isEmptyWindow && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: `4px 9px 6px ${9 + 2 * 20}px` }}>
+                      {/* Opening the window shows the pane-unavailable notice, which carries the open-pane form. */}
+                      <Button size="sm" variant="primary" onClick={() => onSelect(winRef)}>{t('windows.openPane')}</Button>
+                      <Button size="sm" disabled={!actionable} onClick={() => onKillWindow(winRef, winLabel)}>{t('windows.killWindow')}</Button>
+                    </div>
+                  )}
                   {win.panes.map((pane) => {
                     const paneRef = terminalRefFromWindow(serverName, win.windowId, win.ref, pane.index);
                     return (
@@ -125,7 +166,20 @@ export default function WindowTreePopover({
                         selected={selectedId === terminalTabId(paneRef)}
                       >
                         <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.{pane.index}</span>
-                        <span style={{ fontFamily: 'var(--mono)' }}>{pane.title || pane.command}</span>
+                        <span style={{ fontFamily: 'var(--mono)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>{pane.title || pane.command}</span>
+                        <PaneStateChip pane={pane} />
+                        {!isPaneLive(pane) && (
+                          <IconButton
+                            size="sm"
+                            title={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
+                            aria-label={t('windows.deletePane', { name: `${winLabel}.${pane.index}` })}
+                            style={{ marginLeft: 'auto' }}
+                            disabled={!actionable}
+                            onClick={(e) => { e.stopPropagation(); onDeletePane(paneRef, `${winLabel}.${pane.index}`, pane.handle); }}
+                          >
+                            <Icon name="trash" size={14} />
+                          </IconButton>
+                        )}
                       </TreeRow>
                     );
                   })}

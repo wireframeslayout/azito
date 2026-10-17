@@ -3,6 +3,7 @@ import { api } from '../api/client';
 import { useNotificationChannel } from './useNotificationChannel';
 import type { PersistedTab } from './useTabPersistence';
 import type { Project, Unit, Task, Server, Session, SidebarMode, Window } from '../pages/workspace/types';
+import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
 
 export function useWorkspaceData(
   projectId: string | undefined,
@@ -89,18 +90,17 @@ export function useWorkspaceData(
     // 稼働中でもセッション情報が無く「オフライン」表示になってしまう。
     const taskWindowServerNames = tasksRef.current.flatMap((t) => (t.windows ?? []).map((w) => w.serverName));
     const serverNames = [...new Set([...projectServerNames, ...tabServerNames, ...taskWindowServerNames])];
-    const results = await Promise.allSettled(serverNames.map(async (name) => {
-      const r = await api<Session[]>(`/servers/${name}/sessions`);
-      return { name, sessions: Array.isArray(r) ? r : [] };
-    }));
+    // A non-listing reply (error body) is a failed fetch: left out so consumers wait instead of reading "no windows".
+    const results = await Promise.allSettled(serverNames.map(async (name) => ({ name, listing: await fetchSessionListing<Session>(name) })));
     if (projectIdRef.current !== requestedProjectId) return; // stale response, a newer project is now active
-    const freshSessions: Record<string, Session[]> = {};
-    for (const r of results) {
-      if (r.status === 'fulfilled') {
-        freshSessions[r.value.name] = r.value.sessions;
+    // A mux that could not be listed keeps its previous sessions: its windows are not gone, only unreadable now.
+    setSessionData((prev) => {
+      const freshSessions: Record<string, Session[]> = {};
+      for (const r of results) {
+        if (r.status === 'fulfilled') freshSessions[r.value.name] = keepUnavailableKinds(prev[r.value.name], r.value.listing);
       }
-    }
-    setSessionData((prev) => ({ ...prev, ...freshSessions }));
+      return { ...prev, ...freshSessions };
+    });
   }, [projectId]);
 
   // Event-driven refresh via WebSocket

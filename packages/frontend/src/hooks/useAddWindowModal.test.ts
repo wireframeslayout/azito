@@ -13,8 +13,14 @@ vi.mock('../api/client', () => ({ api: vi.fn() }));
 vi.mock('./useAgentDefinitions', () => ({
   useAgentDefinitions: () => ({ agents: [], loading: false, error: null }),
 }));
+vi.mock('./useServerStatuses', () => ({
+  useServerStatuses: () => ({ statuses: {} }),
+}));
 vi.mock('./useToast', () => ({
   useToast: () => ({ showToast: vi.fn() }),
+}));
+vi.mock('./useMisaoInstallOffer', () => ({
+  useMisaoInstallOffer: () => <T,>(_serverName: string, create: () => Promise<T>) => create(),
 }));
 
 import { buildAgentCommand, isInsufficientResources } from './useAddWindowModal';

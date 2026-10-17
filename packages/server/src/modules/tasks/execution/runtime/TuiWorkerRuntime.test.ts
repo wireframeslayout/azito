@@ -30,6 +30,7 @@ function makeLaunchCtx(tmux: any) {
     supervisorTarget: 'sess:1',
     taskId: 1,
     unitId: 1,
+    windowKind: 'tmux' as const,
     windowType: 'agent',
     workerExecutionMode: 'tmux-pipe' as const,
   };

@@ -9,7 +9,7 @@ export function IconButton({
   ...rest
 }: {
   title?: string;
-  onClick?: () => void;
+  onClick?: React.MouseEventHandler<HTMLButtonElement>;
   children: React.ReactNode;
   size?: 'sm' | 'md';
 } & React.ButtonHTMLAttributes<HTMLButtonElement>) {

@@ -1,6 +1,7 @@
-import { type PaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
+import { type PaneHandle, muxKindOfPaneHandle, muxRefFromTmuxTarget } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
+import { paneInfoMatchesRef } from '../tmux/types';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { IServerRepository } from '../servers/Server';
 import type { IWindowRepository, Window } from '../windows/Window';
@@ -54,7 +55,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(driver, server, handle);
+    await this.preparePaneForInput(server, handle);
     await driver.sendTextToHandle(server, handle, text);
     const submitDelayMs = this.resolveSubmitDelay(window.workerType);
     if (submitDelayMs > 0) await this.wait(submitDelayMs);
@@ -73,7 +74,7 @@ export class WindowInputService {
     const belongsToWindow = await this.paneBelongsToWindow(driver, server, window, handle);
     if (!belongsToWindow) return 'pane_not_found';
 
-    await this.preparePaneForInput(driver, server, handle);
+    await this.preparePaneForInput(server, handle);
     const resolvedKey = action === 'interrupt' ? this.resolveInterruptKey(window.workerType) : (key as InterruptKey | AnswerKey);
     await driver.sendKeysToHandle(server, handle, [resolvedKey]);
     return 'ok';
@@ -102,8 +103,11 @@ export class WindowInputService {
   /**
    * copy-mode 判定は MuxCapabilities.copyMode で分岐する。tmux ではスクロールバック閲覧中の
    * send-keys がバッファ選択操作に吸収されるため、解除してから短い待機を挟む。
+   * caps はペインが属する mux（handle の形で判別）の driver のものを見る。サーバーの既定 mux の
+   * caps ではない（1 台に tmux と misao のペインが並ぶため）。
    */
-  private async preparePaneForInput(driver: IMuxClient, server: ServerConfig, handle: PaneHandle): Promise<void> {
+  private async preparePaneForInput(server: ServerConfig, handle: PaneHandle): Promise<void> {
+    const driver = this.muxDriverRegistry.resolveKind(muxKindOfPaneHandle(handle), server);
     if (!driver.caps.copyMode) return;
     const inMode = await driver.isPaneInModeByHandle(server, handle);
     if (!inMode) return;
@@ -119,7 +123,7 @@ export class WindowInputService {
   private async listWindowPanes(driver: IMuxClient, server: ServerConfig, window: Window) {
     const ref = resolveWindowRef(window);
     const allPanes = await driver.listAllPanes(server);
-    return allPanes.filter((p) => p.sessionName === ref.workspace && windowSpecMatches(ref.window, p.windowIndex, p.windowName));
+    return allPanes.filter((p) => paneInfoMatchesRef(p, ref));
   }
 
   private resolveInterruptKey(workerType: string | null): InterruptKey {
@@ -131,12 +135,4 @@ export class WindowInputService {
     if (workerType === null) return 0;
     return getAgentTranscriptProfile(workerType)?.submitDelayMs ?? 0;
   }
-}
-
-function windowSpecMatches(windowSpec: string, windowIndex: number, windowName: string): boolean {
-  for (const spec of new Set([windowSpec, windowSpec.replace(/\.\d+$/, '')])) {
-    if (!spec) continue;
-    if (/^\d+$/.test(spec) ? spec === String(windowIndex) : spec === windowName) return true;
-  }
-  return false;
 }

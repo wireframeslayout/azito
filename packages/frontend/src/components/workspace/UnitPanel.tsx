@@ -12,7 +12,8 @@ import { timeAgo } from '../../utils/time';
 import { summarizePhaseConfig, getPhaseLabel } from '../../lib/taskPhases';
 import { useUnitTypes, findUnitType } from '../../hooks/useUnitTypes';
 import type { RunningOperation, Task, Unit } from '../../pages/workspace/types';
-import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
+import type { TerminalRef } from '../../lib/terminalRef';
 
 interface UnitPanelProps {
   unitId: number;
@@ -145,6 +146,7 @@ function NowRunningSection({ running, unitTasks, connectPane }: {
   unitTasks: Task[];
   connectPane: (refOrServerName: TerminalRef | string, targetOrProjectId?: string | number, projectId?: number) => void;
 }) {
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation('units');
   return (
     <div>
@@ -162,10 +164,7 @@ function NowRunningSection({ running, unitTasks, connectPane }: {
               description={task ? `${STATUS_FILTER_KEYS[task.status] ? t(STATUS_FILTER_KEYS[task.status]) : task.status} · ${op.target}` : op.target}
               rightActions={
                 <Button size="sm" onClick={() => {
-                  const ref: TerminalRef = op.windowId != null
-                    ? { kind: 'windowId', serverName: op.serverName, windowId: op.windowId, pane: 1 }
-                    : terminalRefFromTarget(op.serverName, op.target);
-                  connectPane(ref);
+                  openTerminal({ serverName: op.serverName, target: op.target, windowId: op.windowId });
                 }}>{t('terminal')}</Button>
               }
             />

@@ -12,6 +12,7 @@ import {
   removePane,
   closeTab,
   openTab,
+  replaceTabId,
   setActiveTab,
   setRatio,
   reconcile,
@@ -767,5 +768,46 @@ describe('reconcile against an async, not-yet-populated tab set (regression cove
       activeTabId: 'v-window:local/sess:1.0',
     };
     expect(persisted.tabIds).toEqual(['view:description', 'v-window:local/sess:1.0']);
+  });
+});
+
+describe('replaceTabId', () => {
+  const two = (): { root: LayoutNode; a: PaneNode; b: PaneNode } => {
+    const a: PaneNode = { type: 'pane', id: 'pa', tabIds: ['x', 'old', 'y'], activeTabId: 'old' };
+    const b: PaneNode = { type: 'pane', id: 'pb', tabIds: ['z'], activeTabId: 'z' };
+    return { root: { type: 'split', dir: 'row', ratio: 0.5, a, b }, a, b };
+  };
+
+  it('renames in place, keeping pane, position and active state', () => {
+    const { root } = two();
+    const next = replaceTabId(root, 'old', 'new');
+    expect(findPane(next, 'pa')).toMatchObject({ tabIds: ['x', 'new', 'y'], activeTabId: 'new' });
+    expect(findPane(next, 'pb')).toMatchObject({ tabIds: ['z'] });
+  });
+
+  it('keeps the active tab when another tab was active', () => {
+    const { root } = two();
+    const next = replaceTabId(setActiveTab(root, 'pa', 'x'), 'old', 'new');
+    expect(findPane(next, 'pa')?.activeTabId).toBe('x');
+  });
+
+  it('merges into an existing tab: drops the old one and activates the existing', () => {
+    const { root } = two();
+    const next = replaceTabId(root, 'old', 'z');
+    expect(findPane(next, 'pa')).toMatchObject({ tabIds: ['x', 'y'] });
+    expect(findPane(next, 'pb')).toMatchObject({ tabIds: ['z'], activeTabId: 'z' });
+  });
+
+  it('folds an emptied pane away when merging its only tab', () => {
+    const a: PaneNode = { type: 'pane', id: 'pa', tabIds: ['old'], activeTabId: 'old' };
+    const b: PaneNode = { type: 'pane', id: 'pb', tabIds: ['z'], activeTabId: 'z' };
+    const next = replaceTabId({ type: 'split', dir: 'row', ratio: 0.5, a, b }, 'old', 'z');
+    expect(next.type).toBe('pane');
+  });
+
+  it('is a no-op for an unknown old id or identical ids', () => {
+    const { root } = two();
+    expect(replaceTabId(root, 'nope', 'new')).toBe(root);
+    expect(replaceTabId(root, 'old', 'old')).toBe(root);
   });
 });

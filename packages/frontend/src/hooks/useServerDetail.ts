@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, apiWithStatus } from '../api/client';
 import type { Server, Session, ServerStatus } from './useServerManagement';
 import { useServerStatuses } from './useServerStatuses';
+import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
 import type { InstallStatusResponse } from '../components/servers/serverSections';
 import type { Window } from '../pages/workspace/types';
 import { buildWindowIndex, type WindowIndexEntry } from '../lib/windowDisplay';
+import { parseMuxDriverStatus, type MuxDriverStatus } from '../lib/muxDriverStatus';
 
 // Issue #29 review, Important finding 2: isolation_report (cleanup/doctor
 // outcome JSON) is a detail-only field the servers-list API deliberately
@@ -121,14 +123,28 @@ export function hasIsolationCleanupReportField(body: unknown): body is { isolati
   return !!body && typeof body === 'object' && !Array.isArray(body) && Object.prototype.hasOwnProperty.call(body, 'isolationCleanupReport');
 }
 
+async function fetchInstallStatus(encodedName: string): Promise<{ status: InstallStatusResponse | null; error: 'offline' | 'failed' | null }> {
+  try {
+    const r = await api<InstallStatusResponse | { error: string }>(`/servers/${encodedName}/install-status`);
+    if ('error' in r) return { status: null, error: r.error === 'agent_unreachable' ? 'offline' : 'failed' };
+    return { status: r, error: null };
+  } catch {
+    return { status: null, error: 'failed' };
+  }
+}
+
 interface UseServerDetailResult {
   server: Server | null;
   servers: Server[];
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
+  /** install-status を取得できなかった理由。'offline' はハブが到達不能（503）と判定した場合。 */
+  installStatusError: 'offline' | 'failed' | null;
   sessions: Session[];
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
+  /** Whether the hub can reach this server's mux driver (detail API `mux`); 'unknown' until fetched or when the body is not understood. */
+  muxDriverStatus: MuxDriverStatus;
   isolationReport: IsolationReport | null;
   // Review round (Important finding 4): the cleanup-outcome counterpart to
   // isolationReport above — parsed independently from its own
@@ -159,6 +175,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   // ここでは install-status とセッション一覧のみ、この画面固有に取得する。
   const { servers, statuses, refresh: refreshStatuses } = useServerStatuses();
   const [installStatus, setInstallStatus] = useState<InstallStatusResponse | null>(null);
+  const [installStatusError, setInstallStatusError] = useState<'offline' | 'failed' | null>(null);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [allProjects, setAllProjects] = useState<Array<{ windows?: Window[] }>>([]);
   const [allTasks, setAllTasks] = useState<Array<{ id: number; title?: string; windows?: Window[] }>>([]);
@@ -166,6 +183,7 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   const [isolationReportUnavailable, setIsolationReportUnavailable] = useState(false);
   const [isolationCleanupReport, setIsolationCleanupReport] = useState<IsolationReport | null>(null);
   const [isolationCleanupReportUnavailable, setIsolationCleanupReportUnavailable] = useState(false);
+  const [muxDriverStatus, setMuxDriverStatus] = useState<MuxDriverStatus>('unknown');
   const [windowMetaError, setWindowMetaError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -194,11 +212,13 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
     // non-isolated one would flash the old isolation warning against the
     // new server until the fetch resolves).
     setInstallStatus(null);
+    setInstallStatusError(null);
     setSessions([]);
     setIsolationReport(null);
     setIsolationReportUnavailable(false);
     setIsolationCleanupReport(null);
     setIsolationCleanupReportUnavailable(false);
+    setMuxDriverStatus('unknown');
     setWindowMetaError(false);
     setLoading(true);
     setError(null);
@@ -220,8 +240,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       ]);
       const mainPromise = Promise.all([
         refreshStatuses(),
-        api<InstallStatusResponse>(`/servers/${encoded}/install-status`),
-        api<Session[]>(`/servers/${encoded}/sessions`).catch(() => [] as Session[]),
+        // 到達不能なサーバー（503 agent_unreachable）でも詳細全体を落とさず、失敗の種類を区別して返す
+        fetchInstallStatus(encoded),
+        fetchSessionListing<Session>(serverName).catch(() => null),
         apiWithStatus<unknown>(`/servers/${encoded}`).catch(() => null),
       ]);
       const [mainResult, metaResult] = await Promise.all([mainPromise, metaPromise]);
@@ -234,8 +255,10 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
       // awaiting — discard this response rather than let it clobber the
       // newer one's state.
       if (fetchGenRef.current !== gen) return;
-      setInstallStatus(installRes);
-      setSessions(Array.isArray(sessionsRes) ? sessionsRes : []);
+      setInstallStatus(installRes.status);
+      setInstallStatusError(installRes.error);
+      // A mux that could not be listed keeps its previous sessions (its windows are unreadable, not gone).
+      setSessions((prev) => (sessionsRes ? keepUnavailableKinds(prev, sessionsRes) : []));
       let metaFailed = false;
       if (projResult.status === 'fulfilled' && Array.isArray(projResult.value)) {
         setAllProjects(projResult.value);
@@ -289,6 +312,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
         return { report: null, unavailable: false };
       }
 
+      const detailBody = detailResult !== null && detailResult.status >= 200 && detailResult.status < 300 ? detailResult.body : null;
+      setMuxDriverStatus(parseMuxDriverStatus(detailBody && typeof detailBody === 'object' ? (detailBody as { mux?: unknown }).mux : null));
+
       const verification = parseReportField('isolationReport');
       const cleanup = parseReportField('isolationCleanupReport');
       // Unavailability only matters (as UI-visible uncertainty) for a server
@@ -319,8 +345,9 @@ export function useServerDetail(serverName: string | null): UseServerDetailResul
   }, [allTasks]);
 
   return {
-    server, servers, status, installStatus, sessions,
+    server, servers, status, installStatus, installStatusError, sessions,
     windowById, taskById,
+    muxDriverStatus,
     isolationReport, isolationReportUnavailable,
     isolationCleanupReport, isolationCleanupReportUnavailable,
     windowMetaError,

@@ -6,6 +6,7 @@ import type { AgentActivityPayload, AppNotification, AppNotificationKind } from 
 import { useAgentActivity } from './useAgentActivity';
 import { useNotificationChannel } from './useNotificationChannel';
 import { useWorkspaceTargets } from './useWorkspaceTargets';
+import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 import { Icon } from '../components/ui/Icon';
 import { paths, matchWorkspacePath } from '../paths';
 
@@ -48,7 +49,7 @@ interface NotificationCenterContextValue {
    * ターミナルタブを開く。プロジェクトが現在のワークスペースと異なる場合（グローバルページ
    * 表示中を含む）は、そのプロジェクトのワークスペースへ遷移してからタブを開く。
    */
-  openTerminal: (serverName: string, target: string, projectId?: number) => void;
+  openTerminal: (req: TerminalOpenTarget, projectId?: number) => void;
 }
 
 const defaultValue: NotificationCenterContextValue = {
@@ -80,6 +81,7 @@ function isAppNotification(v: unknown): v is AppNotification {
     && (n.projectId === undefined || typeof n.projectId === 'number')
     && (n.serverName === undefined || typeof n.serverName === 'string')
     && (n.target === undefined || typeof n.target === 'string')
+    && (n.windowId === undefined || typeof n.windowId === 'number')
     && (n.body === undefined || typeof n.body === 'string');
 }
 
@@ -143,6 +145,7 @@ function buildAgentNotification(kind: AppNotificationKind, messageKey: string, m
     projectId: payload.projectId,
     serverName: payload.serverName,
     target: payload.target,
+    windowId: payload.windowId,
     read: false,
     createdAt: Date.now(),
   };
@@ -188,7 +191,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
   const toastsRef = useRef<EphemeralToast[]>([]);
   const toastTimersRef = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const pendingOpenTaskRef = useRef<{ taskId: number; projectId: number } | null>(null);
-  const pendingOpenTerminalRef = useRef<{ serverName: string; target: string; projectId: number } | null>(null);
+  const pendingOpenTerminalRef = useRef<{ req: TerminalOpenTarget; projectId: number } | null>(null);
   const pendingOpenTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -333,11 +336,11 @@ export function NotificationCenterProvider({ children }: { children: React.React
   }, [openTaskInProject]);
 
   // projectId が現在ルートと異なる場合は navigate＋pending 機構でプロジェクト遷移後にターミナルを開く
-  const openTerminalInProject = useCallback((serverName: string, target: string, projectId: number | undefined) => {
+  const openTerminalInProject = useCallback((req: TerminalOpenTarget, projectId: number | undefined) => {
     const wsMatch = matchWorkspacePath(locationRef.current.pathname);
     const currentProjectId = wsMatch ? parseInt(wsMatch.id, 10) : null;
     if (projectId !== undefined && projectId !== currentProjectId) {
-      pendingOpenTerminalRef.current = { serverName, target, projectId };
+      pendingOpenTerminalRef.current = { req, projectId };
       pendingOpenTaskRef.current = null;
       if (pendingOpenTimerRef.current) clearTimeout(pendingOpenTimerRef.current);
       pendingOpenTimerRef.current = setTimeout(() => {
@@ -346,7 +349,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
       }, PENDING_OPEN_TASK_TTL_MS);
       navigate(paths.workspace(projectId));
     } else {
-      onOpenInTerminalRef.current?.(serverName, target);
+      onOpenInTerminalRef.current?.(req);
     }
   }, [navigate]);
 
@@ -368,7 +371,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
         // taskId 付き agent 通知はタスク取得でプロジェクトを解決して開く
         openTask(notification.taskId);
       } else {
-        openTerminalInProject(notification.serverName, notification.target, notification.projectId);
+        openTerminalInProject({ serverName: notification.serverName, target: notification.target, windowId: notification.windowId }, notification.projectId);
       }
     }
   }, [markRead, dismissToast, openTaskInProject, openTask, openTerminalInProject]);
@@ -398,7 +401,7 @@ export function NotificationCenterProvider({ children }: { children: React.React
       clearTimeout(pendingOpenTimerRef.current);
       pendingOpenTimerRef.current = null;
     }
-    onOpenInTerminal(pending.serverName, pending.target);
+    onOpenInTerminal(pending.req);
   }, [location.pathname, onOpenInTerminal]);
 
   const unreadCount = notifications.reduce((acc, n) => acc + (n.read ? 0 : 1), 0);

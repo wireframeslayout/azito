@@ -4,6 +4,7 @@ vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 import { TransportFactory } from './TransportFactory';
 import { AgentTransport } from './AgentTransport';
+import { LocalTransport } from './LocalTransport';
 
 describe('TransportFactory', () => {
   const baseServer = {
@@ -12,7 +13,7 @@ describe('TransportFactory', () => {
     host: '10.0.0.7',
     agentPort: 4021,
     agentToken: 'tok-1',
-    muxRuntime: 'system' as const,
+    defaultMux: 'tmux' as const, muxRuntime: 'system' as const,
   };
 
   it('returns cached transport when token and muxRuntime match', () => {
@@ -36,6 +37,13 @@ describe('TransportFactory', () => {
     const t2 = factory.getTransport({ ...baseServer, muxRuntime: 'managed' });
     expect(t1).not.toBe(t2);
     expect(t2).toBeInstanceOf(AgentTransport);
+  });
+
+  it('gives a local server the tmux LocalTransport whichever mux it defaults to', () => {
+    const factory = new TransportFactory('http://hub:3001');
+    const local = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, muxRuntime: 'system' as const };
+    expect(factory.getTransport(local)).toBeInstanceOf(LocalTransport);
+    expect(factory.getTransport({ ...local, defaultMux: 'misao' } as never)).toBeInstanceOf(LocalTransport);
   });
 
   it('invalidate forces recreation on next getTransport', () => {

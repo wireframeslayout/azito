@@ -1,3 +1,4 @@
+import type { MuxDriverKind } from '@azito/shared';
 import type { ServerConfig } from '../../servers/Server';
 
 export interface IPrimaryWindowWaker {
@@ -11,5 +12,6 @@ export interface IPrimaryWindowWaker {
     taskId: number,
     agentSessionId: string,
     serverName: string,
-  ): Promise<{ windowId: number; tmuxTarget: string } | null>;
+  /** `kind` is the mux the window lives in. */
+  ): Promise<{ windowId: number; tmuxTarget: string; kind: MuxDriverKind } | null>;
 }

@@ -6,6 +6,7 @@ import { useClickOutside } from '../../hooks/useClickOutside';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { openActivityTarget } from '../../lib/activityOpen';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
 import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { groupRunningRows, readKeyFor, pruneStaleReadKeys } from '../../lib/activityPillLogic';
@@ -77,6 +78,7 @@ const rowTitleStyle: CSSProperties = {
 };
 
 export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatusBarProps) {
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'common']);
   const { rows } = useActiveWindowRows();
   const [open, setOpen] = useState(false);
@@ -140,20 +142,20 @@ export function MobileStatusBar({ allTasks, openTask, connectPane }: MobileStatu
 
   const handleWorkingRowOpen = (group: WorkingGroup) => {
     openActivityTarget(
-      { taskId: group.taskId, serverName: group.row.serverName, target: group.row.target, projectId: group.projectId },
+      { taskId: group.taskId, serverName: group.row.serverName, windowId: group.row.windowId, target: group.row.target, projectId: group.projectId },
       group.title,
       openTask,
-      connectPane,
+      openTerminal,
     );
     setOpen(false);
   };
 
   const handleFinishedRowOpen = (row: ActiveWindowRow) => {
     openActivityTarget(
-      { taskId: row.taskId, serverName: row.serverName, target: row.target, projectId: row.projectId },
+      { taskId: row.taskId, serverName: row.serverName, windowId: row.windowId, target: row.target, projectId: row.projectId },
       formatActiveWindowLabel(row),
       openTask,
-      connectPane,
+      openTerminal,
     );
     setOpen(false);
   };

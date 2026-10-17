@@ -19,7 +19,7 @@ export default defineConfig({
         test: {
           name: 'unit',
           include: ['src/**/*.test.ts'],
-          exclude: ['src/**/*.tmuxIntegration.test.ts'],
+          exclude: ['src/**/*.tmuxIntegration.test.ts', 'src/**/*.misaoIntegration.test.ts'],
         },
       },
       {
@@ -27,6 +27,18 @@ export default defineConfig({
         test: {
           name: 'tmux-integration',
           include: ['src/**/*.tmuxIntegration.test.ts'],
+          fileParallelism: false,
+          testTimeout: 30000,
+          pool: 'forks',
+          poolOptions: { forks: { singleFork: true } },
+        },
+      },
+      {
+        // Same shape as tmux-integration: these files start a real misao daemon, so they run one at a time.
+        extends: true,
+        test: {
+          name: 'misao-integration',
+          include: ['src/**/*.misaoIntegration.test.ts'],
           fileParallelism: false,
           testTimeout: 30000,
           pool: 'forks',

@@ -4,7 +4,8 @@ import { apiWithStatus } from '../../api/client';
 import { Button, EmptyState, LoadingState } from '../ui';
 import ConversationView from './ConversationView';
 import PromptInputBar from './PromptInputBar';
-import type { ResolveWindowResult, TranscriptErrorResponse } from './transcriptTypes';
+import { hostUnavailableReason, type HostUnavailableReason } from './hostUnavailable';
+import type { ResolveWindowResult, TranscriptErrorResponse, UnresolvedReason } from './transcriptTypes';
 import type { WindowViewMode } from '../ui/TerminalChatToggle';
 
 interface WindowChatPanelProps {
@@ -25,8 +26,10 @@ type ResolveState =
   // best-effort で判定できていれば含まれる（コマンドパレット、Issue #338 フェーズC codex レビュー
   // Important #2: 最初のプロンプト送信前でも /model 等を使いたいため、判明していれば伝搬する。
   // 不明な場合は undefined のまま — フォールバック値は作らずパレット非表示に倒す）。
-  | { kind: 'pane-only'; paneId: string; agentType?: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean }
-  | { kind: 'unresolved'; reason: 'unsupported_server' | 'no_recent_session' };
+  // hostUnavailable: エージェントサーバーに届かない／古い（会話ログだけが読めない）。pane は解決できて
+  // いるので入力は続けられ、会話の表示だけが使えない旨を出す。
+  | { kind: 'pane-only'; paneId: string; agentType?: string; agentDetected: boolean; slashCommandsVisibleInLog?: boolean; hostUnavailable: HostUnavailableReason | null }
+  | { kind: 'unresolved'; reason: UnresolvedReason };
 
 const POST_SEND_POLL_INTERVAL_MS = 3000;
 const POST_SEND_POLL_MAX_ATTEMPTS = 10;
@@ -84,7 +87,7 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
             slashCommandsVisibleInLog: body.slashCommandsVisibleInLog,
           });
         } else if (body.paneId) {
-          setState({ kind: 'pane-only', paneId: body.paneId, agentType: body.agentType, agentDetected: body.agentDetected, slashCommandsVisibleInLog: body.slashCommandsVisibleInLog });
+          setState({ kind: 'pane-only', paneId: body.paneId, agentType: body.agentType, agentDetected: body.agentDetected, slashCommandsVisibleInLog: body.slashCommandsVisibleInLog, hostUnavailable: hostUnavailableReason(body.reason) });
         } else {
           setState({ kind: 'unresolved', reason: body.reason });
         }
@@ -163,7 +166,15 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
     return (
       <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
         <div style={{ flex: 1, minHeight: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <EmptyState title={t('windowChat.empty.title')} description={t('windowChat.empty.description')} />
+          {state.hostUnavailable ? (
+            <EmptyState
+              title={t(`windowChat.notFound.${state.hostUnavailable}`)}
+              description={t(`windowChat.hostUnavailableDescription.${state.hostUnavailable}`)}
+              action={<Button size="sm" onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>}
+            />
+          ) : (
+            <EmptyState title={t('windowChat.empty.title')} description={t('windowChat.empty.description')} />
+          )}
         </div>
         <PromptInputBar
           windowId={windowId}

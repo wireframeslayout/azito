@@ -1,3 +1,4 @@
+import type { MuxDriverKind, MuxPaneProcessState, MuxRef, MuxRuntime } from '@azito/shared';
 import type { PhaseConfigEntryLike } from '../../lib/taskPhases';
 
 export type SidebarMode = 'windows' | 'tasks' | 'files' | 'repos' | 'storage' | 'settings';
@@ -23,7 +24,7 @@ export interface Window {
   taskId?: number;
   serverName: string;
   tmuxTarget: string;
-  muxRef?: string;
+  muxRef?: MuxRef;
   label?: string;
   isPrimary: boolean;
   windowType: 'terminal' | 'agent';
@@ -154,15 +155,20 @@ export interface Server {
   name: string;
   type: string;
   host?: string;
-  muxRuntime?: 'system' | 'managed';
+  defaultMux: MuxDriverKind;
+  /** Old names of servers merged into this one (migration 079); saved tabs are re-pointed. TODO(#313): remove after one release. */
+  aliases?: string[];
+  muxRuntime?: MuxRuntime;
   /** Issue #29 Step 3a: whether this server has declared isolation intent — GET /api/servers already returns this (only agentToken/isolationReport/isolationCleanupReport are stripped from the list response), used to gate whether 'allow' is selectable for a project_servers row on this server. */
   isolationIntent?: boolean;
   /** ISO timestamp of the isolation doctor's last passing verification, or null. Used together with `isolationIntent` for the same UI hint. */
   isolationVerifiedAt?: string | null;
 }
-export interface Pane { index: number; title: string; command: string; width: number; height: number; active: boolean; }
+export interface Pane { index: number; /** Stable pane handle; unlike `index` it does not shift when a sibling pane is deleted. */ handle?: string; title: string; command: string; width: number; height: number; active: boolean; /** Reported by the misao driver only; absent for tmux panes. */ processState?: MuxPaneProcessState; }
 export interface TmuxWindow { index: number; name: string; panes: Pane[]; activity?: number; ref: string; windowId: number | null; }
-export interface Session { name: string; windows: TmuxWindow[]; }
+/** `kind`: the mux the session lives in (a tmux and a misao session can share a name). See lib/sessionKind.ts. */
+/** `stale`: kept from an earlier listing because its mux could not be listed now (see keepUnavailableKinds). */
+export interface Session { name: string; kind?: MuxDriverKind; stale?: boolean; windows: TmuxWindow[]; }
 export interface LogEntry { type: string; content: string; createdAt: string; unitId?: number; }
 
 export const VALID_SIDEBAR_MODES: SidebarMode[] = ['windows', 'tasks', 'files', 'repos', 'storage', 'settings'];

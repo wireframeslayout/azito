@@ -57,4 +57,18 @@ describe('resolveKillOutcome', () => {
     expect(outcome.success).toBe(false);
     expect(outcome.alreadyGone).toBe(false);
   });
+
+  it('trusts the alreadyGone flag without any tmux wording (misao NotFound)', async () => {
+    const result: ExecResult = { stdout: '', stderr: 'window not found: w_1', code: 1, alreadyGone: true };
+    const outcome = await resolveKillOutcome(Promise.resolve(result));
+    expect(outcome.success).toBe(true);
+    expect(outcome.alreadyGone).toBe(true);
+  });
+
+  it('does not treat misao-style "not found" wording as alreadyGone without the flag', async () => {
+    const result: ExecResult = { stdout: '', stderr: 'window not found: w_1', code: 1 };
+    const outcome = await resolveKillOutcome(Promise.resolve(result));
+    expect(outcome.success).toBe(false);
+    expect(outcome.alreadyGone).toBe(false);
+  });
 });

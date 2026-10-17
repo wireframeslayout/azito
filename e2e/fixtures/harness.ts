@@ -112,7 +112,14 @@ export class Harness {
   private trackedAgents: FakeAgent[] = [];
   private trackedWindowIds: number[] = [];
 
-  static async start(): Promise<Harness> {
+  /**
+   * `misaoSocket` を渡すと、ハブをそのソケットの misao デーモンへ接続させる（MISAO_SOCKET）。
+   * ハブは misao ドライバを常に登録するため、省略時も一時ディレクトリ内の存在しないソケットを指して、
+   * 常駐の ~/.misao デーモンへは繋がせない（デーモン不在の扱いになるだけで、tmux 系の検証には影響しない）。
+   *
+   * `path` を渡すと、ハブの PATH をそれに置き換える（tmux を引けないホストの再現: fixtures/tmuxlessPath.ts）。
+   */
+  static async start(options: { misaoSocket?: string; path?: string } = {}): Promise<Harness> {
     assertPrerequisites();
 
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-e2e-'));
@@ -155,6 +162,8 @@ export class Harness {
       TMUX_TMPDIR: tmuxTmpDir,
       NODE_ENV: 'test',
     };
+    childEnv.MISAO_SOCKET = options.misaoSocket ?? path.join(root, 'misao-none.sock');
+    if (options.path !== undefined) childEnv.PATH = options.path;
     // 継承した TMUX を残すと、ハーネス自身が tmux 内から起動された場合に tmux CLI が
     // 「現在のセッション」を勝手に解決してしまう。
     delete childEnv.TMUX;
@@ -266,6 +275,30 @@ export class Harness {
         body: JSON.stringify({ agent_session_id: options.agentSessionId }),
       });
     }
+    return id;
+  }
+
+  /**
+   * misao のウィンドウを agent ウィンドウとして登録する。misao の窓は MuxRef（kind: 'misao'）で
+   * 特定される。UI と同じく ref だけを送り、tmux_target（`<workspace>:<window id>`）はサーバーが作る。
+   */
+  async registerMisaoWindow(
+    projectId: number,
+    window: { ref: string },
+    options: { label: string },
+  ): Promise<number> {
+    const { id } = await this.api<{ ok: boolean; id: number }>(`/projects/${projectId}/windows`, {
+      method: 'POST',
+      body: JSON.stringify({
+        server_name: 'local',
+        // UI と同じ ref のみの登録（tmux_target はサーバーが ref から作る）。
+        ref: window.ref,
+        label: options.label,
+        window_type: 'agent',
+        worker_type: 'claude',
+      }),
+    });
+    this.trackedWindowIds.push(id);
     return id;
   }
 
