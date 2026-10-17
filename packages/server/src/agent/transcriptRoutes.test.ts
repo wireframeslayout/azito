@@ -223,6 +223,22 @@ describe('agent read budgets', () => {
     await app.close();
   });
 
+  it('reads at most two windows (the newline probe and the read itself) for an ordinary before-read', async () => {
+    const projects = path.join(root, 'projects');
+    fs.mkdirSync(path.join(projects, 'p'), { recursive: true });
+    const lines = Array.from({ length: 100 }, (_, i) => userLine(`l${i}`, 'y'.repeat(300))).join('');
+    fs.writeFileSync(path.join(projects, 'p', `${SID_BIG}.jsonl`), lines);
+    const WINDOW = 4096;
+    const app = await appWith(new ClaudeTranscriptSource(projects, { incrementalReadMaxBytes: WINDOW }));
+
+    const spy = vi.spyOn(fs, 'readSync');
+    const res = await app.inject({ method: 'GET', url: `/api/transcripts/claude/sessions/${SID_BIG}/entries?before=${Buffer.byteLength(lines)}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.json().entries.length).toBeGreaterThan(0);
+    expect(sumRequestedBytes(spy)).toBeLessThanOrEqual(2 * WINDOW);
+    await app.close();
+  });
+
   it('returns the reader\'s default number of sessions when no limit is given, and never more than the cap', async () => {
     const projects = path.join(root, 'projects');
     fs.mkdirSync(path.join(projects, 'p'), { recursive: true });

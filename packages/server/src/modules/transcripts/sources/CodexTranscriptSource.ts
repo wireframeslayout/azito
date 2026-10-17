@@ -39,8 +39,8 @@ import type {
 // ─── Constants ───
 
 const PREVIEW_LENGTH = 120;
-/** 軽量一覧（metadataOnly）で cwd を拾うために先頭から読む最大バイト数。 */
-const METADATA_SCAN_BYTES = 128 * 1024;
+/** 軽量一覧（metadataOnly）の最初の試行で先頭から読むバイト数。cwd が見つからなければ previewScanBytes まで読み直す。 */
+const METADATA_QUICK_SCAN_BYTES = 64 * 1024;
 /** session_meta は先頭行、最初のユーザー発話は developer/environment_context に続く数行後に来るため、
  * Claude（20行）より広めに走査する。 */
 const PREVIEW_SCAN_LINES = 200;
@@ -168,12 +168,21 @@ function extractUserPreviewText(content: unknown): string | null {
 
 /** 一覧表示用に、ファイル先頭 previewScanBytes 分だけを走査して preview テキストと cwd を拾う。 */
 function scanSessionMeta(file: string, previewScanBytes: number, metadataOnly = false): SessionScanResult {
+  if (!metadataOnly) return scanSessionMetaOnce(file, previewScanBytes, false);
+  // 軽量一覧: preview を作らないだけで、cwd の探索範囲は通常の一覧と同じ（previewScanBytes）。多くは先頭の
+  // 小さな読み取りで cwd が見つかるので、まずそれで試し、見つからないときだけ通常の範囲まで読み直す。
+  const quick = scanSessionMetaOnce(file, Math.min(previewScanBytes, METADATA_QUICK_SCAN_BYTES), true);
+  if (quick.cwd !== null || previewScanBytes <= METADATA_QUICK_SCAN_BYTES) return quick;
+  return scanSessionMetaOnce(file, previewScanBytes, true);
+}
+
+function scanSessionMetaOnce(file: string, previewScanBytes: number, metadataOnly: boolean): SessionScanResult {
   let content: string;
   try {
     const fd = fs.openSync(file, 'r');
     try {
       const size = fs.fstatSync(fd).size;
-      content = readChunk(fd, size, 0, metadataOnly ? Math.min(previewScanBytes, METADATA_SCAN_BYTES) : previewScanBytes).toString('utf-8');
+      content = readChunk(fd, size, 0, previewScanBytes).toString('utf-8');
     } finally {
       fs.closeSync(fd);
     }

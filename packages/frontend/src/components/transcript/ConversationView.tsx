@@ -6,6 +6,7 @@ import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
 import { hostUnavailableReason } from './hostUnavailable';
+import { decideOlderPageContinuation } from './olderPaging';
 import { deriveContextHistory } from './inputHistory';
 import { InteractionAnswerCard } from './InteractionAnswerCard';
 import { InteractionPendingBanner } from './InteractionPendingBanner';
@@ -101,6 +102,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const startOffsetRef = useRef<number | null>(null);
   const hasOlderRef = useRef(false);
   const loadingOlderInFlightRef = useRef(false);
+  // 空ページ（巨大行が読めず飛ばされた）の連続回数と、続き読み込みを再発火させるための版数。
+  const emptyOlderStreakRef = useRef(0);
+  const [olderRetryVersion, setOlderRetryVersion] = useState(0);
   // 上方向ページングでの prepend 直前のスクロール位置。反映後の useLayoutEffect でアンカー補正する。
   const pendingAnchorRef = useRef<{ prevScrollHeight: number; prevScrollTop: number } | null>(null);
 
@@ -162,8 +166,18 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         }
         setEntries((prev) => [...body.entries, ...prev]);
       }
+      const previousStart = startOffsetRef.current;
       startOffsetRef.current = body.prevOffset;
       hasOlderRef.current = body.hasOlder;
+      // entries が空でも offset が前進して hasOlder なら、state が変わらず自動の続き読み込みが動かないため、
+      // 版数を進めて続きを要求する（連続回数には上限がある）。
+      const outcome = decideOlderPageContinuation(
+        previousStart,
+        { entryCount: body.entries.length, prevOffset: body.prevOffset, hasOlder: body.hasOlder },
+        emptyOlderStreakRef.current,
+      );
+      emptyOlderStreakRef.current = outcome.emptyStreak;
+      if (outcome.continuePaging) setOlderRetryVersion((v) => v + 1);
     } catch {
       // ネットワーク一時エラー: 次回のスクロール到達で再試行
     } finally {
@@ -192,6 +206,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     startOffsetRef.current = null;
     hasOlderRef.current = false;
     loadingOlderInFlightRef.current = false;
+    emptyOlderStreakRef.current = 0;
     pendingAnchorRef.current = null;
     nearBottomRef.current = true;
 
@@ -296,7 +311,10 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
     const observer = new IntersectionObserver(
       (observerEntries) => {
-        if (observerEntries[0]?.isIntersecting) void loadOlder();
+        if (observerEntries[0]?.isIntersecting) {
+          emptyOlderStreakRef.current = 0; // 新しいスクロール操作: 空ページの連続回数を数え直す
+          void loadOlder();
+        }
       },
       { root: container, threshold: 0 },
     );
@@ -337,7 +355,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       if (isVisible) void loadOlder();
     });
     return () => cancelAnimationFrame(raf);
-  }, [entries, loading, notFound, error, loadOlder]);
+  }, [entries, olderRetryVersion, loading, notFound, error, loadOlder]);
 
   // ライブ状態行/回答待ちバナーの出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {

@@ -161,6 +161,20 @@ describe('CodexTranscriptSource', () => {
     });
   });
 
+  describe('listSessions metadataOnly', () => {
+    it.each([200 * 1024, 400 * 1024])('finds the same cwd as the full listing when the first line is %d bytes', (firstLineBytes) => {
+      const meta = SESSION_META(SID_A, '/work/big-meta');
+      (meta.payload as Record<string, unknown>).instructions = 'i'.repeat(firstLineBytes);
+      writeSession(dir, SID_A, [meta, USER_MESSAGE('hello')]);
+
+      const full = source.listSessions();
+      const light = source.listSessions(50, { metadataOnly: true });
+      expect(full[0].cwd).toBe('/work/big-meta');
+      expect(light[0].cwd).toBe(full[0].cwd);
+      expect(light[0].preview).toBe('');
+    });
+  });
+
   describe('getSessionCwd', () => {
     it('returns null for an invalid session id', () => {
       expect(source.getSessionCwd('not-a-uuid')).toBeNull();
