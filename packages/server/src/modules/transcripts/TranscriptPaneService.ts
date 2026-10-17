@@ -58,7 +58,7 @@ export class TranscriptPaneService {
   }
 
   async listPaneCandidates(sessionId: string): Promise<PaneCandidatesResult | null> {
-    const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
+    const meta = await this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return null;
 
     const server = this.pickLocalServer();
@@ -78,7 +78,7 @@ export class TranscriptPaneService {
   }
 
   async sendInput(sessionId: string, handle: PaneHandle, text: string): Promise<SendInputResult> {
-    const meta = this.claudeTranscriptSource.getSessionCwd(sessionId);
+    const meta = await this.claudeTranscriptSource.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
     const server = this.pickLocalServer();
@@ -99,7 +99,7 @@ export class TranscriptPaneService {
    * 正しくセッション存在確認できるようにしている。
    */
   async sendSignal(source: TranscriptSource, sessionId: string, handle: PaneHandle, key: InterruptKey): Promise<SendSignalResult> {
-    const meta = source.getSessionCwd(sessionId);
+    const meta = await source.getSessionCwd(sessionId);
     if (!meta) return 'session_not_found';
 
     const server = this.pickLocalServer();

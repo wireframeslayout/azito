@@ -99,7 +99,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     tmuxClient, transportFactory, worktreeServiceFactory, gitProvider, storageClient,
     agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, muxDriverRegistry,
     executeTaskUseCase, agentActivityMonitor, interactionMonitor, paneHandleResolver, windowRespawnService, windowSleepService, taskRestoreService, sessionStrategyFactory, sessionCaptureService, usageService,
-    windowSessionResolver, windowActivityStatusService,
+    transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
     pushService, vapidKeys, notificationBus, sidekickPackageService, sidekickPackageLoader,
     sidekickSyncService, unitTypeLoader, chatCommandLoader, agentSignalService, supervisorRegistry, agentTurnRepo, turnSignalHub,
     browserSessionManager, browserGroupRepo, deployModeDetector, systemUpdateService, channelResolver, auditLogService,
@@ -670,6 +670,8 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   await app.register(healthRoutes, { deployModeDetector, scopedAuthEnabled });
   await app.register(transcriptsRoutes, {
     sources: TRANSCRIPT_SOURCES,
+    sourceProvider: transcriptSourceProvider,
+    serverRepo,
     transcriptPaneService: new TranscriptPaneService(claudeTranscriptSource, muxDriverRegistry, serverRepo),
     windowSessionResolver,
     windowInputService: new WindowInputService(windowRepo, muxDriverRegistry, serverRepo),

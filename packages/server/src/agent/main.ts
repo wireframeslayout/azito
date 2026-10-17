@@ -21,6 +21,9 @@ import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
 import { createMisaoRelay } from './misaoRelay';
 import misaoRoutes from './misaoRoutes';
+import transcriptRoutes from './transcriptRoutes';
+import { agentAuthHook } from './authHook';
+import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
 
@@ -104,13 +107,7 @@ async function main(): Promise<void> {
   });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.url.startsWith('/health')) return;
-    if (request.url.startsWith('/api/hooks/tmux')) return;
-    if (!verifyToken(request.headers.authorization)) {
-      return reply.status(401).send({ error: 'Unauthorized' });
-    }
-  });
+  app.addHook('onRequest', agentAuthHook(verifyToken));
 
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
   // The tmux endpoints (/api/tmux, mode=terminal) are tmux's. misao is reached through its own relay (mode=misao).
@@ -131,6 +128,10 @@ async function main(): Promise<void> {
 
   // Registered after the auth hook above, so it is covered by it like every other /api route.
   await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost() });
+
+  // Conversation logs (Claude Code / Codex JSONL) for the hub's chat mode. Registered after the auth hook, so it is
+  // covered by it; reads only this host's own agent session directories, addressed by agent type + session id.
+  await app.register(transcriptRoutes, { readers: TRANSCRIPT_READERS });
 
   // WebSocket routes
   await app.register(async (fastify) => {

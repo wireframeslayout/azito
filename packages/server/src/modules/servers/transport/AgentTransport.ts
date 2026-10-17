@@ -21,6 +21,8 @@ export const HEALTH_TIMEOUT_MS = 3_000;
 /** Matches the agent's own default exec timeout (agent/routes.ts); the HTTP deadline is this plus transit slack. */
 const DEFAULT_EXEC_TIMEOUT_MS = 15_000;
 const HTTP_SLACK_MS = 5_000;
+/** A conversation-log read (listing or one range of a JSONL) over a tailnet link. */
+const TRANSCRIPT_TIMEOUT_MS = 10_000;
 /** One release file over a tailnet link: seconds in practice, with room for a slow one. */
 const MISAO_UPLOAD_TIMEOUT_MS = 120_000;
 
@@ -232,6 +234,23 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     }, MISAO_UPLOAD_TIMEOUT_MS);
     if (status < 200 || status >= 300) throw new Error(`Agent /api/misao/upload failed (${status}): ${text}`);
     return JSON.parse(text) as { name: string; size: number; sha256: string };
+  }
+
+  /**
+   * GET a JSON endpoint of the agent (e.g. the conversation-log API). Shares the breaker like every agent call: while
+   * it is open this throws `AgentUnreachableError` without fetching. The status and parsed body are returned as they
+   * are, so the caller decides what a 404 means; a body that is not JSON comes back as `null`.
+   */
+  async getJson(path: string, timeoutMs: number = TRANSCRIPT_TIMEOUT_MS): Promise<{ status: number; body: unknown }> {
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(path, { method: 'GET', headers: { authorization: this.authHeader } }, timeoutMs);
+    let body: unknown = null;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = null;
+    }
+    return { status, body };
   }
 
   /** True while the breaker is open (fail-fast window), so callers can skip the network entirely. */

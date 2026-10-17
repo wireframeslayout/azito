@@ -99,6 +99,7 @@ import { SessionCaptureService } from '../modules/windows/SessionCaptureService'
 import { WindowActivityStatusService } from '../modules/windows/WindowActivityStatusService';
 import { WindowSessionResolver } from '../modules/transcripts/WindowSessionResolver';
 import { TRANSCRIPT_SOURCES } from '../modules/transcripts/sources/registry';
+import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from '../modules/transcripts/sources/TranscriptSourceProvider';
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import type { GitIdentity } from '../modules/git/ensureGitIdentity';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
@@ -183,6 +184,7 @@ export interface PushNotificationModule {
 export interface ApplicationServices {
   sessionStrategyFactory: SessionStrategyFactory;
   sessionCaptureService: SessionCaptureService;
+  transcriptSourceProvider: TranscriptSourceProvider;
   windowSessionResolver: WindowSessionResolver;
   windowActivityStatusService: WindowActivityStatusService;
   windowRespawnService: WindowRespawnService;
@@ -453,12 +455,13 @@ function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiTok
   // (session resolution), windowsRoutes (GET /api/windows/activity-status, diagnostics)
   // and AgentActivityMonitor's Tier 4 probe — a single instance keeps the ps/tmux
   // lookups (and their cache) to one per process.
-  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, TRANSCRIPT_SOURCES, sessionCaptureService, infra.transportFactory);
+  const transcriptSourceProvider = new HostTranscriptSourceProvider(TRANSCRIPT_SOURCES, infra.transportFactory);
+  const windowSessionResolver = new WindowSessionResolver(repos.taskRepo, infra.muxDriverRegistry, repos.serverRepo, transcriptSourceProvider, sessionCaptureService, infra.transportFactory);
   const windowActivityStatusService = new WindowActivityStatusService(repos.windowRepo, repos.serverRepo, windowSessionResolver);
   const usageService = new UsageService(infra.agentRegistry);
   const agentSignalService = new AgentSignalService(repos.agentTurnRepo, infra.turnSignalHub, repos.logRepo, repos.auditLogService);
   return {
-    sessionStrategyFactory, sessionCaptureService, windowSessionResolver, windowActivityStatusService,
+    sessionStrategyFactory, sessionCaptureService, transcriptSourceProvider, windowSessionResolver, windowActivityStatusService,
     windowRespawnService, windowSleepService, taskRestoreService, usageService, agentSignalService, taskEvents,
     originationService, taskPaneEnvironmentService,
   };
