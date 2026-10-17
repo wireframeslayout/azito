@@ -5,8 +5,8 @@ import type { UnresolvedReason } from './transcriptTypes';
  * エラー本文 `{ error }` で同じ文字列を使う）。unsupported_server / no_recent_session は「そのサーバーでは
  * 読めない」「対応するセッションが無い」で、ここには含めない。
  */
-export type HostUnavailableReason = Extract<UnresolvedReason, 'agent_unreachable' | 'agent_outdated'>;
+export type HostUnavailableReason = Extract<UnresolvedReason, 'agent_unreachable' | 'agent_outdated' | 'agent_bad_response'>;
 
 export function hostUnavailableReason(value: string | undefined): HostUnavailableReason | null {
-  return value === 'agent_unreachable' || value === 'agent_outdated' ? value : null;
+  return value === 'agent_unreachable' || value === 'agent_outdated' || value === 'agent_bad_response' ? value : null;
 }

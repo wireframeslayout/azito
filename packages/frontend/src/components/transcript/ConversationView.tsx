@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
-import { EmptyState, LoadingState } from '../ui';
+import { Button, EmptyState, LoadingState } from '../ui';
 import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
@@ -65,6 +65,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 初回読み込みの再試行（エージェントに届かない等で失敗したとき、ポーリングは止まるため手動で再取得する）。
+  const [retryTick, setRetryTick] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [newCount, setNewCount] = useState(0);
   const [pendingInteraction, setPendingInteraction] = useState(false);
@@ -227,7 +229,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       // アンマウント/次セッションへの切替直前にも世代を進め、直後にまだ飛行中の応答を確実に破棄する。
       generationRef.current += 1;
     };
-  }, [sessionId, agentType, windowId, scrollToBottom]);
+  }, [sessionId, agentType, windowId, retryTick, scrollToBottom]);
 
   // ライブ追従: 2秒間隔でoffset以降を取得し追記する。タブが非表示の間は取得しない。
   useEffect(() => {
@@ -357,7 +359,11 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           ) : notFound ? (
             <EmptyState title={t('conversation.notFound')} />
           ) : error ? (
-            <EmptyState title={t('conversation.loadError')} description={hostUnavailable ? t(`windowChat.notFound.${hostUnavailable}`) : error} />
+            <EmptyState
+              title={t('conversation.loadError')}
+              description={hostUnavailable ? `${t(`windowChat.notFound.${hostUnavailable}`)} ${t(`windowChat.hostUnavailableDescription.${hostUnavailable}`)}` : error}
+              action={<Button size="sm" onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>}
+            />
           ) : entries.length === 0 ? (
             <EmptyState title={t('conversation.empty')} />
           ) : (
@@ -471,7 +477,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         )}
       </div>
 
-      {!loading && !notFound && !error && (
+      {!loading && !notFound && (
         <PromptInputBar
           windowId={windowId}
           paneId={paneId}

@@ -134,9 +134,10 @@ export interface TranscriptErrorResponse {
 /**
  * セッションを解決できなかった理由（サーバー側 WindowSessionResolver の UnresolvedReason と一致させる）。
  * unsupported_server: 会話ログを読めないサーバー / no_recent_session: 対応するセッションが無い /
- * agent_unreachable: エージェントサーバーに届かない（offline）/ agent_outdated: エージェントが古く会話ログ API が無い。
+ * agent_unreachable: エージェントサーバーに届かない（offline）/ agent_outdated: エージェントが古く会話ログ API が無い /
+ * agent_bad_response: エージェントの応答が取り決めに合わない。
  */
-export type UnresolvedReason = 'unsupported_server' | 'no_recent_session' | 'agent_unreachable' | 'agent_outdated';
+export type UnresolvedReason = 'unsupported_server' | 'no_recent_session' | 'agent_unreachable' | 'agent_outdated' | 'agent_bad_response';
 
 // GET /api/transcripts/resolve-window のレスポンス型（Issue #69 Phase E-1/E-2、仕様調整3で
 // best-effort フィールドを追加）。サーバー側の型

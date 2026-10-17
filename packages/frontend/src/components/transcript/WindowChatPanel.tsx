@@ -169,7 +169,7 @@ export default function WindowChatPanel({ windowId, viewMode, onChangeViewMode }
           {state.hostUnavailable ? (
             <EmptyState
               title={t(`windowChat.notFound.${state.hostUnavailable}`)}
-              description={t('windowChat.hostUnavailableDescription')}
+              description={t(`windowChat.hostUnavailableDescription.${state.hostUnavailable}`)}
               action={<Button size="sm" onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>}
             />
           ) : (
