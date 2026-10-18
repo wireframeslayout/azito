@@ -92,7 +92,7 @@ interface TaskPanelProps {
   onDelete?: (taskId: number) => void;
   onEdit?: (taskId: number) => void;
   onOpenAddWindow?: (forTask?: boolean, taskProjectId?: number, taskId?: number) => void;
-  onSplitPane?: (serverName: string, target: string, direction: 'h' | 'v') => void;
+  onSplitPane?: (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => void;
   onOpenTask?: (taskId: number, title: string) => void;
   tabs?: PersistedTab[];
   closeTab?: (tabId: string) => void;
@@ -1436,7 +1436,7 @@ export default function TaskPanel({
           allTasks={allTasks}
           sessions={sessionData[serverName]}
           onWindowChanged={() => { fetchTaskData(); onRefresh(); }}
-          onSplitPane={onSplitPane ? (dir) => onSplitPane(serverName, target, dir) : undefined}
+          onSplitPane={onSplitPane ? (dir) => onSplitPane(serverName, target, dir, windowId) : undefined}
           onOpenTask={onOpenTask}
           reconnectKey={reconnectKeys[tabId]}
           leading={windowHeader?.leading}

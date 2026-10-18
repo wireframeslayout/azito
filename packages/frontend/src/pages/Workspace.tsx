@@ -61,6 +61,7 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
 import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex } from '../lib/windowDisplay';
+import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -580,14 +581,14 @@ function WorkspaceInner() {
     focusProjectById(allTasks.find((t) => t.id === taskId)?.projectId ?? projectId);
   }, [openTask, allTasks, focusProjectById]);
 
-  const findTaskByTarget = useCallback((target: string) => {
-    const parts = target.split(':');
-    if (parts.length < 2) return null;
-    const windowName = parts[1].split('.')[0];
-    return tasks.find(t => t.tmuxWindow === windowName)
-      ?? allTasks.find(t => t.tmuxWindow === windowName)
-      ?? null;
-  }, [tasks, allTasks]);
+  const windowById = useMemo(() =>
+    buildWindowIndex(allProjects, allTasks, project),
+  [allProjects, allTasks, project]);
+
+  const findTaskByTarget = useCallback(
+    (target: string) => findTaskByTargetLib(target, allTasks, windowById),
+    [allTasks, windowById],
+  );
 
   useEffect(() => {
     if (!focusedActiveTabId) {
@@ -661,7 +662,10 @@ function WorkspaceInner() {
         await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
       } else {
         const colonIdx = target.indexOf(':');
-        if (colonIdx < 0) return;
+        if (colonIdx < 0) {
+          showToast(t('workspace:pane.splitFailed', { error: 'Cannot determine window from target' }));
+          return;
+        }
         const sessionName = target.substring(0, colonIdx);
         const rest = target.substring(colonIdx + 1);
         const dotIdx = rest.indexOf('.');
@@ -862,10 +866,6 @@ function WorkspaceInner() {
     const proj = allProjects.find(p => p.id === pid);
     return { projectId: pid, projectName: proj?.name ?? null };
   }, [allTasks, allProjects]);
-
-  const windowById = useMemo(() =>
-    buildWindowIndex(allProjects, allTasks, project),
-  [allProjects, allTasks, project]);
 
   const windowByLegacyKey = useMemo(() => {
     const map = new Map<string, Window>();

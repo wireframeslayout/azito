@@ -337,18 +337,18 @@ export default function ObjectsSidebar({
   // WindowPaneTree hands the whole WindowItem to onPaneClick; handlePaneClick wants the
   // numeric windows.id. Passing handlePaneClick directly put the row object into
   // `windowId` and produced `terminal:<server>::w[object Object].1` tabs (rc.6 regression).
-  const handleTreePaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
-    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined, undefined, muxRefJson(w.muxRef));
+  const handleTreePaneClick = useCallback((serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => {
+    handlePaneClick(serverName, target, typeof w.id === 'number' ? w.id : undefined, paneOrdinal, muxRefJson(w.muxRef));
   }, [handlePaneClick]);
 
-  const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem) => {
+  const handleOperationPaneClick = useCallback((serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => {
     const decision = resolveOperationClick(w, serverName, target);
     if (decision.kind === 'task' && onOpenTaskWindow) {
       onOpenTaskWindow(decision.taskId, t('tasks:detail.taskRef', { id: decision.taskId }), { serverName: decision.serverName, target: decision.target });
       if (mobile) onCloseMobileSidebar();
       return;
     }
-    handlePaneClick(serverName, target, w.id, undefined, muxRefJson(w.muxRef));
+    handlePaneClick(serverName, target, w.id, paneOrdinal, muxRefJson(w.muxRef));
   }, [onOpenTaskWindow, t, mobile, onCloseMobileSidebar, handlePaneClick]);
 
   const renderOperationExtra = useCallback((w: WindowItem) => {
@@ -919,7 +919,7 @@ interface ServerGroupProps {
   quickAddIcons: Record<QuickAddAgent, React.FC<{ size?: number }>>;
   agentDefsLoading?: boolean;
   agentDefsError?: string | null;
-  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => void;
   onContextMenu: (e: React.MouseEvent, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onLongPress?: (x: number, y: number, w: Window, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => void;
   onOpenQuickAdd: (serverName: string, agentType: QuickAddAgent) => void;

@@ -37,7 +37,7 @@ export interface WindowPaneTreeProps {
    * 持つ場合、呼び出し元が物理ターゲットから Map で引き直して取り違えないようにするため）。
    * 既存の呼び出し元（2引数のみ受け取る）は後方互換のため無視して構わない。
    */
-  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
   extra?: (w: WindowItem) => React.ReactNode;
@@ -124,7 +124,7 @@ interface WindowRowProps {
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
   onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => void;
-  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
   extra?: React.ReactNode;
@@ -553,7 +553,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         {extra}
       </div>
 
-      {isExpanded && sw.panes.map((pane) => {
+      {isExpanded && sw.panes.map((pane, i) => {
         const planned = panes.find((p) => p.index === pane.index)!;
         const target = planned.target;
         const active = isActive?.(w.serverName, target, 'pane', w.id) ?? false;
@@ -563,7 +563,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         return (
           <div
             key={`${w.id}-${sw.index}-${pane.index}`}
-            onClick={() => onPaneClick(w.serverName, target, w)}
+            onClick={() => onPaneClick(w.serverName, target, w, i + 1)}
             onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, paneCtxExtra) : undefined}
             {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, paneCtxExtra)) : {})}
             className={`row-hover${(active || focused) ? ' row-selected' : ''}`}
