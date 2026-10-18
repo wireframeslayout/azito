@@ -594,6 +594,12 @@ Encrypted secrets cannot be decrypted. Re-enter the following manually:
 
 Before doing that, check whether an old `master.key` survives elsewhere (backups, or next to `data.db.bak-*`).
 
+### Tokens in existing logs
+
+Before v0.11.1, the UI token included in browser terminal WebSocket connection URLs was recorded in plaintext in request logs. Tokens may be readable in old logs retained by journald or log files.
+
+Remediation: run `azito token rotate` to invalidate the current token and issue a new one. Tokens in old logs become invalid.
+
 ### Reverting to the previous version
 
 ```bash

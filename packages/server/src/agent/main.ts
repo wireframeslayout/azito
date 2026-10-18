@@ -26,6 +26,7 @@ import { agentAuthHook } from './authHook';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
+import { serializeRequestForLog } from '../shared/redactUrlSecrets';
 
 // ─── Environment validation ───
 
@@ -86,7 +87,11 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 
 async function main(): Promise<void> {
   const startedAt = Date.now();
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      serializers: { req: serializeRequestForLog },
+    },
+  });
   const agentEventBus = new EventEmitter();
   const browserSessionManager = new BrowserSessionManager(
     path.resolve(os.homedir(), '.azito', 'browser-profile'),

@@ -23,6 +23,7 @@ import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
+import { serializeRequestForLog } from './shared/redactUrlSecrets';
 
 // ─── Graceful shutdown ───
 
@@ -100,7 +101,11 @@ async function main(): Promise<void> {
   const uiToken = resolveUiToken(paths.uiToken);
   const webhookToken = resolveWebhookToken(paths.webhookToken);
 
-  const app = Fastify({ logger: true });
+  const app = Fastify({
+    logger: {
+      serializers: { req: serializeRequestForLog },
+    },
+  });
   const PORT = parseInt(process.env.PORT || '3001', 10);
   const HOST = process.env.AZITO_BIND ?? '127.0.0.1';
   if (HOST === '0.0.0.0' || HOST === '::') {
