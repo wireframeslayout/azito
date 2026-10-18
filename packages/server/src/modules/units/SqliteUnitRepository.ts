@@ -32,7 +32,7 @@ function parsePhaseConfig(raw: unknown): PhaseConfig | null {
 }
 
 function parseSubagentConfig(raw: unknown): SubagentConfig | null {
-  if (raw === null || raw === undefined) return null;
+  if (raw === null || raw === undefined || raw === 'null') return null;
   if (typeof raw !== 'string') throw new Error(`Invalid subagent config: expected string, got ${typeof raw}`);
   const parsed: unknown = JSON.parse(raw);
   if (typeof parsed !== 'object' || parsed === null) {
@@ -80,8 +80,8 @@ export class SqliteUnitRepository implements IUnitRepository {
       data.unitType ?? 'devops',
       data.systemPrompt ?? null,
       data.selfReviewMaxAttempts ?? 2,
-      data.reviewSubagent !== undefined ? JSON.stringify(data.reviewSubagent) : null,
-      data.implementSubagent !== undefined ? JSON.stringify(data.implementSubagent) : null,
+      data.reviewSubagent !== undefined ? (data.reviewSubagent !== null ? JSON.stringify(data.reviewSubagent) : null) : null,
+      data.implementSubagent !== undefined ? (data.implementSubagent !== null ? JSON.stringify(data.implementSubagent) : null) : null,
       data.phaseConfig !== undefined && data.phaseConfig !== null ? JSON.stringify(data.phaseConfig) : null,
       data.workerType ?? null,
       data.workerModel ?? null,
