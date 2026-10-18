@@ -13,7 +13,7 @@ import { InteractionPendingBanner } from './InteractionPendingBanner';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import { answerableQuestion } from './pendingQuestion';
-import { isNearBottom } from './scrollFollow';
+import { isNearBottom, nextNearBottom } from './scrollFollow';
 import PromptInputBar from './PromptInputBar';
 import type { WindowViewMode } from '../ui/TerminalChatToggle';
 import BubbleEntry from './styles/BubbleEntry';
@@ -91,6 +91,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const contentRef = useRef<HTMLDivElement>(null);
   const pendingInitialScrollRef = useRef(false);
   const nearBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const nextOffsetRef = useRef<number | null>(null);
 
   // 世代トークン（Important #1）: sessionId/agentType が切り替わるたびに発行し直す。飛行中の
@@ -142,7 +143,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    nearBottomRef.current = isNearBottom(el);
+    nearBottomRef.current = nextNearBottom(nearBottomRef.current, lastScrollTopRef.current, el);
+    lastScrollTopRef.current = el.scrollTop;
     if (nearBottomRef.current) setNewCount(0);
   }, []);
 
@@ -210,6 +212,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     pendingAnchorRef.current = null;
     pendingInitialScrollRef.current = false;
     nearBottomRef.current = true;
+    lastScrollTopRef.current = 0;
 
     apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
       `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?windowId=${windowId}`,
@@ -332,6 +335,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     pendingInitialScrollRef.current = false;
     el.scrollTop = el.scrollHeight;
     nearBottomRef.current = true;
+    lastScrollTopRef.current = el.scrollTop;
   }, [loading, entries]);
 
   // 上方向ページングのスクロール位置アンカー補正: prepend 直前に記録した scrollHeight/scrollTop を
@@ -378,6 +382,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     const observer = new ResizeObserver(() => {
       if (!nearBottomRef.current) return;
       container.scrollTop = container.scrollHeight;
+      lastScrollTopRef.current = container.scrollTop;
     });
     observer.observe(content);
     observer.observe(container);
