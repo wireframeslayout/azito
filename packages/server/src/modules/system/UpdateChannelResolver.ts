@@ -1,5 +1,6 @@
 import fs from 'fs';
 import { getReleaseInfo } from '../../shared/releaseInfo';
+import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 
 interface UpdateChannelFile {
   repo?: string;
@@ -18,7 +19,7 @@ interface UpdateChannelFile {
  * hardcoded default.
  */
 export class UpdateChannelResolver {
-  constructor(private channelPath: string) {}
+  constructor(private channelPath: string, private guard: SecretFileGuard) {}
 
   resolve(): string | null {
     const fromEnv = process.env.AZITO_RELEASE_REPO;
@@ -35,7 +36,7 @@ export class UpdateChannelResolver {
 
   updateChannel(repo: string): void {
     const content: UpdateChannelFile = { ...(this.readChannelFile() ?? {}), repo };
-    fs.writeFileSync(this.channelPath, JSON.stringify(content, null, 2), { mode: 0o600 });
+    this.guard.writeSecretFile(this.channelPath, JSON.stringify(content, null, 2));
   }
 
   resolveChannel(): 'stable' | 'rc' {
@@ -44,7 +45,7 @@ export class UpdateChannelResolver {
 
   updateChannelKind(kind: 'stable' | 'rc'): void {
     const content: UpdateChannelFile = { ...(this.readChannelFile() ?? {}), channel: kind };
-    fs.writeFileSync(this.channelPath, JSON.stringify(content, null, 2), { mode: 0o600 });
+    this.guard.writeSecretFile(this.channelPath, JSON.stringify(content, null, 2));
   }
 
   private readChannelFile(): UpdateChannelFile | null {

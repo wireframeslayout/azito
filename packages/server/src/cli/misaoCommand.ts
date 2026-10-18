@@ -1,3 +1,4 @@
+import { createSecretFileGuard } from '../shared/os/secretFileGuard';
 import readline from 'readline';
 import type { MisaoServiceStatus } from '@azito/shared';
 import { getBundleRoot } from '../shared/releaseInfo';
@@ -94,6 +95,7 @@ export async function misaoCommand(argv: string[], platform: NodeJS.Platform): P
       bundle: readMisaoBundle(bundleRoot),
       controller: createMisaoServiceController(platform, runCommand),
       env: process.env,
+      secretFileGuard: createSecretFileGuard(platform),
     });
 
     if (args.command === 'status') {

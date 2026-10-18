@@ -1,11 +1,13 @@
 import webpush from 'web-push';
 import fs from 'fs';
-import path from 'path';
+import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 
 let keyPath: string | null = null;
+let secretFileGuard: SecretFileGuard | null = null;
 
-export function initVapidKeyManager(vapidKeysPath: string): void {
+export function initVapidKeyManager(vapidKeysPath: string, guard: SecretFileGuard): void {
   keyPath = vapidKeysPath;
+  secretFileGuard = guard;
 }
 
 export interface VapidKeys {
@@ -14,16 +16,15 @@ export interface VapidKeys {
 }
 
 export function getVapidKeys(): VapidKeys {
-  if (!keyPath) {
+  if (!keyPath || !secretFileGuard) {
     throw new Error('VapidKeyManager not initialized. Call initVapidKeyManager(path) first.');
   }
 
   if (fs.existsSync(keyPath)) {
-    try { fs.chmodSync(keyPath, 0o600); } catch {}
+    secretFileGuard.repairFile(keyPath);
     return JSON.parse(fs.readFileSync(keyPath, 'utf-8'));
   }
   const keys = webpush.generateVAPIDKeys();
-  fs.mkdirSync(path.dirname(keyPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(keyPath, JSON.stringify(keys, null, 2), { mode: 0o600 });
+  secretFileGuard.writeSecretFile(keyPath, JSON.stringify(keys, null, 2));
   return keys;
 }

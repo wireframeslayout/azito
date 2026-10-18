@@ -15,6 +15,9 @@ import { DeployModeDetector } from '../DeployModeDetector';
 import type { DataPaths } from '../../../shared/dataDir';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
 import type { Task } from '../../tasks/Task';
+import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform);
 
 const mockedGetReleaseInfo = vi.mocked(getReleaseInfo);
 
@@ -56,9 +59,9 @@ describe('SystemUpdateService', () => {
       updateLog: path.join(tmpDir, 'update.log'),
       updateChannel: path.join(tmpDir, 'update-channel.json'),
     };
-    channelResolver = new UpdateChannelResolver(dataPaths.updateChannel);
+    channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
     channelResolver.updateChannel('acme/azito-hub');
-    stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog);
+    stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
     deployModeDetector = { detect: () => 'systemd', canUpdate: () => true, getDisabledReason: () => null } as unknown as DeployModeDetector;
     mockedGetReleaseInfo.mockReset();
     mockedGetReleaseInfo.mockReturnValue({ version: 'v1.0.0', commit: 'abc1234', bundleHash: 'deadbeef', channel: { repo: 'acme/azito-hub' } });

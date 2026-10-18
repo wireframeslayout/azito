@@ -1,5 +1,5 @@
 import Database from 'better-sqlite3';
-import fs from 'fs';
+import type { SecretFileGuard } from '../os/secretFileGuard';
 
 import * as m001 from './migrations/001_initial_schema';
 import * as m002 from './migrations/002_legacy_migrations';
@@ -106,6 +106,8 @@ export interface OpenDatabaseOptions {
    * column exists, so it would otherwise be tmux). Applies only to a brand-new database; an existing one keeps what it has.
    */
   freshLocalDefaultMux?: 'tmux' | 'misao';
+  /** Restricts the database file and its -wal / -shm to the owner. Required for a file database; an in-memory one has no file. */
+  secretFileGuard?: SecretFileGuard;
 }
 
 function runMigrations(db: import('better-sqlite3').Database, options: OpenDatabaseOptions): void {
@@ -159,12 +161,19 @@ function runMigrations(db: import('better-sqlite3').Database, options: OpenDatab
 export type SqliteDatabase = import('better-sqlite3').Database;
 
 export function openDatabase(dbPath: string, options: OpenDatabaseOptions = {}): SqliteDatabase {
+  const guard = dbPath === ':memory:' ? null : options.secretFileGuard;
+  if (guard === undefined) throw new Error(`openDatabase(${dbPath}) needs a secretFileGuard for a file database`);
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
 
-  for (const suffix of ['', '-wal', '-shm']) {
-    try { fs.chmodSync(`${dbPath}${suffix}`, 0o600); } catch {}
+  if (guard) {
+    try {
+      for (const suffix of ['', '-wal', '-shm']) guard.repairFile(`${dbPath}${suffix}`);
+    } catch (err) {
+      db.close();
+      throw err;
+    }
   }
 
   runMigrations(db, options);

@@ -18,6 +18,7 @@ import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
 import { resolveCurrentHostEnv } from './shared/os/hostEnv';
+import { createSecretFileGuard } from './shared/os/secretFileGuard';
 import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
@@ -33,8 +34,9 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 
 async function main(): Promise<void> {
   const hostEnv = resolveCurrentHostEnv();
+  const secretFileGuard = createSecretFileGuard(hostEnv.platform);
   if (process.argv[2] === 'token') {
-    await tokenCommand(process.argv.slice(3), hostEnv.homeDir);
+    await tokenCommand(process.argv.slice(3), hostEnv.homeDir, secretFileGuard);
     return;
   }
 
@@ -55,10 +57,10 @@ async function main(): Promise<void> {
     // Run the same data-dir resolution + migration + SecretBox init the
     // normal server startup does (but nothing heavier — no DB open, no
     // Fastify) so decryption has a key to work with.
-    const doctorPaths = resolveDataDir();
-    migrateDataIfNeeded(doctorPaths, getLegacyPaths());
-    initSecretBox(doctorPaths.masterKey);
-    await authDoctorCommand(hostEnv.homeDir);
+    const doctorPaths = resolveDataDir(secretFileGuard);
+    migrateDataIfNeeded(doctorPaths, getLegacyPaths(), secretFileGuard);
+    initSecretBox(doctorPaths.masterKey, secretFileGuard);
+    await authDoctorCommand(hostEnv.homeDir, secretFileGuard);
     return;
   }
 
@@ -69,11 +71,11 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'update-run') {
-    await runUpdate(process.argv.slice(3));
+    await runUpdate(process.argv.slice(3), secretFileGuard);
     return;
   }
 
-  const paths = resolveDataDir();
+  const paths = resolveDataDir(secretFileGuard);
   const legacy = getLegacyPaths();
 
   const releaseInfo = getReleaseInfo();
@@ -82,10 +84,10 @@ async function main(): Promise<void> {
     console.log(`[azito] Data directory: ${paths.dir}`);
   }
 
-  migrateDataIfNeeded(paths, legacy);
+  migrateDataIfNeeded(paths, legacy, secretFileGuard);
 
-  initSecretBox(paths.masterKey);
-  initVapidKeyManager(paths.vapidKeys);
+  initSecretBox(paths.masterKey, secretFileGuard);
+  initVapidKeyManager(paths.vapidKeys, secretFileGuard);
 
   // Isolation doctor FS-boundary canary (Issue #29 review, Critical finding
   // 1): best-effort, write failure only warns — never blocks startup. See
@@ -98,9 +100,9 @@ async function main(): Promise<void> {
   // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh sets both up).
   // Otherwise, and for a source checkout (`npm run dev`), it starts on tmux.
   const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, hostEnv.homeDir, fs.existsSync);
-  const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux' });
-  const uiToken = resolveUiToken(paths.uiToken);
-  const webhookToken = resolveWebhookToken(paths.webhookToken);
+  const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux', secretFileGuard });
+  const uiToken = resolveUiToken(paths.uiToken, secretFileGuard);
+  const webhookToken = resolveWebhookToken(paths.webhookToken, secretFileGuard);
 
   const app = Fastify({
     logger: {

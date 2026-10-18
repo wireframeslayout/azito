@@ -1,12 +1,14 @@
 import crypto from 'crypto';
 import fs from 'fs';
-import path from 'path';
+import type { SecretFileGuard } from '../os/secretFileGuard';
 
 let keyPath: string | null = null;
+let secretFileGuard: SecretFileGuard | null = null;
 let cachedKey: Buffer | null = null;
 
-export function initSecretBox(masterKeyPath: string): void {
+export function initSecretBox(masterKeyPath: string, guard: SecretFileGuard): void {
   keyPath = masterKeyPath;
+  secretFileGuard = guard;
   cachedKey = null;
 }
 
@@ -22,12 +24,12 @@ export function getMasterKey(): Buffer {
     return cachedKey;
   }
 
-  if (!keyPath) {
+  if (!keyPath || !secretFileGuard) {
     throw new Error('SecretBox not initialized. Call initSecretBox(path) before using seal/open.');
   }
 
   if (fs.existsSync(keyPath)) {
-    try { fs.chmodSync(keyPath, 0o600); } catch {}
+    secretFileGuard.repairFile(keyPath);
     const hex = fs.readFileSync(keyPath, 'utf-8').trim();
     if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
       throw new Error('master.key must contain 64 hex characters (32 bytes)');
@@ -37,8 +39,7 @@ export function getMasterKey(): Buffer {
   }
 
   const key = crypto.randomBytes(32);
-  fs.mkdirSync(path.dirname(keyPath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(keyPath, key.toString('hex'), { mode: 0o600 });
+  secretFileGuard.writeSecretFile(keyPath, key.toString('hex'));
   cachedKey = key;
   return cachedKey;
 }

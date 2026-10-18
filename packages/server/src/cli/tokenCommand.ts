@@ -4,6 +4,7 @@ import path from 'path';
 import { resolveDataDir } from '../shared/dataDir';
 import { resolveServerEnvPath } from '../shared/envFile';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
+import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 
 interface McpServerEnv {
   env?: Record<string, string>;
@@ -21,7 +22,7 @@ function operatorEnvPath(homeDir: string): string {
 // printf %q で書き出す形式）。ローテート後は AZITO_UI_TOKEN 行だけを
 // 書き換える。新トークンは crypto.randomBytes(32).toString('hex') で
 // 常に英数字のみなのでシェルクォートは不要（生値のまま書いてよい）。
-function updateOperatorEnvToken(newToken: string, homeDir: string): boolean {
+function updateOperatorEnvToken(newToken: string, homeDir: string, guard: SecretFileGuard): boolean {
   const filePath = operatorEnvPath(homeDir);
   if (!fs.existsSync(filePath)) return false;
   const content = fs.readFileSync(filePath, 'utf-8');
@@ -35,16 +36,12 @@ function updateOperatorEnvToken(newToken: string, homeDir: string): boolean {
     return line;
   });
   if (updated) {
-    // Force 0600 regardless of the file's current mode (third-party review
-    // Important finding): `mode` on writeFileSync only applies when the file
-    // is newly created, and this file always pre-exists (checked above), so
-    // it alone would not correct a file that somehow ended up more
-    // permissive (e.g. written by an older setup.sh before the umask 077 +
-    // atomic-mv fix, or restored from a backup). chmod before writing too,
-    // so the content is never briefly readable under a looser mode between
-    // this chmod and the write.
-    fs.chmodSync(filePath, 0o600);
-    fs.writeFileSync(filePath, newLines.join('\n'), { mode: 0o600 });
+    // Restrict to the owner regardless of the file's current permissions (third-party review
+    // Important finding): this file always pre-exists (checked above), so a plain write would not
+    // correct one that somehow ended up more permissive (e.g. written by an older setup.sh before
+    // the umask 077 + atomic-mv fix, or restored from a backup). The guard restricts the file
+    // before the new token goes in, so the content is never readable under the looser permissions.
+    guard.writeSecretFile(filePath, newLines.join('\n'));
   }
   return updated;
 }
@@ -76,16 +73,16 @@ function updateMcpSettingsToken(newToken: string, homeDir: string): boolean {
   return true;
 }
 
-export async function tokenCommand(args: string[], homeDir: string): Promise<void> {
+export async function tokenCommand(args: string[], homeDir: string, guard: SecretFileGuard): Promise<void> {
   const subcommand = args[0];
 
   if (subcommand === 'show') {
-    const result = resolveCurrentUiToken();
+    const result = resolveCurrentUiToken(guard);
     if (result) {
       console.log(result.token);
       return;
     }
-    const paths = resolveDataDir();
+    const paths = resolveDataDir(guard);
     const envFilePath = resolveServerEnvPath();
     console.error('UI token not found.');
     console.error(`Checked: AZITO_UI_TOKEN env, ${envFilePath}, ${paths.uiToken}`);
@@ -94,7 +91,7 @@ export async function tokenCommand(args: string[], homeDir: string): Promise<voi
   }
 
   if (subcommand === 'rotate') {
-    const paths = resolveDataDir();
+    const paths = resolveDataDir(guard);
 
     // Issue #28 review Important finding: `resolveCurrentUiToken()` mirrors
     // the SAME env -> .env -> token-file precedence the running hub applies
@@ -107,7 +104,7 @@ export async function tokenCommand(args: string[], homeDir: string): Promise<voi
     // the OLD token indefinitely. Resolve BEFORE writing anything and abort
     // with guidance instead, rather than distributing a token nobody can
     // actually use.
-    const current = resolveCurrentUiToken();
+    const current = resolveCurrentUiToken(guard);
     if (current && current.source !== paths.uiToken) {
       console.error(`Cannot rotate: the hub's effective AZITO_UI_TOKEN currently comes from ${current.source}, not the token file (${paths.uiToken}).`);
       console.error('Rotating the token file would produce a new value the running hub never reads, while still overwriting operator.env / MCP settings with that unusable token.');
@@ -131,15 +128,14 @@ export async function tokenCommand(args: string[], homeDir: string): Promise<voi
 
     const newToken = crypto.randomBytes(32).toString('hex');
 
-    fs.mkdirSync(path.dirname(paths.uiToken), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(paths.uiToken, newToken, { mode: 0o600 });
+    guard.writeSecretFile(paths.uiToken, newToken);
     console.log(`New UI token written to ${paths.uiToken}`);
 
     // Issue #28 Phase B: rotate は ~/.azito/azitoctl*.env へ UI トークンを
     // 再配置しない（全権トークンをタスク実行プロセスが source するファイルに
     // 置かない、という配布分離の方針。設計 §9/§12）。ローカルにある operator.env
     // と MCP settings（人間が操作する経路）だけを更新する。
-    if (updateOperatorEnvToken(newToken, homeDir)) {
+    if (updateOperatorEnvToken(newToken, homeDir, guard)) {
       console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath(homeDir)}`);
     }
     if (updateMcpSettingsToken(newToken, homeDir)) {

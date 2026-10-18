@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { createSecretFileGuard } from '../shared/os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform);
 
 let tmpDir: string;
 let uiTokenPath: string;
@@ -139,7 +142,7 @@ describe('authDoctorCommand', () => {
   // checks passed" that couldn't be told apart from a genuinely clean run.
   it('reports unverifiable (not a pass) when nothing is set up yet', { timeout: 20000 }, async () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
     expect(process.exitCode).toBe(3);
     expect(allLogLines()).toContain('確認できなかった項目があります');
   });
@@ -150,7 +153,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_UI_TOKEN=leftover\n');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('azitoctl.env');
@@ -162,7 +165,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_WEBHOOK_TOKEN=y\n');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(allLogLines()).toContain('[OK ] azitoctl*.env');
     // Overall exit reflects the OTHER checks' unverifiable state (no hub DB,
@@ -183,7 +186,7 @@ describe('authDoctorCommand', () => {
     fs.symlinkSync(path.join(azitoDir, 'does-not-exist-target'), path.join(azitoDir, 'azitoctl.env'));
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('読み取りに失敗しました');
@@ -199,21 +202,20 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(operatorEnvPath, 'AZITO_UI_TOKEN=x\n', { mode: 0o644 });
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('operator.env');
   });
 
-  // Windows では動かない: mode 600 の検査（Windows には POSIX の mode が無い。P2 の SecretFileGuard で扱う）
-  it.skipIf(process.platform === 'win32')('passes this one check when operator.env is 0600 (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
+  it('passes this one check when operator.env is restricted to the owner (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });
     const operatorEnvPath = path.join(azitoDir, 'operator.env');
-    fs.writeFileSync(operatorEnvPath, 'AZITO_UI_TOKEN=x\n', { mode: 0o600 });
+    secretFileGuard.writeSecretFile(operatorEnvPath, 'AZITO_UI_TOKEN=x\n');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(allLogLines()).toContain('[OK ] operator.env');
     expect(process.exitCode).toBe(3);
@@ -229,7 +231,7 @@ describe('authDoctorCommand', () => {
     );
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('MCP settings');
@@ -245,7 +247,7 @@ describe('authDoctorCommand', () => {
     );
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(allLogLines()).toContain('[OK ] MCP settings');
     expect(process.exitCode).toBe(3);
@@ -262,7 +264,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(path.join(claudeDir, 'settings.json'), '{ this is not valid json');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('読み取りまたは JSON パースに失敗');
@@ -271,7 +273,7 @@ describe('authDoctorCommand', () => {
   it('reports AZITO_SCOPED_AUTH current value', async () => {
     process.env.AZITO_SCOPED_AUTH = '1';
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
     expect(allLogLines()).toContain('scoped 認可: 有効');
   });
 
@@ -282,15 +284,14 @@ describe('authDoctorCommand', () => {
   // enabled (skips the drain check cleanly, no live-pane concern), no stray
   // AZITO_UI_TOKEN in azitoctl.env, operator.env at 0600, and both the
   // Claude and Codex azt-mcp registrations matching the hub's current token.
-  // Windows では動かない: operator.env の mode 600 検査を含む（P2 の SecretFileGuard で扱う）
-  it.skipIf(process.platform === 'win32')('reports a clean pass with exit 0 when every check actually verifies something and finds it clean', async () => {
+  it('reports a clean pass with exit 0 when every check actually verifies something and finds it clean', async () => {
     process.env.AZITO_UI_TOKEN = 'hub-token';
     process.env.AZITO_SCOPED_AUTH = '1';
 
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });
     fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_WEBHOOK_TOKEN=y\n');
-    fs.writeFileSync(path.join(azitoDir, 'operator.env'), 'AZITO_UI_TOKEN=hub-token\n', { mode: 0o600 });
+    secretFileGuard.writeSecretFile(path.join(azitoDir, 'operator.env'), 'AZITO_UI_TOKEN=hub-token\n');
 
     const claudeDir = path.join(fakeHome, '.claude');
     fs.mkdirSync(claudeDir, { recursive: true });
@@ -304,7 +305,7 @@ describe('authDoctorCommand', () => {
     );
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome);
+    await authDoctorCommand(fakeHome, secretFileGuard);
 
     expect(process.exitCode).toBeUndefined();
     expect(allLogLines()).toContain('すべての検査に合格しました');
@@ -320,7 +321,7 @@ describe('authDoctorCommand', () => {
   describe('task-owned window drain check', () => {
     async function seedTaskWindow(tmuxTarget: string): Promise<void> {
       const { openDatabase } = await import('../shared/db/Database.js');
-      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      const db = openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard });
       try {
         db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
         db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
@@ -334,7 +335,7 @@ describe('authDoctorCommand', () => {
 
     it('reports a notice (not a failure) when the DB has not been created on this machine yet — this host is not the hub', async () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       // Phase C round-4 review: unverifiable (`notice`) is no longer folded
       // into exit 0 — it now gets its own non-zero code (3), distinct from
@@ -346,10 +347,10 @@ describe('authDoctorCommand', () => {
 
     it('passes this check with no warning when no task-owned windows exist on the local server (overall exit is 3: codex CLI still unverifiable in this test env)', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
-      openDatabase(path.join(tmpDir, 'data.db')).close(); // just runs migrations, seeds 'local' server
+      openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard }).close(); // just runs migrations, seeds 'local' server
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('タスク所有ウィンドウの登録がありません');
@@ -360,7 +361,7 @@ describe('authDoctorCommand', () => {
       // default execFileMock behavior is "pane gone"
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('生存中のペインはありません');
@@ -371,7 +372,7 @@ describe('authDoctorCommand', () => {
       execFileMock.mockImplementation((_cmd, _args, _opts, callback) => callback(null, '', ''));
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       // warning (exit 2) takes precedence over the codex-CLI notice also
       // present in this test env — see authDoctorCommand()'s severity order.
@@ -391,7 +392,7 @@ describe('authDoctorCommand', () => {
     // silently treated as "no live pane found" (clean).
     it('reports a misao window as unverifiable when its daemon is unreachable, and never probes it with tmux (a tmux "can\'t find" says nothing about it)', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
-      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      const db = openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard });
       db.prepare("INSERT INTO projects (name) VALUES ('p')").run();
       db.prepare("INSERT INTO tasks (project_id, title) VALUES (1, 't')").run();
       db.prepare(
@@ -401,7 +402,7 @@ describe('authDoctorCommand', () => {
       execFileMock.mockClear();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('到達不能');
@@ -411,7 +412,7 @@ describe('authDoctorCommand', () => {
 
     it('reports a server it cannot reach as unverifiable, never as a clean pass', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
-      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      const db = openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard });
       db.prepare(
         "INSERT INTO servers (name, type, host, agent_port, agent_token) VALUES ('remote1', 'agent', '127.0.0.1', 1, 'tok')",
       ).run();
@@ -423,7 +424,7 @@ describe('authDoctorCommand', () => {
       db.close();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('[-- ] scoped 認可 有効化前の生存タスクウィンドウ');
@@ -437,7 +438,7 @@ describe('authDoctorCommand', () => {
       execFileMock.mockImplementation((_cmd, _args, _opts, callback) => callback(null, '', ''));
 
       const { openDatabase } = await import('../shared/db/Database.js');
-      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      const db = openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard });
       db.prepare(
         "INSERT INTO servers (name, type, host, agent_port, agent_token) VALUES ('remote1', 'agent', '127.0.0.1', 1, 'tok')",
       ).run();
@@ -447,7 +448,7 @@ describe('authDoctorCommand', () => {
       db.close();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       // warning (exit 2) takes precedence over the codex-CLI notice also
       // present in this test env.
@@ -472,7 +473,7 @@ describe('authDoctorCommand', () => {
     // unverifiable and keep running every other check instead of throwing.
     it('does not crash when a server row has an encrypted agent_token and SecretBox has not been initialized', async () => {
       const { openDatabase } = await import('../shared/db/Database.js');
-      const db = openDatabase(path.join(tmpDir, 'data.db'));
+      const db = openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard });
       db.prepare(
         "INSERT INTO servers (name, type, host, agent_port, agent_token) VALUES " +
           "('remote1', 'agent', '127.0.0.1', 1, 'v1.aWl2aWl2aWl2aWl2aWl2aWl2.dGFndGFndGFndGFndGFndGFn.Y2lwaGVydGV4dA==')",
@@ -485,7 +486,7 @@ describe('authDoctorCommand', () => {
       db.close();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       // The whole command must have completed (not thrown) and every other
       // check must still have run — proof the decrypt failure was contained
@@ -502,7 +503,7 @@ describe('authDoctorCommand', () => {
       process.env.AZITO_SCOPED_AUTH = '1';
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       // Drain check itself is a clean skip (no notice/warning); the codex-CLI
       // notice still present in this test env is what drives the overall
@@ -517,7 +518,7 @@ describe('authDoctorCommand', () => {
     it('reports a notice (not a failure) when the codex CLI is not installed', async () => {
       // default mock already throws ENOENT
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       // Two independent notices here (codex CLI + no hub DB in this test
       // env) both map to the same exit 3 ("unverifiable"), never exit 0.
@@ -535,7 +536,7 @@ describe('authDoctorCommand', () => {
         throw err;
       });
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('Codex に azt-mcp が登録されていません');
@@ -556,7 +557,7 @@ describe('authDoctorCommand', () => {
         throw err;
       });
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('登録状況を確認できませんでした');
@@ -570,7 +571,7 @@ describe('authDoctorCommand', () => {
         () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'stale-codex-token' } } }),
       );
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(1);
       expect(allLogLines()).toContain('Codex 側の azt-mcp トークンとハブの現在値');
@@ -582,7 +583,7 @@ describe('authDoctorCommand', () => {
         () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'hub-token' } } }),
       );
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(3);
     });
@@ -590,7 +591,7 @@ describe('authDoctorCommand', () => {
     it('fails independently when the codex JSON output cannot be parsed', async () => {
       execFileSyncMock.mockImplementation(() => 'not json');
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome);
+      await authDoctorCommand(fakeHome, secretFileGuard);
 
       expect(process.exitCode).toBe(1);
       expect(allLogLines()).toContain('JSON パースに失敗しました');

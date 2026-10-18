@@ -2,6 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { createSecretFileGuard } from '../shared/os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform);
 
 let tmpDir: string;
 let uiTokenPath: string;
@@ -80,14 +83,14 @@ describe('tokenCommand', () => {
     it('returns env token when AZITO_UI_TOKEN is set', async () => {
       process.env.AZITO_UI_TOKEN = 'env-token-123';
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show'], fakeHome);
+      await tokenCommand(['show'], fakeHome, secretFileGuard);
       expect(logSpy).toHaveBeenCalledWith('env-token-123');
     });
 
     it('returns .env token when only .env has the value', async () => {
       fs.writeFileSync(dotEnvPath, 'AZITO_UI_TOKEN=dotenv-token-456\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show'], fakeHome);
+      await tokenCommand(['show'], fakeHome, secretFileGuard);
       expect(logSpy).toHaveBeenCalledWith('dotenv-token-456');
     });
 
@@ -95,7 +98,7 @@ describe('tokenCommand', () => {
       fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
       fs.writeFileSync(uiTokenPath, 'file-token-789\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show'], fakeHome);
+      await tokenCommand(['show'], fakeHome, secretFileGuard);
       expect(logSpy).toHaveBeenCalledWith('file-token-789');
     });
 
@@ -103,7 +106,7 @@ describe('tokenCommand', () => {
       process.env.AZITO_UI_TOKEN = 'env-wins';
       fs.writeFileSync(dotEnvPath, 'AZITO_UI_TOKEN=dotenv-loses\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show'], fakeHome);
+      await tokenCommand(['show'], fakeHome, secretFileGuard);
       expect(logSpy).toHaveBeenCalledWith('env-wins');
     });
 
@@ -112,13 +115,13 @@ describe('tokenCommand', () => {
       fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
       fs.writeFileSync(uiTokenPath, 'file-loses\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show'], fakeHome);
+      await tokenCommand(['show'], fakeHome, secretFileGuard);
       expect(logSpy).toHaveBeenCalledWith('dotenv-wins');
     });
 
     it('shows all checked paths when no token found', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['show'], fakeHome)).rejects.toThrow('process.exit');
+      await expect(tokenCommand(['show'], fakeHome, secretFileGuard)).rejects.toThrow('process.exit');
       expect(errorSpy).toHaveBeenCalledWith('UI token not found.');
       const checkedMsg = errorSpy.mock.calls.find((c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('Checked:'));
       expect(checkedMsg).toBeDefined();
@@ -153,7 +156,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['rotate'], fakeHome)).rejects.toThrow('process.exit');
+      await expect(tokenCommand(['rotate'], fakeHome, secretFileGuard)).rejects.toThrow('process.exit');
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(dotEnvPath));
@@ -166,7 +169,7 @@ describe('tokenCommand', () => {
     it('aborts without writing anything when AZITO_UI_TOKEN env var is the authoritative source', async () => {
       process.env.AZITO_UI_TOKEN = 'env-authoritative';
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['rotate'], fakeHome)).rejects.toThrow('process.exit');
+      await expect(tokenCommand(['rotate'], fakeHome, secretFileGuard)).rejects.toThrow('process.exit');
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('environment variable'));
@@ -179,7 +182,7 @@ describe('tokenCommand', () => {
       fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
       fs.writeFileSync(uiTokenPath, 'previous-file-token\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
       expect(errorSpy).not.toHaveBeenCalled();
       const rotated = fs.readFileSync(uiTokenPath, 'utf-8');
@@ -189,7 +192,7 @@ describe('tokenCommand', () => {
 
     it('does not warn when .env has no AZITO_UI_TOKEN', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
@@ -201,7 +204,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(azitoctlEnvPath, before);
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
       expect(fs.readFileSync(azitoctlEnvPath, 'utf-8')).toBe(before);
     });
@@ -213,7 +216,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
       const updated = fs.readFileSync(operatorEnvPath, 'utf-8');
       expect(updated).not.toContain('old-token');
@@ -221,26 +224,25 @@ describe('tokenCommand', () => {
       expect(updated).toContain('AZITO_URL=http://localhost:3001');
     });
 
-    // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
-    it.skipIf(process.platform === 'win32')('forces operator.env to mode 0600 even if it was previously more permissive', async () => {
+    it('restricts operator.env to the owner even if it was previously more permissive', async () => {
       const azitoDir = path.join(fakeHome, '.azito');
       fs.mkdirSync(azitoDir, { recursive: true });
       const operatorEnvPath = path.join(azitoDir, 'operator.env');
       fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
       // Simulate a file left over from before the umask 077 + atomic-mv fix
       // (or restored from a backup) that ended up world-readable.
-      fs.chmodSync(operatorEnvPath, 0o644);
+      if (process.platform !== 'win32') fs.chmodSync(operatorEnvPath, 0o644);
+      expect(secretFileGuard.inspect(operatorEnvPath, 'file').ok).toBe(false);
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
-      const mode = fs.statSync(operatorEnvPath).mode & 0o777;
-      expect(mode).toBe(0o600);
+      expect(secretFileGuard.inspect(operatorEnvPath, 'file')).toEqual({ ok: true });
     });
 
     it('does nothing when operator.env does not exist', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['rotate'], fakeHome)).resolves.not.toThrow();
+      await expect(tokenCommand(['rotate'], fakeHome, secretFileGuard)).resolves.not.toThrow();
       expect(fs.existsSync(path.join(fakeHome, '.azito', 'operator.env'))).toBe(false);
     });
 
@@ -260,7 +262,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
       const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).toMatch(/^[0-9a-f]{64}$/);
@@ -277,7 +279,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate'], fakeHome);
+      await tokenCommand(['rotate'], fakeHome, secretFileGuard);
 
       const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).toBeUndefined();

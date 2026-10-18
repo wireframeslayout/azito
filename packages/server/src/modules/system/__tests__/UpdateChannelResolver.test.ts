@@ -9,6 +9,9 @@ vi.mock('../../../shared/releaseInfo', () => ({
 
 import { getReleaseInfo } from '../../../shared/releaseInfo';
 import { UpdateChannelResolver } from '../UpdateChannelResolver';
+import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform);
 
 const mockedGetReleaseInfo = vi.mocked(getReleaseInfo);
 
@@ -31,13 +34,13 @@ describe('UpdateChannelResolver', () => {
 
   it('resolves from AZITO_RELEASE_REPO env var (stage 1)', () => {
     process.env.AZITO_RELEASE_REPO = 'env-owner/env-repo';
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     expect(resolver.resolve()).toBe('env-owner/env-repo');
   });
 
   it('resolves from update-channel.json when env is unset (stage 2)', () => {
     fs.writeFileSync(channelPath, JSON.stringify({ repo: 'file-owner/file-repo' }));
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     expect(resolver.resolve()).toBe('file-owner/file-repo');
   });
 
@@ -48,12 +51,12 @@ describe('UpdateChannelResolver', () => {
       bundleHash: 'deadbeefcafe',
       channel: { repo: 'release-owner/release-repo' },
     });
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     expect(resolver.resolve()).toBe('release-owner/release-repo');
   });
 
   it('returns null when all three stages are empty', () => {
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     expect(resolver.resolve()).toBeNull();
   });
 
@@ -66,7 +69,7 @@ describe('UpdateChannelResolver', () => {
       bundleHash: 'deadbeefcafe',
       channel: { repo: 'release-owner/release-repo' },
     });
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     expect(resolver.resolve()).toBe('env-owner/env-repo');
   });
 
@@ -78,12 +81,12 @@ describe('UpdateChannelResolver', () => {
       bundleHash: 'deadbeefcafe',
       channel: { repo: 'release-owner/release-repo' },
     });
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     expect(resolver.resolve()).toBe('file-owner/file-repo');
   });
 
   it('updateChannel() writes a repo that resolve() then reads back', () => {
-    const resolver = new UpdateChannelResolver(channelPath);
+    const resolver = new UpdateChannelResolver(channelPath, secretFileGuard);
     resolver.updateChannel('written-owner/written-repo');
     expect(resolver.resolve()).toBe('written-owner/written-repo');
     const written = JSON.parse(fs.readFileSync(channelPath, 'utf-8'));

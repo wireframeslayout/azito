@@ -6,6 +6,7 @@ import { extractClaudeMcpUiToken, type McpUiTokenExtraction } from '../shared/mc
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
+import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 import { openDatabase } from '../shared/db/Database';
 import { open } from '../shared/crypto/SecretBox';
 import { openDoctorMux, probeWindowLiveness, type DoctorMux } from './doctorMuxRegistry';
@@ -114,21 +115,21 @@ function checkAzitoctlEnvNoUiToken(homeDir: string): CheckResult {
 }
 
 // (b) operator.env のパーミッションが 0600 か
-function checkOperatorEnvPermissions(homeDir: string): CheckResult {
-  const label = 'operator.env のパーミッションが 0600';
+function checkOperatorEnvPermissions(homeDir: string, guard: SecretFileGuard): CheckResult {
+  const label = `operator.env の${guard.policyDescription}`;
   const filePath = operatorEnvPath(homeDir);
   if (!fs.existsSync(filePath)) {
     return { ok: true, label, detail: `${filePath} は存在しません（--ui-token 未使用、または未セットアップ）` };
   }
 
-  const mode = fs.statSync(filePath).mode & 0o777;
-  if (mode === 0o600) {
+  const result = guard.inspect(filePath, 'file');
+  if (result.ok) {
     return { ok: true, label, detail: filePath };
   }
   return {
     ok: false,
     label,
-    detail: `${filePath} のパーミッションが ${mode.toString(8)} です。\n  修正: chmod 600 ${filePath}`,
+    detail: `${filePath} の${result.summary}\n  修正: ${result.fix}`,
   };
 }
 
@@ -163,7 +164,7 @@ function readMcpUiToken(settingsPath: string): McpUiTokenResult {
 
 // (c) MCP settings の AZITO_UI_TOKEN がハブの現在値と一致するか
 //     （ローカルで読める範囲 — resolveCurrentUiToken() と同じ解決順）
-function checkMcpTokenMatchesHub(homeDir: string): CheckResult {
+function checkMcpTokenMatchesHub(homeDir: string, guard: SecretFileGuard): CheckResult {
   const label = 'MCP settings の AZITO_UI_TOKEN がハブの現在値と一致';
   const settingsPath = mcpSettingsPath(homeDir);
   const mcpTokenResult = readMcpUiToken(settingsPath);
@@ -188,7 +189,7 @@ function checkMcpTokenMatchesHub(homeDir: string): CheckResult {
   }
   const mcpToken = mcpTokenResult.token;
 
-  const current = resolveCurrentUiToken();
+  const current = resolveCurrentUiToken(guard);
   if (!current) {
     return {
       ok: false,
@@ -236,7 +237,7 @@ function checkMcpTokenMatchesHub(homeDir: string): CheckResult {
 // through, not an absence, and must not be reported as green.
 const CODEX_MCP_NOT_REGISTERED_RE = /no mcp server named/i;
 
-function checkCodexMcpTokenMatchesHub(): CheckResult {
+function checkCodexMcpTokenMatchesHub(guard: SecretFileGuard): CheckResult {
   const label = 'Codex MCP settings の azt-mcp トークンがハブの現在値と一致';
 
   let stdout: string;
@@ -308,7 +309,7 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
     };
   }
 
-  const current = resolveCurrentUiToken();
+  const current = resolveCurrentUiToken(guard);
   if (!current) {
     return {
       ok: false,
@@ -369,7 +370,7 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
 // the flag on. Once AZITO_SCOPED_AUTH is actually enabled, this check is a
 // no-op (skipped) — draining is a one-time migration step, not an ongoing
 // invariant this command should keep flagging.
-async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string): Promise<CheckResult> {
+async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string, guard: SecretFileGuard): Promise<CheckResult> {
   const label = 'scoped 認可 有効化前の生存タスクウィンドウ（ハブから全サーバーを検査）';
 
   if (resolveScopedAuthEnabled()) {
@@ -380,7 +381,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string): Promise<C
     };
   }
 
-  const paths = resolveDataDir();
+  const paths = resolveDataDir(guard);
   if (!fs.existsSync(paths.db)) {
     // Third-party review finding: this check can only ever run meaningfully
     // on the machine holding the hub's DB — there is nothing to do "per
@@ -400,7 +401,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string): Promise<C
   let db: ReturnType<typeof openDatabase> | undefined;
   let mux: DoctorMux | undefined;
   try {
-    db = openDatabase(paths.db);
+    db = openDatabase(paths.db, { secretFileGuard: guard });
 
     const taskWindows = db
       .prepare("SELECT task_id AS taskId, server_name AS serverName, tmux_target AS tmuxTarget, mux_ref AS muxRef FROM windows WHERE owner_type = 'task'")
@@ -544,16 +545,16 @@ function colorize(ok: boolean, text: string): string {
   return `\x1b[${code}m${text}\x1b[0m`;
 }
 
-export async function authDoctorCommand(homeDir: string): Promise<void> {
+export async function authDoctorCommand(homeDir: string, guard: SecretFileGuard): Promise<void> {
   console.log('azito auth doctor');
   console.log('多くの検査はこのマシンのローカルファイルのみが対象です。タスクウィンドウの生存検査（e）だけはハブから全サーバーを横断検査します — ハブ以外のホストで実行した場合はその旨を案内します。\n');
 
   const checks: CheckResult[] = [
     checkAzitoctlEnvNoUiToken(homeDir),
-    checkOperatorEnvPermissions(homeDir),
-    checkMcpTokenMatchesHub(homeDir),
-    checkCodexMcpTokenMatchesHub(),
-    await checkTaskOwnedWindowsBeforeScopedAuth(homeDir),
+    checkOperatorEnvPermissions(homeDir, guard),
+    checkMcpTokenMatchesHub(homeDir, guard),
+    checkCodexMcpTokenMatchesHub(guard),
+    await checkTaskOwnedWindowsBeforeScopedAuth(homeDir, guard),
     checkScopedAuthFlag(),
   ];
 
