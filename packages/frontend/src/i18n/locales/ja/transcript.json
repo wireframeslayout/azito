@@ -1,5 +1,6 @@
 {
   "conversation": {
+    "logLabel": "会話ログ",
     "notFound": "セッションが見つかりません",
     "loadError": "会話ログの取得に失敗しました",
     "empty": "このセッションにはまだメッセージがありません",
