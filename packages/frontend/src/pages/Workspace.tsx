@@ -586,8 +586,8 @@ function WorkspaceInner() {
   [allProjects, allTasks, project]);
 
   const findTaskByTarget = useCallback(
-    (target: string) => findTaskByTargetLib(target, allTasks, windowById),
-    [allTasks, windowById],
+    (target: string) => findTaskByTargetLib(target, [tasks, allTasks], windowById),
+    [tasks, allTasks, windowById],
   );
 
   useEffect(() => {
@@ -663,7 +663,7 @@ function WorkspaceInner() {
       } else {
         const colonIdx = target.indexOf(':');
         if (colonIdx < 0) {
-          showToast(t('workspace:pane.splitFailed', { error: 'Cannot determine window from target' }));
+          showToast(t('workspace:pane.splitTargetUnknown'));
           return;
         }
         const sessionName = target.substring(0, colonIdx);

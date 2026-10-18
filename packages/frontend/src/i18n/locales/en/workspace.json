@@ -18,6 +18,7 @@
     "splitSuccessH": "Pane split horizontally",
     "splitSuccessV": "Pane split vertically",
     "splitFailed": "Split failed: {{error}}",
+    "splitTargetUnknown": "Could not determine which window to split",
     "viewSegments": "Task view switcher"
   },
   "activeWindows": {

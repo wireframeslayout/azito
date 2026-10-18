@@ -18,6 +18,7 @@
     "splitSuccessH": "ペインを水平分割しました",
     "splitSuccessV": "ペインを垂直分割しました",
     "splitFailed": "分割に失敗しました: {{error}}",
+    "splitTargetUnknown": "分割する窓を特定できませんでした",
     "viewSegments": "表示切替"
   },
   "activeWindows": {
