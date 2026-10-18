@@ -642,24 +642,13 @@ export default function TaskPanel({
     return parsed ? resolveWindowTabTarget(parsed) : null;
   }, [layout.state.root, layout.state.focusedPaneId, resolveWindowTabTarget]);
 
-  // The focused pane's window record — shared by the SP window bar's live pane count
-  // ("▣ win ▾ Nペイン") and the SP terminal/chat view-mode persistence below (both keyed
-  // by the actual `windows` row id, Issue #69 T5).
+  // The focused pane's window record — used by the SP terminal/chat view-mode persistence
+  // below (keyed by the actual `windows` row id, Issue #69 T5).
   const focusedWindow = useMemo(() => {
     if (!focusedWindowTarget) return undefined;
     return windows.find((w) => w.serverName === focusedWindowTarget.serverName && isSameWindowTarget(w.tmuxTarget, focusedWindowTarget.target));
   }, [focusedWindowTarget, windows]);
   const focusedWindowId = focusedWindow?.id ?? null;
-
-  // SP ウィンドウバー右端の「Nペイン」— tmux 上のライブなペイン数（Window レコードの静的な
-  // paneLayout ではなく、実際に今開いているペイン数を見せる）。
-  const displayedWindowPaneCount = useMemo(() => {
-    if (!focusedWindowTarget) return null;
-    const sessions = sessionData[focusedWindowTarget.serverName];
-    if (!sessions) return null;
-    const tw = focusedWindow ? findSessionWindow(focusedWindow, sessions)?.window : undefined;
-    return tw ? tw.panes.length : null;
-  }, [focusedWindowTarget, focusedWindow, sessionData]);
 
   // SP 端末/チャットセグメント（Issue #69 T5）: 表示モードは TaskPanel が単一の真実源として
   // localStorage（azito.windowView.<windowId>、TerminalContainer と同一キー形式を共有）を
@@ -1151,9 +1140,9 @@ export default function TaskPanel({
     );
   }, [windows, windowDropdownPaneId, focusedWindowTarget, renderWindowDropdownBody, sessionData, task, t]);
 
-  // SP コンテンツヘッダー（承認済み S8: 「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nペイン」）
+  // SP コンテンツヘッダー（承認済み S8: 「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nウィンドウ」）
   // — 旧実装は名前+件数+▾を1トリガーへ結合していたが、S8 は左（ウィンドウ名タップ＝ウィンドウ
-  // 切替）と右（ペイン数チップ＝既存ドロップダウンの移設先）に分離する。両者は同じ
+  // 切替）と右（ウィンドウ数チップ＝既存ドロップダウンの移設先）に分離する。両者は同じ
   // windowDropdownPaneId 開閉状態とドロップダウン本体（renderWindowDropdownBody）を共有し、
   // ドロップダウン自体は常にチップ側（右）に アンカーする。
   const renderSpWindowNameTrigger = useCallback((pane: PaneNode) => {
@@ -1198,7 +1187,7 @@ export default function TaskPanel({
     );
   }, [windows, windowDropdownPaneId, focusedWindowTarget, sessionData, task, t]);
 
-  const renderSpPaneCountChip = useCallback((pane: PaneNode) => {
+  const renderSpWindowCountChip = useCallback((pane: PaneNode) => {
     if (windows.length === 0) return null;
     const isOpen = windowDropdownPaneId === pane.id;
     return (
@@ -1219,13 +1208,13 @@ export default function TaskPanel({
         >
           <span style={{ display: 'inline-flex', flexShrink: 0 }}><Icon name="chevron-down" size={14} rotate={isOpen ? 180 : 0} /></span>
           <span style={{ fontSize: 'var(--font-2xs)', whiteSpace: 'nowrap' }}>
-            {t('workspace:windows.paneCount', { count: displayedWindowPaneCount ?? 1 })}
+            {t('workspace:windows.windowCount', { count: windows.length })}
           </span>
         </span>
         {isOpen && renderWindowDropdownBody(pane)}
       </span>
     );
-  }, [windows, windowDropdownPaneId, displayedWindowPaneCount, renderWindowDropdownBody, t]);
+  }, [windows, windowDropdownPaneId, renderWindowDropdownBody, t]);
 
   const renderPaneTrailing = useCallback((pane: PaneNode) => {
     const panesCount = listPanes(layout.state.root).length;
@@ -1499,8 +1488,8 @@ export default function TaskPanel({
   // SP のコンテンツ選択は S8 で ⋯ メニュー／ウィンドウ名タップ／下部ミニトグルへ一本化された
   // （旧セグメント行は撤去、Issue #69 S8）。「端末」「チャット」は独立ビューではなく同じ
   // 「直近アクティブだったウィンドウタブ」に対する表示モード切替 — 実際のウィンドウ切替は
-  // コンテンツヘッダーのウィンドウ名タップ／ペイン数チップ（renderSpWindowNameTrigger /
-  // renderSpPaneCountChip）が担う（未選択時/そのウィンドウが閉じられた時は先頭のウィンドウへ
+  // コンテンツヘッダーのウィンドウ名タップ／ウィンドウ数チップ（renderSpWindowNameTrigger /
+  // renderSpWindowCountChip）が担う（未選択時/そのウィンドウが閉じられた時は先頭のウィンドウへ
   // フォールバック、旧実装から維持）。
   const MOBILE_TERMINAL_SEGMENT = '__terminal__';
   const MOBILE_CHAT_SEGMENT = '__chat__';
@@ -2001,7 +1990,7 @@ export default function TaskPanel({
         const resolvedViewTabId = isLegacyMergedMobileView ? viewTabId('unit') : mobileActiveTabId;
         const resolvedViewName = isWindowContent ? null : parseViewTabId(resolvedViewTabId);
         // コンテンツヘッダー（承認済み S8）: 端末/チャットは TerminalContainer 自身の
-        // leading/trailing（ウィンドウ名タップ＋ワーカーバッジ▾＋ペイン数チップ）が担う。
+        // leading/trailing（ウィンドウ名タップ＋ワーカーバッジ▾＋ウィンドウ数チップ）が担う。
         // ブラウザは専用の MobileBrowserContentHeader（Issue #338 T9 #1 — タスクは複数
         // ブラウザインスタンスを持てるため、タイトル▾で切替・右端＋で追加する）が担う。
         // それ以外の固定ビューはこの MobileContentHeader を使う（説明のみ「編集」アクション付き）。
@@ -2029,7 +2018,7 @@ export default function TaskPanel({
                     )}
                     {/* ウィンドウ/ブラウザ追加（windows.length===0 でも到達できる唯一の入口、
                         Issue #69 S8）。ウィンドウ/チャット表示中はコンテンツヘッダー右端の
-                        ペイン数チップ隣に別途置くため、ここには非ウィンドウ系ビューでのみ出す。 */}
+                        ウィンドウ数チップ隣に別途置くため、ここには非ウィンドウ系ビューでのみ出す。 */}
                     <span onClick={(e) => showAddMenu(e, activePane)}>
                       <IconButton size="sm" title={t('workspace:pane.openTab')}><Icon name="plus" size={14} /></IconButton>
                     </span>
@@ -2059,7 +2048,7 @@ export default function TaskPanel({
                     leading: renderSpWindowNameTrigger(activePane),
                     trailing: (
                       <>
-                        {renderSpPaneCountChip(activePane)}
+                        {renderSpWindowCountChip(activePane)}
                         {/* ウィンドウ追加専用（Issue #338 T9 #2）。旧実装はここが showAddMenu
                             （ブラウザ追加も含むフルメニュー）だったが、ブラウザ追加はブラウザ
                             表示中のコンテンツヘッダー（#1）と ⋯ メニュー（#3）に一本化したため、

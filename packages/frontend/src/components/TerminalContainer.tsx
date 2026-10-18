@@ -78,7 +78,7 @@ interface TerminalContainerProps {
    */
   leading?: React.ReactNode;
   /**
-   * SP コンテンツヘッダー右端（Issue #69 S8: 「∨ Nペイン」チップ等）に差し込む要素。leading と
+   * SP コンテンツヘッダー右端（Issue #69 S8: 「∨ Nウィンドウ」チップ等）に差し込む要素。leading と
    * 対称の位置づけ — SP では WindowStatusDropdown（ワーカーバッジ）の後ろに並べる。デスクトップは
    * 使わない（渡されない）。
    */
@@ -357,7 +357,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
         {leading && <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 4, minWidth: 0 }}>{leading}</div>}
         {/* SP: ウィンドウ名は leading（TaskPanel が「> ウィンドウ名」トリガーとして描画）が
             既に担うため、ここでは pane 名の重複表示をしない（承認済み S8 コンテンツヘッダー:
-            「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nペイン」の1行のみ）。デスクトップは
+            「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nウィンドウ」の1行のみ）。デスクトップは
             従来どおり activePaneName（pane 名）を表示する。 */}
         {activePaneName && !isMobile && (
           <div
