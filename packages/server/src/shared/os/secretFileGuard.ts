@@ -35,6 +35,8 @@ export class UnixSecretFileGuard implements SecretFileGuard {
     try { fs.chmodSync(filePath, 0o600); } catch {}
   }
 
+  prepareFile(): void {}
+
   inspect(targetPath: string, kind: SecretPathKind): SecretFileInspection {
     const expected = kind === 'dir' ? 0o700 : 0o600;
     const mode = fs.statSync(targetPath).mode & 0o777;
@@ -47,7 +49,10 @@ export class UnixSecretFileGuard implements SecretFileGuard {
   }
 }
 
-/** platform は HostEnv.platform。win32 以外は Unix 実装。 */
-export function createSecretFileGuard(platform: NodeJS.Platform): SecretFileGuard {
-  return platform === 'win32' ? createWindowsSecretFileGuard() : new UnixSecretFileGuard();
+/**
+ * platform は HostEnv.platform。win32 以外は Unix 実装。env は境界（入口）から渡す。
+ * Windows 実装は env の SystemRoot から powershell.exe の絶対パスを解決する（無ければ投げる）。
+ */
+export function createSecretFileGuard(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): SecretFileGuard {
+  return platform === 'win32' ? createWindowsSecretFileGuard(env) : new UnixSecretFileGuard();
 }

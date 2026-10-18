@@ -6,7 +6,7 @@ import { resolveDataDir, _resetReleaseDefaultNotice } from './dataDir';
 import * as releaseInfo from './releaseInfo';
 import { createSecretFileGuard } from './os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 describe('resolveDataDir', () => {
   let tmpDir: string;

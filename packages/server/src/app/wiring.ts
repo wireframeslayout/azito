@@ -559,7 +559,7 @@ function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform, secret
 }
 
 function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv): SystemUpdateModule {
-  const secretFileGuard = createSecretFileGuard(hostEnv.platform);
+  const secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
   const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);

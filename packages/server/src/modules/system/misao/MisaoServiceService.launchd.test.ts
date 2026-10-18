@@ -84,7 +84,7 @@ describe('MisaoServiceService with launchd, which keeps the definition of a load
     bundle: readMisaoBundle(path.join(prefix, 'hub', 'current')),
     controller,
     env: { PATH: '/usr/bin' },
-    secretFileGuard: createSecretFileGuard(process.platform),
+    secretFileGuard: createSecretFileGuard(process.platform, process.env),
     homeDir: prefix,
     readyTimeoutMs: 400,
   });

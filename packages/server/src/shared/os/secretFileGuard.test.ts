@@ -7,9 +7,10 @@ import { WindowsSecretFileGuard } from './windowsSecretFileGuard';
 
 describe('createSecretFileGuard', () => {
   it('win32 だけ Windows 実装、それ以外は Unix 実装', () => {
-    expect(createSecretFileGuard('win32')).toBeInstanceOf(WindowsSecretFileGuard);
-    expect(createSecretFileGuard('linux')).toBeInstanceOf(UnixSecretFileGuard);
-    expect(createSecretFileGuard('darwin')).toBeInstanceOf(UnixSecretFileGuard);
+    expect(createSecretFileGuard('win32', { SystemRoot: 'C:\\Windows' })).toBeInstanceOf(WindowsSecretFileGuard);
+    expect(createSecretFileGuard('linux', {})).toBeInstanceOf(UnixSecretFileGuard);
+    expect(createSecretFileGuard('darwin', {})).toBeInstanceOf(UnixSecretFileGuard);
+    expect(() => createSecretFileGuard('win32', {})).toThrow('SystemRoot');
   });
 });
 
@@ -68,6 +69,12 @@ describe.skipIf(process.platform === 'win32')('UnixSecretFileGuard', () => {
     fs.chmodSync(file, 0o664);
     guard.repairFile(file);
     expect(modeOf(file)).toBe(0o600);
+  });
+
+  it('prepareFile は何もしない（作成後の修復は repairFile）', () => {
+    const file = path.join(dir, 'data.db-wal');
+    guard.prepareFile();
+    expect(fs.existsSync(file)).toBe(false);
   });
 
   it('inspect は 600（ファイル）/ 700（ディレクトリ）を ok とし、違えば理由と修正コマンドを返す', () => {

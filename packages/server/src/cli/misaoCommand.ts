@@ -95,7 +95,7 @@ export async function misaoCommand(argv: string[], platform: NodeJS.Platform): P
       bundle: readMisaoBundle(bundleRoot),
       controller: createMisaoServiceController(platform, runCommand),
       env: process.env,
-      secretFileGuard: createSecretFileGuard(platform),
+      secretFileGuard: createSecretFileGuard(platform, process.env),
     });
 
     if (args.command === 'status') {

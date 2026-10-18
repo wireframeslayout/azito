@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from './Database';
 import { createSecretFileGuard } from '../os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 describe('openDatabase freshLocalDefaultMux', () => {
   let dir: string;

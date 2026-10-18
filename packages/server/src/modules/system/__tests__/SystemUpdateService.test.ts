@@ -17,7 +17,7 @@ import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
 import type { Task } from '../../tasks/Task';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 const mockedGetReleaseInfo = vi.mocked(getReleaseInfo);
 

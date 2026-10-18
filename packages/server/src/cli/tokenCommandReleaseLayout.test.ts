@@ -10,7 +10,7 @@ import { tokenCommand } from './tokenCommand';
 import { authDoctorCommand } from './authDoctorCommand';
 import { createSecretFileGuard } from '../shared/os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 // A real release layout, nothing mocked: <prefix>/hub/<version>/ (the bundle), <prefix>/hub/current -> <version>,
 // <prefix>/hub/.env (written by install.sh, loaded by run.sh).

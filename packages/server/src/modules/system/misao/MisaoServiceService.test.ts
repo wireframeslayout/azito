@@ -66,7 +66,7 @@ describe('MisaoServiceService', () => {
   let controller: FakeController;
 
   const newService = (overrides: Partial<ConstructorParameters<typeof MisaoServiceService>[0]> = {}): MisaoServiceService => new MisaoServiceService({
-    paths, bundle, controller, env: { PATH: '/usr/bin:/custom/bin' }, secretFileGuard: createSecretFileGuard(process.platform), homeDir: prefix, readyTimeoutMs: 2_000, ...overrides,
+    paths, bundle, controller, env: { PATH: '/usr/bin:/custom/bin' }, secretFileGuard: createSecretFileGuard(process.platform, process.env), homeDir: prefix, readyTimeoutMs: 2_000, ...overrides,
   });
 
   beforeEach(() => {

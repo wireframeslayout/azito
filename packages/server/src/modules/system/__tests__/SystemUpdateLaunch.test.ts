@@ -26,7 +26,7 @@ import type { DataPaths } from '../../../shared/dataDir';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 const mockedGetReleaseInfo = vi.mocked(getReleaseInfo);
 const mockedSpawn = vi.mocked(spawn);

@@ -4,7 +4,7 @@ import path from 'path';
 import os from 'os';
 import { createSecretFileGuard } from '../shared/os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 let tmpDir: string;
 let uiTokenPath: string;

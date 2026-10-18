@@ -163,6 +163,8 @@ export type SqliteDatabase = import('better-sqlite3').Database;
 export function openDatabase(dbPath: string, options: OpenDatabaseOptions = {}): SqliteDatabase {
   const guard = dbPath === ':memory:' ? null : options.secretFileGuard;
   if (guard === undefined) throw new Error(`openDatabase(${dbPath}) needs a secretFileGuard for a file database`);
+  // SQLite が -wal / -shm を作る前に、保護した空ファイルを置く（Windows。作られてから保護するまでの間に読まれない）。
+  if (guard) for (const suffix of ['', '-wal', '-shm']) guard.prepareFile(`${dbPath}${suffix}`);
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');

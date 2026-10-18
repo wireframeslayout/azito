@@ -5,7 +5,7 @@ import os from 'os';
 import { resolveUiToken, resolveWebhookToken } from './uiToken';
 import { createSecretFileGuard } from './os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 describe('resolveUiToken', () => {
   let tmpDir: string;

@@ -9,7 +9,7 @@ export type SecretPathKind = 'file' | 'dir';
  * ハブ自身のマシンにある秘密ファイル（master.key・トークン・.env・DB など）を「所有者だけ」に保つ方針。
  * OS ごとに実装が違う（Unix は mode 600 / 700、Windows は現在のユーザーだけを許可する保護 DACL）。
  * 作成（書き込み・修復）と検査（auth doctor）が同じ方針を使うよう、両方をここに置く。
- * プロセスの入口で `createSecretFileGuard(hostEnv.platform)` から 1 つ作って渡す（共有コードで process.platform は読まない）。
+ * プロセスの入口で `createSecretFileGuard(hostEnv.platform, process.env)` から 1 つ作って渡す（共有コードで process.platform は読まない）。
  */
 export interface SecretFileGuard {
   /** 検査の表示用: `operator.env の${policyDescription}` の形で使う（Unix は「パーミッションが 0600」）。 */
@@ -31,6 +31,11 @@ export interface SecretFileGuard {
    * Windows は修復に失敗したら投げる。
    */
   repairFile(filePath: string): void;
+  /**
+   * SQLite のように第三者が後からファイルを作る場合の事前準備。無ければ保護した空ファイルを先に作り、あれば保護し直す
+   * （作られてから保護するまでの間に緩い権限で読まれるのを防ぐ）。Unix は何もしない（作成後の修復は repairFile）。
+   */
+  prepareFile(filePath: string): void;
   /** 方針どおりかを確かめる（auth doctor 用）。存在しないパスは呼び出し側で先に除く。 */
   inspect(targetPath: string, kind: SecretPathKind): SecretFileInspection;
 }

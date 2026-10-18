@@ -34,7 +34,7 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 
 async function main(): Promise<void> {
   const hostEnv = resolveCurrentHostEnv();
-  const secretFileGuard = createSecretFileGuard(hostEnv.platform);
+  const secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
   if (process.argv[2] === 'token') {
     await tokenCommand(process.argv.slice(3), hostEnv.homeDir, secretFileGuard);
     return;

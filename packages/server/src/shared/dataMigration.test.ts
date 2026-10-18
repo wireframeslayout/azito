@@ -8,7 +8,7 @@ import type { DataPaths, LegacyPaths } from './dataDir';
 import { migrateDataIfNeeded } from './dataMigration';
 import { createSecretFileGuard } from './os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 function createLegacyLayout(dir: string): { legacyPaths: LegacyPaths; sealedValue: string } {
   const dataSubdir = path.join(dir, 'data');

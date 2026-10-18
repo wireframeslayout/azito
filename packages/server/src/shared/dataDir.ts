@@ -82,6 +82,7 @@ export function resolveDataDir(guard: SecretFileGuard): DataPaths {
 
   const repoRoot = resolveRoot();
   const dataSubdir = path.join(repoRoot, 'data');
+  guard.ensureProtectedDir(dataSubdir);
   const sidekicks = process.env.AZITO_SIDEKICKS_DIR
     ? path.resolve(process.env.AZITO_SIDEKICKS_DIR)
     : path.join(dataSubdir, 'sidekicks');

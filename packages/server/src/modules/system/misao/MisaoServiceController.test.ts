@@ -7,7 +7,7 @@ import { buildServicePath, hasMisaoToRelyOn, resolveInstallPrefix, resolveMisaoP
 import { readEnvValue, upsertEnvValue } from '../../../shared/envFile';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform);
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 function recorder(results: Record<string, Partial<CommandResult>> = {}): { run: CommandRunner; calls: string[] } {
   const calls: string[] = [];
