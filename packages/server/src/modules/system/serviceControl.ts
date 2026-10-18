@@ -9,12 +9,12 @@ const execFileAsync = promisify(execFile);
  * can actually restart the service — 'source' has no service manager, so it is
  * not representable here.
  */
-export type ServiceManager = 'systemd' | 'launchd';
+export type ServiceManagerKind = 'systemd' | 'launchd';
 
 export const LAUNCHD_LABEL = 'com.azito.hub';
 export const SYSTEMD_UNIT = 'azito';
 
-export function isServiceManager(value: string): value is ServiceManager {
+export function isServiceManagerKind(value: string): value is ServiceManagerKind {
   return value === 'systemd' || value === 'launchd';
 }
 
@@ -25,14 +25,14 @@ export function isServiceManager(value: string): value is ServiceManager {
  * job and starts it again, which is the closest equivalent. The service target
  * is the per-user GUI domain, matching where install.sh loads the LaunchAgent.
  */
-export function restartCommand(manager: ServiceManager): { file: string; args: string[] } {
+export function restartCommand(manager: ServiceManagerKind): { file: string; args: string[] } {
   if (manager === 'launchd') {
     return { file: 'launchctl', args: ['kickstart', '-k', `gui/${os.userInfo().uid}/${LAUNCHD_LABEL}`] };
   }
   return { file: 'systemctl', args: ['--user', 'restart', SYSTEMD_UNIT] };
 }
 
-export async function restartService(manager: ServiceManager): Promise<void> {
+export async function restartService(manager: ServiceManagerKind): Promise<void> {
   const { file, args } = restartCommand(manager);
   await execFileAsync(file, args);
 }

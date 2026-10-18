@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import os from 'os';
-import { restartCommand, isServiceManager } from '../serviceControl';
+import { restartCommand, isServiceManagerKind } from '../serviceControl';
 
 describe('serviceControl', () => {
   it('restarts through systemctl under systemd', () => {
@@ -19,9 +19,9 @@ describe('serviceControl', () => {
   });
 
   it('rejects anything that is not a known service manager', () => {
-    expect(isServiceManager('systemd')).toBe(true);
-    expect(isServiceManager('launchd')).toBe(true);
-    expect(isServiceManager('source')).toBe(false);
-    expect(isServiceManager('')).toBe(false);
+    expect(isServiceManagerKind('systemd')).toBe(true);
+    expect(isServiceManagerKind('launchd')).toBe(true);
+    expect(isServiceManagerKind('source')).toBe(false);
+    expect(isServiceManagerKind('')).toBe(false);
   });
 });

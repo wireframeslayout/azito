@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { isReleaseMode } from '../../shared/releaseInfo';
-import type { ServiceManager } from './serviceControl';
+import type { ServiceManagerKind } from './serviceControl';
 
 export type DeployMode = 'systemd' | 'launchd' | 'source';
 
@@ -51,7 +51,7 @@ export class DeployModeDetector {
   }
 
   /** The service manager to restart through, or null when there is none. */
-  serviceManager(): ServiceManager | null {
+  serviceManager(): ServiceManagerKind | null {
     const mode = this.detect();
     return mode === 'source' ? null : mode;
   }
