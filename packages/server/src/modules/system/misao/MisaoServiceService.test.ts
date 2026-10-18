@@ -1,37 +1,23 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MisaoServiceState } from '@azito/shared';
-import { readMisaoBundle, type MisaoBundle } from './MisaoBundle';
+import { misaoTargetFor, readMisaoBundle, type MisaoBundle } from './MisaoBundle';
+import { fakeBinaryFor, writeHubBundle as writeBundle } from './misaoBundleFixture';
 import { MisaoServiceService } from './MisaoServiceService';
 import { MisaoServiceError } from './MisaoServiceError';
 import type { MisaoServiceController } from './MisaoServiceController';
 import { resolveMisaoPaths, type MisaoPaths } from './misaoPaths';
 import { readEnvValue } from '../../../shared/envFile';
 
-const REPO_DEPLOY_DIR = path.resolve(__dirname, '../../../../../../deploy');
-const BUNDLED_VERSION = '0.2.0';
+const writeHubBundle = (root: string, version: string = BUNDLED_VERSION): void => writeBundle(root, version, `#!/bin/sh\n# misao ${version}`);
 
-function sha(content: string): string {
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
-
-/** A hub bundle on disk: misao/ with its manifest, the hub's node-pty, and the real deploy templates. */
-function writeHubBundle(root: string, version: string = BUNDLED_VERSION): void {
-  fs.mkdirSync(path.join(root, 'misao'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'misao', 'misao.mjs'), `// misao ${version}\n`);
-  fs.writeFileSync(path.join(root, 'misao', 'LICENSES.txt'), 'licenses\n');
-  fs.writeFileSync(path.join(root, 'misao', 'manifest.json'), JSON.stringify({
-    version,
-    files: { 'misao.mjs': sha(`// misao ${version}\n`), 'LICENSES.txt': sha('licenses\n') },
-  }));
-  fs.mkdirSync(path.join(root, 'node_modules', 'node-pty'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'node_modules', 'node-pty', 'package.json'), '{"name":"node-pty"}');
-  fs.cpSync(REPO_DEPLOY_DIR, path.join(root, 'deploy'), { recursive: true });
-}
+const BUNDLED_VERSION = '0.3.0';
+/** This host's target: the hub tests run on whatever the developer / CI machine is. */
+const HOST_TARGET = misaoTargetFor(process.platform, process.arch);
+const LEGACY_UNIT = '[Service]\nExecStart=/old/node /old/misao/current/misao.mjs serve\n';
 
 /** A service manager that records what it was asked, and opens the daemon's socket on start like the real daemon. */
 class FakeController implements MisaoServiceController {
@@ -46,6 +32,7 @@ class FakeController implements MisaoServiceController {
   constructor(private readonly socketPath: string, private readonly currentLink: string) {}
 
   isInstalled(): boolean { return this.installed; }
+  readDefinition(): string | undefined { return this.installed ? this.unit : undefined; }
   async install(content: string): Promise<void> { this.calls.push('install'); this.installed = true; this.unit = content; }
   async start(): Promise<void> {
     this.calls.push(`start:${fs.existsSync(this.currentLink) ? path.basename(fs.readlinkSync(this.currentLink)) : '-'}`);
@@ -97,13 +84,17 @@ describe('MisaoServiceService', () => {
   });
 
   describe('install', () => {
-    it('unpacks the bundled misao with the hub node-pty, points current at it, and starts the service', async () => {
+    it('unpacks the binary for this host and its licenses, points current at it, and starts the service', async () => {
       const status = await newService().install();
 
       const versionDir = path.join(paths.root, BUNDLED_VERSION);
-      expect(fs.readFileSync(path.join(versionDir, 'misao.mjs'), 'utf-8')).toContain(`misao ${BUNDLED_VERSION}`);
-      expect(fs.existsSync(path.join(versionDir, 'node_modules', 'node-pty', 'package.json'))).toBe(true);
-      expect(fs.existsSync(path.join(versionDir, 'LICENSES.txt'))).toBe(true);
+      expect(fs.readFileSync(path.join(versionDir, 'misao'), 'utf-8')).toBe(fakeBinaryFor(HOST_TARGET, `#!/bin/sh\n# misao ${BUNDLED_VERSION}`));
+      expect(fs.statSync(path.join(versionDir, 'misao')).mode & 0o777).toBe(0o755);
+      for (const license of ['LICENSE', 'NOTICE', 'THIRD-PARTY-LICENSES.txt']) {
+        expect(fs.statSync(path.join(versionDir, license)).mode & 0o777).toBe(0o644);
+      }
+      expect(fs.existsSync(path.join(versionDir, 'node_modules'))).toBe(false);
+      expect(fs.existsSync(path.join(versionDir, 'misao.mjs'))).toBe(false);
       expect(fs.readlinkSync(paths.current)).toBe(BUNDLED_VERSION);
       expect(controller.calls).toEqual(['install', `start:${BUNDLED_VERSION}`]);
       expect(status).toMatchObject({ managed: true, serviceInstalled: true, serviceState: 'active', installedVersion: BUNDLED_VERSION, socketSetting: 'managed', updateAvailable: false });
@@ -114,12 +105,12 @@ describe('MisaoServiceService', () => {
       expect(fs.statSync(paths.root).mode & 0o777).toBe(0o700);
     });
 
-    it('renders the unit with the prefix and a PATH that starts with the usual tool locations, leaving no placeholder', async () => {
+    it('renders the unit with the prefix (no node) and a PATH that starts with the usual tool locations, leaving no placeholder', async () => {
       fs.mkdirSync(path.join(prefix, '.local', 'bin'), { recursive: true });
       await newService().install();
 
       expect(controller.unit).not.toContain('__');
-      expect(controller.unit).toContain(`ExecStart=${prefix}/hub/current/node ${prefix}/misao/current/misao.mjs serve --socket ${paths.socket} --data ${paths.root}`);
+      expect(controller.unit).toContain(`ExecStart=${prefix}/misao/current/misao serve --socket ${paths.socket} --data ${paths.root}`);
       expect(controller.unit).toContain(`Environment=PATH=${prefix}/.local/bin:`);
       expect(controller.unit).toContain('/custom/bin');
       expect(controller.unit).toContain('KillMode=process');
@@ -145,12 +136,31 @@ describe('MisaoServiceService', () => {
       fs.mkdirSync(path.join(paths.root, '0.1.0'), { recursive: true });
       fs.symlinkSync('0.1.0', paths.current);
       controller.current = 'active';
+      controller.installed = true;
+      controller.unit = LEGACY_UNIT;
 
       const status = await newService().install();
 
       expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
       expect(controller.calls).not.toContain('stop:0.1.0');
       expect(status.updateAvailable).toBe(true);
+      // Neither the link nor the unit that starts it (a crash restart would follow a new unit) is touched.
+      expect(controller.calls).toEqual([]);
+      expect(controller.unit).toBe(LEGACY_UNIT);
+    });
+
+    it('moves a stopped older install to the bundled version: nothing is running, and the new unit needs the new layout', async () => {
+      fs.mkdirSync(path.join(paths.root, '0.2.0'), { recursive: true });
+      fs.writeFileSync(path.join(paths.root, '0.2.0', 'misao.mjs'), '// node build\n');
+      fs.symlinkSync('0.2.0', paths.current);
+      controller.installed = true;
+      controller.unit = LEGACY_UNIT;
+
+      await newService().install();
+
+      expect(fs.readlinkSync(paths.current)).toBe(BUNDLED_VERSION);
+      expect(controller.unit).toContain(`${prefix}/misao/current/misao serve`);
+      expect(fs.existsSync(path.join(paths.root, '0.2.0', 'misao.mjs'))).toBe(true);
     });
 
     it('refuses to move the hub away from a MISAO_SOCKET that points at another daemon unless told to', async () => {
@@ -195,11 +205,14 @@ describe('MisaoServiceService', () => {
   });
 
   describe('update', () => {
+    /** A Node-era install: its directory holds `misao.mjs` (no binary) and its unit runs it with a node. */
     async function installOld(): Promise<void> {
       const oldDir = path.join(paths.root, '0.1.0');
-      fs.mkdirSync(oldDir, { recursive: true });
+      fs.mkdirSync(path.join(oldDir, 'node_modules', 'node-pty'), { recursive: true });
+      fs.writeFileSync(path.join(oldDir, 'misao.mjs'), '// node build\n');
       fs.symlinkSync('0.1.0', paths.current);
       controller.installed = true;
+      controller.unit = LEGACY_UNIT;
       controller.current = 'active';
       await controller.start();
       controller.calls.length = 0;
@@ -212,11 +225,19 @@ describe('MisaoServiceService', () => {
       expect(controller.calls).toEqual(['stop:0.1.0', 'install', `start:${BUNDLED_VERSION}`]);
       expect(fs.readlinkSync(paths.current)).toBe(BUNDLED_VERSION);
       expect(status).toMatchObject({ installedVersion: BUNDLED_VERSION, updateAvailable: false });
+      expect(controller.unit).toContain(`${prefix}/misao/current/misao serve`);
+      expect(controller.unit).not.toContain('misao.mjs');
+      // The Node-era directory stays where it was (a rollback target, and not ours to delete).
+      expect(fs.existsSync(path.join(paths.root, '0.1.0', 'misao.mjs'))).toBe(true);
+      expect(fs.existsSync(path.join(paths.root, BUNDLED_VERSION, 'misao'))).toBe(true);
     });
 
     it('stops nothing when the bundled files cannot be unpacked (the daemon keeps running)', async () => {
       await installOld();
-      fs.rmSync(path.join(prefix, 'hub', 'current', 'node_modules', 'node-pty'), { recursive: true });
+      // A directory where the binary should be copied from makes the unpack fail before anything is stopped.
+      const entry = path.join(prefix, 'hub', 'current', 'misao', HOST_TARGET, 'misao');
+      fs.rmSync(entry);
+      fs.mkdirSync(entry);
 
       await expect(newService().update()).rejects.toThrow();
       expect(controller.calls).toEqual([]);
@@ -243,6 +264,8 @@ describe('MisaoServiceService', () => {
         expect(fs.readlinkSync(paths.current)).toBe('0.1.0');
         expect(controller.calls.at(-1)).toBe('start:0.1.0');
         expect(controller.current).toBe('active');
+        // The unit that ran before comes back as it was: rendering the new template would point a Node-era release at a binary it does not have.
+        expect(controller.unit).toBe(LEGACY_UNIT);
       });
 
       it('puts the previous version back when start fails', async () => {
@@ -372,9 +395,21 @@ describe('readMisaoBundle', () => {
     expect(readMisaoBundle(root)).toBeNull();
   });
 
-  it('rejects a damaged misao.mjs instead of installing it', () => {
+  it('rejects a damaged binary instead of installing it', () => {
     writeHubBundle(root);
-    fs.writeFileSync(path.join(root, 'misao', 'misao.mjs'), '// tampered\n');
+    fs.writeFileSync(path.join(root, 'misao', HOST_TARGET, 'misao'), '// tampered\n');
     expect(() => readMisaoBundle(root)).toThrow(/does not match its manifest sha256/);
+  });
+
+  it('rejects a bundle that lacks one of the targets', () => {
+    writeHubBundle(root);
+    fs.rmSync(path.join(root, 'misao', 'aarch64-apple-darwin'), { recursive: true });
+    expect(() => readMisaoBundle(root)).toThrow(/aarch64-apple-darwin/);
+  });
+
+  it('reads the files of every target', () => {
+    writeHubBundle(root);
+    const bundle = readMisaoBundle(root)!;
+    expect(Object.keys(bundle.targets).sort()).toEqual(['aarch64-apple-darwin', 'aarch64-unknown-linux-musl', 'x86_64-apple-darwin', 'x86_64-unknown-linux-musl']);
   });
 });

@@ -1,3 +1,4 @@
+import { execFileSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -9,17 +10,26 @@ import { fileURLToPath } from 'url';
  * asset that was swapped on the release page (SHA256SUMS from the same origin
  * would prove nothing). The SDK / protocol tarballs in packages/server/package.json
  * must point at the same version.
+ *
+ * misao is one native binary per target (the Node `.mjs` build is not shipped). The hub carries every Unix target,
+ * because an agent server can run on another OS / architecture than the hub: the one that fits is picked at install time.
  */
 export const MISAO_RELEASE = {
-  version: '0.2.0',
-  baseUrl: 'https://github.com/wireframeslayout/misao/releases/download/v0.2.0',
+  version: '0.3.0',
+  baseUrl: 'https://github.com/wireframeslayout/misao/releases/download/v0.3.0',
   assets: {
-    'misao-0.2.0.mjs': 'a418714fd7b38f4235766e0d1e082d83ec46081b193ce5964ad00910d84b5c89',
-    'misao-0.2.0.LICENSES.txt': '3a3696bba2f4c3cbcb0d51bf6336c0a63f0eeb5a0212aad0ce768905ffc82306',
+    'misao-0.3.0-x86_64-unknown-linux-musl.tar.gz': '564000c5a240cf60a6192f2b9253249bdc3b34061179c51a1000856837d9003a',
+    'misao-0.3.0-aarch64-unknown-linux-musl.tar.gz': '574e960e1022b582b1ae2604bd8d6126a8e8e55fc9680a10d8e762d07f36a754',
+    'misao-0.3.0-aarch64-apple-darwin.tar.gz': '93d87feb08a07cf65841bf16fbb4df817d6a59f32a04d8bab76ff4f7e845719a',
+    'misao-0.3.0-x86_64-apple-darwin.tar.gz': 'c6b4066db0bad4897d25538ba8994ce1965fb001a3272f5324a83eb7112f8b4c',
   },
 } as const;
 
 export type MisaoAssetName = keyof typeof MISAO_RELEASE.assets;
+
+/** The files an archive carries directly under its top directory (`misao-<ver>-<target>/`). */
+export const MISAO_RELEASE_FILES = ['misao', 'LICENSE', 'NOTICE', 'THIRD-PARTY-LICENSES.txt'] as const;
+export type MisaoReleaseFile = typeof MISAO_RELEASE_FILES[number];
 
 /** Where downloaded assets are cached between builds (dist-hub is wiped on every build, so not there). */
 const DEFAULT_CACHE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'misao');
@@ -85,7 +95,7 @@ async function resolveAsset(name: MisaoAssetName): Promise<string> {
     throw new Error(
       `${err instanceof Error ? err.message : String(err)}\n` +
       `  Fetching the misao ${MISAO_RELEASE.version} release failed. On a build host without network access, download\n` +
-      `  ${Object.keys(MISAO_RELEASE.assets).join(' and ')} from ${MISAO_RELEASE.baseUrl}/\n` +
+      `  ${Object.keys(MISAO_RELEASE.assets).join(', ')} from ${MISAO_RELEASE.baseUrl}/\n` +
       `  and set ${MISAO_ASSET_DIR_ENV} to the directory holding them (they are verified against the pinned sha256).`,
     );
   }
@@ -95,26 +105,35 @@ async function resolveAsset(name: MisaoAssetName): Promise<string> {
 /** `misao/manifest.json` in the hub bundle: which misao the bundle carries (read by MisaoBundle at runtime). */
 export interface MisaoManifest {
   version: string;
-  files: Record<'misao.mjs' | 'LICENSES.txt', string>;
+  /** Per target triple: the sha256 of each file under `misao/<target>/`. */
+  targets: Record<string, Record<MisaoReleaseFile, string>>;
 }
 
-/** Stages `misao/{misao.mjs,LICENSES.txt,manifest.json}` into the hub bundle. */
+function targetOf(asset: MisaoAssetName): string {
+  return asset.slice(`misao-${MISAO_RELEASE.version}-`.length, -'.tar.gz'.length);
+}
+
+/** Stages `misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for every target, plus `misao/manifest.json`, into the hub bundle. */
 export async function stageMisao(stageDir: string): Promise<void> {
   const dest = path.join(stageDir, 'misao');
   fs.mkdirSync(dest, { recursive: true });
 
-  const bundleName = `misao-${MISAO_RELEASE.version}.mjs` as MisaoAssetName;
-  const licensesName = `misao-${MISAO_RELEASE.version}.LICENSES.txt` as MisaoAssetName;
-  fs.copyFileSync(await resolveAsset(bundleName), path.join(dest, 'misao.mjs'));
-  fs.copyFileSync(await resolveAsset(licensesName), path.join(dest, 'LICENSES.txt'));
-  fs.chmodSync(path.join(dest, 'misao.mjs'), 0o755);
+  const manifest: MisaoManifest = { version: MISAO_RELEASE.version, targets: {} };
+  for (const asset of Object.keys(MISAO_RELEASE.assets) as MisaoAssetName[]) {
+    const target = targetOf(asset);
+    const targetDir = path.join(dest, target);
+    fs.mkdirSync(targetDir, { recursive: true });
+    // `misao-<ver>-<target>/` is the archive's only top directory.
+    execFileSync('tar', ['xzf', await resolveAsset(asset), '-C', targetDir, '--strip-components=1']);
 
-  const manifest: MisaoManifest = {
-    version: MISAO_RELEASE.version,
-    files: {
-      'misao.mjs': MISAO_RELEASE.assets[bundleName],
-      'LICENSES.txt': MISAO_RELEASE.assets[licensesName],
-    },
-  };
+    const hashes = {} as Record<MisaoReleaseFile, string>;
+    for (const name of MISAO_RELEASE_FILES) {
+      const file = path.join(targetDir, name);
+      if (!fs.existsSync(file)) throw new Error(`${asset} does not contain ${name}`);
+      hashes[name] = sha256(file);
+    }
+    fs.chmodSync(path.join(targetDir, 'misao'), 0o755);
+    manifest.targets[target] = hashes;
+  }
   fs.writeFileSync(path.join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 }

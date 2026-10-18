@@ -11,7 +11,7 @@ import type { IPaneStream } from '../../tmux/PaneStream';
 import { AgentPaneStream } from './AgentPaneStream';
 import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
 import type { MuxRuntime } from '../Server';
-import type { MisaoSocketStatus } from './agentMisaoSocket';
+import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
 const PING_INTERVAL_MS = 15_000;
@@ -224,7 +224,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
    * The agent decides the location; this side only names the version and which release file it is. Returns what the
    * agent received (size, sha256) so the caller can compare it with the hash it expects.
    */
-  async uploadMisaoFile(version: string, name: 'misao.mjs' | 'LICENSES.txt', data: Buffer): Promise<{ name: string; size: number; sha256: string }> {
+  async uploadMisaoFile(version: string, name: MisaoReleaseFile, data: Buffer): Promise<{ name: string; size: number; sha256: string }> {
     this.assertCircuitClosed();
     const query = `version=${encodeURIComponent(version)}&name=${encodeURIComponent(name)}`;
     const { status, text } = await this.send(`/api/misao/upload?${query}`, {

@@ -4,6 +4,16 @@ import * as path from 'path';
 /** sockaddr_un.sun_path on Linux holds 108 bytes including the terminating NUL (same limit as @misao/sdk). */
 const MAX_SOCKET_PATH_BYTES = 107;
 
+/** The files of a misao release (one target's archive) and the mode each is installed with. The agent accepts exactly these as uploads. */
+export const MISAO_RELEASE_FILES = {
+  misao: 0o755,
+  LICENSE: 0o644,
+  NOTICE: 0o644,
+  'THIRD-PARTY-LICENSES.txt': 0o644,
+} as const;
+export type MisaoReleaseFile = keyof typeof MISAO_RELEASE_FILES;
+export const MISAO_RELEASE_FILE_NAMES = Object.keys(MISAO_RELEASE_FILES) as MisaoReleaseFile[];
+
 /** WebSocket close codes of the agent's misao relay: the relay could not be served (not a protocol error). */
 export const MISAO_RELAY_CLOSE = {
   disabled: 4501,
@@ -33,12 +43,10 @@ export function resolveAgentMisaoSocket(env: NodeJS.ProcessEnv, homeDir: string)
 /** What the installer needs to know about the host an agent runs on (reported by the agent itself, never guessed over a shell). */
 export interface AgentMisaoHost {
   homeDir: string;
-  /** The node that runs the agent: the daemon runs on the same one. */
+  /** The node that runs the agent (the installer probes the socket with it; the daemon itself is a native binary). */
   nodePath: string;
   /** PATH the daemon's panes should see (see buildServicePath). */
   servicePath: string;
-  /** The agent's node-pty, which the daemon shares (its prebuilt native part is not rebuilt for it). */
-  nodePtyDir: string | null;
   platform: NodeJS.Platform;
   arch: string;
 }

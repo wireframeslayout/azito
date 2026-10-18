@@ -1,11 +1,11 @@
 import fs from 'fs';
 import path from 'path';
 import type { AgentMisaoHost, MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
-import { agentMisaoManagedSocket, agentMisaoRoot } from '../../servers/transport/agentMisaoSocket';
+import { agentMisaoManagedSocket, agentMisaoRoot, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
 import type { AgentTransport } from '../../servers/transport/AgentTransport';
 import { shellQuote } from '../../../shared/shellQuote';
-import type { MisaoBundle } from './MisaoBundle';
-import { sha256Buffer } from './MisaoBundle';
+import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
+import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MISAO_SYSTEMD_UNIT } from './misaoPaths';
 import { renderMisaoUnit } from './misaoUnit';
@@ -64,14 +64,16 @@ function assertSafePath(value: string, label: string): void {
 }
 
 /**
- * Installs the bundled misao on an agent server, through the agent: release files go over the agent's upload route (the
- * hub's own copy, sha256-checked on both ends; the agent never downloads anything), the rest is done with the agent's
- * exec, which runs as the same user. The result is the layout the hub's own service uses, under `<home>/.azito/misao/`:
- * `<version>/` (misao.mjs, the agent's node-pty), `current` -> `<version>`, the socket, a systemd user unit (a plain
- * background process when there is no user systemd).
+ * Installs the bundled misao on an agent server, through the agent: the binary that fits the agent's OS / architecture
+ * (the agent can differ from the hub) and its licenses go over the agent's upload route (the hub's own copy,
+ * sha256-checked on both ends; the agent never downloads anything), the rest is done with the agent's exec, which runs
+ * as the same user. The result is the layout the hub's own service uses, under `<home>/.azito/misao/`:
+ * `<version>/` (misao, licenses), `current` -> `<version>`, the socket, a systemd user unit (a plain background process
+ * when there is no user systemd, and always on macOS). A host with no binary for its OS / architecture is refused.
  *
  * Like the hub's service it never stops a running daemon: an older running release is left in place (the new files
- * are put beside it), and a daemon that is not AZITO's is refused. The rules shared with the hub's installer (the unit
+ * are put beside it), and a daemon that is not AZITO's is refused. When nothing is running, `current` is pointed at the
+ * bundled release: there are no panes to lose, and the unit that starts it needs a release in the binary layout. The rules shared with the hub's installer (the unit
  * template and how it is filled in, the bundle and its checks, the error type) are the same code.
  */
 export class MisaoAgentInstaller {
@@ -92,6 +94,7 @@ export class MisaoAgentInstaller {
     onProgress('inspect');
     const status = await this.inspect(target);
     const { host } = status;
+    const files = bundleFilesFor(bundle, host.platform, host.arch);
     const root = agentMisaoRoot(host.homeDir);
     const socket = agentMisaoManagedSocket(host.homeDir);
     if (status.socketPath !== socket) {
@@ -106,11 +109,11 @@ export class MisaoAgentInstaller {
       return { version: bundle.version, runningVersion: bundle.version, startMethod: 'running', updateAvailable: false };
     }
 
-    if (!(await this.hasVersion(target, root, bundle))) {
+    if (!(await this.hasVersion(target, root, bundle.version, files))) {
       onProgress('transfer');
-      await this.transfer(target, bundle);
+      await this.transfer(target, bundle.version, files);
       onProgress('prepare');
-      await this.finalize(target, host, root, bundle.version);
+      await this.finalize(target, root, bundle.version);
     }
 
     if (live) {
@@ -119,11 +122,10 @@ export class MisaoAgentInstaller {
     }
 
     onProgress('start');
+    await this.pointCurrentAt(target, root, bundle.version);
     const startMethod = await this.start(target, host, root, socket, bundle);
     await this.waitUntilListening(target, host, socket);
-    // `current` is not moved by an install, so a host that had an older release installed starts that one.
-    const runningVersion = status.installedVersion ?? bundle.version;
-    return { version: bundle.version, runningVersion, startMethod, updateAvailable: runningVersion !== bundle.version };
+    return { version: bundle.version, runningVersion: bundle.version, startMethod, updateAvailable: false };
   }
 
   private requireBundle(): MisaoBundle {
@@ -139,12 +141,7 @@ export class MisaoAgentInstaller {
       throw new MisaoServiceError('unsupported_host', `Could not read the agent's misao status (an agent older than this hub has no such route: update the agent first): ${err instanceof Error ? err.message : String(err)}`);
     }
     const { host } = status;
-    if (host.platform !== 'linux') throw new MisaoServiceError('unsupported_host', `misao can be installed on Linux agent servers only (this one is ${host.platform}).`);
-    if (host.arch !== 'x64') throw new MisaoServiceError('unsupported_host', `misao can be installed on x86_64 agent servers only (this one is ${host.arch}).`);
     assertSafePath(host.homeDir, 'home directory');
-    assertSafePath(host.nodePath, 'node binary');
-    if (!host.nodePtyDir) throw new MisaoServiceError('unsupported_host', "The agent has no node-pty to share with misao: reinstall the agent.");
-    assertSafePath(host.nodePtyDir, 'node-pty directory');
     return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath) } };
   }
 
@@ -161,61 +158,80 @@ export class MisaoAgentInstaller {
     return result.code === 0;
   }
 
-  /** The version directory already on the host is the bundled one, whole: no need to transfer it again. */
-  private async hasVersion(target: MisaoInstallTarget, root: string, bundle: MisaoBundle): Promise<boolean> {
-    const dir = path.join(root, bundle.version);
-    const result = await target.exec([
-      `[ -f ${shellQuote(path.join(dir, 'node_modules', 'node-pty', 'package.json'))} ] || exit 1`,
-      `(sha256sum ${shellQuote(path.join(dir, 'misao.mjs'))} 2>/dev/null || shasum -a 256 ${shellQuote(path.join(dir, 'misao.mjs'))}) | awk '{print $1}'`,
-    ].join('\n'), EXEC_TIMEOUT_MS);
-    return result.code === 0 && result.stdout.trim() === bundle.sha256['misao.mjs'];
+  /** The version directory already on the host holds the bundled binary for this host, whole: no need to transfer it again. */
+  private async hasVersion(target: MisaoInstallTarget, root: string, version: string, files: MisaoTargetFiles): Promise<boolean> {
+    const binary = path.join(root, version, 'misao');
+    const result = await target.exec(
+      `(sha256sum ${shellQuote(binary)} 2>/dev/null || shasum -a 256 ${shellQuote(binary)}) | awk '{print $1}'`,
+      EXEC_TIMEOUT_MS,
+    );
+    return result.code === 0 && result.stdout.trim() === files.sha256.misao;
   }
 
-  private async transfer(target: MisaoInstallTarget, bundle: MisaoBundle): Promise<void> {
-    for (const name of ['misao.mjs', 'LICENSES.txt'] as const) {
-      const data = fs.readFileSync(bundle.files[name]);
+  private async transfer(target: MisaoInstallTarget, version: string, files: MisaoTargetFiles): Promise<void> {
+    for (const name of MISAO_RELEASE_FILE_NAMES) {
+      const data = fs.readFileSync(files.files[name]);
       // The bundle was verified when it was read; this also catches a file changed on disk since.
-      if (sha256Buffer(data) !== bundle.sha256[name]) {
+      if (sha256Buffer(data) !== files.sha256[name]) {
         throw new MisaoServiceError('transfer_failed', `The bundled ${name} no longer matches its manifest sha256; not sending it.`);
       }
       let received: { size: number; sha256: string };
       try {
-        received = await target.uploadMisaoFile(bundle.version, name, data);
+        received = await target.uploadMisaoFile(version, name, data);
       } catch (err) {
         throw new MisaoServiceError('transfer_failed', `Sending ${name} to the agent failed: ${err instanceof Error ? err.message : String(err)}`);
       }
-      if (received.sha256 !== bundle.sha256[name] || received.size !== data.length) {
-        throw new MisaoServiceError('transfer_failed', `${name} arrived damaged: expected ${bundle.sha256[name]} (${data.length} bytes), the agent received ${received.sha256} (${received.size} bytes).`);
+      if (received.sha256 !== files.sha256[name] || received.size !== data.length) {
+        throw new MisaoServiceError('transfer_failed', `${name} arrived damaged: expected ${files.sha256[name]} (${data.length} bytes), the agent received ${received.sha256} (${received.size} bytes).`);
       }
     }
   }
 
-  /** Completes the staged release (the agent's node-pty goes beside it), moves it into place and, only when there is none, points `current` at it. */
-  private async finalize(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, version: string): Promise<void> {
+  /** Moves the staged release into place as `<root>/<version>`. An older release's directory is not touched. */
+  private async finalize(target: MisaoInstallTarget, root: string, version: string): Promise<void> {
     const stage = path.join(root, `${version}.upload`);
     const dest = path.join(root, version);
-    const current = path.join(root, 'current');
     const script = [
       'set -e',
-      `[ -f ${shellQuote(path.join(stage, 'misao.mjs'))} ] && [ -f ${shellQuote(path.join(stage, 'LICENSES.txt'))} ] || { echo 'the staged release files are missing' >&2; exit 3; }`,
-      `mkdir -p ${shellQuote(path.join(stage, 'node_modules'))}`,
-      `rm -rf ${shellQuote(path.join(stage, 'node_modules', 'node-pty'))}`,
-      `cp -R ${shellQuote(host.nodePtyDir!)} ${shellQuote(path.join(stage, 'node_modules', 'node-pty'))}`,
-      `[ -f ${shellQuote(path.join(stage, 'node_modules', 'node-pty', 'package.json'))} ] || { echo 'node-pty could not be copied' >&2; exit 4; }`,
+      ...MISAO_RELEASE_FILE_NAMES.map((name) => `[ -f ${shellQuote(path.join(stage, name))} ] || { echo 'the staged release files are missing' >&2; exit 3; }`),
+      `chmod 755 ${shellQuote(path.join(stage, 'misao'))}`,
       `rm -rf ${shellQuote(dest)}`,
       `mv ${shellQuote(stage)} ${shellQuote(dest)}`,
-      `[ -e ${shellQuote(current)} ] || [ -L ${shellQuote(current)} ] || ln -s ${shellQuote(version)} ${shellQuote(current)}`,
     ].join('\n');
     await this.run(target, script, 'Preparing misao on the agent');
   }
 
+  /** Only called with no daemon running: points `current` at the bundled release (replacing a link to an older, e.g. Node-era, release). */
+  private async pointCurrentAt(target: MisaoInstallTarget, root: string, version: string): Promise<void> {
+    await this.run(target, `ln -sfn ${shellQuote(version)} ${shellQuote(path.join(root, 'current'))}`, 'Switching misao to the new release on the agent');
+  }
+
   private async start(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, socket: string, bundle: MisaoBundle): Promise<'systemd' | 'nohup'> {
-    const template = fs.readFileSync(path.join(bundle.templatesDir, 'azito-misao.service'), 'utf-8');
+    // A systemd user unit exists only on Linux; elsewhere (macOS) the daemon runs as a background process of its own.
+    const systemd = host.platform === 'linux' ? await this.startWithSystemd(target, host, root, bundle) : undefined;
+    if (systemd?.code === 0) return 'systemd';
+
+    // No usable user systemd (no user bus, or none at all, or macOS): a background process. It does not survive a reboot.
+    // Its environment is cleared down to what the unit gives the daemon, so nothing of the agent's (its token) reaches panes.
+    const background = [
+      `cd ${shellQuote(host.homeDir)}`,
+      `systemctl --user disable ${MISAO_SYSTEMD_UNIT} >/dev/null 2>&1 || true`,
+      'S=; command -v setsid >/dev/null 2>&1 && S=setsid',
+      `$S nohup env -i HOME=${shellQuote(host.homeDir)} USER="$(id -un)" LOGNAME="$(id -un)" PATH=${shellQuote(host.servicePath)} LC_CTYPE=C.UTF-8 ${shellQuote(path.join(root, 'current', 'misao'))} serve --socket ${shellQuote(socket)} --data ${shellQuote(root)} >> ${shellQuote(path.join(root, 'misao.log'))} 2>&1 < /dev/null &`,
+    ].join('\n');
+    const started = await target.exec(background, EXEC_TIMEOUT_MS);
+    if (started.code !== 0) {
+      const reason = systemd ? `systemd said (${(systemd.stderr || systemd.stdout).trim() || `exit ${systemd.code}`}) and starting it` : 'starting it';
+      throw new MisaoServiceError('daemon_not_ready', `misao could not be started: ${reason} as a background process failed (${(started.stderr || started.stdout).trim() || `exit ${started.code}`}).`);
+    }
+    return 'nohup';
+  }
+
+  private async startWithSystemd(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, bundle: MisaoBundle): Promise<{ code: number; stdout: string; stderr: string }> {
     const unit = renderMisaoUnit({
-      template,
+      template: fs.readFileSync(path.join(bundle.templatesDir, 'azito-misao.service'), 'utf-8'),
       manager: 'systemd',
       prefix: path.dirname(root),
-      node: host.nodePath,
       servicePath: host.servicePath,
     });
     const unitPath = path.join(host.homeDir, '.config', 'systemd', 'user', SERVICE_UNIT_FILE);
@@ -228,28 +244,14 @@ export class MisaoAgentInstaller {
     await this.run(target, writeUnit, 'Writing the misao service unit');
 
     // Lingering keeps the user manager (and so the daemon) alive after logout; best effort, like the agent's own unit.
-    const systemd = await target.exec([
+    return target.exec([
       'systemctl --user daemon-reload',
       `systemctl --user enable ${MISAO_SYSTEMD_UNIT}`,
       '(loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || true)',
       `systemctl --user start ${MISAO_SYSTEMD_UNIT}`,
     ].join(' && '), EXEC_TIMEOUT_MS);
-    if (systemd.code === 0) return 'systemd';
-
-    // No usable user systemd (no user bus, or none at all): a background process of its own. It does not survive a reboot.
-    // Its environment is cleared down to what the unit gives the daemon, so nothing of the agent's (its token) reaches panes.
-    const background = [
-      `cd ${shellQuote(host.homeDir)}`,
-      `systemctl --user disable ${MISAO_SYSTEMD_UNIT} >/dev/null 2>&1 || true`,
-      'S=; command -v setsid >/dev/null 2>&1 && S=setsid',
-      `$S nohup env -i HOME=${shellQuote(host.homeDir)} USER="$(id -un)" LOGNAME="$(id -un)" PATH=${shellQuote(host.servicePath)} LC_CTYPE=C.UTF-8 ${shellQuote(host.nodePath)} ${shellQuote(path.join(root, 'current', 'misao.mjs'))} serve --socket ${shellQuote(socket)} --data ${shellQuote(root)} >> ${shellQuote(path.join(root, 'misao.log'))} 2>&1 < /dev/null &`,
-    ].join('\n');
-    const started = await target.exec(background, EXEC_TIMEOUT_MS);
-    if (started.code !== 0) {
-      throw new MisaoServiceError('daemon_not_ready', `misao could not be started: systemd said (${(systemd.stderr || systemd.stdout).trim() || `exit ${systemd.code}`}) and starting it as a background process failed too (${(started.stderr || started.stdout).trim() || `exit ${started.code}`}).`);
-    }
-    return 'nohup';
   }
+
 
   private async waitUntilListening(target: MisaoInstallTarget, host: AgentMisaoHost, socket: string): Promise<void> {
     const deadline = Date.now() + (this.options.readyTimeoutMs ?? DEFAULT_READY_TIMEOUT_MS);

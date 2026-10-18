@@ -2,15 +2,9 @@ import type { FastifyPluginCallback } from 'fastify';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
-import { agentMisaoRoot, readMisaoSocketStatus, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
+import { agentMisaoRoot, MISAO_RELEASE_FILES, readMisaoSocketStatus, type AgentMisaoHost, type AgentMisaoSocket, type MisaoReleaseFile } from '../modules/servers/transport/agentMisaoSocket';
 
-/** The files a misao release is made of (the hub's `misao/` bundle). Nothing else can be uploaded. */
-export const MISAO_UPLOAD_FILES = {
-  'misao.mjs': 0o755,
-  'LICENSES.txt': 0o644,
-} as const;
-
-export type MisaoUploadName = keyof typeof MISAO_UPLOAD_FILES;
+export type MisaoUploadName = MisaoReleaseFile;
 
 /** An upload is one release file, a few MB; this is only a ceiling against a runaway body. */
 export const MISAO_UPLOAD_LIMIT_BYTES = 64 * 1024 * 1024;
@@ -24,7 +18,7 @@ export interface MisaoRoutesOptions {
 }
 
 function isUploadName(value: unknown): value is MisaoUploadName {
-  return typeof value === 'string' && Object.hasOwn(MISAO_UPLOAD_FILES, value);
+  return typeof value === 'string' && Object.hasOwn(MISAO_RELEASE_FILES, value);
 }
 
 /** Where an upload of `version` is staged: next to the final `<root>/<version>` directory, which the hub's installer moves it to. */
@@ -36,7 +30,7 @@ export function misaoStagingDir(homeDir: string, version: string): string {
  * The agent's side of installing misao: what it sees (`status`) and a place to put the release files (`upload`).
  * Everything else (node-pty, the service unit, starting it) is done by the hub through the agent's exec, which already
  * runs with the same token. Both routes sit behind the agent token check like every other /api route; the upload
- * writes only the two release files, only under `<home>/.azito/misao/<version>.upload/`, whatever the request says.
+ * writes only the release files (the binary and its licenses), only under `<home>/.azito/misao/<version>.upload/`, whatever the request says.
  */
 const misaoRoutes: FastifyPluginCallback<MisaoRoutesOptions> = (fastify, opts, done) => {
   const { socket, host } = opts;
@@ -51,7 +45,7 @@ const misaoRoutes: FastifyPluginCallback<MisaoRoutesOptions> = (fastify, opts, d
   fastify.put<{ Querystring: { version?: string; name?: string }; Body: Buffer }>('/api/misao/upload', async (request, reply) => {
     const { version, name } = request.query;
     if (typeof version !== 'string' || !VERSION_RE.test(version)) return reply.status(400).send({ error: 'version must be x.y.z' });
-    if (!isUploadName(name)) return reply.status(400).send({ error: `name must be one of ${Object.keys(MISAO_UPLOAD_FILES).join(', ')}` });
+    if (!isUploadName(name)) return reply.status(400).send({ error: `name must be one of ${Object.keys(MISAO_RELEASE_FILES).join(', ')}` });
     if (!Buffer.isBuffer(request.body)) return reply.status(415).send({ error: 'body must be application/octet-stream' });
 
     const root = agentMisaoRoot(host.homeDir);
@@ -63,8 +57,8 @@ const misaoRoutes: FastifyPluginCallback<MisaoRoutesOptions> = (fastify, opts, d
 
     const target = path.join(stage, name);
     const partial = `${target}.part`;
-    fs.writeFileSync(partial, request.body, { mode: MISAO_UPLOAD_FILES[name] });
-    fs.chmodSync(partial, MISAO_UPLOAD_FILES[name]);
+    fs.writeFileSync(partial, request.body, { mode: MISAO_RELEASE_FILES[name] });
+    fs.chmodSync(partial, MISAO_RELEASE_FILES[name]);
     fs.renameSync(partial, target);
     return { name, size: request.body.length, sha256: crypto.createHash('sha256').update(request.body).digest('hex') };
   });

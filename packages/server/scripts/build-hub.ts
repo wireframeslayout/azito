@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
-import { stageMisao, type MisaoManifest } from './misaoAssets';
+import { MISAO_RELEASE, stageMisao, type MisaoManifest } from './misaoAssets';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = path.resolve(SCRIPT_DIR, '..');
@@ -214,8 +214,6 @@ function assertStageContents(): void {
     'deploy/com.azito.hub.plist',
     'deploy/azito-misao.service',
     'deploy/com.azito.misao.plist',
-    'misao/misao.mjs',
-    'misao/LICENSES.txt',
     'misao/manifest.json',
     // ssh2 / better-sqlite3 require these at boot; missing them means the
     // released hub dies with MODULE_NOT_FOUND before serving anything.
@@ -233,10 +231,20 @@ function assertStageContents(): void {
   // The staged misao must be exactly the pinned release: a truncated copy or a stale cache would otherwise ship
   // a daemon that fails the first time a user installs it.
   const manifest = JSON.parse(fs.readFileSync(path.join(STAGE, 'misao', 'manifest.json'), 'utf-8')) as MisaoManifest;
-  for (const [file, expected] of Object.entries(manifest.files)) {
-    const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(STAGE, 'misao', file))).digest('hex');
-    if (actual !== expected) {
-      throw new Error(`Stage validation failed: misao/${file} does not match the manifest sha256`);
+  const targets = Object.entries(manifest.targets);
+  if (manifest.version !== MISAO_RELEASE.version || targets.length !== Object.keys(MISAO_RELEASE.assets).length) {
+    throw new Error(`Stage validation failed: misao manifest is not the pinned ${MISAO_RELEASE.version} release for every target`);
+  }
+  for (const [target, files] of targets) {
+    for (const [name, expected] of Object.entries(files)) {
+      const file = path.join(STAGE, 'misao', target, name);
+      const actual = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+      if (actual !== expected) {
+        throw new Error(`Stage validation failed: misao/${target}/${name} does not match the manifest sha256`);
+      }
+    }
+    if ((fs.statSync(path.join(STAGE, 'misao', target, 'misao')).mode & 0o111) === 0) {
+      throw new Error(`Stage validation failed: misao/${target}/misao is not executable`);
     }
   }
 
@@ -360,7 +368,7 @@ async function main(): Promise<void> {
   // 6c. Stage misao (pinned release asset, sha256-verified)
   // The headless pane server runs as its own service next to the hub (see deploy/azito-misao.service); the hub
   // only carries the files. `azito misao install` unpacks them into ~/.azito/misao/<version>/ — outside hub/, so
-  // a hub update never switches or restarts it. node-pty is not staged here: the hub's copy (step 7) is shared.
+  // a hub update never switches or restarts it.
   console.log('[build-hub] Staging misao...');
   await stageMisao(STAGE);
 

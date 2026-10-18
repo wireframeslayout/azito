@@ -66,20 +66,13 @@ function resolveVersion(): string {
 }
 const agentVersion = resolveVersion();
 
-/** What the hub's misao installer needs to know about this host: the node and node-pty this agent runs on, and its PATH. */
+/** What the hub's misao installer needs to know about this host: its OS / architecture (to pick the binary), the node this agent runs on, and its PATH. */
 function describeMisaoHost(): AgentMisaoHost {
   const homeDir = os.homedir();
-  let nodePtyDir: string | null = null;
-  try {
-    nodePtyDir = path.dirname(require.resolve('node-pty/package.json'));
-  } catch {
-    nodePtyDir = null;
-  }
   return {
     homeDir,
     nodePath: process.execPath,
     servicePath: buildServicePath(process.env, homeDir, fs.existsSync),
-    nodePtyDir,
     platform: process.platform,
     arch: process.arch,
   };

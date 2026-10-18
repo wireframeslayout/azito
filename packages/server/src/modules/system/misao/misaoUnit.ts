@@ -10,8 +10,6 @@ export interface MisaoUnitInput {
   manager: MisaoServiceManager;
   /** `<prefix>/misao/...` holds the daemon; absolute, no characters a unit file would reinterpret (see resolveMisaoPaths). */
   prefix: string;
-  /** Absolute path of the node that runs the daemon: the hub's bundled node, or the node an agent runs on. */
-  node: string;
   /** PATH the daemon's panes see (see buildServicePath). */
   servicePath: string;
 }
@@ -21,10 +19,9 @@ export interface MisaoUnitInput {
  * server, so the two can never drift apart. systemd treats `%` as a specifier and a plist is XML, so values are escaped
  * for the format they land in.
  */
-export function renderMisaoUnit({ template, manager, prefix, node, servicePath }: MisaoUnitInput): string {
+export function renderMisaoUnit({ template, manager, prefix, servicePath }: MisaoUnitInput): string {
   const escape = (value: string): string => (manager === 'launchd' ? xmlEscape(value) : value.replace(/%/g, '%%'));
   return template
-    .replaceAll('__NODE__', escape(node))
     .replaceAll('__AZITO_PREFIX__', prefix)
     .replaceAll('__PATH__', escape(servicePath));
 }

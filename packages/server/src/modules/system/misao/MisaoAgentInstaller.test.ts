@@ -1,4 +1,3 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -6,39 +5,32 @@ import { execFile } from 'child_process';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import misaoRoutes from '../../../agent/misaoRoutes';
-import { agentMisaoManagedSocket, readMisaoSocketStatus, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
+import { agentMisaoManagedSocket, MISAO_RELEASE_FILE_NAMES, readMisaoSocketStatus, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { readMisaoBundle, type MisaoBundle } from './MisaoBundle';
+import { fakeBinaryFor, writeHubBundle as writeBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller, sanitizeServicePath, type MisaoInstallTarget } from './MisaoAgentInstaller';
 import { MisaoServiceError } from './MisaoServiceError';
 
-const REPO_DEPLOY_DIR = path.resolve(__dirname, '../../../../../../deploy');
-const VERSION = '0.2.0';
+const VERSION = '0.3.0';
+const LINUX_X64 = 'x86_64-unknown-linux-musl';
 
-/** A "daemon": listens on --socket until it is killed. Stands in for misao.mjs, which this test does not need to run for real. */
-const FAKE_DAEMON = `
-import net from 'net'; import fs from 'fs';
+/** A "daemon": listens on --socket until it is killed. Stands in for the misao binary, which this test does not need to run for real. */
+const FAKE_DAEMON_BODY = `
+const net = require('net'); const fs = require('fs');
 const args = process.argv.slice(2);
 const socket = args[args.indexOf('--socket') + 1];
 fs.rmSync(socket, { force: true });
 net.createServer().listen(socket);
 `;
 
-/** The same, as CommonJS, for `node -e`. */
-const FAKE_DAEMON_CJS = FAKE_DAEMON.replace("import net from 'net'; import fs from 'fs';", "const net = require('net'); const fs = require('fs');").replace(/\n/g, ' ');
+/** The bundle's `misao`: an executable script, since the installer starts it directly (a real one is a native binary). */
+const FAKE_BINARY = `#!${process.execPath}${FAKE_DAEMON_BODY}`;
 
-function sha(content: string): string {
-  return crypto.createHash('sha256').update(content).digest('hex');
-}
+/** The previous (Node-era) release's daemon: an ES module run by a node. */
+const OLD_DAEMON = FAKE_DAEMON_BODY.replace("const net = require('net'); const fs = require('fs');", "import net from 'net'; import fs from 'fs';");
 
-function writeHubBundle(root: string): void {
-  fs.mkdirSync(path.join(root, 'misao'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'misao', 'misao.mjs'), FAKE_DAEMON);
-  fs.writeFileSync(path.join(root, 'misao', 'LICENSES.txt'), 'licenses\n');
-  fs.writeFileSync(path.join(root, 'misao', 'manifest.json'), JSON.stringify({ version: VERSION, files: { 'misao.mjs': sha(FAKE_DAEMON), 'LICENSES.txt': sha('licenses\n') } }));
-  fs.mkdirSync(path.join(root, 'node_modules', 'node-pty'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'node_modules', 'node-pty', 'package.json'), '{"name":"node-pty"}');
-  fs.cpSync(REPO_DEPLOY_DIR, path.join(root, 'deploy'), { recursive: true });
-}
+/** The same as one line, for `node -e`. */
+const FAKE_DAEMON_CJS = FAKE_DAEMON_BODY.replace(/\n/g, ' ');
 
 function runShell(script: string, env: NodeJS.ProcessEnv): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve) => {
@@ -91,12 +83,9 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     home = path.join(tmp, 'home');
     fs.mkdirSync(home, { recursive: true });
     systemctlLog = path.join(tmp, 'systemctl.log');
-    writeHubBundle(path.join(tmp, 'hub'));
+    writeBundle(path.join(tmp, 'hub'), VERSION, FAKE_BINARY);
     bundle = readMisaoBundle(path.join(tmp, 'hub'))!;
-    const nodePtyDir = path.join(tmp, 'agent-node-pty');
-    fs.mkdirSync(nodePtyDir, { recursive: true });
-    fs.writeFileSync(path.join(nodePtyDir, 'package.json'), '{"name":"node-pty"}');
-    host = { homeDir: home, nodePath: process.execPath, servicePath: '/usr/bin:/bin', nodePtyDir, platform: 'linux', arch: 'x64' };
+    host = { homeDir: home, nodePath: process.execPath, servicePath: '/usr/bin:/bin', platform: 'linux', arch: 'x64' };
     app = Fastify();
     await app.register(misaoRoutes, { socket: { path: agentMisaoManagedSocket(home) }, host });
     await app.ready();
@@ -119,9 +108,10 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
 
     expect(result).toEqual({ version: VERSION, runningVersion: VERSION, startMethod: 'nohup', updateAvailable: false });
     const root = path.join(home, '.azito', 'misao');
-    expect(fs.readFileSync(path.join(root, VERSION, 'misao.mjs'), 'utf-8')).toBe(FAKE_DAEMON);
-    expect(fs.readFileSync(path.join(root, VERSION, 'LICENSES.txt'), 'utf-8')).toBe('licenses\n');
-    expect(fs.existsSync(path.join(root, VERSION, 'node_modules', 'node-pty', 'package.json'))).toBe(true);
+    expect(fs.readFileSync(path.join(root, VERSION, 'misao'), 'utf-8')).toBe(fakeBinaryFor(LINUX_X64, FAKE_BINARY));
+    expect(fs.statSync(path.join(root, VERSION, 'misao')).mode & 0o777).toBe(0o755);
+    expect(fs.readFileSync(path.join(root, VERSION, 'NOTICE'), 'utf-8')).toBe('notice\n');
+    expect(fs.readdirSync(path.join(root, VERSION)).sort()).toEqual([...MISAO_RELEASE_FILE_NAMES].sort());
     expect(fs.readlinkSync(path.join(root, 'current'))).toBe(VERSION);
     expect(fs.statSync(root).mode & 0o777).toBe(0o700);
     expect(fs.existsSync(path.join(root, `${VERSION}.upload`))).toBe(false);
@@ -135,14 +125,14 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  it('writes the systemd unit with the agent\'s node and starts it through systemctl --user', async () => {
+  it('writes the systemd unit (the binary runs directly, no node) and starts it through systemctl --user', async () => {
     installFakeSystemctl('ok');
     const result = await installer().install(target());
 
     expect(result.startMethod).toBe('systemd');
     const unit = fs.readFileSync(path.join(home, '.config', 'systemd', 'user', 'azito-misao.service'), 'utf-8');
     const root = path.join(home, '.azito');
-    expect(unit).toContain(`ExecStart=${process.execPath} ${root}/misao/current/misao.mjs serve --socket ${root}/misao/misao.sock --data ${root}/misao`);
+    expect(unit).toContain(`ExecStart=${root}/misao/current/misao serve --socket ${root}/misao/misao.sock --data ${root}/misao`);
     expect(unit).toContain('Environment=PATH=/usr/bin:/bin');
     expect(unit).toContain('KillMode=process');
     expect(unit).not.toContain('__');
@@ -169,7 +159,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     installFakeSystemctl('absent');
     const root = path.join(home, '.azito', 'misao');
     fs.mkdirSync(path.join(root, '0.1.0'), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(root, '0.1.0', 'misao.mjs'), FAKE_DAEMON);
+    fs.writeFileSync(path.join(root, '0.1.0', 'misao.mjs'), OLD_DAEMON);
     fs.symlinkSync('0.1.0', path.join(root, 'current'));
     const old = await runShell(`setsid ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(root, '0.1.0', 'misao.mjs'))} serve --socket ${JSON.stringify(agentMisaoManagedSocket(home))} --data ${JSON.stringify(root)} >/dev/null 2>&1 < /dev/null & echo $!`, process.env);
     daemons.push(Number(old.stdout.trim()));
@@ -179,7 +169,41 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
 
     expect(result).toEqual({ version: VERSION, runningVersion: '0.1.0', startMethod: 'running', updateAvailable: true });
     expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.1.0');
-    expect(fs.existsSync(path.join(root, VERSION, 'misao.mjs'))).toBe(true);
+    expect(fs.existsSync(path.join(root, VERSION, 'misao'))).toBe(true);
+  });
+
+  it('switches a stopped Node-era install to the bundled release: current moves to the bundled binary release and the old directory stays', async () => {
+    installFakeSystemctl('ok');
+    const root = path.join(home, '.azito', 'misao');
+    fs.mkdirSync(path.join(root, '0.2.0', 'node_modules'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(root, '0.2.0', 'misao.mjs'), OLD_DAEMON);
+    fs.symlinkSync('0.2.0', path.join(root, 'current'));
+
+    const result = await installer().install(target());
+
+    expect(result).toEqual({ version: VERSION, runningVersion: VERSION, startMethod: 'systemd', updateAvailable: false });
+    expect(fs.readlinkSync(path.join(root, 'current'))).toBe(VERSION);
+    expect(fs.existsSync(path.join(root, '0.2.0', 'misao.mjs'))).toBe(true);
+    expect(fs.readFileSync(path.join(home, '.config', 'systemd', 'user', 'azito-misao.service'), 'utf-8')).toContain(`ExecStart=${root}/current/misao serve`);
+  });
+
+  it.each([
+    ['linux', 'arm64', 'aarch64-unknown-linux-musl'],
+    ['darwin', 'arm64', 'aarch64-apple-darwin'],
+    ['darwin', 'x64', 'x86_64-apple-darwin'],
+  ])('sends the binary that fits a %s/%s agent (%s), whatever the hub runs on, and on macOS runs it as a background process (no systemd unit)', async (platform, arch, expectedTarget) => {
+    installFakeSystemctl('ok');
+    const status = await target().fetchMisaoStatus();
+    const sent: string[] = [];
+    const base = target();
+    const result = await installer().install(target({
+      fetchMisaoStatus: async () => ({ ...status, host: { ...status.host, platform: platform as NodeJS.Platform, arch } }),
+      uploadMisaoFile: async (version, name, data) => { if (name === 'misao') sent.push(data.toString()); return base.uploadMisaoFile(version, name, data); },
+    }));
+
+    expect(sent).toEqual([fakeBinaryFor(expectedTarget, FAKE_BINARY)]);
+    expect(result.startMethod).toBe(platform === 'darwin' ? 'nohup' : 'systemd');
+    expect(fs.existsSync(path.join(home, '.config', 'systemd', 'user', 'azito-misao.service'))).toBe(platform !== 'darwin');
   });
 
   it('refuses a daemon AZITO did not install, and starts nothing', async () => {
@@ -201,15 +225,17 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
   });
 
   it.each([
-    ['not Linux', { platform: 'darwin' as const }],
-    ['not x86_64', { arch: 'arm64' }],
-    ['without node-pty', { nodePtyDir: null }],
-    ['with a node path that cannot go in a unit', { nodePath: '/opt/my node/bin/node' }],
-  ])('refuses an agent host %s', async (_label, change) => {
+    ['on Windows', { platform: 'win32' as const }],
+    ['on an architecture without a binary', { arch: 'riscv64' }],
+    ['on FreeBSD', { platform: 'freebsd' as const }],
+    ['with a home directory that cannot go in a unit', { homeDir: '/home/my user' }],
+  ])('refuses an agent host %s with no binary or no usable layout, and sends nothing', async (_label, change) => {
     installFakeSystemctl('absent');
     const status = { ...(await target().fetchMisaoStatus()) };
     status.host = { ...status.host, ...change };
-    await expect(installer().install(target({ fetchMisaoStatus: async () => status }))).rejects.toMatchObject({ code: 'unsupported_host' });
+    const upload = vi.fn();
+    await expect(installer().install(target({ fetchMisaoStatus: async () => status, uploadMisaoFile: upload }))).rejects.toMatchObject({ code: 'unsupported_host' });
+    expect(upload).not.toHaveBeenCalled();
   });
 
   it('says to update the agent when it has no misao status route', async () => {
@@ -233,7 +259,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
 
   it('refuses to send a bundled file that changed on disk after the bundle was read', async () => {
     installFakeSystemctl('absent');
-    fs.writeFileSync(bundle.files['misao.mjs'], '// tampered\n');
+    fs.writeFileSync(bundle.targets[LINUX_X64].files.misao, '// tampered\n');
     const upload = vi.fn();
     await expect(installer().install(target({ uploadMisaoFile: upload }))).rejects.toMatchObject({ code: 'transfer_failed' });
     expect(upload).not.toHaveBeenCalled();
@@ -242,13 +268,12 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
   it('transfers again when the version directory on the host is damaged', async () => {
     installFakeSystemctl('absent');
     const root = path.join(home, '.azito', 'misao');
-    fs.mkdirSync(path.join(root, VERSION, 'node_modules', 'node-pty'), { recursive: true, mode: 0o700 });
-    fs.writeFileSync(path.join(root, VERSION, 'node_modules', 'node-pty', 'package.json'), '{}');
-    fs.writeFileSync(path.join(root, VERSION, 'misao.mjs'), '// not the bundled file\n');
+    fs.mkdirSync(path.join(root, VERSION), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(root, VERSION, 'misao'), '// not the bundled file\n');
     const upload = vi.fn(target().uploadMisaoFile);
     await installer().install(target({ uploadMisaoFile: upload }));
-    expect(upload).toHaveBeenCalledTimes(2);
-    expect(fs.readFileSync(path.join(root, VERSION, 'misao.mjs'), 'utf-8')).toBe(FAKE_DAEMON);
+    expect(upload).toHaveBeenCalledTimes(MISAO_RELEASE_FILE_NAMES.length);
+    expect(fs.readFileSync(path.join(root, VERSION, 'misao'), 'utf-8')).toBe(fakeBinaryFor(LINUX_X64, FAKE_BINARY));
   });
 });
 

@@ -15,7 +15,7 @@ describe('agent misao routes', () => {
     app = Fastify();
     await app.register(misaoRoutes, {
       socket: { path: path.join(home, '.azito', 'misao', 'misao.sock') },
-      host: { homeDir: home, nodePath: process.execPath, servicePath: '/usr/bin', nodePtyDir: null, platform: 'linux', arch: 'x64' },
+      host: { homeDir: home, nodePath: process.execPath, servicePath: '/usr/bin', platform: 'linux', arch: 'x64' },
     });
     await app.ready();
   });
@@ -40,27 +40,28 @@ describe('agent misao routes', () => {
   });
 
   it('stages a release file under the fixed layout and reports its sha256', async () => {
-    const res = await upload('version=0.2.0&name=misao.mjs', 'console.log(1)');
+    const res = await upload('version=0.3.0&name=misao', 'binary-bytes');
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ name: 'misao.mjs', size: 14, sha256: crypto.createHash('sha256').update('console.log(1)').digest('hex') });
-    const staged = path.join(misaoStagingDir(home, '0.2.0'), 'misao.mjs');
-    expect(fs.readFileSync(staged, 'utf-8')).toBe('console.log(1)');
+    expect(res.json()).toEqual({ name: 'misao', size: 12, sha256: crypto.createHash('sha256').update('binary-bytes').digest('hex') });
+    const staged = path.join(misaoStagingDir(home, '0.3.0'), 'misao');
+    expect(fs.readFileSync(staged, 'utf-8')).toBe('binary-bytes');
     expect(fs.statSync(staged).mode & 0o777).toBe(0o755);
     expect(fs.statSync(path.join(home, '.azito', 'misao')).mode & 0o777).toBe(0o700);
   });
 
-  it('stages the licenses file without the execute bit', async () => {
-    const res = await upload('version=0.2.0&name=LICENSES.txt');
+  it('stages a license file without the execute bit', async () => {
+    const res = await upload('version=0.3.0&name=NOTICE');
     expect(res.statusCode).toBe(200);
-    expect(fs.statSync(path.join(misaoStagingDir(home, '0.2.0'), 'LICENSES.txt')).mode & 0o777).toBe(0o644);
+    expect(fs.statSync(path.join(misaoStagingDir(home, '0.3.0'), 'NOTICE')).mode & 0o777).toBe(0o644);
   });
 
   it.each([
-    ['a name outside the release files', 'version=0.2.0&name=evil.sh'],
-    ['a path in the name', 'version=0.2.0&name=../../.bashrc'],
-    ['a name missing', 'version=0.2.0'],
-    ['a version that is not x.y.z', 'version=../../x&name=misao.mjs'],
-    ['a version missing', 'name=misao.mjs'],
+    ['a name outside the release files', 'version=0.3.0&name=evil.sh'],
+    ['the retired Node bundle', 'version=0.3.0&name=misao.mjs'],
+    ['a path in the name', 'version=0.3.0&name=../../.bashrc'],
+    ['a name missing', 'version=0.3.0'],
+    ['a version that is not x.y.z', 'version=../../x&name=misao'],
+    ['a version missing', 'name=misao'],
   ])('refuses %s and writes nothing', async (_label, query) => {
     const res = await upload(query);
     expect(res.statusCode).toBe(400);
@@ -68,7 +69,7 @@ describe('agent misao routes', () => {
   });
 
   it('refuses a body that is not application/octet-stream', async () => {
-    const res = await app.inject({ method: 'PUT', url: '/api/misao/upload?version=0.2.0&name=misao.mjs', headers: { 'content-type': 'application/json' }, payload: '{}' });
+    const res = await app.inject({ method: 'PUT', url: '/api/misao/upload?version=0.3.0&name=misao', headers: { 'content-type': 'application/json' }, payload: '{}' });
     expect([400, 415]).toContain(res.statusCode);
     expect(fs.existsSync(path.join(home, '.azito'))).toBe(false);
   });

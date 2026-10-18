@@ -41,8 +41,8 @@ jobs:
             --arch ${{ matrix.arch }} \
             --repo ${{ github.repository }}
 
-      # Runs the bundled misao the way the installed service does (bundled node + node-pty, a mode-700 data dir),
-      # checks that server.info reports both versions, and stops it — a broken asset or native module fails the release here.
+      # Runs the bundled misao binary that fits this runner the way the installed service does (a mode-700 data dir, no node),
+      # checks that server.info reports both versions and that a pane opens, and stops it — a broken or mismatched binary fails the release here.
       - name: Smoke-test bundled misao
         run: |
           SMOKE=$(mktemp -d)
