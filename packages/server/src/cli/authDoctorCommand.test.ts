@@ -37,7 +37,7 @@ const execFileMock = vi.fn(
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
   return {
-    execFileSync: (...args: unknown[]) => (args[0] === 'powershell.exe'
+    execFileSync: (...args: unknown[]) => (/powershell\.exe$/i.test(String(args[0]))
       ? (actual.execFileSync as (...a: unknown[]) => string)(...args)
       : execFileSyncMock(...args)),
     execFile: (...args: unknown[]) => (execFileMock as unknown as (...a: unknown[]) => void)(...args),
