@@ -6,7 +6,7 @@ import type { MisaoDaemonInfo, MisaoServiceStatus, MisaoSocketSetting, MisaoUnma
 import { readEnvValue, upsertEnvValue } from '../../../shared/envFile';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { bundleFilesFor, sha256File, type MisaoBundle, type MisaoTargetFiles } from './MisaoBundle';
-import { MISAO_RELEASE_FILES } from '../../servers/transport/agentMisaoSocket';
+import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
 import type { MisaoServiceController } from './MisaoServiceController';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
@@ -129,8 +129,10 @@ export class MisaoServiceService {
 
   /**
    * Sets the service up: files under `<prefix>/misao/<version>/`, the unit, MISAO_SOCKET in the hub's `.env`, and a start
-   * when it is not running. Safe to repeat. An already installed older version is NOT switched (that kills the panes):
-   * only `update()` does. `replaceSocketSetting` lets it overwrite a MISAO_SOCKET that points elsewhere.
+   * when it is not running. Safe to repeat. An older version that is running is left entirely alone (neither `current` nor
+   * the unit is touched; switching it kills the panes): only `update()` does that. An older version that is NOT running is
+   * moved to the bundled one (`current` and the unit), and put back if that fails. `replaceSocketSetting` lets it
+   * overwrite a MISAO_SOCKET that points elsewhere.
    */
   install(opts: { replaceSocketSetting?: boolean } = {}): Promise<MisaoServiceStatus> {
     return this.exclusive(() => this.doInstall(opts));
@@ -156,10 +158,7 @@ export class MisaoServiceService {
     // An older release that is serving panes is left entirely alone: switching it, or rewriting the unit that starts it
     // (a crash restart would follow the new unit), is an explicit `update`. The new files only wait beside it.
     const olderRunning = installed !== undefined && installed !== bundle.version && (await controller.state()) === 'active';
-    if (!olderRunning) {
-      if (installed !== bundle.version) this.switchCurrent(bundle.version);
-      await controller.install(this.renderUnit(bundle, controller));
-    }
+    if (!olderRunning) await this.registerBundled(bundle, controller, installed);
     upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket);
 
     if ((await controller.state()) !== 'active') {
@@ -167,6 +166,35 @@ export class MisaoServiceService {
       await this.waitUntilListening();
     }
     return this.status();
+  }
+
+  /**
+   * Points `current` at the bundled version and writes its unit, with nothing running. When this replaces an installed
+   * older version and any step fails, the previous link and the previous unit are put back: the old unit may run
+   * `node current/misao.mjs`, which the new layout no longer provides. The job is booted out first, because launchd
+   * keeps the definition of a loaded job and `start` only kicks it.
+   */
+  private async registerBundled(bundle: MisaoBundle, controller: MisaoServiceController, installed: string | undefined): Promise<void> {
+    if (installed === undefined || installed === bundle.version) {
+      if (installed !== bundle.version) this.switchCurrent(bundle.version);
+      await controller.install(this.renderUnit(bundle, controller));
+      return;
+    }
+    const previousDefinition = controller.readDefinition();
+    await controller.stop();
+    try {
+      this.switchCurrent(bundle.version);
+      await controller.install(this.renderUnit(bundle, controller));
+    } catch (err) {
+      try {
+        this.switchCurrent(installed);
+        if (previousDefinition !== undefined) await controller.install(previousDefinition);
+      } catch (restoreErr) {
+        const restoreText = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
+        throw new MisaoServiceError('update_failed', `Moving misao to ${bundle.version} failed (${err instanceof Error ? err.message : String(err)}) and putting ${installed} back failed too (${restoreText}). To restore by hand: ln -sfn ${installed} ${this.paths.current}`);
+      }
+      throw err;
+    }
   }
 
   /** Starts the installed service when it is not running. It never restarts a running daemon. */
@@ -235,6 +263,8 @@ export class MisaoServiceService {
       throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion}: ${causeText} The new daemon is running, so it was left as it is. Check the service log; ${manual}`);
     }
     try {
+      // A loaded launchd job keeps its definition (kickstart does not read the plist again): boot it out before putting the old one back.
+      await controller.stop();
       this.switchCurrent(previous);
       await controller.install(previousDefinition);
       await controller.start();
@@ -263,9 +293,12 @@ export class MisaoServiceService {
     fs.chmodSync(this.paths.root, 0o700);
   }
 
+  /** Every release file is there and matches the manifest (a directory with only some of them is not a usable release). */
   private isExtracted(dir: string, files: MisaoTargetFiles): boolean {
-    const entry = path.join(dir, 'misao');
-    return fs.existsSync(entry) && sha256File(entry) === files.sha256.misao;
+    return MISAO_RELEASE_FILE_NAMES.every((name) => {
+      const file = path.join(dir, name);
+      return fs.existsSync(file) && sha256File(file) === files.sha256[name];
+    });
   }
 
   /** Unpacks this host's misao binary and its licenses into `<root>/<version>/`, atomically. An older release's directory is not touched. */

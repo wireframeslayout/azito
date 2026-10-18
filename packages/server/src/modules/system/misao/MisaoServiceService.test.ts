@@ -161,6 +161,28 @@ describe('MisaoServiceService', () => {
       expect(fs.readlinkSync(paths.current)).toBe(BUNDLED_VERSION);
       expect(controller.unit).toContain(`${prefix}/misao/current/misao serve`);
       expect(fs.existsSync(path.join(paths.root, '0.2.0', 'misao.mjs'))).toBe(true);
+      // The job is booted out before its definition changes (launchd keeps the definition of a loaded job).
+      expect(controller.calls.slice(0, 2)).toEqual(['stop:0.2.0', 'install']);
+    });
+
+    it('puts the old link and the old unit back when moving a stopped older install fails', async () => {
+      fs.mkdirSync(path.join(paths.root, '0.2.0'), { recursive: true });
+      fs.writeFileSync(path.join(paths.root, '0.2.0', 'misao.mjs'), '// node build\n');
+      fs.symlinkSync('0.2.0', paths.current);
+      controller.installed = true;
+      controller.unit = LEGACY_UNIT;
+      const original = controller.install.bind(controller);
+      let calls = 0;
+      controller.install = async (content: string) => {
+        calls += 1;
+        if (calls === 1) throw new Error('daemon-reload exploded');
+        return original(content);
+      };
+
+      await expect(newService().install()).rejects.toThrow('daemon-reload exploded');
+
+      expect(fs.readlinkSync(paths.current)).toBe('0.2.0');
+      expect(controller.unit).toBe(LEGACY_UNIT);
     });
 
     it('refuses to move the hub away from a MISAO_SOCKET that points at another daemon unless told to', async () => {
