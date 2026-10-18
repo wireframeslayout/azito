@@ -120,9 +120,23 @@ export interface ReadSessionBeforeResult {
   hasOlder: boolean;
 }
 
+/** 後方ページングの読み取り予算。maxExpandWindows: 1 で、巨大行のためのウィンドウ拡張（既定は最大8窓）を無効にする。 */
+export interface ReadBudget {
+  maxExpandWindows?: number;
+}
+
+export interface ListSessionsOptions {
+  /** true なら preview を作らず（空文字）、cwd を拾うのに足りる先頭だけを読む。cwd 照合用の軽量一覧。 */
+  metadataOnly?: boolean;
+}
+
 /**
  * 1エージェント種別分のトランスクリプト読み取りを提供するアダプタ。
  * 実装はファイル走査・行パースの詳細を持つが、返す値は上記の正規化スキーマに従う。
+ * TranscriptReader は「会話ログのあるマシン上で」同期的に読むもの（ハブ自身 = local、または
+ * エージェントプロセス）。ハブから見た読み取り口は非同期の TranscriptSource で、local は
+ * LocalTranscriptSource（reader のラッパー）、リモートは AgentTranscriptSource（エージェント上の
+ * reader を HTTP で呼ぶ）が実装する。
  *
  * 'command' 型の TranscriptEntry（ローカルスラッシュコマンド実行）は、CLI 自身がその実行を
  * セッション JSONL に記録するエージェント種別（現状 Claude Code のみ）の実装だけが生成する。
@@ -130,12 +144,15 @@ export interface ReadSessionBeforeResult {
  * このケースはフロント側の入力バー注記（sources/profiles.ts の slashCommandsVisibleInLog）で
  * 別途ユーザーへ誘導する。
  */
-export interface TranscriptSource {
+export interface TranscriptReader {
   readonly agentType: string;
-  listSessions(limit?: number): SessionSummary[];
+  listSessions(limit?: number, options?: ListSessionsOptions): SessionSummary[];
   readSession(sessionId: string, offset?: number): ReadSessionResult | null;
-  /** before（既知の行境界バイト位置）より前を後方ページングで読む。セッション未検出は null。 */
-  readSessionBefore(sessionId: string, before: number): ReadSessionBeforeResult | null;
+  /**
+   * before（既知の行境界バイト位置）より前を後方ページングで読む。セッション未検出は null。
+   * budget を渡すと1回の読み取り量に上限を課せる（エージェント上の同期読み用）。省略時は reader の既定。
+   */
+  readSessionBefore(sessionId: string, before: number, budget?: ReadBudget): ReadSessionBeforeResult | null;
   getSessionCwd(sessionId: string): { cwd: string | null } | null;
   /**
    * セッション JSONL の最終更新時刻（epoch ms）。WindowSessionResolver の agentDetected 判定
@@ -201,4 +218,20 @@ export interface SessionTailState {
   state: TailState;
   /** state の分類元となった末尾の意味あるエントリ自身の timestamp（epoch ms）。無ければ null。 */
   lastEntryTimestampMs: number | null;
+}
+
+/**
+ * ハブから見たトランスクリプトの読み取り口。TranscriptReader と同じ契約を非同期で提供する —
+ * 会話ログがハブ自身のマシンにあるとは限らない（エージェントサーバー）ため。契約（戻り値の意味）は
+ * TranscriptReader の各メソッドのコメントを参照。リモート実装は到達不能時に例外を投げる。
+ */
+export interface TranscriptSource {
+  readonly agentType: string;
+  listSessions(limit?: number, options?: ListSessionsOptions): Promise<SessionSummary[]>;
+  readSession(sessionId: string, offset?: number): Promise<ReadSessionResult | null>;
+  readSessionBefore(sessionId: string, before: number): Promise<ReadSessionBeforeResult | null>;
+  getSessionCwd(sessionId: string): Promise<{ cwd: string | null } | null>;
+  getSessionMtimeMs(sessionId: string): Promise<number | null>;
+  getSessionCreatedMs(sessionId: string): Promise<number | null>;
+  getSessionTailState(sessionId: string): Promise<SessionTailState>;
 }

@@ -1,14 +1,21 @@
 import { ClaudeTranscriptSource } from './ClaudeTranscriptSource';
 import { CodexTranscriptSource } from './CodexTranscriptSource';
-import type { TranscriptSource } from './TranscriptSource';
+import { LocalTranscriptSource } from './LocalTranscriptSource';
+import type { TranscriptReader, TranscriptSource } from './TranscriptSource';
 
-// 本番用の既定ソース群（実ディレクトリを走査する）。テストは ClaudeTranscriptSource /
-// CodexTranscriptSource を dirOverride 付きで個別にインスタンス化し、この配列は使わない。
-export const claudeTranscriptSource = new ClaudeTranscriptSource();
-export const codexTranscriptSource = new CodexTranscriptSource();
+// 本番用の既定 reader 群（実ディレクトリを走査する）。ハブ自身のマシンの会話ログ（local）と、
+// エージェントプロセスが自マシンの会話ログを返すとき（agent/transcriptRoutes.ts）の両方が使う。
+// テストは ClaudeTranscriptSource / CodexTranscriptSource を dirOverride 付きで個別に
+// インスタンス化し、この配列は使わない。
+export const claudeTranscriptReader = new ClaudeTranscriptSource();
+export const codexTranscriptReader = new CodexTranscriptSource();
 
-export const TRANSCRIPT_SOURCES: TranscriptSource[] = [claudeTranscriptSource, codexTranscriptSource];
+export const TRANSCRIPT_READERS: TranscriptReader[] = [claudeTranscriptReader, codexTranscriptReader];
 
-export function getSource(agentType: string): TranscriptSource | undefined {
-  return TRANSCRIPT_SOURCES.find((source) => source.agentType === agentType);
-}
+export const claudeTranscriptSource: TranscriptSource = new LocalTranscriptSource(claudeTranscriptReader);
+
+/** ハブ自身のマシン（type=local）の会話ログ。 */
+export const TRANSCRIPT_SOURCES: TranscriptSource[] = [
+  claudeTranscriptSource,
+  new LocalTranscriptSource(codexTranscriptReader),
+];

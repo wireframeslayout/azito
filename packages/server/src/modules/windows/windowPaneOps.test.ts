@@ -1,5 +1,8 @@
-import { describe, it, expect } from 'vitest';
-import { resolveWindowById, resolveRefFromParam } from './windowPaneOps';
+import { describe, it, expect, vi } from 'vitest';
+import { resolveWindowById, resolveRefFromParam, closePaneInWindow } from './windowPaneOps';
+import type { IMuxClient, PaneLocation } from '../tmux/IMuxClient';
+import type { ServerConfig } from '../servers/Server';
+import type { MuxRef } from '@azito/shared';
 import type { Window, IWindowRepository } from './Window';
 
 const makeWindow = (overrides: Partial<Window> = {}): Window => ({
@@ -64,5 +67,76 @@ describe('resolveRefFromParam', () => {
     } catch (e: any) {
       expect(e.statusCode).toBe(400);
     }
+  });
+});
+
+describe('closePaneInWindow with a handle', () => {
+  const server = { name: 'm' } as ServerConfig;
+  const ref: MuxRef = { kind: 'misao', workspace: 'ws', window: 'w_A' };
+  const HANDLE = 'p_00000000000000000000000001';
+  const OK = { stdout: '', stderr: '', code: 0 };
+
+  function driver(location: PaneLocation | Error): { client: IMuxClient; closePane: ReturnType<typeof vi.fn> } {
+    const closePane = vi.fn(async () => OK);
+    const client = {
+      closePane,
+      locatePane: vi.fn(async () => { if (location instanceof Error) throw location; return location; }),
+      resolvePane: vi.fn(async () => HANDLE),
+    } as unknown as IMuxClient;
+    return { client, closePane };
+  }
+  const found: PaneLocation = { status: 'found', ref, ordinal: 1 };
+
+  it('closes a pane that belongs to the window', async () => {
+    const { client, closePane } = driver(found);
+    await closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE });
+    expect(closePane).toHaveBeenCalledWith(server, HANDLE);
+  });
+
+  it('succeeds without closing anything when the pane is verified absent', async () => {
+    const { client, closePane } = driver({ status: 'absent' });
+    await closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE });
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
+  it('refuses a pane of another window with 404', async () => {
+    const { client, closePane } = driver({ status: 'found', ref: { ...ref, window: 'w_B' }, ordinal: 1 });
+    await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE })).rejects.toMatchObject({ statusCode: 404 });
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
+  describe('tmux', () => {
+    const tmuxRef: MuxRef = { kind: 'tmux', workspace: 'A', window: 'bash' };
+    const TMUX_HANDLE = '%5';
+    const tmuxFound = (workspaces: string[], window = 'bash'): PaneLocation => ({ status: 'found', ref: { kind: 'tmux', workspace: workspaces[0], window }, ordinal: 1, workspaces });
+
+    it('refuses a pane of a same-named window in another session with 404', async () => {
+      const { client, closePane } = driver(tmuxFound(['B']));
+      await expect(closePaneInWindow(client, server, tmuxRef, { ordinal: 1, handle: TMUX_HANDLE })).rejects.toMatchObject({ statusCode: 404 });
+      expect(closePane).not.toHaveBeenCalled();
+    });
+
+    it('accepts a grouped session requested under its own name rather than the group name', async () => {
+      const { client, closePane } = driver(tmuxFound(['group1', 'A']));
+      await closePaneInWindow(client, server, tmuxRef, { ordinal: 1, handle: TMUX_HANDLE });
+      expect(closePane).toHaveBeenCalledWith(server, TMUX_HANDLE);
+    });
+  });
+
+  it('refuses a malformed handle with 400', async () => {
+    const { client } = driver(found);
+    await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: '%3' })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it('answers 503 when the pane cannot be verified, never "already gone"', async () => {
+    const { client, closePane } = driver({ status: 'unknown' });
+    await expect(closePaneInWindow(client, server, ref, { ordinal: 1, handle: HANDLE })).rejects.toMatchObject({ statusCode: 503 });
+    expect(closePane).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the ordinal when no handle is given', async () => {
+    const { client, closePane } = driver(found);
+    await closePaneInWindow(client, server, ref, { ordinal: 1 });
+    expect(closePane).toHaveBeenCalledWith(server, HANDLE);
   });
 });

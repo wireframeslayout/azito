@@ -41,7 +41,8 @@ export function HealthProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
     api<HealthResponse>('/health')
       .then((res) => {
-        if (!cancelled) setScopedAuthEnabled(res.scopedAuthEnabled);
+        if (cancelled) return;
+        setScopedAuthEnabled(res.scopedAuthEnabled);
       })
       .catch(() => {
         // Fail closed for the badge's purposes: an unknown state must never

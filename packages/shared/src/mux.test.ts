@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, muxKindForRuntime, type MuxRef } from './mux';
+import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, windowKeyForRef, type MuxRef } from './mux';
 import { windowKey } from './windowKey';
 
 describe('formatMuxRef / parseMuxRef', () => {
@@ -42,14 +42,5 @@ describe('windowKeyForRef', () => {
   it('produces same output as windowKey', () => {
     const ref: MuxRef = { kind: 'tmux', workspace: 'sess', window: 'win--abc' };
     expect(windowKeyForRef('server01', ref)).toBe(windowKey('server01', 'sess:win--abc'));
-  });
-});
-
-describe('muxKindForRuntime', () => {
-  it('maps system to tmux', () => {
-    expect(muxKindForRuntime('system')).toBe('tmux');
-  });
-  it('maps managed to tmux', () => {
-    expect(muxKindForRuntime('managed')).toBe('tmux');
   });
 });

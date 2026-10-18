@@ -17,6 +17,14 @@ export interface DataPaths {
   updateChannel: string;
 }
 
+// resolveDataDir() is called several times in one CLI process (the command and its helpers): announce the default once.
+let announcedReleaseDefault = false;
+
+/** Test hook: forget that the release-default notice was printed. */
+export function _resetReleaseDefaultNotice(): void {
+  announcedReleaseDefault = false;
+}
+
 export function resolveDataDir(): DataPaths {
   const explicitDir = process.env.AZITO_DATA_DIR;
 
@@ -49,7 +57,10 @@ export function resolveDataDir(): DataPaths {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     try { fs.chmodSync(dir, 0o700); } catch {}
 
-    console.log(`AZITO_DATA_DIR not set, using ${dir} (release mode default)`);
+    if (!announcedReleaseDefault) {
+      announcedReleaseDefault = true;
+      console.log(`AZITO_DATA_DIR not set, using ${dir} (release mode default)`);
+    }
 
     const sidekicks = process.env.AZITO_SIDEKICKS_DIR
       ? path.resolve(process.env.AZITO_SIDEKICKS_DIR)

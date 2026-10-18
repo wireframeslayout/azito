@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { muxRefFromTmuxTarget, formatMuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { Window, Task, Project } from '../pages/workspace/types';
-import type { TerminalRef } from '../lib/terminalRef';
+import { resolveWindowRegistrationRef, muxRefJson, type TerminalRef } from '../lib/terminalRef';
+import type { MuxDriverKind } from '@azito/shared';
+import type { Session } from '../pages/workspace/types';
 import { useToast } from '../hooks/useToast';
 import { useAgentDefinitions } from '../hooks/useAgentDefinitions';
 import { AgentIcon } from './ui/AgentIcons';
@@ -12,6 +13,12 @@ import { resolveWindowDisplay, formatWindowDisplayLabel } from '../lib/windowDis
 interface WindowStatusDropdownProps {
   serverName: string;
   target: string;
+  /** Sessions of this server — the source of the window's ref when registering. */
+  sessions?: Session[];
+  /** Mux kind of the server (undefined while the server list is unknown); decides how a window is registered. */
+  muxKind?: MuxDriverKind;
+  /** The terminal this dropdown sits on; finds the window row by windowId / ref (a ref-only misao row has no window-name target). */
+  terminalRef?: TerminalRef;
   project: Project | null;
   allTasks: Task[];
   /** Owner context for registering an untracked window (task takes precedence). */
@@ -27,7 +34,7 @@ export function findWindow(serverName: string, target: string, project: Project 
     const matcher = (w: Window): boolean => {
       if (w.serverName !== serverName) return false;
       if (terminalRef.kind === 'windowId') return w.id === terminalRef.windowId;
-      return w.muxRef === terminalRef.ref;
+      return muxRefJson(w.muxRef) === terminalRef.ref;
     };
     const sources: Window[][] = [];
     if (project) sources.push(project.windows);
@@ -81,19 +88,21 @@ function InfoRow({ label, children }: { label: string; children: React.ReactNode
   );
 }
 
-function ActionButton({ label, icon, onClick, loading }: { label: string; icon: React.ReactNode; onClick: () => void; loading?: boolean }) {
+function ActionButton({ label, icon, onClick, loading, disabled, title }: { label: string; icon: React.ReactNode; onClick: () => void; loading?: boolean; disabled?: boolean; title?: string }) {
+  const inactive = loading || disabled;
   return (
     <button
       onClick={onClick}
-      disabled={loading}
-      className={loading ? undefined : 'row-hover'}
+      disabled={inactive}
+      title={title}
+      className={inactive ? undefined : 'row-hover'}
       style={{
         display: 'flex', alignItems: 'center', gap: 6,
         padding: '6px 10px', borderRadius: 'var(--radius-sm)', fontSize: 'var(--font-sm)',
         background: 'var(--bg-elevated)', border: '1px solid var(--border)',
-        color: loading ? 'var(--text-dim)' : 'var(--text)',
-        cursor: loading ? 'not-allowed' : 'pointer',
-        opacity: loading ? 0.6 : 1,
+        color: inactive ? 'var(--text-dim)' : 'var(--text)',
+        cursor: inactive ? 'not-allowed' : 'pointer',
+        opacity: inactive ? 0.6 : 1,
       }}
     >
       <span style={{ display: 'inline-flex', alignItems: 'center' }}>{icon}</span>
@@ -102,7 +111,7 @@ function ActionButton({ label, icon, onClick, loading }: { label: string; icon: 
   );
 }
 
-export function WindowStatusDropdown({ serverName, target, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
+export function WindowStatusDropdown({ serverName, target, sessions, muxKind, terminalRef, project, allTasks, taskId, projectId, onOpenTask, onChanged }: WindowStatusDropdownProps) {
   const { showToast } = useToast();
   const [open, setOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -118,7 +127,9 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
     ...agentDefs.filter((d) => d.launchable).map((d) => ({ value: d.type, label: d.label })),
   ];
 
-  const win = findWindow(serverName, target, project, allTasks);
+  const win = findWindow(serverName, target, project, allTasks, terminalRef);
+  // tmux keeps its target-derived ref; other mux kinds use the ref the server reported (never a synthesised tmux ref).
+  const registerRef = resolveWindowRegistrationRef({ muxKind, target, terminalRef, sessions });
   const task = win ? findTaskForWindow(win, allTasks) : null;
 
   useEffect(() => {
@@ -205,12 +216,10 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
   const handleRegister = useCallback(async () => {
     setActionLoading(true);
     try {
-      const base = target.replace(/\.\d+$/, '');
-      let refJson: string | undefined;
-      try { refJson = formatMuxRef(muxRefFromTmuxTarget(base)); } catch { /* fall back to tmux_target */ }
+      if (!registerRef) throw new Error('window ref is not resolved yet');
       const body: Record<string, unknown> = {
         server_name: serverName,
-        ...(refJson ? { ref: refJson } : { tmux_target: base }),
+        ref: registerRef,
         window_type: selectedType === 'terminal' ? 'terminal' : 'agent',
         worker_type: selectedType === 'terminal' ? null : selectedType,
       };
@@ -223,7 +232,7 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
     } finally {
       setActionLoading(false);
     }
-  }, [serverName, target, selectedType, taskId, projectId, showToast, onChanged]);
+  }, [serverName, registerRef, selectedType, taskId, projectId, showToast, onChanged]);
 
   const icon = win?.workerType ? <AgentIcon workerType={win.workerType} windowType="agent" size={13} /> : null;
   const label = win
@@ -294,7 +303,7 @@ export function WindowStatusDropdown({ serverName, target, project, allTasks, ta
                   >
                     {typeOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                   </select>
-                  <ActionButton icon={<Icon name="plus" size={16} />} label={`Register to ${taskId ? 'task' : 'project'}`} onClick={handleRegister} loading={actionLoading} />
+                  <ActionButton icon={<Icon name="plus" size={16} />} label={`Register to ${taskId ? 'task' : 'project'}`} onClick={handleRegister} loading={actionLoading} disabled={!registerRef} title={registerRef ? undefined : 'Waiting for the server to report this window'} />
                 </div>
               ) : (
                 <div style={{ paddingTop: 8, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>

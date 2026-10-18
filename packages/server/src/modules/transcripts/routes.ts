@@ -1,16 +1,24 @@
 import type { FastifyPluginCallback, FastifyReply } from 'fastify';
-import { asPaneHandle } from '@azito/shared';
+import { asPaneHandle, isPaneHandle, isPaneHandleLike } from '@azito/shared';
 import type { TranscriptSource } from './sources/TranscriptSource';
+import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import type { IServerRepository } from '../servers/Server';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
+import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { TranscriptPaneService } from './TranscriptPaneService';
 import type { WindowSessionResolver } from './WindowSessionResolver';
 import type { AnswerKey, WindowInputService } from './WindowInputService';
 import type { IWindowRepository } from '../windows/Window';
 import type { InteractionMonitor, InteractionQuestion } from '../notifications/InteractionMonitor';
-import type { TranscriptEntry } from './sources/TranscriptSource';
+import type { ReadSessionBeforeResult, ReadSessionResult, TranscriptEntry } from './sources/TranscriptSource';
 import { getAgentTranscriptProfile, type InterruptKey } from './sources/profiles';
 
 export interface TranscriptsRouteOptions {
+  /** ハブ自身のマシン（local）の会話ログ。windowId の無い読み取り・一覧・旧ルートの対象。 */
   sources: TranscriptSource[];
+  /** windowId が指すウィンドウのサーバーごとの会話ログ（リモートはエージェント経由）。 */
+  sourceProvider: TranscriptSourceProvider;
+  serverRepo: IServerRepository;
   transcriptPaneService: TranscriptPaneService;
   windowSessionResolver: WindowSessionResolver;
   windowInputService: WindowInputService;
@@ -18,7 +26,17 @@ export interface TranscriptsRouteOptions {
   interactionMonitor: InteractionMonitor;
 }
 
-const PANE_ID_PATTERN = /^%\d+$/;
+/**
+ * 会話ログの読み取り先（エージェントサーバー）に届かない／古いエージェントのときの応答。それ以外の例外は
+ * そのまま投げる。503 / 501 の error 文字列は resolve-window の reason と同じで、フロントが区別して表示する。
+ */
+function replyHostReadError(err: unknown, reply: FastifyReply): FastifyReply {
+  if (err instanceof AgentUnreachableError) return reply.status(503).send({ error: 'agent_unreachable' });
+  if (err instanceof TranscriptAgentOutdatedError) return reply.status(501).send({ error: 'agent_outdated' });
+  if (err instanceof TranscriptAgentBadResponseError) return reply.status(502).send({ error: 'agent_bad_response' });
+  throw err;
+}
+
 const INPUT_TEXT_MIN_LENGTH = 1;
 const INPUT_TEXT_MAX_LENGTH = 32768;
 /** pane 候補提示・入力送信は tmux ペインとの cwd 突合が前提のため、現状 Claude のみ対応。 */
@@ -42,6 +60,25 @@ function parsePositiveInt(raw: string | undefined): number | undefined | 'invali
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) return 'invalid';
   return value;
+}
+
+/**
+ * 読み取り結果から、クライアントへ返すフィールドを明示的に組み立てる。source（特にエージェント経由）の
+ * 戻り値をそのまま展開すると、ハブが InteractionMonitor から付ける pendingInteraction / pendingQuestion
+ * のようなハブ固有のフィールドを、source 側が偽装して素通りさせられる。
+ */
+function toReadResponse(result: ReadSessionResult): ReadSessionResult {
+  return {
+    entries: result.entries,
+    nextOffset: result.nextOffset,
+    truncated: result.truncated,
+    startOffset: result.startOffset,
+    hasOlder: result.hasOlder,
+  };
+}
+
+function toReadBeforeResponse(result: ReadSessionBeforeResult): ReadSessionBeforeResult {
+  return { entries: result.entries, prevOffset: result.prevOffset, hasOlder: result.hasOlder };
 }
 
 /**
@@ -104,16 +141,17 @@ async function handleReadSession(
   if (beforeRaw !== undefined) {
     const before = parseNonNegativeInt(beforeRaw);
     if (before === 'invalid' || before === undefined) return reply.status(400).send({ error: 'Invalid before' });
-    const result = source.readSessionBefore(sessionId, before);
+    const result = await source.readSessionBefore(sessionId, before);
     if (!result) return reply.status(404).send({ error: 'Session not found' });
-    return result;
+    return toReadBeforeResponse(result);
   }
 
   const offset = parseNonNegativeInt(offsetRaw);
   if (offset === 'invalid') return reply.status(400).send({ error: 'Invalid offset' });
 
-  const result = source.readSession(sessionId, offset);
-  if (!result) return reply.status(404).send({ error: 'Session not found' });
+  const read = await source.readSession(sessionId, offset);
+  if (!read) return reply.status(404).send({ error: 'Session not found' });
+  const result = toReadResponse(read);
 
   if (windowId === undefined) return result;
 
@@ -147,8 +185,30 @@ async function handleReadSession(
   return { ...result, pendingInteraction, ...(pendingQuestion === undefined ? {} : { pendingQuestion }) };
 }
 
+/** 窓が見つかる場合、その窓の mux 種別（muxRef 無しは tmux）と handle の形式が一致するか。窓が無ければ判定せず true（404 はサービス側）。 */
+function paneHandleMatchesWindow(windowRepo: IWindowRepository, windowId: number, paneId: string): boolean {
+  const window = windowRepo.findById(windowId);
+  return !window || isPaneHandleLike(paneId, window.muxRef?.kind ?? 'tmux');
+}
+
 const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fastify, opts, done) => {
-  const { sources, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
+  const { sources, sourceProvider, serverRepo, transcriptPaneService, windowSessionResolver, windowInputService, windowRepo, interactionMonitor } = opts;
+
+  /**
+   * 読み取りの対象にする会話ログ。windowId が指すウィンドウのサーバーのもの（リモートはエージェント上）。
+   * windowId が無い／不正（不正は handleReadSession が 400 にする）なら従来どおりハブ自身（local）。windowId
+   * 指定でウィンドウが無ければ 'window_not_found'、サーバーが無い・会話ログを読めない種別なら 'unsupported'
+   * （同じ UUID のハブ上の会話を誤って返さないため、local へはフォールバックしない）。
+   */
+  function sourcesForRead(windowIdRaw: string | undefined): TranscriptSource[] | 'window_not_found' | 'unsupported' {
+    const windowId = parsePositiveInt(windowIdRaw);
+    if (windowId === undefined || windowId === 'invalid') return sources;
+    const window = windowRepo.findById(windowId);
+    if (!window) return 'window_not_found';
+    const server = serverRepo.findByName(window.serverName);
+    if (!server) return 'unsupported';
+    return sourceProvider.forServer(server) ?? 'unsupported';
+  }
 
   // ── GET /api/transcripts/resolve-window ── ウィンドウからエージェント会話セッションを自動解決する
   // （Issue #69 Phase E-1）。windowId は数値検証、該当ウィンドウが存在しなければ 404。
@@ -179,9 +239,10 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
     if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
       return reply.status(400).send({ error: 'Invalid windowId' });
     }
-    if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+    if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
       return reply.status(400).send({ error: 'Invalid paneId' });
     }
+    if (!paneHandleMatchesWindow(windowRepo, windowId, paneId)) return reply.status(400).send({ error: 'Invalid paneId' });
     if (typeof text !== 'string' || text.length < INPUT_TEXT_MIN_LENGTH || text.length > INPUT_TEXT_MAX_LENGTH) {
       return reply.status(400).send({ error: 'Invalid text' });
     }
@@ -216,9 +277,10 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
       if (typeof windowId !== 'number' || !Number.isSafeInteger(windowId) || windowId <= 0) {
         return reply.status(400).send({ error: 'Invalid windowId' });
       }
-      if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+      if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
         return reply.status(400).send({ error: 'Invalid paneId' });
       }
+      if (!paneHandleMatchesWindow(windowRepo, windowId, paneId)) return reply.status(400).send({ error: 'Invalid paneId' });
       if (action !== 'interrupt' && action !== 'key' && action !== 'answer') {
         return reply.status(400).send({ error: 'Invalid action' });
       }
@@ -258,7 +320,7 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   fastify.get<{ Querystring: { agent?: string } }>('/api/transcripts', async (request) => {
     const { agent } = request.query;
     const targetSources = agent ? sources.filter((s) => s.agentType === agent) : sources;
-    const sessions = targetSources.flatMap((s) => s.listSessions());
+    const sessions = (await Promise.all(targetSources.map((s) => s.listSessions()))).flat();
     sessions.sort((a, b) => b.mtimeMs - a.mtimeMs);
     return { sessions };
   });
@@ -268,10 +330,17 @@ const transcriptsRoutes: FastifyPluginCallback<TranscriptsRouteOptions> = (fasti
   fastify.get<{ Params: { agent: string; id: string }; Querystring: { offset?: string; before?: string; windowId?: string } }>(
     '/api/transcripts/:agent/:id',
     async (request, reply) => {
-      const source = findSource(sources, request.params.agent);
+      const scoped = sourcesForRead(request.query.windowId);
+      if (scoped === 'window_not_found') return reply.status(404).send({ error: 'Window not found' });
+      if (scoped === 'unsupported') return reply.status(501).send({ error: 'unsupported_server' });
+      const source = findSource(scoped, request.params.agent);
       if (!source) return reply.status(404).send({ error: 'Unknown agent type' });
 
-      return handleReadSession(source, request.params.id, request.query, reply, interactionMonitor, windowRepo);
+      try {
+        return await handleReadSession(source, request.params.id, request.query, reply, interactionMonitor, windowRepo);
+      } catch (err) {
+        return replyHostReadError(err, reply);
+      }
     },
   );
 
@@ -342,7 +411,7 @@ async function handleSendInput(
 ) {
   const { paneId, text } = body ?? {};
 
-  if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+  if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
     return reply.status(400).send({ error: 'Invalid paneId' });
   }
   if (typeof text !== 'string' || text.length < INPUT_TEXT_MIN_LENGTH || text.length > INPUT_TEXT_MAX_LENGTH) {
@@ -378,7 +447,7 @@ async function handleSendSignal(
 ) {
   const { paneId, action, key } = body ?? {};
 
-  if (typeof paneId !== 'string' || !PANE_ID_PATTERN.test(paneId)) {
+  if (typeof paneId !== 'string' || !isPaneHandle(paneId)) {
     return reply.status(400).send({ error: 'Invalid paneId' });
   }
   if (action !== 'interrupt' && action !== 'key') {

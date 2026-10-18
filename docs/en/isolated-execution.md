@@ -498,6 +498,25 @@ Similarly, features that require operator-level privilege (e.g. operations via t
 architecture — they require operator-equivalent credentials, which never reach an isolated server
 in the first place.
 
+## 8. Chat view (conversation logs) on isolated servers (#361)
+
+Chat mode shows the agent's conversation (Claude Code / Codex JSONL) for windows on agent servers,
+including isolated ones. The decision, and why it does not weaken isolation:
+
+- The hub reads the logs **from** the isolated host over the same hub<->agent channel and token it
+  already uses for commands and terminal streams. No hub secret and no operator credential is sent
+  to the isolated host, and the isolated host gains no new authority.
+- The agent's conversation-log API (`/api/transcripts/:agent/sessions...`) sits behind the agent's
+  token check. It serves only the agent host's own session directories (`~/.claude/projects` or
+  `CLAUDE_CONFIG_DIR`, and the Codex `sessions` directory), addressed by agent type + session UUID.
+  There is no endpoint that takes a file path, so arbitrary files cannot be read.
+- Data flows isolated host -> hub, like terminal output and task logs already do. The hub renders
+  it as text; a prompt-injected agent can write misleading text into its own log, exactly as it can
+  into its pane.
+
+If you would rather not surface an isolated server's conversation in the hub UI, leave the window in
+Terminal mode; there is no per-server switch for this today.
+
 ## Related documents
 
 - [Security Configuration & Environment Setup Guide](./security-setup.md) -- Principal separation (operator/task), enabling scoped auth

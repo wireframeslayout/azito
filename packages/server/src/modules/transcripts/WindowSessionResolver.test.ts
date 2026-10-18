@@ -1,11 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { MuxPaneInfo, MuxWorkspace } from '@azito/shared';
 import { WindowSessionResolver } from './WindowSessionResolver';
+import { HostTranscriptSourceProvider } from './sources/TranscriptSourceProvider';
+import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import type { ITaskRepository, Task } from '../tasks/Task';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
-import type { TranscriptSource, SessionSummary } from './sources/TranscriptSource';
+import type { TranscriptReader, TranscriptSource, SessionSummary } from './sources/TranscriptSource';
 import type { Window } from './../windows/Window';
 import type { SessionCaptureService } from '../windows/SessionCaptureService';
 
@@ -20,7 +22,7 @@ const LOCAL_SERVER: ServerConfig = {
   agentToken: null,
   agentVersion: null,
   sshHost: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -28,7 +30,16 @@ const LOCAL_SERVER: ServerConfig = {
   createdAt: '2026-01-01T00:00:00Z',
 };
 
-const AGENT_SERVER: ServerConfig = { ...LOCAL_SERVER, name: 'agent1', type: 'agent' };
+const AGENT_SERVER: ServerConfig = { ...LOCAL_SERVER, name: 'agent1', type: 'agent', host: '10.0.0.2', agentPort: 3002, agentToken: 'tok' };
+// Legacy rows can still carry type 'ssh' (the ServerConfig union no longer lists it).
+const SSH_SERVER = { ...LOCAL_SERVER, name: 'ssh1', type: 'ssh', sshHost: 'user@host' } as unknown as ServerConfig;
+
+/** Providers built in tests that never touch an agent server. */
+const noAgentTransports = {
+  getAgentTransport: (): never => {
+    throw new Error('this test must not use an agent transport');
+  },
+};
 
 function buildWindow(overrides: Partial<Window> = {}): Window {
   return {
@@ -104,14 +115,14 @@ function buildDeps(opts: {
   panePidByHandle?: IMuxClient['panePidByHandle'];
   exec?: (cmd: string) => Promise<{ stdout: string; stderr: string; code: number }>;
   servers?: ServerConfig[];
-  claudeGetSessionCwd?: TranscriptSource['getSessionCwd'];
-  claudeListSessions?: TranscriptSource['listSessions'];
-  claudeGetSessionMtimeMs?: TranscriptSource['getSessionMtimeMs'];
-  claudeGetSessionCreatedMs?: TranscriptSource['getSessionCreatedMs'];
-  claudeGetSessionTailState?: TranscriptSource['getSessionTailState'];
-  codexListSessions?: TranscriptSource['listSessions'];
-  codexGetSessionMtimeMs?: TranscriptSource['getSessionMtimeMs'];
-  codexGetSessionCreatedMs?: TranscriptSource['getSessionCreatedMs'];
+  claudeGetSessionCwd?: TranscriptReader['getSessionCwd'];
+  claudeListSessions?: TranscriptReader['listSessions'];
+  claudeGetSessionMtimeMs?: TranscriptReader['getSessionMtimeMs'];
+  claudeGetSessionCreatedMs?: TranscriptReader['getSessionCreatedMs'];
+  claudeGetSessionTailState?: TranscriptReader['getSessionTailState'];
+  codexListSessions?: TranscriptReader['listSessions'];
+  codexGetSessionMtimeMs?: TranscriptReader['getSessionMtimeMs'];
+  codexGetSessionCreatedMs?: TranscriptReader['getSessionCreatedMs'];
 } = {}) {
   const taskRepo = {
     findById: opts.findById ?? (() => null),
@@ -161,30 +172,30 @@ function buildDeps(opts: {
 }
 
 describe('WindowSessionResolver', () => {
-  it('returns unsupported_server for a non-local server', async () => {
-    const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [AGENT_SERVER] });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
-    const result = await resolver.resolve(buildWindow({ serverName: 'agent1' }));
+  it('returns unsupported_server for a server whose conversation logs cannot be read (ssh)', async () => {
+    const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [SSH_SERVER] });
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
+    const result = await resolver.resolve(buildWindow({ serverName: 'ssh1' }));
     expect(result).toEqual({ resolved: false, reason: 'unsupported_server', agentDetected: false });
   });
 
   it('returns unsupported_server when the window\'s server is not found', async () => {
     const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [] });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: false, reason: 'unsupported_server', agentDetected: false });
   });
 
-  it('best-effort: a non-local server still gets a paneId/agentType/agentDetected hint when panes exist', async () => {
+  it('best-effort: an ssh server still gets a paneId/agentType/agentDetected hint when panes exist', async () => {
     const panes: MuxPaneInfo[] = [
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'claude' },
     ];
     const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
-      servers: [AGENT_SERVER],
+      servers: [SSH_SERVER],
       listAllPanes: async () => panes,
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
-    const result = await resolver.resolve(buildWindow({ serverName: 'agent1', workerType: 'claude' }));
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
+    const result = await resolver.resolve(buildWindow({ serverName: 'ssh1', workerType: 'claude' }));
     expect(result).toEqual({
       resolved: false,
       reason: 'unsupported_server',
@@ -203,7 +214,7 @@ describe('WindowSessionResolver', () => {
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7 }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -221,7 +232,7 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7 }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -238,7 +249,7 @@ describe('WindowSessionResolver', () => {
       claudeListSessions: () => [older],
       codexListSessions: () => [newer],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: false });
   });
@@ -255,7 +266,7 @@ describe('WindowSessionResolver', () => {
           { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
         ],
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const window = buildWindow({ id: 99, taskId: null, agentSessionId: null });
       const result = await resolver.resolve(window);
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: false });
@@ -271,7 +282,7 @@ describe('WindowSessionResolver', () => {
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
       expect(sessionCaptureService.adoptResolvedSession).not.toHaveBeenCalled();
@@ -286,7 +297,7 @@ describe('WindowSessionResolver', () => {
         listAllPanes: async () => panes,
         claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7, agentSessionId: null }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
       expect(sessionCaptureService.adoptResolvedSession).not.toHaveBeenCalled();
@@ -304,7 +315,7 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: staleMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     // window.workerType defaults to 'claude'; the single 'node' pane still matches the node-ish fallback
     // in selectPane, so a best-effort paneId is returned even though no session could be resolved.
@@ -321,14 +332,14 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/other', mtimeMs: Date.now(), sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
   });
 
   it('returns no_recent_session with no pane hint when the window has no panes at all', async () => {
     const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ listAllPanes: async () => [] });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: false, reason: 'no_recent_session', agentDetected: false });
   });
@@ -341,7 +352,7 @@ describe('WindowSessionResolver', () => {
       { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'bash' },
     ];
     const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ listAllPanes: async () => panes });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(
       buildWindow({
         workerType: 'claude',
@@ -363,7 +374,7 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: true });
   });
@@ -401,7 +412,7 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: recentMtime, sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow());
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: false });
   });
@@ -416,7 +427,7 @@ describe('WindowSessionResolver', () => {
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -432,7 +443,7 @@ describe('WindowSessionResolver', () => {
       ...codexSource,
       getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
     } as unknown as TranscriptSource;
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexWithSession], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'codex' }));
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
   });
@@ -448,7 +459,7 @@ describe('WindowSessionResolver', () => {
       ...codexSource,
       getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
     } as unknown as TranscriptSource;
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexWithSession], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'generic' }));
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
   });
@@ -465,7 +476,7 @@ describe('WindowSessionResolver', () => {
       ...codexSource,
       getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
     } as unknown as TranscriptSource;
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexWithSession], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7, workerType: null }));
     expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
   });
@@ -480,7 +491,7 @@ describe('WindowSessionResolver', () => {
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: 7 }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%2', agentDetected: true });
   });
@@ -495,7 +506,7 @@ describe('WindowSessionResolver', () => {
       listAllPanes: async () => panes,
       claudeGetSessionCwd: (id) => (id === SID_CLAUDE ? { cwd: '/proj' } : null),
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(
       buildWindow({
         taskId: 7,
@@ -525,7 +536,7 @@ describe('WindowSessionResolver', () => {
         { sessionId: SID_CLAUDE, agentType: 'claude', projectDir: 'p', cwd: '/proj', mtimeMs: Date.now(), sizeBytes: 1, preview: '' },
       ],
     });
-    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+    const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
     const result = await resolver.resolve(buildWindow({ taskId: null }));
     expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
   });
@@ -546,24 +557,24 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow());
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
     });
 
-    it('layer 2 is skipped on non-local servers (agent/ssh) even when pane_current_command is "node"', async () => {
+    it('layer 2 is skipped on ssh servers even when pane_current_command is "node"', async () => {
       const panes: MuxPaneInfo[] = [
         { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
       ];
       const panePidByHandle = vi.fn(async () => 9000);
       const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({
-        servers: [AGENT_SERVER],
+        servers: [SSH_SERVER],
         listAllPanes: async () => panes,
         panePidByHandle,
         exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
-      const result = await resolver.resolve(buildWindow({ serverName: 'agent1', workerType: 'claude' }));
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
+      const result = await resolver.resolve(buildWindow({ serverName: 'ssh1', workerType: 'claude' }));
       expect(panePidByHandle).not.toHaveBeenCalled();
       expect(result).toEqual({ resolved: false, reason: 'unsupported_server', paneId: '%1', agentType: 'claude', agentDetected: false });
     });
@@ -581,7 +592,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -599,7 +610,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: false });
     });
@@ -613,7 +624,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow());
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: false });
     });
@@ -630,7 +641,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         panePidByHandle: async () => { throw new Error('tmux display-message failed'); },
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: 7 }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -657,7 +668,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // The stale session is rejected by the gate; no other candidate exists, so it falls through to
       // the best-effort unresolved pane hint (the live process is still detected as agentDetected:true).
@@ -676,7 +687,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -694,7 +705,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       // No window/task link at all, so this exercises tier3 (cwd match) only.
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
@@ -715,7 +726,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -735,7 +746,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude', agentDetected: true });
     });
@@ -759,7 +770,7 @@ describe('WindowSessionResolver', () => {
         getSessionCwd: (id: string) => (id === SID_CODEX ? { cwd: '/proj' } : null),
         getSessionMtimeMs: (id: string) => (id === SID_CODEX ? staleMtime : null),
       } as unknown as TranscriptSource;
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexWithSession], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexWithSession], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CODEX, workerType: 'codex' }));
       expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
     });
@@ -776,7 +787,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_RECENT_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -792,7 +803,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? veryStaleMtime : null),
         // execCommand is intentionally not mocked (undefined), simulating a tmux/ps failure.
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
     });
@@ -810,7 +821,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ workerType: 'claude' }));
       // Without the process-detection gate, this would have matched the recent cwd session
       // (reproducing the reported bug: a bash pane in the same cwd showing an unrelated old chat).
@@ -848,7 +859,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       expect(result).toEqual({ resolved: true, agentType: 'codex', sessionId: SID_CODEX, paneId: '%1', agentDetected: true });
     });
@@ -862,7 +873,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: null }));
       // No session file at all (no *ListSessions mocked), so this falls through to the best-effort
       // unresolved path. Even though window.workerType is null, agentType should still be 'codex'
@@ -879,7 +890,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_CODEX_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       // workerType explicitly set to 'claude' even though the live process detected is codex
       // (e.g. stale window metadata) — the explicit workerType still wins.
       const result = await resolver.resolve(buildWindow({ taskId: null, agentSessionId: null, workerType: 'claude' }));
@@ -896,7 +907,7 @@ describe('WindowSessionResolver', () => {
 
     it('returns offline when the server is not local', async () => {
       const { taskRepo, muxDriverRegistry, serverRepo, claudeSource, codexSource, sessionCaptureService, transportFactory } = buildDeps({ servers: [AGENT_SERVER] });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ serverName: 'agent1' }));
       expect(result.status).toBe('offline');
     });
@@ -910,7 +921,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_NO_AGENT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow());
       expect(result.status).toBe('offline');
     });
@@ -924,7 +935,7 @@ describe('WindowSessionResolver', () => {
         panePidByHandle: async () => 9000,
         exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: null }));
       expect(result.status).toBe('idle');
     });
@@ -940,7 +951,7 @@ describe('WindowSessionResolver', () => {
         exec: async () => ({ stdout: PS_OUTPUT_WITH_CLAUDE_DESCENDANT, stderr: '', code: 0 }),
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? staleMtime : null),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result.status).toBe('idle');
     });
@@ -957,7 +968,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: recentMtime }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result).toEqual({ status: 'working', completedAt: null, interruptedAt: null, tailState: 'in_progress', lastEntryTimestampMs: recentMtime });
     });
@@ -974,7 +985,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'terminal_interrupted' as const, lastEntryTimestampMs: recentMtime }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // 中断は完了ではない: interruptedAt だけが立ち、completedAt は null。
       expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: recentMtime, tailState: 'terminal_interrupted', lastEntryTimestampMs: recentMtime });
@@ -992,7 +1003,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: null }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       // timestamp が無い＝再新性の根拠が無い。mtime へは倒さない（偽 working も偽完了も作らない）。
       expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null, tailState: 'terminal_final', lastEntryTimestampMs: null });
@@ -1010,7 +1021,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'terminal_local' as const, lastEntryTimestampMs: null }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
       expect(result.status).toBe('idle');
     });
@@ -1028,7 +1039,7 @@ describe('WindowSessionResolver', () => {
         claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
         claudeGetSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: recentMtime }),
       });
-      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+      const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
       const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: null, taskId: 7, workerType: 'claude' }));
       expect(result.status).toBe('working');
     });
@@ -1049,7 +1060,7 @@ describe('WindowSessionResolver', () => {
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: staleEntryTimestampMs }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result.status).toBe('idle');
       });
@@ -1067,7 +1078,7 @@ describe('WindowSessionResolver', () => {
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'terminal_final' as const, lastEntryTimestampMs: recentEntryTimestampMs }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result).toEqual({ status: 'idle', completedAt: recentEntryTimestampMs, interruptedAt: null, tailState: 'terminal_final', lastEntryTimestampMs: recentEntryTimestampMs });
       });
@@ -1084,7 +1095,7 @@ describe('WindowSessionResolver', () => {
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'in_progress' as const, lastEntryTimestampMs: recentMtime }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result.status).toBe('working');
       });
@@ -1101,10 +1112,143 @@ describe('WindowSessionResolver', () => {
           claudeGetSessionMtimeMs: (id) => (id === SID_CLAUDE ? recentMtime : null),
           claudeGetSessionTailState: async () => ({ state: 'unknown' as const, lastEntryTimestampMs: null }),
         });
-        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, [claudeSource, codexSource], sessionCaptureService, transportFactory);
+        const resolver = new WindowSessionResolver(taskRepo, muxDriverRegistry, serverRepo, new HostTranscriptSourceProvider([claudeSource, codexSource], noAgentTransports), sessionCaptureService, transportFactory);
         const result = await resolver.getActivityStatus(buildWindow({ agentSessionId: SID_CLAUDE, workerType: 'claude' }));
         expect(result).toEqual({ status: 'idle', completedAt: null, interruptedAt: null, tailState: 'unknown', lastEntryTimestampMs: null });
       });
     });
+  });
+});
+
+describe('WindowSessionResolver on an agent server (conversation logs read through the agent)', () => {
+  const PS_WITH_CLAUDE = [
+    '  9000      1     90 node /path/to/azito-supervisor.cjs -- claude --dangerously-skip-permissions',
+    '  9001   9000     90 claude --dangerously-skip-permissions',
+  ].join('\n');
+  const PANES: MuxPaneInfo[] = [
+    { paneId: '%1', sessionName: 'main', windowIndex: 0, windowName: 'w0', paneIndex: 0, currentPath: '/proj', currentCommand: 'node' },
+  ];
+  const hour = 60 * 60 * 1000;
+
+  interface FakeSession { cwd: string | null; mtimeMs: number | null; createdMs: number | null }
+
+  /** An agent that serves the transcript API for `sessions` (by agent type), as agent/transcriptRoutes.ts does. */
+  function fakeAgent(sessions: { claude?: Record<string, FakeSession>; codex?: Record<string, FakeSession> }) {
+    return {
+      getJson: vi.fn(async (path: string) => {
+        const url = new URL(path, 'http://agent');
+        const [, , , agent, , id, leaf] = url.pathname.split('/');
+        const table = sessions[agent as 'claude' | 'codex'] ?? {};
+        if (!id) {
+          return {
+            status: 200,
+            body: {
+              sessions: Object.entries(table).map(([sessionId, s]) => ({
+                sessionId, agentType: agent, projectDir: 'p', cwd: s.cwd, mtimeMs: s.mtimeMs ?? 0, sizeBytes: 1, preview: '', createdMs: s.createdMs,
+              })),
+            },
+          };
+        }
+        const session = table[id];
+        if (!session) return { status: 404, body: { error: 'session_not_found' } };
+        if (leaf === 'meta') return { status: 200, body: { cwd: session.cwd, mtimeMs: session.mtimeMs, createdMs: session.createdMs } };
+        return { status: 200, body: { state: 'unknown', lastEntryTimestampMs: null } };
+      }),
+    };
+  }
+
+  function build(client: { getJson: (path: string) => Promise<{ status: number; body: unknown }> }, deps: Parameters<typeof buildDeps>[0] = {}) {
+    const built = buildDeps({
+      servers: [AGENT_SERVER],
+      listAllPanes: async () => PANES,
+      panePidByHandle: async () => 9000,
+      exec: async () => ({ stdout: PS_WITH_CLAUDE, stderr: '', code: 0 }),
+      ...deps,
+    });
+    const provider = new HostTranscriptSourceProvider([built.claudeSource, built.codexSource], { getAgentTransport: () => client as never });
+    const resolver = new WindowSessionResolver(built.taskRepo, built.muxDriverRegistry, built.serverRepo, provider, built.sessionCaptureService, built.transportFactory);
+    return { resolver, ...built };
+  }
+
+  const agentWindow = (overrides: Partial<Window> = {}) => buildWindow({ serverName: 'agent1', workerType: 'claude', ...overrides });
+
+  it('resolves the window-linked session from the agent (process detection also runs on the agent via exec)', async () => {
+    const client = fakeAgent({ claude: { [SID_CLAUDE]: { cwd: '/proj', mtimeMs: Date.now() - 5000, createdMs: Date.now() - 60000 } } });
+    const { resolver } = build(client);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toEqual({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1', agentDetected: true });
+  });
+
+  it('applies the process start time gate to sessions read from the agent', async () => {
+    // The agent process started 90s ago; the linked session was last written an hour before: it belongs to an older conversation.
+    const client = fakeAgent({ claude: { [SID_CLAUDE]: { cwd: '/proj', mtimeMs: Date.now() - hour, createdMs: Date.now() - hour } } });
+    const { resolver } = build(client);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toMatchObject({ resolved: false, reason: 'no_recent_session', paneId: '%1', agentType: 'claude' });
+  });
+
+  it('falls back to cwd matching over the agent, taking creation times from the agent\'s listing', async () => {
+    const client = fakeAgent({ claude: { [SID_CLAUDE]: { cwd: '/proj', mtimeMs: Date.now() - 10 * 60 * 1000, createdMs: Date.now() - 90 * 1000 } } });
+    const { resolver, sessionCaptureService } = build(client);
+
+    const result = await resolver.resolve(agentWindow());
+    expect(result).toMatchObject({ resolved: true, agentType: 'claude', sessionId: SID_CLAUDE, paneId: '%1' });
+    expect(sessionCaptureService.adoptResolvedSession).toHaveBeenCalledWith(42, SID_CLAUDE);
+    // One listing per agent type; no per-candidate request for the creation time.
+    expect(client.getJson.mock.calls.filter(([p]) => p.endsWith('/meta'))).toHaveLength(0);
+  });
+
+  it('reports agent_unreachable (offline) but still offers the pane for direct input when only the transcript read fails', async () => {
+    const client = { getJson: async () => { throw new AgentUnreachableError('agent1', 'circuit_open'); } };
+    const { resolver } = build(client);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toMatchObject({ resolved: false, reason: 'agent_unreachable', paneId: '%1', agentType: 'claude' });
+  });
+
+  it('reports agent_unreachable without throwing when even the pane lookup cannot reach the agent', async () => {
+    const client = fakeAgent({});
+    const { resolver } = build(client, { listAllPanes: async () => { throw new AgentUnreachableError('agent1', 'timeout'); } });
+
+    expect(await resolver.resolve(agentWindow())).toEqual({ resolved: false, reason: 'agent_unreachable', agentDetected: false });
+  });
+
+  it('reports agent_outdated when the agent has no transcript API, keeping the pane for direct input', async () => {
+    const client = { getJson: async () => ({ status: 404, body: { message: 'Route GET:/api/transcripts not found', error: 'Not Found' } }) };
+    const { resolver } = build(client);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toMatchObject({ resolved: false, reason: 'agent_outdated', paneId: '%1', agentType: 'claude' });
+  });
+
+  it('does not use the hub\'s own conversation logs for an agent server', async () => {
+    const local = buildDeps({ claudeGetSessionCwd: () => ({ cwd: '/proj' }), claudeGetSessionMtimeMs: () => Date.now() });
+    const client = fakeAgent({});
+    const provider = new HostTranscriptSourceProvider([local.claudeSource, local.codexSource], { getAgentTransport: () => client as never });
+    const built = buildDeps({ servers: [AGENT_SERVER], listAllPanes: async () => PANES });
+    const resolver = new WindowSessionResolver(built.taskRepo, built.muxDriverRegistry, built.serverRepo, provider, built.sessionCaptureService, built.transportFactory);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toMatchObject({ resolved: false, reason: 'no_recent_session' });
+  });
+
+  it('reports agent_bad_response when the agent answers outside the contract, keeping the pane for direct input', async () => {
+    const client = { getJson: async () => ({ status: 200, body: { cwd: 123 } }) };
+    const { resolver } = build(client);
+
+    const result = await resolver.resolve(agentWindow({ agentSessionId: SID_CLAUDE }));
+    expect(result).toMatchObject({ resolved: false, reason: 'agent_bad_response', paneId: '%1', agentType: 'claude' });
+  });
+
+  it('lists candidates for the cwd match without previews', async () => {
+    const client = fakeAgent({ claude: { [SID_CLAUDE]: { cwd: '/proj', mtimeMs: Date.now(), createdMs: Date.now() - 90 * 1000 } } });
+    const { resolver } = build(client);
+
+    await resolver.resolve(agentWindow());
+    const listings = client.getJson.mock.calls.map(([p]) => p).filter((p) => p.includes('/sessions') && !p.includes('/sessions/'));
+    expect(listings.length).toBeGreaterThan(0);
+    expect(listings.every((p) => p.includes('metadata=1'))).toBe(true);
   });
 });

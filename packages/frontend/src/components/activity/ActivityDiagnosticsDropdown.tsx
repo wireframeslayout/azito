@@ -58,16 +58,10 @@ export function ActivityDiagnosticsDropdown({ rows, error, onClose }: ActivityDi
 
   const handleOpenRow = (row: ActivityDiagnosticRow) => {
     openActivityTarget(
-      { taskId: row.taskId, serverName: row.serverName, target: row.target },
+      { taskId: row.taskId, windowId: row.windowId, serverName: row.serverName, target: row.target, projectId: row.projectId },
       row.target,
       (taskId) => openTaskAnywhere(taskId),
-      (refOrServerName) => {
-        if (typeof refOrServerName === 'object') {
-          openTerminal(refOrServerName.serverName, row.target, row.projectId);
-        } else {
-          openTerminal(refOrServerName, row.target, row.projectId);
-        }
-      },
+      openTerminal,
     );
     onClose();
   };

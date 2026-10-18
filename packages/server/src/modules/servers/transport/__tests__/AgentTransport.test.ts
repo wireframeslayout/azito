@@ -20,7 +20,7 @@ describe('AgentTransport.openTerminal timeout (Issue #239)', () => {
   });
 
   it('rejects with "openTerminal timed out" and does not raise an unhandled error when terminate() emits error', async () => {
-    const transport = new AgentTransport('agent.invalid', 3002, 'token', 'system');
+    const transport = new AgentTransport('agent.invalid', 3002, 'token', 'system', 'srv');
     const uncaught = vi.fn();
     process.on('uncaughtException', uncaught);
     try {
@@ -40,7 +40,7 @@ describe('AgentTransport.openTerminal timeout (Issue #239)', () => {
   });
 
   it('resolves on open and detaches the pre-open error handler', async () => {
-    const transport = new AgentTransport('agent.invalid', 3002, 'token', 'system');
+    const transport = new AgentTransport('agent.invalid', 3002, 'token', 'system', 'srv');
     const p = transport.openTerminal({ kind: 'tmux', workspace: 'azito', window: 'win--x' }, 1 as never, 80, 24);
     const ws = MockWebSocket.instances[0];
     ws.emit('open');

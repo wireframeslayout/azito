@@ -1,0 +1,71 @@
+#!/usr/bin/env node
+// AZITO E2E 用の「タスク実行」偽エージェント。実 LLM を起動せず、タスク実行フローの
+// プロンプト往復だけを再現する（misao ドライバの e2e が使う。generic Unit の起動コマンドとして
+// 絶対パスで渡される）。
+//
+// 仕様:
+//  - ハブがペインへ書き込むフェーズプロンプトを raw モードで受け取り、画面へエコーする。
+//    PhaseLoopRunner は最初のプロンプトから 3 秒後に画面が着手の兆候
+//    （`</completion_signal>` や `AZITO_DONE_` 等）に合致しないと再送するため、受信内容を
+//    そのまま出せば足りる。
+//  - 入力が静かになったら（プロンプトは分割して届きうる）、実行環境エンベロープ
+//    （modules/prompt/executionEnvelope.ts）が指示する 2 ステップを自分で実行する:
+//      STEP 1  `cat > <output> <<'AZITO_EOF'` の出力ファイルへダミー出力 + AZITO_PHASE_SUMMARY を書く
+//      STEP 2  `echo "AZITO_DONE_<id>_<nonce>" >> <signal>` のシグナルファイルへ完了マーカーを追記する
+//  - 応答は静穏検知のあと RESPONSE_DELAY_MS 待ってから返す。ハブ（PhaseLoopRunner）は送達確認で
+//    約 3 秒待ってから完了マーカーの購読を始めるため、それより早く書かれたマーカーは取りこぼされる。
+//    実エージェントが数秒で完了することは無いので、偽エージェントも実際の LLM 並みの待ちを入れる。
+//  - 完了後も終了せず生き続ける（前景がシェルに戻ると入力送信が中止されるため）。
+
+const fs = require('node:fs');
+
+const QUIET_MS = 1500;
+const RESPONSE_DELAY_MS = 8000;
+const OUTPUT_FILE_RE = /cat > (\S+) <<'AZITO_EOF'/;
+const DONE_RE = /echo "(AZITO_DONE_[^"\s]+)" >> (\S+)/;
+const PHASE_RE = /AZITO_PHASE_SUMMARY: \{"phase":"([^"]+)"/;
+
+let received = '';
+let quietTimer = null;
+
+function respond(prompt) {
+  const outputFile = OUTPUT_FILE_RE.exec(prompt);
+  const done = DONE_RE.exec(prompt);
+  if (!outputFile || !done) {
+    process.stdout.write('\r\n⏺ e2e fake agent: no completion_signal in the prompt, ignoring\r\n');
+    return;
+  }
+  const phase = PHASE_RE.exec(prompt)?.[1] ?? 'implementing';
+  const summary = JSON.stringify({
+    phase,
+    status: 'completed',
+    summary: 'e2e fake agent finished',
+    tokensUsed: { input: 1, output: 1 },
+    durationSeconds: 1,
+  });
+  fs.writeFileSync(outputFile[1], `e2e fake agent output\n\nAZITO_PHASE_SUMMARY: ${summary}\n`);
+  fs.appendFileSync(done[2], `${done[1]}\n`);
+  process.stdout.write(`\r\n⏺ e2e fake agent: wrote ${outputFile[1]} and signalled ${done[1]}\r\n`);
+}
+
+function onQuiet() {
+  quietTimer = null;
+  // 完了シグナルのブロックまで届いていなければ、残りを待つ。
+  if (!received.includes('</completion_signal>')) return;
+  const prompt = received;
+  received = '';
+  setTimeout(() => respond(prompt), RESPONSE_DELAY_MS);
+}
+
+if (process.stdin.isTTY) process.stdin.setRawMode(true);
+process.stdin.setEncoding('utf8');
+process.stdin.on('data', (chunk) => {
+  received += chunk;
+  process.stdout.write(chunk.replace(/\r?\n/g, '\r\n'));
+  if (quietTimer) clearTimeout(quietTimer);
+  quietTimer = setTimeout(onQuiet, QUIET_MS);
+});
+process.stdin.resume();
+
+process.stdout.write('⏺ e2e fake task agent ready\r\n');
+setInterval(() => {}, 60_000);

@@ -28,9 +28,44 @@ export function readEnvValue(filePath: string, key: string): string | undefined 
   return undefined;
 }
 
+/**
+ * Sets `KEY=value` in an env file: replaces the existing assignment in place, otherwise appends one (creating the
+ * file with mode 600 when it does not exist). Other lines, comments included, are kept as they are.
+ */
+export function upsertEnvValue(filePath: string, key: string, value: string): void {
+  const line = `${key}=${value}`;
+  if (!fs.existsSync(filePath)) {
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, `${line}\n`, { mode: 0o600 });
+    return;
+  }
+  const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
+  const index = lines.findIndex((l) => l.trim().startsWith(`${key}=`));
+  if (index >= 0) {
+    lines[index] = line;
+  } else {
+    // the last element is '' when the file ends with a newline: keep that ending
+    if (lines[lines.length - 1] === '') lines.pop();
+    lines.push(line, '');
+  }
+  fs.writeFileSync(filePath, lines.join('\n'));
+  // The file holds secrets (tokens): writeFileSync keeps an existing file's mode, so tighten one that was looser.
+  fs.chmodSync(filePath, 0o600);
+}
+
+/**
+ * The `.env` the hub is configured from. Release mode follows run.sh (scripts/run-hub.sh): the stable file beside the
+ * versioned bundle directories (`hub/.env`, the parent of `hub/current`) wins, the bundle's own `.env` is the fallback.
+ * A source checkout uses `packages/server/.env`.
+ */
 export function resolveServerEnvPath(): string {
   if (isReleaseMode()) {
-    return path.join(resolveRoot(), '.env');
+    const bundleRoot = resolveRoot();
+    const stable = path.join(path.dirname(bundleRoot), '.env');
+    const bundled = path.join(bundleRoot, '.env');
+    // run.sh order: stable file, then the bundle's. With neither present, name the stable one (it outlives version dirs).
+    if (fs.existsSync(stable) || !fs.existsSync(bundled)) return stable;
+    return bundled;
   }
   return path.join(resolveRoot(), 'packages', 'server', '.env');
 }

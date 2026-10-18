@@ -213,6 +213,7 @@
     "stateOffline": "Offline",
     "stateNone": "Undecided",
     "tier0": "tier0 supervisor",
+    "tier0Mux": "tier0 misao",
     "tier1": "tier1 hook",
     "tier2": "tier2 title",
     "tier3": "tier3 heuristic",
@@ -223,6 +224,8 @@
     "notDeciding": "a lower tier is deciding",
     "unbound": "unbound (display only)",
     "refinedBlocked": "+ {{tier}} refined it to blocked",
+    "refinedCompleted": "+ {{tier}} (Stop) confirmed completion",
+    "heldForStopHook": "mux reported idle, waiting for the Stop hook",
     "transitionStarted": "Detected",
     "reason": {
       "completed": "Completed",

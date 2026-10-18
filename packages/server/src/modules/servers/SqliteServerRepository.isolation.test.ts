@@ -81,6 +81,7 @@ import * as m071 from '../../shared/db/migrations/071_agent_watches_window_id';
 import * as m072 from '../../shared/db/migrations/072_fix_herdr_mux_ref_kind';
 import * as m073 from '../../shared/db/migrations/073_restore_tmux_mux_ref_kind';
 import * as m074 from '../../shared/db/migrations/074_herdr_navigation_lock';
+import * as m077 from '../../shared/db/migrations/077_server_default_mux';
 
 import { SqliteServerRepository } from './SqliteServerRepository';
 
@@ -96,7 +97,7 @@ const ALL_MIGRATIONS: Migration[] = [
   m031, m032, m033, m034, m035, m036, m037, m038, m039, m040,
   m041, m042, m043, m044, m045, m046, m047, m048, m049, m050,
   m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062,
-  m063, m064, m065, m066, m067, m068, m069, m070, m071, m072, m073, m074,
+  m063, m064, m065, m066, m067, m068, m069, m070, m071, m072, m073, m074, m077,
 ];
 
 // Same table-rebuild toggle as the real migration runner in Database.ts.

@@ -13,7 +13,7 @@ function makeAgentServer(): ServerConfig {
     agentToken: 'tok',
     agentVersion: '1.0.0',
     sshHost: null,
-    muxRuntime: 'system',
+    defaultMux: 'tmux' as const, muxRuntime: 'system',
     sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,

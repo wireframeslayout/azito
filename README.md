@@ -88,12 +88,13 @@ Browser (React 19 + Vite)
 
 ### Prerequisites
 
-The release build bundles Node.js; the rest are still needed on the host.
+The release build bundles Node.js and misao (the pane server, installed as a separate `azito-misao` service); the rest are still needed on the host.
 
 | Software | Version | Purpose |
 |---|---|---|
 | Node.js | v24+ | Backend and frontend (bundled in the release build) |
-| tmux | 3.4+ | Terminal session management |
+| git | Latest | Per-task worktrees |
+| tmux | 3.4+ (optional) | Only for tmux windows. The release build bundles misao, which runs the panes, so tmux is not required |
 | Tailscale | Latest | SSH connections / HTTPS / push notifications |
 | Docker | Latest (optional) | For MinIO (file storage) |
 

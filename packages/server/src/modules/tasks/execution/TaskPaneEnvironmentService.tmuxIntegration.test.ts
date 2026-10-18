@@ -16,7 +16,7 @@ import type { ServerConfig } from '../../servers/Server';
 // buildEnvForNewWindow() returns; this test drives real tmux to confirm the
 // `-e KEY=''` override this class emits actually masks a session-level value
 // in the pane a task worker runs in — the property the fix depends on.
-const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
+const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
 const SESSION = `azito-test-env-leak-${process.pid}-${Date.now()}`;
 
 function tmux(...args: string[]): string {

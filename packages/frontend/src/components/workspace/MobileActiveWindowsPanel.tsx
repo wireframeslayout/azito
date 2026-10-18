@@ -5,7 +5,8 @@ import { formatActiveWindowLabel } from '../../lib/windowDisplay';
 import { BrailleSpinner, BlockedDot, FinishedIndicator } from '../ui/WindowActivityIndicator';
 import { formatRelativeTime } from '../../utils/time';
 import { selectTaskTerminal } from './TaskPanel';
-import { terminalRefFromTarget, type TerminalRef } from '../../lib/terminalRef';
+import { useOpenTerminalTarget } from '../../hooks/useTerminalTargetOpener';
+import type { TerminalRef } from '../../lib/terminalRef';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
@@ -17,6 +18,7 @@ export interface MobileActiveWindowsPanelProps {
 }
 
 export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskWindows }: MobileActiveWindowsPanelProps) {
+  const openTerminal = useOpenTerminalTarget(connectPane);
   const { t } = useTranslation(['workspace', 'tasks']);
   const { rows } = useActiveWindowRows();
   const { dismissFinished } = useAgentActivity();
@@ -66,10 +68,7 @@ export function MobileActiveWindowsPanel({ onClose, connectPane, openTask, taskW
               selectTaskTerminal(taskId, { serverName: row.serverName, target: row.target });
               openTask(taskId, t('tasks:detail.taskRef', { id: taskId }), row.projectId);
             } else {
-              const ref: TerminalRef = row.windowId != null
-                ? { kind: 'windowId', serverName: row.serverName, windowId: row.windowId, pane: 1 }
-                : terminalRefFromTarget(row.serverName, row.target);
-              connectPane(ref, row.projectId);
+              openTerminal({ serverName: row.serverName, target: row.target, windowId: row.windowId }, row.projectId);
             }
             if (isFinished) dismissFinished(row.serverName, row.target, row.windowId);
             onClose();

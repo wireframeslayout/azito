@@ -57,7 +57,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   const probeInFlightRef = useRef<Map<string, Promise<void>>>(new Map());
 
   const getServerFingerprint = (srv: Server): string =>
-    `${srv.name}|${srv.type}|${srv.host ?? ''}|${srv.agentPort ?? ''}|${srv.sshHost ?? ''}|${srv.muxRuntime ?? ''}|${srv.hasAgentToken ? '1' : '0'}`;
+    `${srv.name}|${srv.type}|${srv.host ?? ''}|${srv.agentPort ?? ''}|${srv.sshHost ?? ''}|${srv.defaultMux}|${srv.muxRuntime ?? ''}|${srv.hasAgentToken ? '1' : '0'}`;
 
   // 各サーバーのステータス探査（重い・遅いサーバーが混ざりうる）は fire-and-forget の
   // バックグラウンドで実行し、refresh() 自体の resolve を待たせない。
@@ -82,7 +82,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
             console.warn('[useServerStatuses] status probe failed:', srv.name, err);
             setStatuses((prev) => ({
               ...prev,
-              [srv.name]: { status: 'error', tmux: false, message: 'Failed to check status' },
+              [srv.name]: { status: 'error', message: 'Failed to check status' },
             }));
           }
         })
@@ -111,7 +111,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
     setStatuses((prev) => {
       const next: Record<string, ServerStatus> = {};
       for (const srv of srvs) {
-        next[srv.name] = prev[srv.name] ?? { status: 'checking', tmux: false };
+        next[srv.name] = prev[srv.name] ?? { status: 'checking' };
       }
       return next;
     });

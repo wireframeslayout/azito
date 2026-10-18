@@ -1,12 +1,24 @@
-import { asPaneHandle, type PaneHandle } from '@azito/shared';
+import { asPaneHandle, muxKindOfPaneHandle, type PaneHandle } from '@azito/shared';
 import type { IPaneStream, IPaneStreamFactory } from './PaneStream';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { PaneOutputStream } from './PaneOutputStream';
+import type { MisaoLineSource } from './misao/MisaoConnection';
+import { MisaoPaneStream } from './misao/MisaoPaneStream';
+
+type StreamServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>;
 
 export class PaneStreamFactory implements IPaneStreamFactory {
-  constructor(private transportFactory: TransportFactory) {}
+  /** `misaoLines` is the line stream of the misao daemon a server's panes live in (each agent server has its own). */
+  constructor(
+    private transportFactory: TransportFactory,
+    private misaoLines: (server: StreamServer) => MisaoLineSource,
+  ) {}
 
-  create(handle: PaneHandle | string, server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IPaneStream {
+  create(handle: PaneHandle | string, server: StreamServer, pane?: PaneHandle): IPaneStream {
+    // A misao pane's output comes from the daemon's line stream (told by the pane's handle, not by the server's default mux).
+    if (pane && muxKindOfPaneHandle(pane) === 'misao') return new MisaoPaneStream(pane, this.misaoLines(server));
+
     const paneHandle = typeof handle === 'string' ? asPaneHandle(handle) : handle;
 
     if (server.type === 'agent') {

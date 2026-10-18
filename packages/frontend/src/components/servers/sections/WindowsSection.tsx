@@ -1,12 +1,21 @@
 import { useCallback, useMemo, useState } from 'react';
+import type { MuxDriverKind } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../../api/client';
 import type { Server, Session } from '../../../hooks/useServerManagement';
 import { useIsMobile } from '../../../hooks/useIsMobile';
-import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, type TerminalRef } from '../../../lib/terminalRef';
-import { stripPaneSuffix, muxKindForRuntime, type MuxRuntime } from '@azito/shared';
-import { resolveWindowDisplay, formatWindowDisplayLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { terminalRefFromWindow, terminalRefDisplayLabel, terminalTabId, resolveTerminalTarget, paneDeletePath, windowKillRequest, type TerminalRef } from '../../../lib/terminalRef';
+import { stripPaneSuffix } from '@azito/shared';
+import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../../lib/windowDisplay';
+import { preferredPaneOrdinal } from '../../../lib/paneState';
+import { refUsesMuxRoutes } from '../../../lib/sessionKind';
+import { muxCreateFailureText } from '../../../lib/muxKindChoice';
+import { useMisaoInstallOffer } from '../../../hooks/useMisaoInstallOffer';
+import { errorMessageOf } from '../../../lib/apiResult';
+import { useConfirm } from '../../../hooks/useConfirm';
+import { useToast } from '../../../hooks/useToast';
 import WindowTreePopover from '../WindowTreePopover';
+import CreateSessionModal from '../CreateSessionModal';
 import { TerminalContainer } from '../../TerminalContainer';
 import { EmptyState } from '../../ui';
 import { Icon } from '../../ui/Icon';
@@ -22,14 +31,18 @@ interface WindowsSectionProps {
 
 export default function WindowsSection({ server, sessions, refresh, windowById, taskById, windowMetaError = false }: WindowsSectionProps) {
   const { t } = useTranslation('servers');
+  const { t: tw } = useTranslation('workspace');
+  const confirm = useConfirm();
+  const { showToast } = useToast();
   const isMobile = useIsMobile();
   const [showTree, setShowTree] = useState(false);
+  const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
 
   const firstRef = useMemo<TerminalRef | null>(() => {
     for (const sess of sessions) {
       for (const win of sess.windows) {
-        return terminalRefFromWindow(server.name, win.windowId, win.ref, 1);
+        return terminalRefFromWindow(server.name, win.windowId, win.ref, preferredPaneOrdinal(win) ?? 1);
       }
     }
     return null;
@@ -53,10 +66,12 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
         workerType: regWin?.workerType,
         windowType: regWin?.windowType,
         taskTitle: regWin?.taskId != null ? taskById.get(regWin.taskId)?.title : undefined,
-        tmuxTarget: sessWin ? `${sessions.find(s => s.windows.includes(sessWin!))?.name}:${sessWin.name}` : undefined,
+        tmuxTarget: sessWin ? sessionWindowLabel(sessions.find(s => s.windows.includes(sessWin!))!.name, sessWin) : undefined,
       });
       return formatWindowDisplayLabel(display);
     }
+    const sessWin = sessions.flatMap((s) => s.windows.map((w) => ({ sessionName: s.name, win: w }))).find(({ win }) => win.ref === activeRef.ref);
+    if (sessWin) return sessionWindowLabel(sessWin.sessionName, sessWin.win);
     const resolved = resolveTerminalTarget(activeRef, sessions);
     if (resolved) return stripPaneSuffix(resolved);
     return terminalRefDisplayLabel(activeRef);
@@ -67,32 +82,32 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     setShowTree(false);
   }, []);
 
-  const useMuxRoutes = useMemo(() => muxKindForRuntime((server.muxRuntime ?? 'system') as MuxRuntime) !== 'tmux', [server.muxRuntime]);
+  // Creation always goes through the mux routes with an explicit kind: a new session in the kind the user picked,
+  // a new window in the kind of the session it is added to. A refusal comes back as a body, shown as text.
+  const failureText = useCallback((res: unknown): string | null => muxCreateFailureText(res, tw), [tw]);
+  const withMisaoInstall = useMisaoInstallOffer();
 
-  const handleCreateSession = useCallback(async () => {
-    const name = prompt('New session name:');
-    if (!name) return;
-    if (useMuxRoutes) {
-      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name }) });
-    } else {
-      await api(`/servers/${encodeURIComponent(server.name)}/sessions`, { method: 'POST', body: JSON.stringify({ name }) });
+  const handleCreateSession = useCallback(async (name: string, kind: MuxDriverKind): Promise<string | null> => {
+    const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) }));
+    const failure = failureText(res);
+    if (failure === null) refresh();
+    return failure;
+  }, [server.name, refresh, failureText, withMisaoInstall]);
+
+  const handleAddWindow = useCallback(async (sessionName: string, kind: MuxDriverKind) => {
+    const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) }));
+    const failure = failureText(res);
+    if (failure !== null) {
+      showToast(failure);
+      return;
     }
     refresh();
-  }, [server.name, refresh, useMuxRoutes]);
-
-  const handleAddWindow = useCallback(async (sessionName: string) => {
-    if (useMuxRoutes) {
-      await api(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST' });
-    } else {
-      await api(`/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows`, { method: 'POST' });
-    }
-    refresh();
-  }, [server.name, refresh, useMuxRoutes]);
+  }, [server.name, refresh, failureText, showToast, withMisaoInstall]);
 
   const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
     if (windowId != null) {
       await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else if (ref && useMuxRoutes) {
+    } else if (refUsesMuxRoutes(ref)) {
       await api(`/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
     } else {
       await api(
@@ -101,7 +116,43 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
       );
     }
     refresh();
-  }, [server.name, refresh, useMuxRoutes]);
+  }, [server.name, refresh]);
+
+  // Deleting what is on screen leaves `selectedRef` pointing at a pane ordinal / window that is gone: fall back to the first window.
+  const handleDeletePane = useCallback(async (ref: TerminalRef, label: string, handle?: string) => {
+    const ok = await confirm({ title: t('confirm.killPane'), message: t('confirm.killPaneMessage', { name: label }), danger: true });
+    if (!ok) return;
+    try {
+      const failure = errorMessageOf(await api<unknown>(paneDeletePath(ref, handle), { method: 'DELETE' }));
+      if (failure) {
+        showToast(failure);
+        return;
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setSelectedRef(null);
+    refresh();
+  }, [confirm, showToast, refresh, t]);
+
+  const handleKillWindow = useCallback(async (ref: TerminalRef, label: string) => {
+    const ok = await confirm({ title: t('confirm.killWindow'), message: t('confirm.killWindowMessage', { name: label }), danger: true });
+    if (!ok) return;
+    const { path, method } = windowKillRequest(ref);
+    try {
+      const failure = errorMessageOf(await api<unknown>(path, { method }));
+      if (failure) {
+        showToast(failure);
+        return;
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    setSelectedRef(null);
+    refresh();
+  }, [confirm, showToast, refresh, t]);
 
   const metaErrorBar = windowMetaError ? (
     <div style={{ padding: '6px 12px', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -112,14 +163,27 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
     </div>
   ) : null;
 
+  const createSessionModal = createSessionOpen ? (
+    <CreateSessionModal
+      server={server}
+      onClose={() => setCreateSessionOpen(false)}
+      onCreate={async (name, kind) => {
+        const failure = await handleCreateSession(name, kind);
+        if (failure === null) setCreateSessionOpen(false);
+        return failure;
+      }}
+    />
+  ) : null;
+
   if (sessions.length === 0) {
     return (
       <div>
         {metaErrorBar}
+        {createSessionModal}
         <EmptyState title={t('windows.noSessions')} />
         <div style={{ textAlign: 'center', marginTop: 'var(--space-3)' }}>
           <button
-            onClick={handleCreateSession}
+            onClick={() => setCreateSessionOpen(true)}
             style={{
               background: 'var(--accent)', color: '#fff', border: 'none', // lint-allow: hex - white text on solid accent fill; no on-color token yet
               borderRadius: 'var(--radius-md)', padding: '8px 20px',
@@ -137,6 +201,7 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', position: 'relative' }}>
       {metaErrorBar}
+      {createSessionModal}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8,
         padding: '8px 14px',
@@ -172,8 +237,11 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
             serverName={server.name}
             target={activeLabel ?? ''}
             terminalRef={activeRef}
+            registeredWindow={activeRef.kind === 'windowId' ? windowById.get(activeRef.windowId) : undefined}
             sessions={sessions}
             onWindowChanged={refresh}
+            onTargetRemoved={() => setSelectedRef(null)}
+            onRetargetPane={(pane) => setSelectedRef({ ...activeRef, pane })}
           />
         ) : (
           <div style={{ color: 'var(--text-dim)', padding: '14px 16px', fontSize: 'var(--font-xs)' }}>{t('windows.noWindowSelected')}</div>
@@ -187,9 +255,11 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
           selectedRef={activeRef}
           onSelect={handleSelect}
           onClose={() => setShowTree(false)}
-          onCreateSession={handleCreateSession}
+          onCreateSession={() => setCreateSessionOpen(true)}
           onAddWindow={handleAddWindow}
           onSplitPane={handleSplitPane}
+          onDeletePane={handleDeletePane}
+          onKillWindow={handleKillWindow}
           isMobile={isMobile}
           windowById={windowById}
           taskById={taskById}

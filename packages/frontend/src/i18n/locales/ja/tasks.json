@@ -9,6 +9,8 @@
     "deleteConfirm": "このタスクを削除しますか？",
     "archiveTask": "タスクをアーカイブ",
     "archiveConfirm": "このタスクをアーカイブしますか？ワークツリーと tmux ウィンドウが削除されます。",
+    "muxUnavailable": "misao デーモンに接続できないため、タスクの窓を閉じられず実行できません。何も変更していません。デーモンの起動後にやり直してください。",
+    "mutationFailed": "実行に失敗しました: {{error}}",
     "execute": "実行",
     "stop": "停止",
     "edit": "編集",

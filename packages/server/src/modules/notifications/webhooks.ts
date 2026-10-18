@@ -3,13 +3,51 @@ import type { SqliteTaskRepository } from '../tasks/SqliteTaskRepository';
 import type { AgentHookSignal } from '../operations/AgentActivityMonitor';
 import type { InteractionSignal, InteractionContent, InteractionQuestion, InteractionQuestionOption } from './InteractionMonitor';
 import { isPaneHandleLike } from '@azito/shared';
+import type { ResolvedWindow } from '../operations/PaneHandleResolver';
+
+/**
+ * Hook signals from a misao pane, which has no tmux coordinates and identifies itself by its pane id
+ * (`$MISAO_PANE_ID`, sent as `misaoPaneId`). Takes effect only when the body carries no tmux fields.
+ */
+export interface MisaoWebhookOptions {
+  /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
+  resolvePane: (serverName: string, paneId: string) => Promise<ResolvedWindow | null>;
+  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event']) => void;
+}
 
 export interface WebhookRouteOptions {
   taskRepo: SqliteTaskRepository;
   verifyToken: (authHeader: string | undefined) => boolean;
+  /**
+   * Maps the `serverName` a hook sends to the current server name: a pane started before migration 079 merged
+   * its server into another still carries the old name in its environment.
+   * TODO(#313): compatibility for one release; remove with the `server_aliases` table.
+   */
+  resolveServerName: (name: string) => string;
   recordAgentActivity: (signal: AgentHookSignal) => void;
   /** v1 only ever receives event: 'open' — see InteractionMonitor's doc comment. */
   recordInteractionSignal: (signal: InteractionSignal) => void;
+  misao: MisaoWebhookOptions;
+}
+
+interface HookSignalBody {
+  serverName?: unknown;
+  sessionName?: unknown;
+  windowIndex?: unknown;
+  windowName?: unknown;
+  paneIndex?: unknown;
+  misaoPaneId?: unknown;
+}
+
+/**
+ * The misao pane id a hook body carries instead of tmux coordinates: `undefined` when this is a tmux signal,
+ * `null` when the field is present but is not a misao pane id.
+ */
+function readMisaoPaneId(body: HookSignalBody): string | null | undefined {
+  if (body.misaoPaneId === undefined) return undefined;
+  const hasTmuxFields = [body.sessionName, body.windowIndex, body.windowName, body.paneIndex].some((v) => v !== undefined);
+  if (hasTmuxFields) return undefined;
+  return typeof body.misaoPaneId === 'string' && isPaneHandleLike(body.misaoPaneId, 'misao') ? body.misaoPaneId : null;
 }
 
 /**
@@ -62,7 +100,7 @@ function parseInteractionContent(raw: unknown): InteractionContent | undefined {
 }
 
 const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, verifyToken, recordAgentActivity, recordInteractionSignal } = opts;
+  const { taskRepo, verifyToken, resolveServerName, recordAgentActivity, recordInteractionSignal, misao } = opts;
 
   fastify.post('/api/webhooks/agent-done', async (request, reply) => {
     if (!verifyToken(request.headers.authorization)) {
@@ -118,7 +156,25 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       paneIndex?: unknown;
       event?: unknown;
       muxPaneRef?: unknown;
+      misaoPaneId?: unknown;
     };
+
+    const misaoPaneId = readMisaoPaneId(body);
+    if (misaoPaneId !== undefined) {
+      if (typeof body.serverName !== 'string' || body.serverName === '') {
+        return reply.status(400).send({ error: 'serverName required' });
+      }
+      if (misaoPaneId === null) {
+        return reply.status(400).send({ error: 'misaoPaneId must be a misao pane id' });
+      }
+      if (body.event !== 'start' && body.event !== 'stop') {
+        return reply.status(400).send({ error: 'event must be "start" or "stop"' });
+      }
+      const resolved = await misao.resolvePane(resolveServerName(body.serverName), misaoPaneId);
+      // Only the first pane carries the window's agent state; a split pane's hook must not stand in for it.
+      if (resolved && resolved.ordinal === 1) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event);
+      return { ok: true };
+    }
 
     if (typeof body.serverName !== 'string' || body.serverName === '') {
       return reply.status(400).send({ error: 'serverName required' });
@@ -139,11 +195,11 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       return reply.status(400).send({ error: 'event must be "start" or "stop"' });
     }
 
-    const muxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef)
+    const muxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef, 'tmux')
       ? body.muxPaneRef : undefined;
 
     recordAgentActivity({
-      serverName: body.serverName,
+      serverName: resolveServerName(body.serverName),
       sessionName: body.sessionName,
       windowIndex: body.windowIndex,
       windowName: body.windowName,
@@ -180,7 +236,33 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       event?: unknown;
       content?: unknown;
       muxPaneRef?: unknown;
+      misaoPaneId?: unknown;
     };
+
+    const misaoPaneId = readMisaoPaneId(body);
+    if (misaoPaneId !== undefined) {
+      if (typeof body.serverName !== 'string' || body.serverName === '') {
+        return reply.status(400).send({ error: 'serverName required' });
+      }
+      if (misaoPaneId === null) {
+        return reply.status(400).send({ error: 'misaoPaneId must be a misao pane id' });
+      }
+      if (body.event !== 'open') {
+        return reply.status(400).send({ error: 'event must be "open"' });
+      }
+      const resolved = await misao.resolvePane(resolveServerName(body.serverName), misaoPaneId);
+      const misaoContent = parseInteractionContent(body.content);
+      if (resolved) {
+        recordInteractionSignal({
+          serverName: resolveServerName(body.serverName),
+          target: { windowId: resolved.windowId, paneIndex: resolved.ordinal },
+          event: body.event,
+          timestamp: Date.now(),
+          ...(misaoContent === undefined ? {} : { content: misaoContent }),
+        });
+      }
+      return { ok: true };
+    }
 
     if (typeof body.serverName !== 'string' || body.serverName === '') {
       return reply.status(400).send({ error: 'serverName required' });
@@ -202,11 +284,11 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
     }
 
     const content = parseInteractionContent(body.content);
-    const interactionMuxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef)
+    const interactionMuxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef, 'tmux')
       ? body.muxPaneRef : undefined;
 
     recordInteractionSignal({
-      serverName: body.serverName,
+      serverName: resolveServerName(body.serverName),
       target: {
         sessionName: body.sessionName,
         windowIndex: body.windowIndex,

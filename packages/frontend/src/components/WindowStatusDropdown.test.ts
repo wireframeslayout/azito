@@ -63,10 +63,10 @@ describe('findWindow', () => {
   });
 
   it('muxRef ref で Window.muxRef と照合する', () => {
-    const muxRef = '{"kind":"tmux","workspace":"sess","window":"1"}';
+    const muxRef = { kind: 'tmux', workspace: 'sess', window: '1' } as const;
     const winWithMuxRef = makeWindow({ id: 11, serverName: 'srv-a', tmuxTarget: 'sess:1', muxRef });
     const proj = { windows: [winWithMuxRef] } as unknown as Project;
-    const ref: TerminalRef = { kind: 'ref', serverName: 'srv-a', ref: muxRef, pane: 1 };
+    const ref: TerminalRef = { kind: 'ref', serverName: 'srv-a', ref: JSON.stringify(muxRef), pane: 1 };
     expect(findWindow('srv-a', '', proj, [], ref)).toBe(winWithMuxRef);
   });
 

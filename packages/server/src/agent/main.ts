@@ -12,13 +12,20 @@ import type { WebSocket } from 'ws';
 
 import agentRoutes from './routes';
 import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
-import { muxRefFromTmuxTarget, parseMuxRef, muxKindForRuntime, type MuxRef, type PaneOrdinal } from '@azito/shared';
+import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
+import { createMisaoRelay } from './misaoRelay';
+import misaoRoutes from './misaoRoutes';
+import transcriptRoutes from './transcriptRoutes';
+import { agentAuthHook } from './authHook';
+import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
+import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
+import { buildServicePath } from '../modules/system/misao/misaoPaths';
 
 // ─── Environment validation ───
 
@@ -59,6 +66,18 @@ function resolveVersion(): string {
 }
 const agentVersion = resolveVersion();
 
+/** What the hub's misao installer needs to know about this host: its OS / architecture (to pick the binary), the node this agent runs on, and its PATH. */
+function describeMisaoHost(): AgentMisaoHost {
+  const homeDir = os.homedir();
+  return {
+    homeDir,
+    nodePath: process.execPath,
+    servicePath: buildServicePath(process.env, homeDir, fs.existsSync),
+    platform: process.platform,
+    arch: process.arch,
+  };
+}
+
 // ─── Graceful shutdown ───
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
@@ -81,21 +100,31 @@ async function main(): Promise<void> {
   });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
-  app.addHook('onRequest', async (request, reply) => {
-    if (request.url.startsWith('/health')) return;
-    if (request.url.startsWith('/api/hooks/tmux')) return;
-    if (!verifyToken(request.headers.authorization)) {
-      return reply.status(401).send({ error: 'Unauthorized' });
-    }
-  });
+  app.addHook('onRequest', agentAuthHook(verifyToken));
 
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
-  const muxKind = muxKindForRuntime(muxRuntime);
-  const isTmuxDriver = muxKind === 'tmux';
-  const hookRt = isTmuxDriver ? resolveTmuxRuntime(muxRuntime, os.homedir()) : null;
-  const transportRt = hookRt ?? resolveTmuxRuntime('system', os.homedir());
+  // The tmux endpoints (/api/tmux, mode=terminal) are tmux's. misao is reached through its own relay (mode=misao).
+  const muxKind = 'tmux';
+  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
 
-  const agentTransport = new LocalTransport(transportRt, process.env.AZITO_URL ?? '');
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '');
+
+  // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
+  // socket path disables the relay (tmux keeps working) rather than stopping the agent.
+  let misaoSocket: AgentMisaoSocket | null = null;
+  try {
+    misaoSocket = resolveAgentMisaoSocket(process.env, os.homedir());
+  } catch (err) {
+    app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+  }
+  const relayMisao = createMisaoRelay(misaoSocket, app.log);
+
+  // Registered after the auth hook above, so it is covered by it like every other /api route.
+  await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost() });
+
+  // Conversation logs (Claude Code / Codex JSONL) for the hub's chat mode. Registered after the auth hook, so it is
+  // covered by it; reads only this host's own agent session directories, addressed by agent type + session id.
+  await app.register(transcriptRoutes, { readers: TRANSCRIPT_READERS });
 
   // WebSocket routes
   await app.register(async (fastify) => {
@@ -114,6 +143,7 @@ async function main(): Promise<void> {
         if (refParam) {
           try {
             ref = parseMuxRef(decodeURIComponent(refParam));
+            if (ref.kind !== muxKind) throw new Error('ref kind does not match agent mux');
           } catch {
             socket.send(JSON.stringify({ error: 'Invalid ref parameter' }));
             socket.close();
@@ -129,6 +159,12 @@ async function main(): Promise<void> {
         const ordinal = (paneParam ? Number(paneParam) : 1) as PaneOrdinal;
 
         handleAgentTerminal(socket, ref, ordinal, cols, rows, agentTransport);
+        return;
+      }
+
+      if (mode === 'misao') {
+        // Same token check as every route (the onRequest hook above). Relays to this agent's own socket only.
+        relayMisao(socket);
         return;
       }
 
@@ -201,12 +237,10 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    if (hookRt) {
-      for (const event of hookEvents) {
-        await new Promise<void>((resolve) => {
-          execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
-        });
-      }
+    for (const event of hookEvents) {
+      await new Promise<void>((resolve) => {
+        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
+      });
     }
   });
 
@@ -234,29 +268,26 @@ async function main(): Promise<void> {
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
   // the initial install fails because tmux isn't up yet, and the next periodic pass installs it).
-  // Skipped entirely for non-tmux drivers.
-  if (hookRt) {
-    let lastInstallFailed: boolean | null = null;
-    const installTmuxHooks = (): void => {
-      let pending = hookEvents.length;
-      let anyFailed = false;
-      for (const event of hookEvents) {
-        const hookValue = buildHookValue(hookBase, event);
-        execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
-          if (err) anyFailed = true;
-          pending--;
-          if (pending === 0 && anyFailed !== lastInstallFailed) {
-            if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
-            else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
-            lastInstallFailed = anyFailed;
-          }
-        });
-      }
-    };
+  let lastInstallFailed: boolean | null = null;
+  const installTmuxHooks = (): void => {
+    let pending = hookEvents.length;
+    let anyFailed = false;
+    for (const event of hookEvents) {
+      const hookValue = buildHookValue(hookBase, event);
+      execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookSetArgs(event, hookValue)], { timeout: 5000 }, (err) => {
+        if (err) anyFailed = true;
+        pending--;
+        if (pending === 0 && anyFailed !== lastInstallFailed) {
+          if (anyFailed) app.log.warn('Failed to install one or more tmux hooks (tmux may not be running yet)');
+          else if (lastInstallFailed !== null) app.log.info('tmux hooks installed successfully');
+          lastInstallFailed = anyFailed;
+        }
+      });
+    }
+  };
 
-    installTmuxHooks();
-    hookInstallInterval = setInterval(installTmuxHooks, 60000);
-  }
+  installTmuxHooks();
+  hookInstallInterval = setInterval(installTmuxHooks, 60000);
 }
 
 main().catch((err) => {

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { resolveDataDir } from './dataDir';
+import { resolveDataDir, _resetReleaseDefaultNotice } from './dataDir';
 import * as releaseInfo from './releaseInfo';
 
 describe('resolveDataDir', () => {
@@ -98,6 +98,21 @@ describe('resolveDataDir', () => {
       expect(paths.uiToken).toBe(path.join(expected, 'ui-token'));
       expect(paths.browserProfile).toBe(path.join(expected, 'browser-profile'));
       expect(paths.sidekicks).toBe(path.join(expected, 'sidekicks'));
+    });
+
+    it('announces the release-mode default data dir once per process', () => {
+      delete process.env.AZITO_DATA_DIR;
+      isReleaseModeSpy.mockReturnValue(true);
+      _resetReleaseDefaultNotice();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        resolveDataDir();
+        resolveDataDir();
+        const notices = logSpy.mock.calls.filter(([m]) => String(m).startsWith('AZITO_DATA_DIR not set'));
+        expect(notices).toHaveLength(1);
+      } finally {
+        logSpy.mockRestore();
+      }
     });
 
     it('does not reference bundle root in any path in release mode', () => {

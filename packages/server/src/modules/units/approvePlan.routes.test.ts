@@ -150,7 +150,7 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       find: vi.fn(() => null),
     } as unknown as UnitsRouteOptions['projectServerRepo'],
     serverRepo: {
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, muxRuntime: 'system' as const, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, createdAt: '' })),
     } as unknown as UnitsRouteOptions['serverRepo'],
     sidekickLoader: {} as unknown as UnitsRouteOptions['sidekickLoader'],
     unitTypeLoader: { get: vi.fn(() => null) } as unknown as UnitsRouteOptions['unitTypeLoader'],

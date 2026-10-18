@@ -30,7 +30,9 @@ import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironment
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
 import type { EventEmitter } from 'events';
-import { type MuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
+import { type MuxRef } from '@azito/shared';
+import { muxWindowTarget } from '../tmux/muxWindowTarget';
+import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -114,7 +116,7 @@ export class TaskRestoreService {
     return { serverIsolationMutex: this.deps.serverIsolationMutex, serverRepo: this.deps.serverRepo };
   }
 
-  private resolveDriver(server: Pick<ServerConfig, 'muxRuntime'>): IMuxClient {
+  private resolveDriver(server: Pick<ServerConfig, 'defaultMux'>): IMuxClient {
     return this.deps.muxDriverRegistry.resolve(server);
   }
 
@@ -298,6 +300,7 @@ export class TaskRestoreService {
     }
 
     let windowName: string | null = null;
+    let windowLabel: string | null = null;
     let worktreePath: string | null = null;
     let windowRowId: number | null = null;
     let repoDir: string | null = null;
@@ -345,7 +348,7 @@ export class TaskRestoreService {
       // roll back.
       const created = await createRotatedWindow(paneEnvService, this.serverIsolationLock, server, task, 'restore_create_failed', async (freshServer, env) => {
         const opened = await this.resolveDriver(freshServer).openWindow(freshServer, tmuxSession, `task-${task.id}`, { extraEnv: env });
-        return { result: opened.result, windowName: opened.windowName ?? opened.ref.window, ref: opened.ref };
+        return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? opened.ref.window };
       },
         true,
         // Issue #29 Step 3a review, Important finding 2: re-verify the
@@ -380,6 +383,7 @@ export class TaskRestoreService {
         },
       );
       windowName = created.windowName;
+      windowLabel = created.label ?? created.windowName;
       tokenId = created.tokenId;
       // Issue #29 review (10th pass), Important finding 3: use the fresh
       // `server` row createRotatedWindow re-read and actually created the
@@ -391,7 +395,7 @@ export class TaskRestoreService {
       createdRef = created.ref ?? null;
 
       const ref: MuxRef = createdRef!;
-      const windowTarget = tmuxTargetFromMuxRef(ref);
+      const windowTarget = muxWindowTarget(ref);
       const handle = await this.resolveDriver(server).resolvePane(server, ref, 1);
       const dbTarget = windowTarget;
       // `lockedProjectServer` (Issue #87 16th-round review, Important finding
@@ -651,7 +655,8 @@ export class TaskRestoreService {
         taskId: task.id,
         serverName,
         tmuxTarget: dbTarget,
-        label: windowName,
+        muxRef: ref,
+        label: windowLabel,
         isPrimary: true,
         windowType: unit?.workerType ? 'agent' : 'terminal',
         workerType: unit?.workerType ?? null,
@@ -662,6 +667,7 @@ export class TaskRestoreService {
         paneLayout: null,
         sleeping: false,
       });
+      await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId: task.id }, windowRepo);
 
       // task.branch is deliberately NOT written here (Issue #328 review,
       // fourth recurrence of this exact self-invalidation bug — see

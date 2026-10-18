@@ -56,6 +56,33 @@ jobs:
       - name: Server unit tests
         run: npx -w packages/server vitest run
 
+  # The integration tests that start a real misao daemon. They run on the very binary the hub ships (the version, URL and
+  # sha256 pinned in packages/server/scripts/misaoAssets.ts), so a pin that does not start, or a protocol drift, fails here.
+  misao-integration:
+    name: misao integration tests
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Fetch the pinned misao binary
+        run: |
+          BIN="$(npx -w packages/server tsx scripts/fetch-misao-binary.ts x86_64-unknown-linux-musl "$RUNNER_TEMP/misao" | tail -n 1)"
+          "$BIN" --version
+          echo "MISAO_CLI=$BIN" >> "$GITHUB_ENV"
+
+      - name: Make sure tmux is available (some of the tests run beside tmux windows)
+        run: command -v tmux >/dev/null || sudo apt-get install -y tmux
+
+      - name: misao integration tests
+        run: npx -w packages/server vitest run --project misao-integration
+
   shell:
     name: Shell scripts
     runs-on: ubuntu-24.04
@@ -63,4 +90,4 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: shellcheck
-        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh
+        run: shellcheck install.sh packages/server/scripts/run-hub.sh packages/server/scripts/download-node.sh packages/server/scripts/smoke-misao.sh

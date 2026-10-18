@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../../api/client';
-import { EmptyState, LoadingState } from '../ui';
+import { Button, EmptyState, LoadingState } from '../ui';
 import { Icon } from '../ui/Icon';
 import { DateDivider } from './DateDivider';
 import { groupEntries, type EntryGroup } from './groupEntries';
+import { hostUnavailableReason } from './hostUnavailable';
+import { decideOlderPageContinuation } from './olderPaging';
 import { deriveContextHistory } from './inputHistory';
 import { InteractionAnswerCard } from './InteractionAnswerCard';
 import { InteractionPendingBanner } from './InteractionPendingBanner';
@@ -64,6 +66,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 初回読み込みの再試行（エージェントに届かない等で失敗したとき、ポーリングは止まるため手動で再取得する）。
+  const [retryTick, setRetryTick] = useState(0);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [newCount, setNewCount] = useState(0);
   const [pendingInteraction, setPendingInteraction] = useState(false);
@@ -98,6 +102,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const startOffsetRef = useRef<number | null>(null);
   const hasOlderRef = useRef(false);
   const loadingOlderInFlightRef = useRef(false);
+  // 空ページ（巨大行が読めず飛ばされた）の連続回数と、続き読み込みを再発火させるための版数。
+  const emptyOlderStreakRef = useRef(0);
+  const [olderRetryVersion, setOlderRetryVersion] = useState(0);
   // 上方向ページングでの prepend 直前のスクロール位置。反映後の useLayoutEffect でアンカー補正する。
   const pendingAnchorRef = useRef<{ prevScrollHeight: number; prevScrollTop: number } | null>(null);
 
@@ -115,6 +122,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     : null;
   const lingeringCardQuestion = answeredQuestion !== null && entries.length <= answeredQuestion.entryCount ? answeredQuestion : null;
   const cardQuestion = liveCardQuestion ?? lingeringCardQuestion;
+
+  const hostUnavailable = hostUnavailableReason(error ?? undefined);
 
   const liveStatus = deriveLiveStatus(entries, Date.now());
   const hasLiveStatus = liveStatus !== null;
@@ -146,7 +155,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     setLoadingOlder(true);
     try {
       const { status, body } = await apiWithStatus<ReadSessionBeforeResult | TranscriptErrorResponse>(
-        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}`,
+        `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?before=${startOffsetRef.current}&windowId=${windowId}`,
       );
       if (generationRef.current !== myGeneration) return; // 別セッションへ切替済み: 破棄
       if (status !== 200 || isErrorResponse(body)) return; // 一時的なエラー: 次回のスクロール到達で再試行
@@ -157,8 +166,18 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         }
         setEntries((prev) => [...body.entries, ...prev]);
       }
+      const previousStart = startOffsetRef.current;
       startOffsetRef.current = body.prevOffset;
       hasOlderRef.current = body.hasOlder;
+      // entries が空でも offset が前進して hasOlder なら、state が変わらず自動の続き読み込みが動かないため、
+      // 版数を進めて続きを要求する（連続回数には上限がある）。
+      const outcome = decideOlderPageContinuation(
+        previousStart,
+        { entryCount: body.entries.length, prevOffset: body.prevOffset, hasOlder: body.hasOlder },
+        emptyOlderStreakRef.current,
+      );
+      emptyOlderStreakRef.current = outcome.emptyStreak;
+      if (outcome.continuePaging) setOlderRetryVersion((v) => v + 1);
     } catch {
       // ネットワーク一時エラー: 次回のスクロール到達で再試行
     } finally {
@@ -167,7 +186,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         setLoadingOlder(false);
       }
     }
-  }, [sessionId, agentType]);
+  }, [sessionId, agentType, windowId]);
 
   // 初回読み込み: セッション切り替え毎に全状態をリセットして末尾から取得する。
   useEffect(() => {
@@ -187,6 +206,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     startOffsetRef.current = null;
     hasOlderRef.current = false;
     loadingOlderInFlightRef.current = false;
+    emptyOlderStreakRef.current = 0;
     pendingAnchorRef.current = null;
     nearBottomRef.current = true;
 
@@ -224,7 +244,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       // アンマウント/次セッションへの切替直前にも世代を進め、直後にまだ飛行中の応答を確実に破棄する。
       generationRef.current += 1;
     };
-  }, [sessionId, agentType, windowId, scrollToBottom]);
+  }, [sessionId, agentType, windowId, retryTick, scrollToBottom]);
 
   // ライブ追従: 2秒間隔でoffset以降を取得し追記する。タブが非表示の間は取得しない。
   useEffect(() => {
@@ -291,7 +311,10 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
     const observer = new IntersectionObserver(
       (observerEntries) => {
-        if (observerEntries[0]?.isIntersecting) void loadOlder();
+        if (observerEntries[0]?.isIntersecting) {
+          emptyOlderStreakRef.current = 0; // 新しいスクロール操作: 空ページの連続回数を数え直す
+          void loadOlder();
+        }
       },
       { root: container, threshold: 0 },
     );
@@ -332,7 +355,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       if (isVisible) void loadOlder();
     });
     return () => cancelAnimationFrame(raf);
-  }, [entries, loading, notFound, error, loadOlder]);
+  }, [entries, olderRetryVersion, loading, notFound, error, loadOlder]);
 
   // ライブ状態行/回答待ちバナーの出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {
@@ -354,7 +377,11 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           ) : notFound ? (
             <EmptyState title={t('conversation.notFound')} />
           ) : error ? (
-            <EmptyState title={t('conversation.loadError')} description={error} />
+            <EmptyState
+              title={t('conversation.loadError')}
+              description={hostUnavailable ? `${t(`windowChat.notFound.${hostUnavailable}`)} ${t(`windowChat.hostUnavailableDescription.${hostUnavailable}`)}` : error}
+              action={<Button size="sm" onClick={() => setRetryTick((n) => n + 1)}>{t('windowChat.retry')}</Button>}
+            />
           ) : entries.length === 0 ? (
             <EmptyState title={t('conversation.empty')} />
           ) : (
@@ -468,7 +495,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         )}
       </div>
 
-      {!loading && !notFound && !error && (
+      {!loading && !notFound && (
         <PromptInputBar
           windowId={windowId}
           paneId={paneId}

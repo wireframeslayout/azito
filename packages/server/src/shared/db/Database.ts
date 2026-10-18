@@ -77,6 +77,9 @@ import * as m073 from './migrations/073_restore_tmux_mux_ref_kind';
 import * as m074 from './migrations/074_herdr_navigation_lock';
 import * as m075 from './migrations/075_remove_herdr_remnants';
 import * as m076 from './migrations/076_pending_follow_up';
+import * as m077 from './migrations/077_server_default_mux';
+import * as m078 from './migrations/078_normalize_misao_tmux_target';
+import * as m079 from './migrations/079_merge_duplicate_local_servers';
 
 // ─── Migration runner ───
 
@@ -86,7 +89,7 @@ interface Migration {
   up: (db: import('better-sqlite3').Database) => void;
 }
 
-const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031, m032, m033, m034, m035, m036, m037, m038, m039, m040, m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062, m063, m064, m065, m066, m067, m068, m069, m070, m071, m072, m073, m074, m075, m076];
+const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008, m009, m010, m011, m012, m013, m014, m015, m016, m017, m018, m019, m020, m021, m022, m023, m024, m025, m026, m027, m028, m029, m030, m031, m032, m033, m034, m035, m036, m037, m038, m039, m040, m041, m042, m043, m044, m045, m046, m047, m048, m049, m050, m051, m052, m053, m054, m055, m056, m057, m058, m059, m060, m061, m062, m063, m064, m065, m066, m067, m068, m069, m070, m071, m072, m073, m074, m075, m076, m077, m078, m079];
 
 // Migrations that rebuild a table referenced by other tables' FOREIGN KEY constraints (via
 // RENAME + CREATE + copy + DROP) need `foreign_keys` off and `legacy_alter_table` on for the
@@ -97,7 +100,15 @@ const migrations: Migration[] = [m001, m002, m003, m004, m005, m006, m007, m008,
 // be set before `db.transaction()` begins.
 const MIGRATIONS_REQUIRING_TABLE_REBUILD = new Set([36, 37, 42, 46, 68]);
 
-function runMigrations(db: import('better-sqlite3').Database): void {
+export interface OpenDatabaseOptions {
+  /**
+   * The default mux of the `local` server seeded into a database this call creates (migration 003 seeds it before the
+   * column exists, so it would otherwise be tmux). Applies only to a brand-new database; an existing one keeps what it has.
+   */
+  freshLocalDefaultMux?: 'tmux' | 'misao';
+}
+
+function runMigrations(db: import('better-sqlite3').Database, options: OpenDatabaseOptions): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS _migrations (
       version INTEGER PRIMARY KEY,
@@ -111,6 +122,7 @@ function runMigrations(db: import('better-sqlite3').Database): void {
       .map((r) => r.version),
   );
 
+  const isFreshDatabase = applied.size === 0;
   const insertMigration = db.prepare('INSERT INTO _migrations (version, description) VALUES (?, ?)');
 
   for (const migration of migrations) {
@@ -136,13 +148,17 @@ function runMigrations(db: import('better-sqlite3').Database): void {
       }
     }
   }
+
+  if (isFreshDatabase && options.freshLocalDefaultMux) {
+    db.prepare("UPDATE servers SET default_mux = ? WHERE name = 'local' AND type = 'local'").run(options.freshLocalDefaultMux);
+  }
 }
 
 // ─── Exports ───
 
 export type SqliteDatabase = import('better-sqlite3').Database;
 
-export function openDatabase(dbPath: string): SqliteDatabase {
+export function openDatabase(dbPath: string, options: OpenDatabaseOptions = {}): SqliteDatabase {
   const db = new Database(dbPath);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
@@ -151,6 +167,6 @@ export function openDatabase(dbPath: string): SqliteDatabase {
     try { fs.chmodSync(`${dbPath}${suffix}`, 0o600); } catch {}
   }
 
-  runMigrations(db);
+  runMigrations(db, options);
   return db;
 }

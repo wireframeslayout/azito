@@ -532,7 +532,8 @@ export function SettingsContent({ settings }: { settings: ReturnType<typeof useP
         awLabel={addWindowModal.awLabel}
         setAwLabel={addWindowModal.setAwLabel}
         awSessionData={addWindowModal.awSessionData}
-        setAwSessionData={addWindowModal.setAwSessionData}
+        awOfflineServers={addWindowModal.awOfflineServers}
+        onLoadMissingSessions={addWindowModal.loadMissingSessions}
         awSelectedSession={addWindowModal.awSelectedSession}
         setAwSelectedSession={addWindowModal.setAwSelectedSession}
         awNewSession={addWindowModal.awNewSession}
@@ -553,6 +554,8 @@ export function SettingsContent({ settings }: { settings: ReturnType<typeof useP
         servers={(s.servers || []) as Server[]}
         projectServers={s.projectServers}
         project={s.project}
+        muxKind={addWindowModal.muxKindModel}
+        onMuxKindChange={addWindowModal.setAwMuxChoice}
       />
       <ResourceWarningDialog
         open={addWindowModal.awResourceWarning !== null}

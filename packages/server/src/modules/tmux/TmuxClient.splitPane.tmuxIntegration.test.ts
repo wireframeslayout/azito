@@ -16,7 +16,7 @@ import type { ServerConfig } from '../servers/Server';
 // beyond the first silently inherited whatever the session carried (e.g. an
 // operator's own AZITO_UI_TOKEN) instead of the task's scoped
 // AZITO_TASK_TOKEN.
-const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', muxRuntime: 'system' } as ServerConfig;
+const LOCAL_SERVER: ServerConfig = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
 const SESSION = `azito-test-split-env-${process.pid}-${Date.now()}`;
 
 function tmux(...args: string[]): string {

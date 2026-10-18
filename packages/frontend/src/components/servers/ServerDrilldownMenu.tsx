@@ -11,6 +11,7 @@ interface ServerDrilldownMenuProps {
   currentServerName: string;
   status: ServerStatus | null;
   installStatus: InstallStatusResponse | null;
+  installStatusError: 'offline' | 'failed' | null;
   sessions: Session[];
 }
 
@@ -19,6 +20,7 @@ export default function ServerDrilldownMenu({
   currentServerName,
   status,
   installStatus,
+  installStatusError,
   sessions,
 }: ServerDrilldownMenuProps) {
   const navigate = useNavigate();
@@ -28,7 +30,7 @@ export default function ServerDrilldownMenu({
 
   const summaries: Record<string, SectionSummary> = {
     overview: getOverviewSummary(status),
-    setup: getSetupSummary(installStatus),
+    setup: getSetupSummary(installStatus, installStatusError),
     windows: getWindowsSummary(sessions.length, windowCount),
     danger: { text: '', tone: 'dim' },
   };
@@ -89,7 +91,7 @@ export default function ServerDrilldownMenu({
               <span style={{
                 marginLeft: 'auto',
                 fontSize: 'var(--font-xs)',
-                color: summary.tone === 'green' ? 'var(--success)' : summary.tone === 'orange' ? 'var(--warning)' : 'var(--text-dim)',
+                color: summary.tone === 'green' ? 'var(--success)' : summary.tone === 'orange' ? 'var(--warning)' : summary.tone === 'red' ? 'var(--danger)' : 'var(--text-dim)',
                 display: 'flex',
                 alignItems: 'center',
                 gap: 6,

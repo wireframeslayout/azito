@@ -11,7 +11,7 @@ const server: ServerConfig = {
   agentToken: null,
   agentVersion: null,
   sshHost: null,
-  muxRuntime: 'system',
+  defaultMux: 'tmux' as const, muxRuntime: 'system',
   sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,

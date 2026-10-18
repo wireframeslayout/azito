@@ -1,4 +1,4 @@
-import type { PaneHandle } from '@azito/shared';
+import type { MuxDriverKind, PaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../../tmux/IMuxClient';
 import type { ServerConfig } from '../../../servers/Server';
 import type { WorkerExecutionMode } from '../../../units/Unit';
@@ -14,6 +14,8 @@ export interface WorkerLaunchContext {
   taskId: number;
   unitId: number;
   windowId?: number;
+  /** The mux kind of the launched window (its `MuxRef.kind`); decides whether it runs under a supervisor. */
+  windowKind: MuxDriverKind;
   windowType: string;
   workerExecutionMode: WorkerExecutionMode;
   effectiveLaunchCommand: string;
