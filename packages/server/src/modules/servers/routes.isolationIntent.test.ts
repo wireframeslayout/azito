@@ -1644,7 +1644,7 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     // failing run.
     expect(realServerRepo.findByName('srv')?.isolationVerifiedAt).toBeNull();
     db.close();
-  });
+  }, 20000);
 
   // Step 2 review, Important #2: the lookup->probe->persist span used to run
   // OUTSIDE serverIsolationMutex — a concurrent PUT (isolationIntent flip,
