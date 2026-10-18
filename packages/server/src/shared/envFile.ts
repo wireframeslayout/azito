@@ -53,9 +53,19 @@ export function upsertEnvValue(filePath: string, key: string, value: string): vo
   fs.chmodSync(filePath, 0o600);
 }
 
+/**
+ * The `.env` the hub is configured from. Release mode follows run.sh (scripts/run-hub.sh): the stable file beside the
+ * versioned bundle directories (`hub/.env`, the parent of `hub/current`) wins, the bundle's own `.env` is the fallback.
+ * A source checkout uses `packages/server/.env`.
+ */
 export function resolveServerEnvPath(): string {
   if (isReleaseMode()) {
-    return path.join(resolveRoot(), '.env');
+    const bundleRoot = resolveRoot();
+    const stable = path.join(path.dirname(bundleRoot), '.env');
+    const bundled = path.join(bundleRoot, '.env');
+    // run.sh order: stable file, then the bundle's. With neither present, name the stable one (it outlives version dirs).
+    if (fs.existsSync(stable) || !fs.existsSync(bundled)) return stable;
+    return bundled;
   }
   return path.join(resolveRoot(), 'packages', 'server', '.env');
 }
