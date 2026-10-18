@@ -293,7 +293,7 @@ export default function SetupSection({ server, installStatus, installStatusError
           running={server.type === 'agent' && agentMisao.installing}
         >
           {server.type === 'local' && <MisaoServicePanel onChanged={refresh} />}
-          {server.type === 'agent' && <AgentMisaoPanel item={installStatus.misao} state={agentMisao} onInstall={() => { void agentMisao.install(); }} />}
+          {server.type === 'agent' && <AgentMisaoPanel item={installStatus.misao} state={agentMisao} onInstall={() => { void agentMisao.install(); }} onUpdate={() => { void agentMisao.update(); }} />}
         </StepRow>
       )}
 

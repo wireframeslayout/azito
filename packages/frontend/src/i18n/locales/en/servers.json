@@ -276,7 +276,15 @@
       "inspect": "Checking the server…",
       "transfer": "Sending misao to the server…",
       "prepare": "Preparing misao…",
+      "stop": "Stopping misao…",
       "start": "Starting misao…"
-    }
+    },
+    "update": "Update misao",
+    "updating": "Updating misao…",
+    "updateDesc": "Stops the running misao, switches it to the release bundled with this hub and starts it. If that fails, the previous release is put back.",
+    "updateFailed": "misao could not be updated",
+    "updateConfirmTitle": "Update misao?",
+    "updateConfirmMessage": "misao on this server is stopped to update it. Every running pane on this server ends and agent work in them is interrupted. Finish what you need before continuing.",
+    "updateConfirmLabel": "Stop and update"
   }
 }
