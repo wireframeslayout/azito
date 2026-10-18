@@ -33,10 +33,16 @@ const execFileMock = vi.fn(
     callback(new Error("can't find pane"));
   },
 );
-vi.mock('child_process', () => ({
-  execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
-  execFile: (...args: unknown[]) => (execFileMock as unknown as (...a: unknown[]) => void)(...args),
-}));
+// powershell.exe is the Windows SecretFileGuard's way to read/write an ACL: let it run for real.
+vi.mock('child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('child_process')>();
+  return {
+    execFileSync: (...args: unknown[]) => (args[0] === 'powershell.exe'
+      ? (actual.execFileSync as (...a: unknown[]) => string)(...args)
+      : execFileSyncMock(...args)),
+    execFile: (...args: unknown[]) => (execFileMock as unknown as (...a: unknown[]) => void)(...args),
+  };
+});
 
 vi.mock('../shared/dataDir', () => ({
   resolveDataDir: () => ({
