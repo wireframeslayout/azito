@@ -1,3 +1,5 @@
+import type { FastifyRequest } from 'fastify';
+
 const SECRET_QUERY_KEYS = new Set(['token']);
 const REDACTED = '[REDACTED]';
 
@@ -23,4 +25,15 @@ export function redactUrlSecrets(url: string): string {
   });
   if (!changed) return url;
   return `${url.slice(0, qIndex + 1)}${redacted.join('&')}${url.slice(queryEnd)}`;
+}
+
+export function serializeRequestForLog(request: FastifyRequest): Record<string, unknown> {
+  return {
+    method: request.method,
+    url: redactUrlSecrets(request.url),
+    version: request.headers?.['accept-version'],
+    host: request.host,
+    remoteAddress: request.ip,
+    remotePort: request.socket?.remotePort,
+  };
 }

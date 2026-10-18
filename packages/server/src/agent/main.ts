@@ -26,8 +26,7 @@ import { agentAuthHook } from './authHook';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
-import { redactUrlSecrets } from '../shared/redactUrlSecrets';
-import pinoSerializers from 'pino-std-serializers';
+import { serializeRequestForLog } from '../shared/redactUrlSecrets';
 
 // ─── Environment validation ───
 
@@ -90,12 +89,7 @@ async function main(): Promise<void> {
   const startedAt = Date.now();
   const app = Fastify({
     logger: {
-      serializers: {
-        req(request) {
-          const obj = pinoSerializers.req(request.raw);
-          return { ...obj, url: redactUrlSecrets(request.url) };
-        },
-      },
+      serializers: { req: serializeRequestForLog },
     },
   });
   const agentEventBus = new EventEmitter();

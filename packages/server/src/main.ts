@@ -23,8 +23,7 @@ import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
-import { redactUrlSecrets } from './shared/redactUrlSecrets';
-import pinoSerializers from 'pino-std-serializers';
+import { serializeRequestForLog } from './shared/redactUrlSecrets';
 
 // ─── Graceful shutdown ───
 
@@ -104,12 +103,7 @@ async function main(): Promise<void> {
 
   const app = Fastify({
     logger: {
-      serializers: {
-        req(request) {
-          const obj = pinoSerializers.req(request.raw);
-          return { ...obj, url: redactUrlSecrets(request.url) };
-        },
-      },
+      serializers: { req: serializeRequestForLog },
     },
   });
   const PORT = parseInt(process.env.PORT || '3001', 10);
