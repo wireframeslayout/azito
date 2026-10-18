@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'vitest';
+import fs from 'fs';
+import path from 'path';
+import { MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
 import { MISAO_TARGETS, misaoTargetFor } from './MisaoBundle';
 
 describe('misaoTargetFor', () => {
@@ -25,5 +28,22 @@ describe('misaoTargetFor', () => {
   it('does not treat an inherited property name as a platform', () => {
     expect(() => misaoTargetFor('constructor', 'x64')).toThrow();
     expect(() => misaoTargetFor('linux', 'toString')).toThrow();
+  });
+});
+
+// scripts/ is outside this package's tsc rootDir (it is built by tsx), so the build script is read as text.
+const BUILD_SCRIPT = fs.readFileSync(path.resolve(__dirname, '../../../../scripts/misaoAssets.ts'), 'utf-8');
+
+describe('the build script and the runtime agree on what a release is made of', () => {
+  it('lists the same release files (the build script stages them, the agent accepts exactly these as uploads)', () => {
+    const listed = /MISAO_RELEASE_FILES = \[([^\]]+)\] as const/.exec(BUILD_SCRIPT)?.[1];
+    expect(listed).toBeDefined();
+    const names = [...listed!.matchAll(/'([^']+)'/g)].map((m) => m[1]);
+    expect(names.sort()).toEqual([...MISAO_RELEASE_FILE_NAMES].sort());
+  });
+
+  it('pins an archive for every target the runtime can pick, and no other', () => {
+    const archives = [...BUILD_SCRIPT.matchAll(/'misao-[0-9.]+-([a-z0-9_-]+)\.tar\.gz':/g)].map((m) => m[1]);
+    expect(archives.sort()).toEqual([...MISAO_TARGETS].sort());
   });
 });

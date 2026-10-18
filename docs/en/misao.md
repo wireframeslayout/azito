@@ -108,8 +108,10 @@ server uses the daemon on its host, reached through the agent.
 ### Installing misao on an agent server
 
 The hub sends **its own bundled misao** through the agent (the release files are checked against the manifest sha256 on both ends; the
-agent downloads nothing). The hub carries the binary for every Unix target and sends the one that fits the agent's own OS / architecture
-(Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). It is installed under
+agent downloads nothing). Every hub carries the binary for all four Unix targets (the hub installs its own misao from the same bundle, and hubs run on
+Linux x86_64 / arm64 and macOS arm64) and sends the one that fits the agent's own OS / architecture
+(Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). In practice the agent
+installer of this release accepts x86_64 hosts only, so an arm64 agent server is not supported yet; that is a separate matter from what the hub bundles. It is installed under
 `~/.azito/misao/<version>/` with `current` -> `<version>` and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background
 process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved.
 
@@ -120,7 +122,14 @@ process (cleared environment, no reboot survival) when the host has no user syst
 - An update of the agent (`AgentUpdater`) never stops or restarts the misao daemon. A daemon of another release than the bundled one is left
   as it is (the Setup row says so): switching it ends every pane.
 - A hub run from a source checkout carries no bundled misao, so it cannot install one on an agent server.
-- Not covered yet: startup recovery of stuck tasks (local servers only), and switching a running agent-side daemon to a newer release.
+- **Updating a running agent-side daemon** (for example a 0.2.0 Node build) to the bundled release is an explicit action: the "Update misao"
+  button on the Setup row (shown only when the running release differs; a confirmation dialog first, because every pane of that server ends), or
+  `POST /api/servers/:name/update-misao` (operator only, also in compat mode; progress through the same `GET`). It saves the previous `current`
+  link and unit file, stops the daemon (the systemd unit, `misao stop`, then a SIGTERM to the process whose command line names the managed socket, which also
+  covers a daemon started in the background), switches `current` and the unit, starts the new one and waits for its socket. If any step fails,
+  the previous link and unit file are put back and the previous release is started again. An install on a host where nothing is running behaves the same
+  way for the unit and link (restored on failure).
+- Not covered yet: startup recovery of stuck tasks (local servers only).
 
 ## When it cannot connect
 

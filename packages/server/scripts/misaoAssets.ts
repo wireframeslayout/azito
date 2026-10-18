@@ -11,8 +11,11 @@ import { fileURLToPath } from 'url';
  * would prove nothing). The SDK / protocol tarballs in packages/server/package.json
  * must point at the same version.
  *
- * misao is one native binary per target (the Node `.mjs` build is not shipped). The hub carries every Unix target,
- * because an agent server can run on another OS / architecture than the hub: the one that fits is picked at install time.
+ * misao is one native binary per target (the Node `.mjs` build is not shipped). Every hub tarball carries all four Unix
+ * targets, whatever platform it is built for: the hub installs its own misao from it (hubs run on linux x64 / arm64 and
+ * darwin arm64), and the same bundle shape serves an agent server whose OS / architecture differs. The one that fits the
+ * install target is picked at install time. (The agent installer's preflight currently accepts x86_64 hosts only; agent
+ * support for other architectures is a separate matter and does not change what is bundled.)
  */
 export const MISAO_RELEASE = {
   version: '0.3.0',
@@ -109,6 +112,24 @@ export interface MisaoManifest {
   targets: Record<string, Record<MisaoReleaseFile, string>>;
 }
 
+/** Extracts one pinned archive (verified against its sha256) into `destDir`, flat (the archive's top directory is stripped). */
+async function extractAsset(asset: MisaoAssetName, destDir: string): Promise<void> {
+  fs.mkdirSync(destDir, { recursive: true });
+  // `misao-<ver>-<target>/` is the archive's only top directory.
+  execFileSync('tar', ['xzf', await resolveAsset(asset), '-C', destDir, '--strip-components=1']);
+}
+
+/**
+ * The pinned native binary of one target, extracted into `destDir` and returned as a path (for CI and tests that need a real
+ * misao: the same version, URL and sha256 as the hub ships). A target without a pinned archive is an error.
+ */
+export async function fetchMisaoBinary(target: string, destDir: string): Promise<string> {
+  const asset = (Object.keys(MISAO_RELEASE.assets) as MisaoAssetName[]).find((name) => targetOf(name) === target);
+  if (!asset) throw new Error(`no pinned misao ${MISAO_RELEASE.version} archive for target ${target}`);
+  await extractAsset(asset, destDir);
+  return path.join(destDir, 'misao');
+}
+
 function targetOf(asset: MisaoAssetName): string {
   return asset.slice(`misao-${MISAO_RELEASE.version}-`.length, -'.tar.gz'.length);
 }
@@ -122,9 +143,7 @@ export async function stageMisao(stageDir: string): Promise<void> {
   for (const asset of Object.keys(MISAO_RELEASE.assets) as MisaoAssetName[]) {
     const target = targetOf(asset);
     const targetDir = path.join(dest, target);
-    fs.mkdirSync(targetDir, { recursive: true });
-    // `misao-<ver>-<target>/` is the archive's only top directory.
-    execFileSync('tar', ['xzf', await resolveAsset(asset), '-C', targetDir, '--strip-components=1']);
+    await extractAsset(asset, targetDir);
 
     const hashes = {} as Record<MisaoReleaseFile, string>;
     for (const name of MISAO_RELEASE_FILES) {

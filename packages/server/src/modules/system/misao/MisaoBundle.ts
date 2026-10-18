@@ -5,7 +5,11 @@ import { z } from 'zod';
 import { MISAO_RELEASE_FILE_NAMES, type MisaoReleaseFile } from '../../servers/transport/agentMisaoSocket';
 import { MisaoServiceError } from './MisaoServiceError';
 
-/** The targets a hub release carries a misao binary for (Unix only: AZITO itself does not run on Windows). */
+/**
+ * The targets a hub release carries a misao binary for (Unix only: AZITO itself does not run on Windows). A hub runs on
+ * linux x64 / arm64 and darwin arm64 and installs its own misao from the same bundle; the rest keeps the bundle one shape for
+ * every hub and covers an agent host of another OS / architecture (AZITO's own agent installer currently accepts x86_64 only).
+ */
 export const MISAO_TARGETS = [
   'x86_64-unknown-linux-musl',
   'aarch64-unknown-linux-musl',
