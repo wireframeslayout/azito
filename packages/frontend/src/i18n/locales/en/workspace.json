@@ -76,7 +76,8 @@
     "loadingAgents": "Loading agent definitions…",
     "windowList": "Window list",
     "select": "Select",
-    "paneCount": "{{count}} panes",
+    "windowCount_one": "{{count}} window",
+    "windowCount_other": "{{count}} windows",
     "detachFromProject": "Detach from project",
     "deleteWindow": "Delete window",
     "quickAddTitle": "Add {{label}} — {{serverName}}"
