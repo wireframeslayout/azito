@@ -20,6 +20,7 @@ local サーバーのウィンドウとペインを misao デーモンへ任せ�
   `.env` を書き換えるので、その後にハブを再起動してください（ペインは終了しません）。
 - **更新**: ハブを更新しても misao は更新・再起動されません（再起動するとペインがすべて終了するため）。同梱版と稼働中の版が違うときは
   Setup の misao 行に表示が出ます。`azito misao update`、または「misao を更新（実行中のペインは終了します）」で、利用者が明示的に切り替えます。
+  0.2.0（Node 版）が入っている環境も同じ操作で 0.3.0（ネイティブバイナリ）へ切り替わります。unit は更新時に作り直され（`__NODE__` が無くなる）、旧版のディレクトリはそのまま残り、失敗したときは更新前の unit と版に戻します。
 - tmux が無いホストでは、窓追加の「ターミナル方式」で tmux が選べず（理由つきで disabled）、Setup の tmux 行は「任意」と表示されます。
 
 サービスの構成・コマンド・手動設置は [インストールとアップデート](./install-and-update.md#misao-サービス) を参照してください。
@@ -32,13 +33,13 @@ local サーバーのウィンドウとペインを misao デーモンへ任せ�
 ### 1. misao をインストールして起動する
 
 misao は別リポジトリ（[wireframeslayout/misao](https://github.com/wireframeslayout/misao)）です。
-Node.js 24 以上が必要です。ビルドして `misao` を PATH に置き、デーモンを起動します。
+単一のネイティブバイナリで、Node.js は要りません。[Releases](https://github.com/wireframeslayout/misao/releases) から
+OS / アーキテクチャに合うアーカイブ（`misao-<version>-<target>.tar.gz`。target は `x86_64-unknown-linux-musl`・
+`aarch64-unknown-linux-musl`・`aarch64-apple-darwin`・`x86_64-apple-darwin`）を取得し、`misao` を PATH に置いてデーモンを起動します。
 
 ```bash
-git clone https://github.com/wireframeslayout/misao.git
-cd misao
-npm ci && npm run build
-mkdir -p ~/.local/bin && ln -sf "$PWD/packages/cli/dist/main.js" ~/.local/bin/misao
+tar xzf misao-0.3.0-x86_64-unknown-linux-musl.tar.gz
+mkdir -p ~/.local/bin && install -m 755 misao-0.3.0-x86_64-unknown-linux-musl/misao ~/.local/bin/misao
 misao serve            # フォアグラウンド起動。常駐させるなら systemd ユーザーユニットを使う
 ```
 
@@ -106,9 +107,11 @@ API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`。�
 ### エージェントサーバーへの misao の導入
 
 ハブは**同梱の misao**をエージェント経由で送ります（リリースのファイルは、マニフェストの sha256 と両端で照合します。エージェントは何も
-ダウンロードしません）。`~/.azito/misao/<version>/` に、`current` -> `<version>`、エージェント自身の node と node-pty で配置し、
-systemd のユーザー unit `azito-misao`（`KillMode=process`）として起動します。ユーザー systemd が無いホストでは、環境を空にしたバックグラウンド
-プロセスで起動します（再起動をまたいでは残りません）。対象は Linux x86_64 のエージェントだけです。
+ダウンロードしません）。ハブは Unix の全ターゲットのバイナリを持ち、エージェント自身の OS / アーキテクチャ（Linux x86_64 / arm64、
+macOS arm64 / x86_64）に合うものを送ります。合うものが無いホストはエラーで断ります（フォールバックはしません）。
+`~/.azito/misao/<version>/` に、`current` -> `<version>` で配置し、systemd のユーザー unit `azito-misao`（`KillMode=process`）として起動します。
+ユーザー systemd が無いホスト（macOS では常に）では、環境を空にしたバックグラウンドプロセスで起動します（再起動をまたいでは残りません）。
+Node.js も node-pty も使いません。
 
 - エージェントサーバーの追加（自動インストール）では、エージェントのあとに misao を入れます。tmux が無いホストも preflight で止まらなくなり、
   その場合は既定の mux が misao になります。misao だけが失敗しても、エージェントは導入済みのまま、レスポンスの `misaoError` で伝えます。
