@@ -4,7 +4,7 @@ import type { EventRegistration, MisaoEventSource } from './MisaoConnection';
 /** Notifications are coalesced over this window: pane.title fires on every spinner frame of a busy agent. */
 export const CHANGE_COALESCE_MS = 200;
 
-const CHANGE_PANE_EVENTS: ReadonlySet<string> = new Set(['pane.opened', 'pane.closed', 'pane.exited', 'pane.title', 'pane.label']);
+const CHANGE_PANE_EVENTS: ReadonlySet<string> = new Set(['pane.opened', 'pane.closed', 'pane.exited', 'pane.label']);
 
 function isChangeEvent(type: string): boolean {
   return type.startsWith('workspace.') || type.startsWith('window.') || CHANGE_PANE_EVENTS.has(type);

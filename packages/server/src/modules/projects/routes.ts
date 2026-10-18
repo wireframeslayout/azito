@@ -13,6 +13,7 @@ import { originFromPrincipal } from '../tasks/origination/TaskOriginationService
 import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
+import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
 // Issue #29 review (independent QC), M-3: imported from the base-layer
@@ -50,6 +51,7 @@ export interface ProjectsRouteOptions {
   taskRepo: ITaskRepository;
   gitProvider: GitProviderService;
   tmux: TmuxClient;
+  muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
   projectSecretRepo: SqliteProjectSecretRepository;
   /** Issue #28 Phase A後半: import-issue is a task-origination path too — see TaskOriginationService's own doc comment. */
@@ -636,10 +638,10 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
           // there is nothing here that a stale `srv` could have already
           // approved that the fresh row could contradict. Keeping the old
           // "adopt whichever row is current" behavior is correct.
-          const sessionResult = await ensureSessionWithLock(tmux, serverIsolationLock, srv, project.slug, false);
+          const sessionResult = await ensureSessionWithLock(opts.muxDriverRegistry.resolve(srv), serverIsolationLock, srv, project.slug, false);
           sessionCreated = sessionResult.created;
-        } catch {
-          // tmux session creation is best-effort
+        } catch (err: unknown) {
+          request.log.warn(`Workspace bootstrap failed for ${project.slug} on ${srv.name}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 

@@ -25,7 +25,7 @@ import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { labelAddedWindowOrRemove } from '../tmux/labelRegisteredWindow';
 import { kindOfStoredWindow, windowKindOf } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, rawTargetProbeOf, resolveRawTarget } from '../tmux/storedWindowKind';
-import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from './windowPaneOps';
+import { resolveWindowById, isRefKindCompatible, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from './windowPaneOps';
 import type { SessionCaptureService } from './SessionCaptureService';
 import type { WindowActivityStatusService } from './WindowActivityStatusService';
 
@@ -633,7 +633,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
-      await driverFor(srv).renameWindowByRef(srv, ref, name);
+      const result = await driverFor(srv).renameWindowByRef(srv, ref, name);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       notifyWindowsChanged(win.serverName);
       return { ok: true };
     },
@@ -729,7 +731,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).zoomPaneByHandle(srv, handle);
+      const result = await driverFor(srv).zoomPaneByHandle(srv, handle);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       return { ok: true };
     },
   );
@@ -744,7 +748,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-      await driverFor(srv).unzoomPaneByHandle(srv, handle);
+      const result = await driverFor(srv).unzoomPaneByHandle(srv, handle);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       return { ok: true };
     },
   );
@@ -761,7 +767,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
-      await driverFor(srv).setPaneTitle(srv, handle, name);
+      const result = await driverFor(srv).setPaneTitle(srv, handle, name);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       return { ok: true };
     },
   );
