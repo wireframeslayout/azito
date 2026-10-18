@@ -59,6 +59,10 @@ export const WINDOWS_EXCLUDED_UNIT_TESTS: readonly WindowsExcludeEntry[] = [
     reason: '/tmp/azito-pipe- の固定パス前提（P3 で許可の見直し）',
   },
   {
+    file: 'src/modules/git/hub-transfer/HubRepoCache.test.ts',
+    reason: '実 git を複数回起動して既定の 5 秒で時間切れ（Windows の CI では遅い。初回の実行では通ったので不安定）',
+  },
+  {
     file: 'src/modules/git/RepoDiscoveryService.test.ts',
     reason: '/bin/bash 前提',
   },
