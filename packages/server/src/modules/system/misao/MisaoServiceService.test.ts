@@ -185,6 +185,61 @@ describe('MisaoServiceService', () => {
       expect(controller.unit).toBe(LEGACY_UNIT);
     });
 
+    describe('when moving a stopped older install fails after the unit is written', () => {
+      function stoppedNodeEra(): void {
+        fs.mkdirSync(path.join(paths.root, '0.2.0'), { recursive: true });
+        fs.writeFileSync(path.join(paths.root, '0.2.0', 'misao.mjs'), '// node build\n');
+        fs.symlinkSync('0.2.0', paths.current);
+        controller.installed = true;
+        controller.unit = LEGACY_UNIT;
+      }
+
+      it('stops the new daemon and puts back the link, the unit and .env, and does not start the old release (it was not running)', async () => {
+        stoppedNodeEra();
+        fs.writeFileSync(paths.hubEnvFile, 'AZITO_UI_TOKEN=abc\nMISAO_SOCKET=/old/m.sock\n');
+        // The service "starts" but nothing ever listens.
+        controller.start = async () => { controller.calls.push('start:new'); controller.current = 'active'; };
+
+        await expect(newService({ readyTimeoutMs: 300 }).install({ replaceSocketSetting: true })).rejects.toMatchObject({ code: 'daemon_not_ready' });
+
+        expect(fs.readlinkSync(paths.current)).toBe('0.2.0');
+        expect(controller.unit).toBe(LEGACY_UNIT);
+        expect(fs.readFileSync(paths.hubEnvFile, 'utf-8')).toBe('AZITO_UI_TOKEN=abc\nMISAO_SOCKET=/old/m.sock\n');
+        expect(controller.calls.filter((c) => c.startsWith('start'))).toEqual(['start:new']);
+        expect(controller.calls.slice(-2)).toEqual(['stop:0.3.0', 'install']);
+        expect(controller.current).toBe('inactive');
+      });
+
+      it('removes a .env that did not exist before', async () => {
+        stoppedNodeEra();
+        controller.start = async () => { throw new Error('start refused'); };
+
+        await expect(newService().install()).rejects.toThrow('start refused');
+
+        expect(fs.existsSync(paths.hubEnvFile)).toBe(false);
+        expect(fs.readlinkSync(paths.current)).toBe('0.2.0');
+      });
+
+      it('reports update_failed with what could not be restored and the manual steps when the restore fails too', async () => {
+        stoppedNodeEra();
+        controller.start = async () => { throw new Error('start refused'); };
+        const original = controller.install.bind(controller);
+        let calls = 0;
+        controller.install = async (content: string) => {
+          calls += 1;
+          if (calls === 2) throw new Error('unit write refused');
+          return original(content);
+        };
+
+        const failure = await newService().install().catch((err: unknown) => err as Error);
+
+        expect((failure as MisaoServiceError).code).toBe('update_failed');
+        expect((failure as Error).message).toContain('start refused');
+        expect((failure as Error).message).toContain('the service definition: unit write refused');
+        expect((failure as Error).message).toContain(`ln -sfn 0.2.0 ${paths.current}`);
+      });
+    });
+
     it('refuses to move the hub away from a MISAO_SOCKET that points at another daemon unless told to', async () => {
       fs.writeFileSync(paths.hubEnvFile, 'MISAO_SOCKET=/home/x/.misao/misao.sock\n');
 
