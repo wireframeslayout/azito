@@ -600,7 +600,7 @@ function normalizeEntry(
 
   const strippedContent =
     record.type === 'assistant' ? extractAskUserQuestionToolUse(message.content, askUserQuestionCache, allowCacheWrite) : message.content;
-  const content = keepAskUserQuestionBlocks ? message.content : strippedContent;
+  const content = keepAskUserQuestionBlocks && record.type === 'assistant' ? message.content : strippedContent;
 
   const blocks = normalizeBlocks(content);
   if (blocks.length === 0) return null;
