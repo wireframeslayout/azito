@@ -13,6 +13,7 @@ import { InteractionPendingBanner } from './InteractionPendingBanner';
 import { LiveStatusRow } from './LiveStatusRow';
 import { deriveLiveStatus } from './liveStatus';
 import { answerableQuestion } from './pendingQuestion';
+import { isNearBottom, nextNearBottom } from './scrollFollow';
 import PromptInputBar from './PromptInputBar';
 import type { WindowViewMode } from '../ui/TerminalChatToggle';
 import BubbleEntry from './styles/BubbleEntry';
@@ -39,7 +40,6 @@ const STYLE_ENTRY_COMPONENTS: Record<TranscriptStyle, ComponentType<StyleGroupPr
 };
 
 const POLL_INTERVAL_MS = 2000;
-const NEAR_BOTTOM_THRESHOLD_PX = 80;
 
 interface ConversationViewProps {
   windowId: number;
@@ -88,7 +88,10 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
 
   const containerRef = useRef<HTMLDivElement>(null);
   const sentinelRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const pendingInitialScrollRef = useRef(false);
   const nearBottomRef = useRef(true);
+  const lastScrollTopRef = useRef(0);
   const nextOffsetRef = useRef<number | null>(null);
 
   // 世代トークン（Important #1）: sessionId/agentType が切り替わるたびに発行し直す。飛行中の
@@ -140,10 +143,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
   const handleScroll = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
-    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const near = distanceFromBottom < NEAR_BOTTOM_THRESHOLD_PX;
-    nearBottomRef.current = near;
-    if (near) setNewCount(0);
+    nearBottomRef.current = nextNearBottom(nearBottomRef.current, lastScrollTopRef.current, el);
+    lastScrollTopRef.current = el.scrollTop;
+    if (nearBottomRef.current) setNewCount(0);
   }, []);
 
   // 上方向ページング（Issue #69 Phase C）: センチネルが可視になったら before=startOffset で
@@ -208,7 +210,9 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     loadingOlderInFlightRef.current = false;
     emptyOlderStreakRef.current = 0;
     pendingAnchorRef.current = null;
+    pendingInitialScrollRef.current = false;
     nearBottomRef.current = true;
+    lastScrollTopRef.current = 0;
 
     apiWithStatus<ReadSessionResult | TranscriptErrorResponse>(
       `/transcripts/${encodeURIComponent(agentType)}/${encodeURIComponent(sessionId)}?windowId=${windowId}`,
@@ -232,7 +236,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
         setPendingInteraction(body.pendingInteraction ?? false);
         setPendingQuestion(body.pendingQuestion ?? null);
         setLoading(false);
-        requestAnimationFrame(() => scrollToBottom('auto'));
+        pendingInitialScrollRef.current = true;
       })
       .catch((err) => {
         if (generationRef.current !== myGeneration) return;
@@ -244,7 +248,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       // アンマウント/次セッションへの切替直前にも世代を進め、直後にまだ飛行中の応答を確実に破棄する。
       generationRef.current += 1;
     };
-  }, [sessionId, agentType, windowId, retryTick, scrollToBottom]);
+  }, [sessionId, agentType, windowId, retryTick]);
 
   // ライブ追従: 2秒間隔でoffset以降を取得し追記する。タブが非表示の間は取得しない。
   useEffect(() => {
@@ -323,6 +327,17 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     return () => observer.disconnect();
   }, [loading, notFound, error, loadOlder]);
 
+  // 初回表示は描画確定後に同期で最下部へ置く（rAF では content-visibility の仮高さ確定前に空振りする）。
+  useLayoutEffect(() => {
+    if (!pendingInitialScrollRef.current || loading) return;
+    const el = containerRef.current;
+    if (!el) return;
+    pendingInitialScrollRef.current = false;
+    el.scrollTop = el.scrollHeight;
+    nearBottomRef.current = true;
+    lastScrollTopRef.current = el.scrollTop;
+  }, [loading, entries]);
+
   // 上方向ページングのスクロール位置アンカー補正: prepend 直前に記録した scrollHeight/scrollTop を
   // 元に、描画後の差分だけ scrollTop を進めて視界を固定する（entries 反映後に同期実行する必要が
   // あるため useLayoutEffect を使う）。
@@ -357,6 +372,23 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
     return () => cancelAnimationFrame(raf);
   }, [entries, olderRetryVersion, loading, notFound, error, loadOlder]);
 
+  // コンテンツ高さが後から確定・変化しても（content-visibility の実高さ置換など）最下部粘着中なら追従する。
+  const hasEntries = entries.length > 0;
+  useEffect(() => {
+    if (loading || notFound || error || !hasEntries) return;
+    const container = containerRef.current;
+    const content = contentRef.current;
+    if (!container || !content) return;
+    const observer = new ResizeObserver(() => {
+      if (!nearBottomRef.current) return;
+      container.scrollTop = container.scrollHeight;
+      lastScrollTopRef.current = container.scrollTop;
+    });
+    observer.observe(content);
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [loading, notFound, error, hasEntries]);
+
   // ライブ状態行/回答待ちバナーの出現は「新着」バッジのカウント対象にしない。最下部粘着中のみ追従スクロールする。
   useEffect(() => {
     if ((hasLiveStatus || pendingInteraction) && nearBottomRef.current) {
@@ -369,6 +401,8 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
       <div style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         <div
           ref={containerRef}
+          role="region"
+          aria-label={t('conversation.logLabel')}
           onScroll={handleScroll}
           style={{ height: '100%', overflowY: 'auto', overflowX: 'hidden', padding: '16px' }}
         >
@@ -385,7 +419,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
           ) : entries.length === 0 ? (
             <EmptyState title={t('conversation.empty')} />
           ) : (
-            <>
+            <div ref={contentRef}>
               <div ref={sentinelRef} style={{ minHeight: 1 }}>
                 {loadingOlder && (
                   <div style={{ textAlign: 'center', fontSize: 'var(--font-xs)', color: 'var(--text-dim)', padding: '8px 0 12px' }}>
@@ -462,7 +496,7 @@ export default function ConversationView({ windowId, sessionId, agentType, paneI
               ) : pendingInteraction ? (
                 <InteractionPendingBanner onChangeViewMode={onChangeViewMode} />
               ) : null}
-            </>
+            </div>
           )}
         </div>
 

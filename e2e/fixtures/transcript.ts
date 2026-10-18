@@ -35,6 +35,11 @@ export interface TranscriptFixture {
    * 既存内容は保持したまま追記する（差分読みの offset を壊さないため write() は使わない）。
    */
   appendAnsweredQuestion(question: string, optionLabels: string[], answerLabel: string): void;
+  /**
+   * user/assistant の対を `turns` 回書き出した長い会話で、ファイルを置き換える（write() の代替）。
+   * 各 assistant 返信は `- line i` を `linesPerReply` 行含む。最後の返信に入れた一意マーカーを返す。
+   */
+  writeLongConversation(turns: number, linesPerReply: number): string;
 }
 
 function uuid(): string {
@@ -134,5 +139,37 @@ export function createTranscriptFixture(claudeConfigDir: string, projectName: st
     fs.appendFileSync(filePath, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
   };
 
-  return { sessionId, filePath, write, appendAnsweredQuestion };
+  const writeLongConversation = (turns: number, linesPerReply: number): string => {
+    const marker = `e2e-latest-${uuid()}`;
+    const startMs = Date.now() - turns * 2 * 1000;
+    const records: unknown[] = [];
+    for (let turn = 0; turn < turns; turn += 1) {
+      const userIso = new Date(startMs + turn * 2000).toISOString();
+      const assistantIso = new Date(startMs + turn * 2000 + 1000).toISOString();
+      const lines = Array.from({ length: linesPerReply }, (_, i) => `- line ${i}`);
+      if (turn === turns - 1) lines.push(marker);
+      records.push(
+        {
+          uuid: uuid(),
+          type: 'user',
+          timestamp: userIso,
+          message: { role: 'user', content: [{ type: 'text', text: `e2e: question ${turn}` }] },
+        },
+        {
+          uuid: uuid(),
+          type: 'assistant',
+          timestamp: assistantIso,
+          message: {
+            role: 'assistant',
+            model: 'claude-e2e',
+            content: [{ type: 'text', text: lines.join('\n') }],
+          },
+        },
+      );
+    }
+    fs.writeFileSync(filePath, records.map((r) => JSON.stringify(r)).join('\n') + '\n');
+    return marker;
+  };
+
+  return { sessionId, filePath, write, appendAnsweredQuestion, writeLongConversation };
 }
