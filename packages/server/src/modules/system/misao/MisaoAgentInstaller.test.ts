@@ -176,7 +176,8 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(fs.existsSync(path.join(root, VERSION, 'misao'))).toBe(true);
   });
 
-  it('switches a stopped Node-era install to the bundled release: current moves to the bundled binary release and the old directory stays', async () => {
+  // Windows では動かない: home の安全パス検査が C:\ を拒否する、systemd / プロセス操作の POSIX 前提
+  it.skipIf(process.platform === 'win32')('switches a stopped Node-era install to the bundled release: current moves to the bundled binary release and the old directory stays', async () => {
     installFakeSystemctl('ok');
     const root = path.join(home, '.azito', 'misao');
     fs.mkdirSync(path.join(root, '0.2.0', 'node_modules'), { recursive: true, mode: 0o700 });
@@ -233,7 +234,8 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
   }
 
   describe('update (the explicit switch of a running release)', { timeout: 30_000 }, () => {
-    it('stops a running Node-era daemon under systemd, switches current and the unit, and starts the bundled one', async () => {
+    // Windows では動かない: home の安全パス検査が C:\ を拒否する、systemd / プロセス操作の POSIX 前提
+    it.skipIf(process.platform === 'win32')('stops a running Node-era daemon under systemd, switches current and the unit, and starts the bundled one', async () => {
       installFakeSystemctl('ok');
       const root = path.join(home, '.azito', 'misao');
       await installNodeEra({ unit: true, running: true });
