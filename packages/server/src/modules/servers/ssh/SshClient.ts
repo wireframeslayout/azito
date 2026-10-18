@@ -18,6 +18,7 @@ interface ParsedHost {
   host: string;
   port: number;
   username: string;
+  portExplicit: boolean;
 }
 
 interface PendingCommand {
@@ -43,17 +44,19 @@ function parseHostString(hostStr: string): ParsedHost | null {
   const username = hostStr.substring(0, atIdx);
   let rest = hostStr.substring(atIdx + 1);
   let port = 22;
+  let portExplicit = false;
 
   const colonIdx = rest.lastIndexOf(':');
   if (colonIdx !== -1) {
     const maybePort = parseInt(rest.substring(colonIdx + 1), 10);
     if (!isNaN(maybePort) && maybePort > 0 && maybePort <= 65535) {
       port = maybePort;
+      portExplicit = true;
       rest = rest.substring(0, colonIdx);
     }
   }
 
-  return { host: rest, port, username };
+  return { host: rest, port, username, portExplicit };
 }
 
 function findDefaultKey(): string | null {
@@ -107,8 +110,8 @@ export class SshClient {
         ? (computed.IdentityFile as string).replace(/^~/, process.env.HOME || '')
         : findDefaultKey();
       return {
-        host: direct.host,
-        port: direct.port,
+        host: (computed.HostName as string) || direct.host,
+        port: direct.portExplicit ? direct.port : parseInt((computed.Port as string) || '22', 10),
         username: direct.username,
         identityFile,
         agent: process.env.SSH_AUTH_SOCK || null,
