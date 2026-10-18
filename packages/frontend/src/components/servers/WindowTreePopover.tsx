@@ -32,6 +32,10 @@ interface WindowTreePopoverProps {
   onDeletePane: (ref: TerminalRef, label: string, handle?: string) => void;
   /** Deletes a whole window (the way out of a window without panes). `label` names it in the confirmation. */
   onKillWindow: (ref: TerminalRef, label: string) => void;
+  /** A window is being added: the "+Window" actions are disabled until it settles. */
+  addingWindow?: boolean;
+  /** A pane is being split: the "Split" actions are disabled until it settles. */
+  splittingPane?: boolean;
   isMobile: boolean;
   windowById: Map<number, WindowIndexEntry>;
   taskById: Map<number, { title?: string }>;
@@ -40,6 +44,7 @@ interface WindowTreePopoverProps {
 export default function WindowTreePopover({
   sessions, serverName, selectedRef,
   onSelect, onClose, onCreateSession, onAddWindow, onSplitPane, onDeletePane, onKillWindow, isMobile,
+  addingWindow = false, splittingPane = false,
   windowById, taskById,
 }: WindowTreePopoverProps) {
   const { t } = useTranslation('servers');
@@ -94,9 +99,9 @@ export default function WindowTreePopover({
                 {sess.windows.length} windows
               </span>
               <span
-                aria-disabled={!actionable}
-                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(actionable) }}
-                onClick={(e) => { e.stopPropagation(); if (actionable) onAddWindow(sess.name, kind); }}
+                aria-disabled={addingWindow || !actionable}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(!addingWindow && actionable) }}
+                onClick={(e) => { e.stopPropagation(); if (!addingWindow && actionable) onAddWindow(sess.name, kind); }}
               >
                 <Icon name="plus" size={14} />Window
               </span>
@@ -138,11 +143,11 @@ export default function WindowTreePopover({
                     </span>
                     {!isEmptyWindow && (
                       <span
-                        aria-disabled={!actionable}
-                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(actionable) }}
+                        aria-disabled={splittingPane || !actionable}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(!splittingPane && actionable) }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          if (actionable) onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
+                          if (!splittingPane && actionable) onSplitPane(sess.name, String(win.name ?? win.index), 'horizontal', win.windowId ?? undefined, win.ref);
                         }}
                       >
                         <Icon name="split-h" size={14} /> {t('windows.split')}

@@ -38,6 +38,8 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   const [showTree, setShowTree] = useState(false);
   const [createSessionOpen, setCreateSessionOpen] = useState(false);
   const [selectedRef, setSelectedRef] = useState<TerminalRef | null>(null);
+  const [addingWindow, setAddingWindow] = useState(false);
+  const [splittingPane, setSplittingPane] = useState(false);
 
   const firstRef = useMemo<TerminalRef | null>(() => {
     for (const sess of sessions) {
@@ -87,36 +89,61 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
   const failureText = useCallback((res: unknown): string | null => muxCreateFailureText(res, tw), [tw]);
   const withMisaoInstall = useMisaoInstallOffer();
 
+  // The modal shows the returned text, so a thrown error (network, 5xx) is returned like a refusal body.
   const handleCreateSession = useCallback(async (name: string, kind: MuxDriverKind): Promise<string | null> => {
-    const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) }));
-    const failure = failureText(res);
-    if (failure === null) refresh();
-    return failure;
+    try {
+      const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces`, { method: 'POST', body: JSON.stringify({ name, kind }) }));
+      const failure = failureText(res);
+      if (failure === null) refresh();
+      return failure;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
   }, [server.name, refresh, failureText, withMisaoInstall]);
 
   const handleAddWindow = useCallback(async (sessionName: string, kind: MuxDriverKind) => {
-    const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) }));
-    const failure = failureText(res);
-    if (failure !== null) {
-      showToast(failure);
-      return;
+    if (addingWindow) return;
+    setAddingWindow(true);
+    try {
+      const res = await withMisaoInstall(server.name, () => api<unknown>(`/servers/${encodeURIComponent(server.name)}/mux/workspaces/${encodeURIComponent(sessionName)}/windows`, { method: 'POST', body: JSON.stringify({ kind }) }));
+      const failure = failureText(res);
+      if (failure !== null) {
+        showToast(failure);
+        return;
+      }
+      refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAddingWindow(false);
     }
-    refresh();
-  }, [server.name, refresh, failureText, showToast, withMisaoInstall]);
+  }, [addingWindow, server.name, refresh, failureText, showToast, withMisaoInstall]);
 
   const handleSplitPane = useCallback(async (sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
-    if (windowId != null) {
-      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else if (refUsesMuxRoutes(ref)) {
-      await api(`/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else {
-      await api(
-        `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`,
-        { method: 'POST', body: JSON.stringify({ direction }) },
-      );
+    if (splittingPane) return;
+    setSplittingPane(true);
+    const init = { method: 'POST', body: JSON.stringify({ direction }) };
+    try {
+      let path: string;
+      if (windowId != null) {
+        path = `/windows/${windowId}/panes`;
+      } else if (refUsesMuxRoutes(ref)) {
+        path = `/servers/${encodeURIComponent(server.name)}/mux/windows/${encodeURIComponent(ref)}/panes`;
+      } else {
+        path = `/servers/${encodeURIComponent(server.name)}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`;
+      }
+      const failure = errorMessageOf(await api<unknown>(path, init));
+      if (failure) {
+        showToast(failure);
+        return;
+      }
+      refresh();
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSplittingPane(false);
     }
-    refresh();
-  }, [server.name, refresh]);
+  }, [splittingPane, server.name, refresh, showToast]);
 
   // Deleting what is on screen leaves `selectedRef` pointing at a pane ordinal / window that is gone: fall back to the first window.
   const handleDeletePane = useCallback(async (ref: TerminalRef, label: string, handle?: string) => {
@@ -260,6 +287,8 @@ export default function WindowsSection({ server, sessions, refresh, windowById, 
           onSplitPane={handleSplitPane}
           onDeletePane={handleDeletePane}
           onKillWindow={handleKillWindow}
+          addingWindow={addingWindow}
+          splittingPane={splittingPane}
           isMobile={isMobile}
           windowById={windowById}
           taskById={taskById}
