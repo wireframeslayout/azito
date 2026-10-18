@@ -469,6 +469,8 @@ never appear under broader conditions than the banner.
 | Answerable shape | Exactly one question, `multiSelect: false`, and 1-9 options (`MAX_TAPPABLE_OPTIONS`). Anything else degrades to the banner |
 | After a failed send | That generation (`openedAt`) degrades to the banner instead of the card |
 
+Note: when classifying the session tail, an unanswered AskUserQuestion `tool_use` record is kept (unlike the display path, which strips it). Stripping it made the preceding preface text look like the tail, yielding `terminal_final` and no question card. Once answered, the matching tool_result (an interaction) sits later in the tail, so nothing changes. Display (`readSession` / `readSessionBefore`) still strips the `tool_use`.
+
 ### Preconditions and conventions per stage
 
 | Stage | Behavior |

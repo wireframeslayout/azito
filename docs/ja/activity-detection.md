@@ -442,6 +442,8 @@ POST /api/webhooks/agent-interaction  →  InteractionMonitor が pending 状態
 | 回答可能な形 | 質問が1件、`multiSelect: false`、選択肢が1〜9件（`MAX_TAPPABLE_OPTIONS`）。それ以外はバナーに退化 |
 | 送信失敗後 | その世代（`openedAt`）はカードを出さずバナーに退化する |
 
+注: セッション末尾の分類では、未回答の AskUserQuestion の tool_use レコードを（表示用とは異なり）除去せず残す。除去すると直前の前置き text が末尾とみなされて `terminal_final` になり、質問カードが出なくなるため。回答済みならば対応する tool_result が interaction として末尾側に来るので影響しない。表示（`readSession` / `readSessionBefore`）は従来どおり tool_use を除去する。
+
 ### 各段階の前提と規約
 
 | 段階 | 内容 |
