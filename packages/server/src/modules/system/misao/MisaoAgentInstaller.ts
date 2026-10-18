@@ -134,10 +134,10 @@ export class MisaoAgentInstaller {
       const startMethod = await this.switchAndStart(target, host, root, socket, bundle);
       return { version: bundle.version, runningVersion: bundle.version, startMethod, updateAvailable: false };
     } catch (err) {
-      // Nothing was running, so nothing is lost; but an older install must be startable again as it was.
+      // Nothing was running, so nothing is lost; but an older install must be startable again as it was. The old release is not started: it was not running.
       if (previous.link !== undefined && previous.link !== bundle.version) {
         await this.stopDaemon(target, host, root, socket, previous).catch(() => undefined);
-        await this.restore(target, host, root, previous).catch(() => undefined);
+        await this.restoreOrReport(err, target, host, root, previous, bundle.version);
       }
       throw err;
     }
@@ -293,15 +293,40 @@ export class MisaoAgentInstaller {
     return previous;
   }
 
-  /** Puts the previous `current` link and unit file back (and tells systemd about the unit). */
-  private async restore(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, previous: PreviousInstall): Promise<void> {
-    const lines = ['set -e'];
-    if (previous.link !== undefined) lines.push(`ln -sfn ${shellQuote(previous.link)} ${shellQuote(path.join(root, 'current'))}`);
-    await this.run(target, lines.join('\n'), 'Putting the previous misao release back');
-    if (previous.unit !== undefined) {
-      await this.writeUnitFile(target, host, previous.unit);
-      await target.exec('systemctl --user daemon-reload', EXEC_TIMEOUT_MS);
+  /**
+   * Puts the previous `current` link and unit file back (and tells systemd about the unit). Each is attempted even when the
+   * other fails; returns what could not be restored (empty when everything was).
+   */
+  private async restore(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, previous: PreviousInstall): Promise<string[]> {
+    const failed: string[] = [];
+    if (previous.link !== undefined) {
+      try {
+        await this.run(target, `ln -sfn ${shellQuote(previous.link)} ${shellQuote(path.join(root, 'current'))}`, 'Putting the previous misao release back');
+      } catch (err) {
+        failed.push(`the link ${path.join(root, 'current')}: ${describeError(err)}`);
+      }
     }
+    if (previous.unit !== undefined) {
+      try {
+        await this.writeUnitFile(target, host, previous.unit);
+        await target.exec('systemctl --user daemon-reload', EXEC_TIMEOUT_MS);
+      } catch (err) {
+        failed.push(`the service unit file ${this.unitPathOf(host)}: ${describeError(err)}`);
+      }
+    }
+    return failed;
+  }
+
+  /** Restores the previous link and unit after a failed switch; when that fails too, throws `update_failed` with both errors and the manual steps. */
+  private async restoreOrReport(cause: unknown, target: MisaoInstallTarget, host: AgentMisaoHost, root: string, previous: PreviousInstall, bundledVersion: string): Promise<void> {
+    const failed = await this.restore(target, host, root, previous);
+    if (failed.length === 0) return;
+    throw new MisaoServiceError('update_failed', `Moving misao to ${bundledVersion} failed (${describeError(cause)}) and putting the previous release ${previous.link ?? ''} back failed too (could not restore: ${failed.join('; ')}). ${this.manualRestore(root, previous)}`);
+  }
+
+  private manualRestore(root: string, previous: PreviousInstall): string {
+    const steps = [previous.link !== undefined ? `ln -sfn ${previous.link} ${path.join(root, 'current')}` : undefined, previous.unit !== undefined ? `put the previous unit file back (${SERVICE_UNIT_FILE} in ~/.config/systemd/user/) and run systemctl --user daemon-reload` : undefined].filter((s) => s !== undefined);
+    return `To restore the previous release by hand on the agent host: ${steps.join('; ')}.`;
   }
 
   private async writeUnitFile(target: MisaoInstallTarget, host: AgentMisaoHost, content: string): Promise<void> {
@@ -416,10 +441,11 @@ export class MisaoAgentInstaller {
    */
   private async recoverFromFailedUpdate(cause: unknown, target: MisaoInstallTarget, host: AgentMisaoHost, root: string, socket: string, previous: PreviousInstall, bundledVersion: string, previousVersion: string, wasRunning: boolean): Promise<never> {
     const causeText = describeError(cause);
-    const manual = `To restore the previous release by hand on the agent host: ln -sfn ${previousVersion} ${path.join(root, 'current')}`;
+    const manual = this.manualRestore(root, previous);
     try {
       await this.stopDaemon(target, host, root, socket, previous).catch(() => undefined);
-      await this.restore(target, host, root, previous);
+      const failed = await this.restore(target, host, root, previous);
+      if (failed.length > 0) throw new Error(`could not restore: ${failed.join('; ')}`);
       if (wasRunning) {
         const viaSystemd = host.platform === 'linux' && previous.unit !== undefined
           && (await target.exec(`systemctl --user start ${MISAO_SYSTEMD_UNIT}`, EXEC_TIMEOUT_MS)).code === 0;

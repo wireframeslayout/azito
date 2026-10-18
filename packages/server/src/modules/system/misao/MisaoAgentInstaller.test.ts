@@ -214,9 +214,18 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
   const runningNodeEraDaemons = async (): Promise<string> => (await runShell(`pgrep -f -- ${JSON.stringify(`[m]isao.mjs serve --socket ${agentMisaoManagedSocket(home)}`)} || true`, process.env)).stdout.trim();
 
   /** The target with the commands matching `fails` refused (exit 1), to make one step of a switch fail. */
-  function failing(fails: RegExp): MisaoInstallTarget {
+  function failing(fails: RegExp, onlyFirst = false): MisaoInstallTarget {
     const base = target();
-    return target({ exec: async (command, timeout) => (fails.test(command) ? { code: 1, stdout: '', stderr: 'injected failure' } : base.exec(command, timeout)) });
+    let refused = 0;
+    return target({
+      exec: async (command, timeout) => {
+        if (fails.test(command) && !(onlyFirst && refused > 0)) {
+          refused += 1;
+          return { code: 1, stdout: '', stderr: 'injected failure' };
+        }
+        return base.exec(command, timeout);
+      },
+    });
   }
 
   describe('update (the explicit switch of a running release)', { timeout: 30_000 }, () => {
@@ -312,10 +321,27 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     const root = path.join(home, '.azito', 'misao');
     const legacyUnit = await installNodeEra({ unit: true, running: false });
 
-    await expect(installer().install(failing(/base64 -d/))).rejects.toMatchObject({ code: 'transfer_failed' });
+    await expect(installer().install(failing(/base64 -d/, true))).rejects.toMatchObject({ code: 'transfer_failed' });
 
     expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
     expect(fs.readFileSync(unitFile(), 'utf-8')).toBe(legacyUnit);
+  });
+
+  it('reports update_failed with what could not be restored, both errors and the manual steps when putting the old install back fails too', async () => {
+    installFakeSystemctl('ok');
+    const root = path.join(home, '.azito', 'misao');
+    await installNodeEra({ unit: true, running: false });
+
+    // Writing the new unit fails, and so does everything that would put the old link and unit back.
+    const failure = await installer().install(failing(/base64 -d|ln -sfn '?0\.2\.0/)).then(() => undefined, (err: unknown) => err as MisaoServiceError);
+
+    expect(failure).toBeInstanceOf(MisaoServiceError);
+    expect(failure!.code).toBe('update_failed');
+    expect(failure!.message).toContain('Writing the misao service unit failed');
+    expect(failure!.message).toContain(`the link ${root}/current`);
+    expect(failure!.message).toContain('the service unit file');
+    expect(failure!.message).toContain(`ln -sfn 0.2.0 ${root}/current`);
+    expect(failure!.message).toContain('put the previous unit file back');
   });
 
   it('puts the old link and unit back when the new daemon cannot be started after moving a stopped older install', async () => {
