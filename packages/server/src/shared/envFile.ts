@@ -62,7 +62,10 @@ export function resolveServerEnvPath(): string {
   if (isReleaseMode()) {
     const bundleRoot = resolveRoot();
     const stable = path.join(path.dirname(bundleRoot), '.env');
-    return fs.existsSync(stable) && fs.statSync(stable).isFile() ? stable : path.join(bundleRoot, '.env');
+    const bundled = path.join(bundleRoot, '.env');
+    // run.sh order: stable file, then the bundle's. With neither present, name the stable one (it outlives version dirs).
+    if (fs.existsSync(stable) || !fs.existsSync(bundled)) return stable;
+    return bundled;
   }
   return path.join(resolveRoot(), 'packages', 'server', '.env');
 }

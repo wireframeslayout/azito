@@ -7,6 +7,7 @@ import { _resetReleaseDefaultNotice } from '../shared/dataDir';
 import { resolveServerEnvPath } from '../shared/envFile';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { tokenCommand } from './tokenCommand';
+import { authDoctorCommand } from './authDoctorCommand';
 
 // A real release layout, nothing mocked: <prefix>/hub/<version>/ (the bundle), <prefix>/hub/current -> <version>,
 // <prefix>/hub/.env (written by install.sh, loaded by run.sh).
@@ -83,10 +84,22 @@ describe('release layout (hub/<version>, hub/current symlink, parent .env)', () 
     expect(fs.existsSync(path.join(tmpDir, '.azito', 'data', 'ui-token'))).toBe(false);
   });
 
-  it('token show names the parent .env when no token exists, and announces the data dir once', async () => {
+  it('token show names the parent .env when no .env exists, and announces the data dir once', async () => {
     await expect(tokenCommand(['show'])).rejects.toThrow('process.exit');
-    expect(errorOutput()).toContain(path.join(hubDir, 'current', '.env'));
+    expect(errorOutput()).toContain(`Set AZITO_UI_TOKEN in ${path.join(hubDir, '.env')}`);
     const notices = vi.mocked(console.log).mock.calls.filter(([m]) => String(m).startsWith('AZITO_DATA_DIR not set'));
     expect(notices).toHaveLength(1);
+  });
+
+  it('auth doctor finds the token in the parent .env', async () => {
+    fs.writeFileSync(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN=parent-token\n');
+    fs.mkdirSync(path.join(tmpDir, '.claude'), { recursive: true });
+    fs.writeFileSync(
+      path.join(tmpDir, '.claude', 'settings.json'),
+      JSON.stringify({ mcpServers: { 'azt-mcp': { env: { AZITO_UI_TOKEN: 'parent-token' } } } }),
+    );
+    await authDoctorCommand();
+    const out = vi.mocked(console.log).mock.calls.map(([m]) => String(m)).join('\n');
+    expect(out).toContain(`一致元: ${path.join(hubDir, '.env')}`);
   });
 });

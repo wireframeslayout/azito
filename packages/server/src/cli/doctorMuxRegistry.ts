@@ -1,20 +1,12 @@
 import os from 'os';
 import { asPaneHandle, parseMuxRef } from '@azito/shared';
 import { readEnvValue, resolveServerEnvPath } from '../shared/envFile';
-import { getBundleRoot } from '../shared/releaseInfo';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../modules/tmux/MuxCapabilityError';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { NO_AGENT_MISAO, registerMisaoDriver, resolveMisaoRuntimeForHub } from '../modules/tmux/misao/misaoDriver';
-import { hubEnvFilePath, resolveInstallPrefix } from '../modules/system/misao/misaoPaths';
 import type { ServerConfig } from '../modules/servers/Server';
-
-/** The hub's `.env`: a CLI process does not load it (the service's run.sh does), but MISAO_SOCKET lives there. */
-function hubEnvFile(): string {
-  const prefix = resolveInstallPrefix(getBundleRoot());
-  return prefix ? hubEnvFilePath(prefix) : resolveServerEnvPath();
-}
 
 export interface DoctorMux {
   registry: MuxDriverRegistry;
@@ -33,7 +25,7 @@ export async function openDoctorMux(): Promise<DoctorMux> {
   const registry = new MuxDriverRegistry();
   registry.register('tmux', new TmuxClient(new TransportFactory(''), '', '', '', ''));
 
-  const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(hubEnvFile(), 'MISAO_SOCKET');
+  const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(resolveServerEnvPath(), 'MISAO_SOCKET');
   const runtime = await resolveMisaoRuntimeForHub(
     { env: { ...process.env, ...(configuredSocket ? { MISAO_SOCKET: configuredSocket } : {}) }, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' },
     false,
