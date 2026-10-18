@@ -20,36 +20,52 @@ export interface AclSnapshot {
 /** PowerShell を 1 回実行して stdout を返す。path は環境変数 AZITO_GUARD_PATH で渡す（スクリプトに埋め込まない）。 */
 export type PowerShellRunner = (script: string, targetPath: string) => string;
 
+// Get-Acl / Set-Acl は Microsoft.PowerShell.Security の自動読み込みに依存し、PSModulePath が PowerShell 7 のものだと失敗する。
+// FileInfo / DirectoryInfo の GetAccessControl / SetAccessControl（.NET）なら、モジュール無しで DACL だけを読み書きできる。
+const OPEN_INFO = 'if($isDir){$info=New-Object System.IO.DirectoryInfo $p}else{$info=New-Object System.IO.FileInfo $p};';
+
 const PS_PREAMBLE = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $p=$env:AZITO_GUARD_PATH; ";
 
 /**
  * 継承を切った（保護）DACL に、現在のユーザーの FullControl だけを入れて丸ごと置き換える。
- * Get-Acl で得た明示的な許可（他のユーザーのもの）は PurgeAccessRules で全部除いてから足す
+ * 読み出した DACL の明示的な許可（他のユーザーのもの）は PurgeAccessRules で全部除いてから足す
  * （`icacls /inheritance:r /grant:r` だけでは他の主体の明示的な許可が残る）。ディレクトリには子へ継承させる。
  */
 const PROTECT_SCRIPT = PS_PREAMBLE +
   "$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; " +
-  '$item=Get-Item -LiteralPath $p -Force; ' +
-  '$acl=Get-Acl -LiteralPath $p; ' +
+  '$isDir=[System.IO.Directory]::Exists($p); ' +
+  `${OPEN_INFO} ` +
+  "$acl=$info.GetAccessControl([System.Security.AccessControl.AccessControlSections]'Access'); " +
   '$acl.SetAccessRuleProtection($true,$false); ' +
   'foreach($r in @($acl.Access)){ $acl.PurgeAccessRules($r.IdentityReference) }; ' +
-  "if($item.PSIsContainer){$inh=[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{$inh=[System.Security.AccessControl.InheritanceFlags]'None'}; " +
+  "if($isDir){$inh=[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{$inh=[System.Security.AccessControl.InheritanceFlags]'None'}; " +
   "$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,[System.Security.AccessControl.FileSystemRights]'FullControl',$inh,[System.Security.AccessControl.PropagationFlags]'None',[System.Security.AccessControl.AccessControlType]'Allow'); " +
   '$acl.AddAccessRule($rule); ' +
-  'Set-Acl -LiteralPath $p -AclObject $acl';
+  '$info.SetAccessControl($acl)';
 
 /** 全エントリを SID に解決して JSON で返す（表示名はロケールで変わるので、判定は SID だけで行う）。 */
 const INSPECT_SCRIPT = PS_PREAMBLE +
-  '$acl=Get-Acl -LiteralPath $p; ' +
+  '$isDir=[System.IO.Directory]::Exists($p); ' +
+  `${OPEN_INFO} ` +
+  "$acl=$info.GetAccessControl([System.Security.AccessControl.AccessControlSections]'Access'); " +
   '$entries=@($acl.Access | ForEach-Object { ' +
   "$s=''; try { $s=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}; " +
   '[pscustomobject]@{ sid=$s; name=$_.IdentityReference.Value; type=$_.AccessControlType.ToString(); inherited=[bool]$_.IsInherited } }); ' +
   '[pscustomobject]@{ currentSid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value; entries=$entries } | ConvertTo-Json -Depth 4 -Compress';
 
+/** 親が PowerShell 7 のとき PSModulePath が 5.1 に合わない値になるので、渡さず 5.1 の既定に任せる。 */
+function powerShellEnv(targetPath: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, AZITO_GUARD_PATH: targetPath };
+  for (const key of Object.keys(env)) {
+    if (key.toLowerCase() === 'psmodulepath') delete env[key];
+  }
+  return env;
+}
+
 function runPowerShell(script: string, targetPath: string): string {
   try {
     return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-      env: { ...process.env, AZITO_GUARD_PATH: targetPath },
+      env: powerShellEnv(targetPath),
       encoding: 'utf8',
       windowsHide: true,
       timeout: 60_000,
