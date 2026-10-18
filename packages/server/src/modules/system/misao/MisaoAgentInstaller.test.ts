@@ -344,13 +344,62 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(failure!.message).toContain('put the previous unit file back');
   });
 
+  it('does not call it a recovery when the daemon cannot be confirmed stopped: nothing is put back, and the stop error, the cause and the manual steps are reported', async () => {
+    installFakeSystemctl('ok');
+    const root = path.join(home, '.azito', 'misao');
+    await installNodeEra({ unit: true, running: true });
+    const base = target();
+    const commands: string[] = [];
+    let switchFailed = false;
+    const stuck = target({
+      exec: async (command, timeout) => {
+        commands.push(command);
+        if (/ln -sfn '?0\.3\.0/.test(command)) { switchFailed = true; return { code: 1, stdout: '', stderr: 'injected failure' }; }
+        // After the failed switch the daemon "keeps answering" whatever is done to it.
+        if (switchFailed && command.includes('.connect(process.argv[1])')) return { code: 0, stdout: '', stderr: '' };
+        return base.exec(command, timeout);
+      },
+    });
+
+    const failure = await new MisaoAgentInstaller(bundle, { readyTimeoutMs: 400, pollIntervalMs: 20 }).update(stuck).then(() => undefined, (err: unknown) => err as MisaoServiceError);
+
+    expect(failure!.code).toBe('update_failed');
+    expect(failure!.message).toContain('Updating misao to 0.3.0 failed');
+    expect(failure!.message).toContain('stopping the daemon on');
+    expect(failure!.message).toContain('make sure no daemon answers');
+    expect(failure!.message).not.toContain('was restored');
+    expect(commands.some((c) => /ln -sfn '?0\.2\.0/.test(c))).toBe(false);
+    expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
+  });
+
+  it('treats a failing systemctl daemon-reload during the restore as a restore failure', async () => {
+    installFakeSystemctl('ok');
+    await installNodeEra({ unit: true, running: false });
+    const base = target();
+    let unitWrites = 0;
+    const reloadFails = target({
+      exec: async (command, timeout) => {
+        if (command.includes('base64 -d') && unitWrites++ === 0) return { code: 1, stdout: '', stderr: 'injected failure' };
+        if (command === 'systemctl --user daemon-reload') return { code: 1, stdout: '', stderr: 'Failed to connect to bus' };
+        return base.exec(command, timeout);
+      },
+    });
+
+    const failure = await installer().install(reloadFails).then(() => undefined, (err: unknown) => err as MisaoServiceError);
+
+    expect(failure!.code).toBe('update_failed');
+    expect(failure!.message).toContain('the service unit file');
+    expect(failure!.message).toContain('Failed to connect to bus');
+    expect(failure!.message).toContain('systemctl --user daemon-reload');
+  });
+
   it('puts the old link and unit back when the new daemon cannot be started after moving a stopped older install', async () => {
     installFakeSystemctl('ok');
     const root = path.join(home, '.azito', 'misao');
     const legacyUnit = await installNodeEra({ unit: true, running: false });
     // The unit is rewritten and the service "starts", but the new daemon never listens (and the background start fails too).
     const base = failing(/nohup/);
-    fs.writeFileSync(path.join(tmp, 'bin', 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    fs.writeFileSync(path.join(tmp, 'bin', 'systemctl'), '#!/bin/sh\n[ "$2" = start ] && exit 1\nexit 0\n', { mode: 0o755 });
 
     await expect(new MisaoAgentInstaller(bundle, { readyTimeoutMs: 600, pollIntervalMs: 50 }).install(base)).rejects.toMatchObject({ code: 'daemon_not_ready' });
 
