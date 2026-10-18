@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'misao') {
-    await misaoCommand(process.argv.slice(3), hostEnv.platform);
+    await misaoCommand(process.argv.slice(3), hostEnv.platform, secretFileGuard);
     return;
   }
 
@@ -125,7 +125,7 @@ async function main(): Promise<void> {
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
-  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken, hostEnv);
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken, hostEnv, secretFileGuard);
   const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);

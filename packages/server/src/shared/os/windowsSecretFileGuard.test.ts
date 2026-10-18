@@ -84,7 +84,7 @@ describe('WindowsSecretFileGuard（実行器を差し替えるので全 OS で�
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
   const make = (run: PowerShellRunner, extra: Partial<ConstructorParameters<typeof WindowsSecretFileGuard>[0]> = {}): WindowsSecretFileGuard =>
-    new WindowsSecretFileGuard({ powershellPath: 'powershell.exe', run, sleep: () => {}, ...extra });
+    new WindowsSecretFileGuard({ powershellPath: 'powershell.exe', env: {}, run, sleep: () => {}, ...extra });
   /** 保護済みの空ファイルの作成（CREATE_SCRIPT）を、fs で真似る実行器。 */
   const fakeRun = (calls: string[] = []): PowerShellRunner => (script, p) => {
     const kind = script.includes('CreateNew') ? 'create' : 'protect';
@@ -178,13 +178,48 @@ describe('WindowsSecretFileGuard（実行器を差し替えるので全 OS で�
     expect(calls).toEqual(['create:data.db-wal', 'protect:data.db-shm']);
   });
 
-  it('repairFile: 無いファイルと保護済みのファイルでは実行器を呼ばない', () => {
+  it('repairFile: 無いファイルでは実行器を呼ばず、あるファイルは（直前に保護していても）毎回保護する', () => {
     const calls: string[] = [];
     const guard = make(fakeRun(calls));
     guard.repairFile(path.join(dir, 'missing'));
     guard.prepareFile(path.join(dir, 'data.db'));
     guard.repairFile(path.join(dir, 'data.db'));
-    expect(calls).toEqual(['create:data.db']);
+    guard.writeSecretFile(path.join(dir, 'master.key'), 'k');
+    guard.repairFile(path.join(dir, 'master.key'));
+    expect(calls.filter((c) => !c.startsWith('create:.'))).toEqual(['create:data.db', 'protect:data.db', 'protect:master.key']);
+  });
+
+  it('appendSecretFile: 削除されて無くなったら保護付きで作り直し、別のファイルに置き換えられたら保護し直す', () => {
+    const target = path.join(dir, 'update.log');
+    const calls: string[] = [];
+    const guard = make(fakeRun(calls));
+    guard.appendSecretFile(target, 'a\n');
+    guard.appendSecretFile(target, 'b\n');
+    expect(calls).toEqual(['create:update.log']);
+
+    fs.rmSync(target);
+    guard.appendSecretFile(target, 'c\n');
+    expect(calls).toEqual(['create:update.log', 'create:update.log']);
+    expect(fs.readFileSync(target, 'utf-8')).toBe('c\n');
+
+    // 別のファイルが同じ名前になった（rename で置き換え）: 実体が違うので保護し直す
+    const other = path.join(dir, 'other');
+    fs.writeFileSync(other, 'x\n');
+    fs.renameSync(other, target);
+    guard.appendSecretFile(target, 'd\n');
+    expect(calls).toEqual(['create:update.log', 'create:update.log', 'protect:update.log']);
+    expect(fs.readFileSync(target, 'utf-8')).toBe('x\nd\n');
+  });
+
+  it('appendSecretFile: 追記は既存のファイルを開く形で、確かめた後に消されても作り直さない', () => {
+    const target = path.join(dir, 'update.log');
+    const guard = make(fakeRun());
+    guard.appendSecretFile(target, 'a\n');
+    // 実体の確認と書き込みの間の削除は、次のように ENOENT になる（保護の無いファイルが作られない）
+    const fdOpen = (): number => fs.openSync(target, fs.constants.O_WRONLY | fs.constants.O_APPEND);
+    fs.rmSync(target);
+    expect(fdOpen).toThrow();
+    expect(fs.existsSync(target)).toBe(false);
   });
 });
 
@@ -194,7 +229,7 @@ function icaclsOutput(target: string): string {
 
 describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際の ACL）', () => {
   const powershellPath = process.platform === 'win32' ? resolveWindowsPowerShellPath(process.env) : '';
-  const guard = new WindowsSecretFileGuard({ powershellPath });
+  const guard = new WindowsSecretFileGuard({ powershellPath, env: process.env });
   let dir: string;
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-wguard-')); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
@@ -219,10 +254,22 @@ describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際�
     expect(out).not.toMatch(/Administrators/i);
   });
 
-  it('所有者が現在のユーザー以外のファイルを inspect が違反とし、protectFile が直す', () => {
+  it('自分が所有者のファイルは、DACL だけが緩くても所有者を変えずに直せる', () => {
+    const file = path.join(dir, 'self-owned');
+    guard.writeSecretFile(file, 'x');
+    execFileSync('icacls', [file, '/grant', '*S-1-1-0:R']);
+    guard.protectFile(file);
+    expect(guard.inspect(file, 'file')).toEqual({ ok: true });
+  });
+
+  it('所有者が現在のユーザー以外のファイルを inspect が違反とし、protectFile が直す（所有権を渡せる管理者権限があるときだけ）', () => {
     const file = path.join(dir, 'owned');
     fs.writeFileSync(file, 'x');
-    execFileSync('icacls', [file, '/setowner', '*S-1-5-32-544']);
+    try {
+      execFileSync('icacls', [file, '/setowner', '*S-1-5-32-544'], { stdio: 'pipe' });
+    } catch {
+      return; // 権限が無い通常のユーザー: この準備ができないので、自分が所有者のケースで確かめる
+    }
     const before = guard.inspect(file, 'file');
     expect(before.ok).toBe(false);
     if (!before.ok) expect(before.summary).toContain('所有者');
@@ -231,10 +278,11 @@ describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際�
   });
 
   it('一時ファイルは作成の直後（中身を書く前）から、現在のユーザー以外の主体も他の所有者も持たない', () => {
-    const real = createPowerShellRunner(powershellPath);
+    const real = createPowerShellRunner(powershellPath, process.env);
     const atCreation: unknown[] = [];
     const observing = new WindowsSecretFileGuard({
       powershellPath,
+      env: process.env,
       run: (script, p) => {
         const out = real(script, p);
         if (script.includes('CreateNew')) atCreation.push(guard.inspect(p, 'file'));
@@ -276,6 +324,24 @@ describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際�
     }
   });
 
+  it('方針どおりのディレクトリには書き込まない（2 回目の ensureProtectedDir で ACL が変わらず、継承の伝播も起きない）', () => {
+    const data = path.join(dir, 'data');
+    guard.ensureProtectedDir(data);
+    const child = path.join(data, 'browser-profile');
+    fs.mkdirSync(child);
+    for (let i = 0; i < 50; i++) fs.writeFileSync(path.join(child, `f${i}`), 'x');
+    guard.protectFile(child);
+    const ctimeOf = (p: string): number => fs.statSync(p).ctimeMs;
+    const before = [data, child, path.join(child, 'f0')].map(ctimeOf);
+    guard.ensureProtectedDir(data);
+    expect([data, child, path.join(child, 'f0')].map(ctimeOf)).toEqual(before);
+
+    // 対照: 緩めれば直す（ACL が書き換わる）
+    execFileSync('icacls', [data, '/grant', '*S-1-1-0:(OI)(CI)R']);
+    guard.ensureProtectedDir(data);
+    expect(guard.inspect(data, 'dir')).toEqual({ ok: true });
+  });
+
   it('ensureProtectedDir は緩い既存ディレクトリも直す', () => {
     const data = path.join(dir, 'data');
     fs.mkdirSync(data);
@@ -304,9 +370,30 @@ describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際�
     const file = path.join(dir, 'update.log');
     fs.writeFileSync(file, 'old\n');
     execFileSync('icacls', [file, '/grant', '*S-1-1-0:R']);
-    const fresh = new WindowsSecretFileGuard({ powershellPath });
+    const fresh = new WindowsSecretFileGuard({ powershellPath, env: process.env });
     fresh.appendSecretFile(file, 'new\n');
     expect(fs.readFileSync(file, 'utf-8')).toBe('old\nnew\n');
+    expect(guard.inspect(file, 'file')).toEqual({ ok: true });
+  });
+
+  it('appendSecretFile: 同名の緩いファイルに置き換えられたら、次の追記の前に保護し直す', () => {
+    const file = path.join(dir, 'update.log');
+    guard.appendSecretFile(file, 'a\n');
+    const other = path.join(dir, 'other');
+    fs.writeFileSync(other, 'x\n');
+    execFileSync('icacls', [other, '/grant', '*S-1-1-0:R']);
+    fs.renameSync(other, file);
+    expect(guard.inspect(file, 'file').ok).toBe(false);
+    guard.appendSecretFile(file, 'b\n');
+    expect(guard.inspect(file, 'file')).toEqual({ ok: true });
+    expect(fs.readFileSync(file, 'utf-8')).toBe('x\nb\n');
+  });
+
+  it('writeSecretFile の後でも、緩められたファイルは repairFile が毎回直す', () => {
+    const file = path.join(dir, 'master.key');
+    guard.writeSecretFile(file, 'k');
+    execFileSync('icacls', [file, '/grant', '*S-1-1-0:R']);
+    guard.repairFile(file);
     expect(guard.inspect(file, 'file')).toEqual({ ok: true });
   });
 
@@ -320,7 +407,7 @@ describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際�
 
   it('緩い親ディレクトリに新しい DB を開いても、DB と -wal / -shm は書き込み後も現在のユーザーだけ', () => {
     const dbPath = path.join(dir, 'data.db');
-    const db = openDatabase(dbPath, { secretFileGuard: new WindowsSecretFileGuard({ powershellPath }) });
+    const db = openDatabase(dbPath, { secretFileGuard: new WindowsSecretFileGuard({ powershellPath, env: process.env }) });
     try {
       db.exec('CREATE TABLE IF NOT EXISTS probe (v TEXT); INSERT INTO probe VALUES (\'x\');');
       for (const suffix of ['', '-wal', '-shm']) {

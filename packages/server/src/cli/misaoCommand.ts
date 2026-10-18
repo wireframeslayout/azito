@@ -1,4 +1,4 @@
-import { createSecretFileGuard } from '../shared/os/secretFileGuard';
+import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 import readline from 'readline';
 import type { MisaoServiceStatus } from '@azito/shared';
 import { getBundleRoot } from '../shared/releaseInfo';
@@ -79,7 +79,7 @@ function printStatus(status: MisaoServiceStatus): void {
 }
 
 /** `azito misao ...`: install, update, start and inspect the AZITO-managed misao service from the bundled hub. */
-export async function misaoCommand(argv: string[], platform: NodeJS.Platform): Promise<void> {
+export async function misaoCommand(argv: string[], platform: NodeJS.Platform, secretFileGuard: SecretFileGuard): Promise<void> {
   try {
     const args = parseArgs(argv);
     if (!args.command || !['status', 'install', 'update', 'start'].includes(args.command)) {
@@ -95,7 +95,7 @@ export async function misaoCommand(argv: string[], platform: NodeJS.Platform): P
       bundle: readMisaoBundle(bundleRoot),
       controller: createMisaoServiceController(platform, runCommand),
       env: process.env,
-      secretFileGuard: createSecretFileGuard(platform, process.env),
+      secretFileGuard,
     });
 
     if (args.command === 'status') {

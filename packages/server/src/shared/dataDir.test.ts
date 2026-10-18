@@ -27,7 +27,10 @@ describe('resolveDataDir', () => {
   it('returns repo-root-relative paths when AZITO_DATA_DIR is unset', () => {
     delete process.env.AZITO_DATA_DIR;
     delete process.env.AZITO_SIDEKICKS_DIR;
-    const paths = resolveDataDir(secretFileGuard);
+    // 開発モードはリポジトリの実際の data/ を指す: 作成・chmod / ACL の変更を避けるため、保護は呼ばれるだけの代役にする。
+    const ensureProtectedDir = vi.fn();
+    const paths = resolveDataDir({ ensureProtectedDir } as never);
+    expect(ensureProtectedDir).toHaveBeenCalledWith(path.join(path.dirname(paths.db), 'data'));
     expect(paths.db).toMatch(/data\.db$/);
     expect(paths.masterKey).toMatch(/data[/\\]master\.key$/);
     expect(paths.vapidKeys).toMatch(/data[/\\]vapid-keys\.json$/);

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../shared/releaseInfo', () => ({ getBundleRoot: () => null }));
 
 import { misaoCommand } from './misaoCommand';
+import { createSecretFileGuard } from '../shared/os/secretFileGuard';
 
 describe('azito misao', () => {
   let out: string[];
@@ -21,22 +22,22 @@ describe('azito misao', () => {
   });
 
   it('prints the usage without a command', async () => {
-    await misaoCommand([], process.platform);
+    await misaoCommand([], process.platform, createSecretFileGuard(process.platform, process.env));
     expect(out.join('\n')).toContain('Usage: azito misao');
     expect(process.exitCode).toBeUndefined();
   });
 
   it('rejects an unknown option as a usage error, not a crash', async () => {
-    await misaoCommand(['install', '--bogus'], process.platform);
+    await misaoCommand(['install', '--bogus'], process.platform, createSecretFileGuard(process.platform, process.env));
     expect(err.join('\n')).toContain('Unknown option: --bogus');
     expect(process.exitCode).toBe(1);
   });
 
   it('reports a source checkout as unmanaged in status and refuses to install', async () => {
-    await misaoCommand(['status'], process.platform);
+    await misaoCommand(['status'], process.platform, createSecretFileGuard(process.platform, process.env));
     expect(out.join('\n')).toContain('source_install');
 
-    await misaoCommand(['install'], process.platform);
+    await misaoCommand(['install'], process.platform, createSecretFileGuard(process.platform, process.env));
     expect(err.join('\n')).toContain('source checkout');
     expect(process.exitCode).toBe(1);
   });
@@ -45,7 +46,7 @@ describe('azito misao', () => {
     const isTTY = process.stdin.isTTY;
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
     try {
-      await misaoCommand(['update'], process.platform);
+      await misaoCommand(['update'], process.platform, createSecretFileGuard(process.platform, process.env));
     } finally {
       Object.defineProperty(process.stdin, 'isTTY', { value: isTTY, configurable: true });
     }

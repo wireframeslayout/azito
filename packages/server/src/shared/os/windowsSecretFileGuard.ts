@@ -30,9 +30,12 @@ const ACL_SECTIONS = "[System.Security.AccessControl.AccessControlSections]'Acce
 const PS_PREAMBLE = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $p=$env:AZITO_GUARD_PATH; " +
   '$sid=[System.Security.Principal.WindowsIdentity]::GetCurrent().User; ';
 
-/** 継承を切った DACL に、現在のユーザーの FullControl だけを入れ、所有者も現在のユーザーにする（$inh を先に決めておく）。 */
+/**
+ * 継承を切った DACL に、現在のユーザーの FullControl だけを入れ、所有者も現在のユーザーにする（$inh と $ownerOk を先に決めておく）。
+ * 既に自分が所有者なら SetOwner を呼ばない（WRITE_OWNER が無くても DACL は直せる）。
+ */
 const BUILD_RULE =
-  '$acl.SetAccessRuleProtection($true,$false); $acl.SetOwner($sid); ' +
+  '$acl.SetAccessRuleProtection($true,$false); if(-not $ownerOk){ $acl.SetOwner($sid) }; ' +
   "$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,[System.Security.AccessControl.FileSystemRights]'FullControl',$inh,[System.Security.AccessControl.PropagationFlags]'None',[System.Security.AccessControl.AccessControlType]'Allow'); " +
   '$acl.AddAccessRule($rule); ';
 
@@ -43,8 +46,14 @@ const BUILD_RULE =
  */
 const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
   `$acl=$info.GetAccessControl(${ACL_SECTIONS}); ` +
-  'foreach($r in @($acl.Access)){ $acl.PurgeAccessRules($r.IdentityReference) }; ' +
   "if($isDir){$inh=[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{$inh=[System.Security.AccessControl.InheritanceFlags]'None'}; " +
+  "$ownerOk=$false; try { $ownerOk=($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid.Value) } catch {}; " +
+  // 既に方針どおりなら書かない（DirectoryInfo.SetAccessControl は呼ぶたびに継承の伝播を木全体にやり直し、大きなディレクトリでは時間がかかる）。
+  '$rules=@($acl.Access); $ruleOk=$false; ' +
+  'if($rules.Count -eq 1){ $r=$rules[0]; $rs=\'\'; try { $rs=$r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}; ' +
+  "$ruleOk=($r.AccessControlType -eq 'Allow' -and $rs -eq $sid.Value -and $r.FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]'FullControl' -and $r.InheritanceFlags -eq $inh -and $r.PropagationFlags -eq [System.Security.AccessControl.PropagationFlags]'None') }; " +
+  'if($acl.AreAccessRulesProtected -and $ownerOk -and $ruleOk){ exit 0 }; ' +
+  'foreach($r in @($acl.Access)){ $acl.PurgeAccessRules($r.IdentityReference) }; ' +
   BUILD_RULE +
   '$info.SetAccessControl($acl)';
 
@@ -54,7 +63,7 @@ const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
  */
 const CREATE_SCRIPT = PS_PREAMBLE +
   '$acl=New-Object System.Security.AccessControl.FileSecurity; ' +
-  "$inh=[System.Security.AccessControl.InheritanceFlags]'None'; " +
+  "$inh=[System.Security.AccessControl.InheritanceFlags]'None'; $ownerOk=$false; " +
   BUILD_RULE +
   "$stream=New-Object System.IO.FileStream($p,[System.IO.FileMode]'CreateNew',[System.Security.AccessControl.FileSystemRights]'FullControl',[System.IO.FileShare]'None',4096,[System.IO.FileOptions]'None',$acl); " +
   '$stream.Dispose()';
@@ -69,8 +78,8 @@ const INSPECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
   '[pscustomobject]@{ currentSid=$sid.Value; ownerSid=$owner; entries=$entries } | ConvertTo-Json -Depth 4 -Compress';
 
 /** 親が PowerShell 7 のとき PSModulePath が 5.1 に合わない値になるので、渡さず 5.1 の既定に任せる。 */
-function powerShellEnv(targetPath: string): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, AZITO_GUARD_PATH: targetPath };
+function powerShellEnv(base: NodeJS.ProcessEnv, targetPath: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...base, AZITO_GUARD_PATH: targetPath };
   for (const key of Object.keys(env)) {
     if (key.toLowerCase() === 'psmodulepath') delete env[key];
   }
@@ -78,11 +87,11 @@ function powerShellEnv(targetPath: string): NodeJS.ProcessEnv {
 }
 
 /** PATH 探索に頼らないよう、境界で解決した powershell.exe の絶対パスを使う。 */
-export function createPowerShellRunner(powershellPath: string): PowerShellRunner {
+export function createPowerShellRunner(powershellPath: string, baseEnv: NodeJS.ProcessEnv): PowerShellRunner {
   return (script, targetPath) => {
     try {
       return execFileSync(powershellPath, ['-NoProfile', '-NonInteractive', '-Command', script], {
-        env: powerShellEnv(targetPath),
+        env: powerShellEnv(baseEnv, targetPath),
         encoding: 'utf8',
         windowsHide: true,
         timeout: 60_000,
@@ -143,6 +152,17 @@ export function evaluateAcl(snapshot: AclSnapshot, targetPath: string, kind: Sec
   return { ok: false, summary: `${parts.join('。')}。`, fix };
 }
 
+/** ファイルの実体の識別子（無ければ null）。パスだけでは、削除や置き換えの後も同じと見なしてしまう。 */
+function identityOf(filePath: string): string | null {
+  try {
+    const st = fs.statSync(filePath, { bigint: true });
+    return `${st.dev}:${st.ino}`;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
 const RENAME_RETRYABLE = new Set(['EPERM', 'EBUSY', 'EACCES']);
 const RENAME_ATTEMPTS = 6;
 const RENAME_RETRY_DELAY_MS = 50;
@@ -154,6 +174,8 @@ function sleepSync(ms: number): void {
 export interface WindowsSecretFileGuardOptions {
   /** 境界で解決した powershell.exe の絶対パス。 */
   powershellPath: string;
+  /** 境界から渡された環境変数（PowerShell の子プロセスの元になる）。 */
+  env: NodeJS.ProcessEnv;
   /** テスト用: PowerShell の実行を差し替える。 */
   run?: PowerShellRunner;
   /** テスト用: rename を差し替える。 */
@@ -173,11 +195,11 @@ export class WindowsSecretFileGuard implements SecretFileGuard {
   private readonly run: PowerShellRunner;
   private readonly rename: (from: string, to: string) => void;
   private readonly sleep: (ms: number) => void;
-  /** このプロセスで保護済みのパス。追記や修復のたびに PowerShell を起動しないための記録。 */
-  private readonly protectedPaths = new Set<string>();
+  /** 追記先として保護を確かめたファイルの実体（dev:ino）。同じ実体への 2 回目以降の追記で PowerShell を起動しないための記録。 */
+  private readonly appendTargets = new Map<string, string>();
 
   constructor(options: WindowsSecretFileGuardOptions) {
-    this.run = options.run ?? createPowerShellRunner(options.powershellPath);
+    this.run = options.run ?? createPowerShellRunner(options.powershellPath, options.env);
     this.rename = options.rename ?? fs.renameSync;
     this.sleep = options.sleep ?? sleepSync;
   }
@@ -199,16 +221,26 @@ export class WindowsSecretFileGuard implements SecretFileGuard {
       fs.rmSync(tmp, { force: true });
       throw err;
     }
-    this.protectedPaths.add(filePath);
   }
 
   appendSecretFile(filePath: string, content: string): void {
     this.ensureParent(path.dirname(filePath));
-    if (!this.protectedPaths.has(filePath)) {
-      if (fs.existsSync(filePath)) this.protect(filePath);
-      else this.createProtected(filePath);
+    let identity = identityOf(filePath);
+    if (identity === null) {
+      this.createProtected(filePath);
+      identity = identityOf(filePath);
+    } else if (this.appendTargets.get(filePath) !== identity) {
+      this.protect(filePath);
     }
-    fs.appendFileSync(filePath, content);
+    if (identity === null) throw new Error(`Cannot append to ${filePath}: the file disappeared`);
+    this.appendTargets.set(filePath, identity);
+    // O_CREAT を付けない: 確かめた後に消されても、保護の無いファイルを作り直さない。
+    const fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_APPEND);
+    try {
+      fs.writeSync(fd, content);
+    } finally {
+      fs.closeSync(fd);
+    }
   }
 
   protectFile(filePath: string): void {
@@ -216,7 +248,7 @@ export class WindowsSecretFileGuard implements SecretFileGuard {
   }
 
   repairFile(filePath: string): void {
-    if (this.protectedPaths.has(filePath) || !fs.existsSync(filePath)) return;
+    if (!fs.existsSync(filePath)) return;
     this.protect(filePath);
   }
 
@@ -237,12 +269,10 @@ export class WindowsSecretFileGuard implements SecretFileGuard {
 
   private protect(targetPath: string): void {
     this.run(PROTECT_SCRIPT, targetPath);
-    this.protectedPaths.add(targetPath);
   }
 
   private createProtected(targetPath: string): void {
     this.run(CREATE_SCRIPT, targetPath);
-    this.protectedPaths.add(targetPath);
   }
 
   /** ウイルス対策ソフトや読み取り中のプロセスが一瞬ファイルを掴んでいると rename が失敗するので、短く数回やり直す。 */
@@ -261,5 +291,5 @@ export class WindowsSecretFileGuard implements SecretFileGuard {
 }
 
 export function createWindowsSecretFileGuard(env: NodeJS.ProcessEnv): SecretFileGuard {
-  return new WindowsSecretFileGuard({ powershellPath: resolveWindowsPowerShellPath(env) });
+  return new WindowsSecretFileGuard({ powershellPath: resolveWindowsPowerShellPath(env), env });
 }

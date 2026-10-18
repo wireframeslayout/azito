@@ -7,7 +7,7 @@
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
 import type { HostEnv } from '../shared/os/hostEnv';
-import { createSecretFileGuard, type SecretFileGuard } from '../shared/os/secretFileGuard';
+import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
@@ -558,8 +558,7 @@ function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform, secret
   });
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv): SystemUpdateModule {
-  const secretFileGuard = createSecretFileGuard(hostEnv.platform, process.env);
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
   const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
@@ -600,7 +599,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -677,7 +676,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard);
 
   return {
     uiToken,
