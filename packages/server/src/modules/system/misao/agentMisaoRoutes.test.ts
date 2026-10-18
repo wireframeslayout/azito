@@ -14,6 +14,7 @@ describe('POST /api/servers/:name/install-misao', () => {
   let app: FastifyInstance;
   let principal: Principal | undefined;
   const install = vi.fn();
+  const update = vi.fn();
   const connection = { availability: vi.fn(), request: vi.fn() };
   const ensureAgentNode = vi.fn();
   const onInstalled = vi.fn();
@@ -25,6 +26,7 @@ describe('POST /api/servers/:name/install-misao', () => {
     connection.availability.mockReset().mockReturnValue({ available: true });
     connection.request.mockReset().mockResolvedValue({ protocolVersion: '0.3.0', version: '0.2.0' });
     ensureAgentNode.mockReset().mockReturnValue({ connection });
+    update.mockReset().mockImplementation(async (_transport: unknown, onProgress: (m: string) => void) => { onProgress('stop'); return { ...RESULT, version: '0.3.0', runningVersion: '0.3.0' }; });
     onInstalled.mockReset();
     getAgentTransport.mockReset().mockReturnValue({ kind: 'transport' });
     app = Fastify();
@@ -32,7 +34,7 @@ describe('POST /api/servers/:name/install-misao', () => {
     await app.register(agentMisaoRoutes, {
       serverRepo: { findByName: (name: string) => ({ a1: agent, l1: local } as Record<string, ServerConfig>)[name] ?? null },
       transportFactory: { getAgentTransport } as never,
-      installer: { install } as never,
+      installer: { install, update } as never,
       misaoServers: { ensureAgentNode } as never,
       serverIsolationMutex: new KeyedMutex(),
       onInstalled,
@@ -106,17 +108,17 @@ describe('POST /api/servers/:name/install-misao', () => {
       return RESULT;
     });
     const running = post('a1');
-    await vi.waitFor(async () => expect((await get()).json()).toEqual({ state: 'running', steps: ['transfer'] }));
+    await vi.waitFor(async () => expect((await get()).json()).toEqual({ state: 'running', action: 'install', steps: ['transfer'] }));
     release();
     await running;
-    expect((await get()).json()).toEqual({ state: 'done', steps: ['transfer'] });
+    expect((await get()).json()).toEqual({ state: 'done', action: 'install', steps: ['transfer'] });
   });
 
   it('keeps a refusal as the outcome of the run', async () => {
     install.mockRejectedValueOnce(new MisaoServiceError('unsupported_host', 'not x86_64'));
     await post('a1');
     const res = await app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' });
-    expect(res.json()).toEqual({ state: 'failed', steps: [], error: 'not x86_64', code: 'unsupported_host' });
+    expect(res.json()).toEqual({ state: 'failed', action: 'install', steps: [], error: 'not x86_64', code: 'unsupported_host' });
   });
 
   it('is 404 for the progress of an unknown server', async () => {
@@ -135,5 +137,44 @@ describe('POST /api/servers/:name/install-misao', () => {
     expect((await first).statusCode).toBe(200);
     expect((await second).statusCode).toBe(200);
     expect(install).toHaveBeenCalledTimes(2);
+  });
+
+  describe('POST /api/servers/:name/update-misao', () => {
+    const postUpdate = (name: string) => app.inject({ method: 'POST', url: `/api/servers/${name}/update-misao` });
+
+    it('switches the running misao of the agent server through the installer, reconnects the hub and reports the daemon', async () => {
+      const res = await postUpdate('a1');
+      expect(res.statusCode).toBe(200);
+      expect(res.json()).toMatchObject({ ok: true, version: '0.3.0', runningVersion: '0.3.0', steps: ['stop'] });
+      expect(update).toHaveBeenCalledWith({ kind: 'transport' }, expect.any(Function));
+      expect(install).not.toHaveBeenCalled();
+      expect(onInstalled).toHaveBeenCalledWith(agent);
+    });
+
+    it.each([
+      ['a task principal', { class: 'task', id: 'task-1' } as unknown as Principal],
+      ['no principal', undefined],
+    ])('refuses %s, in compat mode too, without touching the agent', async (_label, who) => {
+      principal = who;
+      const res = await postUpdate('a1');
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toEqual({ error: 'operator_required', operation: 'servers.update_misao' });
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it('answers a failed update with its code and the steps taken, and keeps it as the outcome of the run', async () => {
+      update.mockImplementationOnce(async (_t: unknown, onProgress: (m: string) => void) => { onProgress('stop'); throw new MisaoServiceError('update_failed', 'restored the previous release'); });
+      const res = await postUpdate('a1');
+      expect(res.statusCode).toBe(502);
+      expect(res.json()).toEqual({ error: 'restored the previous release', code: 'update_failed', steps: ['stop'] });
+      expect((await app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' })).json()).toEqual({ state: 'failed', action: 'update', steps: ['stop'], error: 'restored the previous release', code: 'update_failed' });
+      expect(onInstalled).not.toHaveBeenCalled();
+    });
+
+    it('is 404 for an unknown server and 400 for a local one', async () => {
+      expect((await postUpdate('nope')).statusCode).toBe(404);
+      expect((await postUpdate('l1')).statusCode).toBe(400);
+      expect(update).not.toHaveBeenCalled();
+    });
   });
 });

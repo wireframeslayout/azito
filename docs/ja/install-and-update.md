@@ -211,9 +211,9 @@ misao デーモンは**ハブとは別のサービス**（`azito-misao`）とし
 
 | | |
 |---|---|
-| 設置先 | `~/.azito/misao/<version>/`（`misao.mjs`・ライセンス・ハブ同梱の node-pty の複製）。`~/.azito/misao/current` が使用中の版を指す |
+| 設置先 | `~/.azito/misao/<version>/`（このホストの OS / アーキテクチャに合う `misao` ネイティブバイナリとライセンス）。`~/.azito/misao/current` が使用中の版を指す |
 | ソケット | `~/.azito/misao/misao.sock`（ディレクトリは mode 700、パスは 107 バイト以内）。`~/.azito/hub/.env` に `MISAO_SOCKET` として書かれる |
-| 実行 | ハブ同梱の node（`~/.azito/hub/current/node`）で `misao.mjs serve` を実行 |
+| 実行 | `misao serve`（単一のネイティブバイナリ。Node.js も node-pty も使わない） |
 | サービス | Linux: systemd ユーザーユニット `azito-misao`（`KillMode=process`、`Restart=on-failure`、linger 有効）。macOS: launchd `com.azito.misao`（`KeepAlive` は `SuccessfulExit=false`、PATH と LANG を設定） |
 | テンプレート | `deploy/azito-misao.service` / `deploy/com.azito.misao.plist`（リリースに同梱） |
 

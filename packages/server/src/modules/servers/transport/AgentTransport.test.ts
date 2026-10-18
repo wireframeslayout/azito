@@ -42,19 +42,19 @@ describe('AgentTransport', () => {
   });
 
   it('puts a release file with the token and reports what the agent received', async () => {
-    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ name: 'misao.mjs', size: 3, sha256: 'abc' }), { status: 200 }));
+    fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ name: 'misao', size: 3, sha256: 'abc' }), { status: 200 }));
     const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv');
-    expect(await transport.uploadMisaoFile('0.2.0', 'misao.mjs', Buffer.from('xyz'))).toEqual({ name: 'misao.mjs', size: 3, sha256: 'abc' });
+    expect(await transport.uploadMisaoFile('0.3.0', 'misao', Buffer.from('xyz'))).toEqual({ name: 'misao', size: 3, sha256: 'abc' });
 
     const [url, opts] = fetchSpy.mock.calls[0];
-    expect(url).toBe('http://10.0.0.1:4021/api/misao/upload?version=0.2.0&name=misao.mjs');
+    expect(url).toBe('http://10.0.0.1:4021/api/misao/upload?version=0.3.0&name=misao');
     expect(opts).toMatchObject({ method: 'PUT', headers: { authorization: 'Bearer tok', 'content-type': 'application/octet-stream' } });
   });
 
   it('fails the upload with the agent\'s answer when it is refused', async () => {
     fetchSpy.mockImplementation(async () => new Response('{"error":"name must be one of"}', { status: 400 }));
     const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv');
-    await expect(transport.uploadMisaoFile('0.2.0', 'misao.mjs', Buffer.from('x'))).rejects.toThrow(/failed \(400\)/);
+    await expect(transport.uploadMisaoFile('0.3.0', 'misao', Buffer.from('x'))).rejects.toThrow(/failed \(400\)/);
   });
 
   it('reads the misao status with the token', async () => {

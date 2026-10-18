@@ -209,9 +209,9 @@ so that hub restarts and updates never take it down.
 
 | | |
 |---|---|
-| Location | `~/.azito/misao/<version>/` (`misao.mjs`, licenses, a copy of the hub's node-pty). `~/.azito/misao/current` points at the active version |
+| Location | `~/.azito/misao/<version>/` (the `misao` native binary for this host's OS / architecture and its licenses). `~/.azito/misao/current` points at the active version |
 | Socket | `~/.azito/misao/misao.sock` (directory mode 700, path within 107 bytes). Written to `~/.azito/hub/.env` as `MISAO_SOCKET` |
-| Runtime | `misao.mjs serve` on the hub's bundled node (`~/.azito/hub/current/node`) |
+| Runtime | `misao serve` (a single native binary: no Node.js, no node-pty) |
 | Service | Linux: systemd user unit `azito-misao` (`KillMode=process`, `Restart=on-failure`, linger enabled). macOS: launchd `com.azito.misao` (`KeepAlive` with `SuccessfulExit=false`, PATH and LANG set) |
 | Templates | `deploy/azito-misao.service` / `deploy/com.azito.misao.plist` (shipped in the release) |
 

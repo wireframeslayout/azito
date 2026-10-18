@@ -6,9 +6,9 @@ import * as path from 'node:path';
 import { MisaoConnection } from './MisaoConnection';
 import { MisaoChangeEvents, CHANGE_COALESCE_MS } from './misaoChangeEvents';
 import { MisaoPaneStateEvents } from './misaoPaneStateEvents';
+import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 
 const BURST = 'i=0; while [ $i -lt 15 ]; do head -c 400 /dev/zero | tr "\\0" x; echo; sleep 0.2; i=$((i+1)); done; sleep 30';
 
@@ -26,7 +26,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('misao event consumers sharing one co
   beforeAll(async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azme-'));
     const socketPath = path.join(dir, 'm.sock');
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
     const sdk = await import('@misao/sdk');

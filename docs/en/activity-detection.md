@@ -565,8 +565,9 @@ tmux. For tmux servers nothing below is created and the tmux behavior above is u
   `sessions:updated` (for up to 60s). On a gap and on every reconnect the whole `pane.list` is
   re-read (`agentState` / `decidedBy`); while the connection is down every misao-derived key is
   `unknown`.
-- **Blocked refinement.** The misao core only ever says working / idle / exited -- `blocked`
-  comes only from an agent profile. So for a misao window the screen is read the same way as
+- **Blocked refinement.** The Rust core (misao 0.3.0 and later) also reports `blocked` in `pane.state`, from its
+  bundled claude / codex profiles (mapped to blocked as above). A working / idle row can still hide a prompt, and a
+  not-yet-updated 0.2.0 (Node) daemon never reports `blocked`, so for a misao window the screen is read the same way as
   the Tier 0 idle refinement (§1), but through the window's mux ref and `driver.captureScreen`
   (first pane) instead of tmux coordinates, and **without the title pre-check**: a `tier0_mux`
   `working` row whose screen shows a waiting-for-answer prompt becomes `blocked` (still

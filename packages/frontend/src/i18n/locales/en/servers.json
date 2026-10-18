@@ -271,12 +271,21 @@
     "notInstallable": "This hub does not bundle misao, so it cannot install it on a server.",
     "failed": "misao could not be installed",
     "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",
+    "updateAvailableInstalled": "The installed misao ({{installed}}) differs from the bundled release ({{bundled}}); its running version is unknown",
     "updateAvailableSub": "It is not switched automatically: switching ends every pane on this server. Update it when no work is running there.",
     "step": {
       "inspect": "Checking the server…",
       "transfer": "Sending misao to the server…",
       "prepare": "Preparing misao…",
+      "stop": "Stopping misao…",
       "start": "Starting misao…"
-    }
+    },
+    "update": "Update misao",
+    "updating": "Updating misao…",
+    "updateDesc": "Stops the running misao, switches it to the release bundled with this hub and starts it. If that fails, the previous release is put back.",
+    "updateFailed": "misao could not be updated",
+    "updateConfirmTitle": "Update misao?",
+    "updateConfirmMessage": "misao on this server is stopped to update it. Every running pane on this server ends and agent work in them is interrupted. Finish what you need before continuing.",
+    "updateConfirmLabel": "Stop and update"
   }
 }

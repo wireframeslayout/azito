@@ -1440,7 +1440,7 @@ export class AgentActivityMonitor {
               const sessions = sessionsByServer.get(w.serverName) ?? [];
               const muxWindow = findLiveWindow(sessions, w.tmuxTarget, w.muxRef);
               if (muxWindow && isMisaoWindow(w)) {
-                // The misao core never reports blocked; only the screen can.
+                // The Rust core reports blocked from its agent profiles, but a working/idle row can still hide a prompt (and a 0.2.0 Node daemon never reports it): confirm on the screen.
                 if (await this.isMisaoScreenBlocked(server, w, muxWindow, key)) {
                   effectiveMuxStatus = 'blocked';
                   muxRefinedBy = 'tier2_title';
@@ -1972,9 +1972,10 @@ export class AgentActivityMonitor {
   }
 
   /**
-   * Whether a misao window's screen says it is waiting on the user. The misao
-   * core never reports `blocked`, so Tier 0 mux's working/idle is confirmed
-   * against the screen directly, with no title pre-check. 'blocked' is the only
+   * Whether a misao window's screen says it is waiting on the user. The Rust
+   * core reports `blocked` from its agent profiles (a 0.2.0 Node daemon never
+   * does), but Tier 0 mux's working/idle is still confirmed against the screen
+   * directly, with no title pre-check. 'blocked' is the only
    * refinement (a working/idle mux state is never promoted); a screen that could
    * not be read holds the previous tick's status, like the Tier 0 idle refinement.
    */

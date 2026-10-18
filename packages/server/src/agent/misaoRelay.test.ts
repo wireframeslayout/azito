@@ -109,7 +109,7 @@ describe('relay to a unix socket', () => {
   });
 });
 
-const HOST = { homeDir: '/nonexistent-home', nodePath: '/usr/bin/node', servicePath: '/usr/bin', nodePtyDir: null, platform: 'linux' as const, arch: 'x64' };
+const HOST = { homeDir: '/nonexistent-home', nodePath: '/usr/bin/node', servicePath: '/usr/bin', platform: 'linux' as const, arch: 'x64' };
 
 describe('readMisaoSocketStatus', () => {
   it('reports an absent socket', () => {

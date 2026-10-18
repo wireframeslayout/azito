@@ -5,7 +5,7 @@
 // 既定ソケットには触れない。シナリオは前のシナリオの状態（既定のターミナル方式の切替・登録した窓）に
 // 依存するため直列で流し、最後に「デーモン断」を検証する。
 //
-// misao のビルド成果物（MISAO_CLI、既定 ~/workspace/misao/packages/cli/dist/main.js）が無い環境では
+// misao のバイナリ（MISAO_CLI、既定 ~/workspace/misao/target/release/misao）が無い環境では
 // 理由付きで skip する。
 
 import fs from 'node:fs';
@@ -17,7 +17,7 @@ import { createGitRepo, runScriptedTaskToReview } from '../fixtures/scriptedTask
 
 test.skip(
   MisaoDaemon.cliPath() === null,
-  'misao CLI が見つからない（misao をビルドして MISAO_CLI=<misao>/packages/cli/dist/main.js を指定する）',
+  'misao バイナリが見つからない（v0.3.0 のリリースバイナリ、または misao をビルドした target/release/misao を MISAO_CLI に指定する）',
 );
 test.describe.configure({ mode: 'serial' });
 
@@ -77,7 +77,7 @@ test.describe('misao ドライバ', () => {
     await app.getByRole('button', { name: '保存' }).click();
 
     // 概要に既定のターミナル方式と接続状態が出る。接続できているので「接続できません」は出ない。
-    await expect(app.getByText('既定のターミナル方式')).toBeVisible();
+    await expect(app.getByRole('term').filter({ hasText: '既定のターミナル方式' })).toBeVisible();
     await expect(app.getByText('接続中', { exact: true })).toBeVisible();
     await expect(app.getByText(/misao に接続できません/)).toHaveCount(0);
 

@@ -3,9 +3,13 @@ import { api } from '../api/client';
 import { errorMessageOf } from '../lib/apiResult';
 import { interpretInstallProgress, type MisaoInstallProgress } from '../lib/misaoInstallProgress';
 
+export type AgentMisaoAction = 'install' | 'update';
+
 export interface AgentMisaoInstallState {
-  /** An install is running (started here, or already running when the row appeared). */
+  /** An install or update is running (started here, or already running when the row appeared). */
   installing: boolean;
+  /** What the run is doing (from the hub's progress report, so a run started elsewhere is named too); null when nothing runs. */
+  action: AgentMisaoAction | null;
   /** The step in progress (the last one reported). */
   step: string | null;
   /** The hub's refusal or failure text of the last run. */
@@ -14,17 +18,20 @@ export interface AgentMisaoInstallState {
 
 interface UseAgentMisaoInstall extends AgentMisaoInstallState {
   install: () => Promise<void>;
+  /** The explicit switch of a running older release to the bundled one. It ends every pane of the server: ask first. */
+  update: () => Promise<void>;
 }
 
 const POLL_MS = 1000;
 
 /**
- * Installs misao on an agent server (`POST /servers/:name/install-misao`) and follows how far it got while the request
- * runs. `onChanged` runs after a successful install, so the rows that depend on the daemon are checked again.
+ * Installs misao on an agent server (`POST /servers/:name/install-misao`), or updates it (`.../update-misao`), and follows
+ * how far it got while the request runs (both report through `GET .../install-misao`). `onChanged` runs after a
+ * successful run, so the rows that depend on the daemon are checked again.
  * `enabled` is false for a server that has no such install (a local one): nothing is asked of the hub then.
  */
 export function useAgentMisaoInstall(serverName: string, onChanged: () => void, enabled = true): UseAgentMisaoInstall {
-  const [state, setState] = useState<AgentMisaoInstallState>({ installing: false, step: null, error: null });
+  const [state, setState] = useState<AgentMisaoInstallState>({ installing: false, action: null, step: null, error: null });
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const alive = useRef(true);
   /** True while the POST of this hook is in flight: its answer decides then, not a poll that may still see the previous run. */
@@ -40,16 +47,16 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
   const follow = useCallback((progress: MisaoInstallProgress) => {
     const outcome = interpretInstallProgress(progress);
     if (outcome.kind === 'running') {
-      setState((s) => ({ ...s, installing: true, step: outcome.step ?? s.step }));
+      setState((s) => ({ ...s, installing: true, action: outcome.action ?? s.action, step: outcome.step ?? s.step }));
       return;
     }
     if (ownRun.current || outcome.kind === 'idle') return;
     stopPolling();
     if (outcome.kind === 'done') {
-      setState({ installing: false, step: null, error: null });
+      setState({ installing: false, action: null, step: null, error: null });
       onChanged();
     } else {
-      setState({ installing: false, step: null, error: outcome.error });
+      setState({ installing: false, action: null, step: null, error: outcome.error });
     }
   }, [stopPolling, onChanged]);
 
@@ -90,28 +97,31 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
     };
   }, [path, enabled, follow, startPolling, stopPolling]);
 
-  const install = useCallback(async () => {
-    setState({ installing: true, step: null, error: null });
+  const run = useCallback(async (action: AgentMisaoAction) => {
+    setState({ installing: true, action, step: null, error: null });
     ownRun.current = true;
     startPolling();
     try {
-      const res = await api<unknown>(path, { method: 'POST' });
+      const res = await api<unknown>(`/servers/${encodeURIComponent(serverName)}/${action}-misao`, { method: 'POST' });
       if (!alive.current) return;
       const failure = errorMessageOf(res);
       stopPolling();
       if (failure !== null) {
-        setState({ installing: false, step: null, error: failure });
+        setState({ installing: false, action: null, step: null, error: failure });
         return;
       }
-      setState({ installing: false, step: null, error: null });
+      setState({ installing: false, action: null, step: null, error: null });
       onChanged();
     } catch (err) {
       stopPolling();
-      if (alive.current) setState({ installing: false, step: null, error: err instanceof Error ? err.message : String(err) });
+      if (alive.current) setState({ installing: false, action: null, step: null, error: err instanceof Error ? err.message : String(err) });
     } finally {
       ownRun.current = false;
     }
-  }, [path, startPolling, stopPolling, onChanged]);
+  }, [serverName, startPolling, stopPolling, onChanged]);
 
-  return { ...state, install };
+  const install = useCallback(() => run('install'), [run]);
+  const update = useCallback(() => run('update'), [run]);
+
+  return { ...state, install, update };
 }

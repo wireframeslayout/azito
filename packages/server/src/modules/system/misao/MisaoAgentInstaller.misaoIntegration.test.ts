@@ -12,15 +12,15 @@ import { agentMisaoManagedSocket } from '../../servers/transport/agentMisaoSocke
 import { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import { describeMisaoDaemon, registerMisaoDriver, type MisaoHandle } from '../../tmux/misao/misaoDriver';
 import { readMisaoBundle } from './MisaoBundle';
+import { writeHubBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller } from './MisaoAgentInstaller';
+import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 
 // Installs the "bundled" misao on a real agent process (a throwaway port, token and HOME) the way the hub does, and then
-// talks to the daemon it started through the relay. The bundle's misao.mjs only forwards to the built misao CLI of this
-// machine, and no misao of the developer's (~/.misao) is touched.
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
+// talks to the daemon it started through the relay. The bundle carries the misao binary named by MISAO_CLI, and no misao
+// of the developer's (~/.misao) is touched.
 const AGENT_MAIN = path.resolve(__dirname, '../../../agent/main.ts');
 const TSX_CLI = path.join(path.dirname(require.resolve('tsx/package.json')), 'dist', 'cli.mjs');
-const REPO_DEPLOY_DIR = path.resolve(__dirname, '../../../../../../deploy');
 const HUB_ENV = { publicUrl: 'http://hub.example:3001', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' };
 const AGENT_SECRET_TOKEN = crypto.randomBytes(16).toString('hex');
 
@@ -30,10 +30,6 @@ async function freePort(): Promise<number> {
   const { port } = server.address() as net.AddressInfo;
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return port;
-}
-
-function sha(content: string): string {
-  return crypto.createHash('sha256').update(content).digest('hex');
 }
 
 function run(file: string, args: string[]): Promise<{ stdout: string; code: number }> {
@@ -104,23 +100,18 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('installing misao on a real agent pro
 
   it('installs the bundled release through the agent, starts it with a clean environment, and the hub connects to it', async () => {
     const hub = path.join(dir, 'hub');
-    const entry = `import '${MISAO_CLI}';\n`;
-    fs.mkdirSync(path.join(hub, 'misao'), { recursive: true });
-    fs.writeFileSync(path.join(hub, 'misao', 'misao.mjs'), entry);
-    fs.writeFileSync(path.join(hub, 'misao', 'LICENSES.txt'), 'licenses\n');
-    fs.writeFileSync(path.join(hub, 'misao', 'manifest.json'), JSON.stringify({ version: '0.2.0', files: { 'misao.mjs': sha(entry), 'LICENSES.txt': sha('licenses\n') } }));
-    fs.mkdirSync(path.join(hub, 'node_modules', 'node-pty'), { recursive: true });
-    fs.writeFileSync(path.join(hub, 'node_modules', 'node-pty', 'package.json'), '{"name":"node-pty"}');
-    fs.cpSync(REPO_DEPLOY_DIR, path.join(hub, 'deploy'), { recursive: true });
+    // The bundle carries the real misao binary for every target; the agent picks the one that fits its own OS / architecture.
+    writeHubBundle(hub, '0.3.0', fs.readFileSync(MISAO_CLI));
 
     const steps: string[] = [];
     const result = await new MisaoAgentInstaller(readMisaoBundle(hub), { readyTimeoutMs: 20_000 }).install(transport, (step) => steps.push(step));
 
-    expect(result).toEqual({ version: '0.2.0', runningVersion: '0.2.0', startMethod: 'nohup', updateAvailable: false });
+    expect(result).toEqual({ version: '0.3.0', runningVersion: '0.3.0', startMethod: 'nohup', updateAvailable: false });
     expect(steps).toEqual(['inspect', 'transfer', 'prepare', 'start']);
     const root = path.join(home, '.azito', 'misao');
-    expect(fs.readFileSync(path.join(root, '0.2.0', 'misao.mjs'), 'utf-8')).toBe(entry);
-    expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
+    expect(fs.readFileSync(path.join(root, '0.3.0', 'misao')).equals(fs.readFileSync(MISAO_CLI))).toBe(true);
+    expect(fs.statSync(path.join(root, '0.3.0', 'misao')).mode & 0o111).not.toBe(0);
+    expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.3.0');
     expect(fs.statSync(root).mode & 0o777).toBe(0o700);
 
     // The daemon was started by the agent's exec, whose environment holds the agent token: none of it may reach the daemon (and so its panes).
@@ -141,7 +132,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('installing misao on a real agent pro
     const node = misao.servers.ensureAgentNode(server);
     await vi.waitFor(() => expect(node.connection.availability()).toEqual({ available: true }), { timeout: 15000, interval: 100 });
     expect(await describeMisaoDaemon(node.connection)).toMatchObject({ installed: true });
-    expect(await transport.fetchMisaoStatus()).toMatchObject({ socketPresent: true, installedVersion: '0.2.0' });
+    expect(await transport.fetchMisaoStatus()).toMatchObject({ socketPresent: true, installedVersion: '0.3.0' });
   }, 90000);
 
   it('a second install leaves the running daemon alone', async () => {

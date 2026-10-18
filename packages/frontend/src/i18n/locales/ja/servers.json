@@ -271,12 +271,21 @@
     "notInstallable": "このハブは misao を同梱していないため、サーバーに導入できません。",
     "failed": "misao を導入できませんでした",
     "updateAvailable": "稼働中の misao（{{running}}）が同梱版（{{bundled}}）と異なります",
+    "updateAvailableInstalled": "インストール済みの misao（{{installed}}）が同梱版（{{bundled}}）と異なります（稼働中の版は分かりません）",
     "updateAvailableSub": "自動では切り替えません。切り替えるとこのサーバーのペインがすべて終了するため、作業が動いていないときに更新してください。",
     "step": {
       "inspect": "サーバーを確認中…",
       "transfer": "misao をサーバーへ送信中…",
       "prepare": "misao を準備中…",
+      "stop": "misao を停止中…",
       "start": "misao を起動中…"
-    }
+    },
+    "update": "misao を更新",
+    "updating": "misao を更新中…",
+    "updateDesc": "稼働中の misao を止め、このハブに同梱の版へ切り替えて起動します。失敗したときは更新前の版に戻します。",
+    "updateFailed": "misao を更新できませんでした",
+    "updateConfirmTitle": "misao を更新しますか？",
+    "updateConfirmMessage": "更新のため、このサーバーの misao を停止します。このサーバーで実行中のペインはすべて終了し、中のエージェントの作業は中断されます。必要な作業を終えてから続けてください。",
+    "updateConfirmLabel": "停止して更新"
   }
 }

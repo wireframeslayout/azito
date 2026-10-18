@@ -536,8 +536,9 @@ tmux のサーバーでは以下は何も生成されず、これまでの tmux 
   シェルペインがエージェントの状態を上書きしない）。窓の行が後から登録されるペインは
   `sessions:updated` で再解決する（最大60秒）。gap と再接続のたびに `pane.list`（`agentState` /
   `decidedBy`）で全ペインを再同期し、接続が切れている間は misao 由来のキーを `unknown` にする。
-- **blocked 補正。** misao のコアは working / idle / exited しか出さず、`blocked` はエージェント
-  プロファイルからしか出ない。そのため misao 窓では、Tier 0 idle の精緻化（§1）と同じ画面確認を、
+- **blocked 補正。** misao 0.3.0 以降（Rust 版）のコアは、同梱の claude / codex プロファイルによる判定で `pane.state` に
+  `blocked` も出す（上の写像のとおり、そのまま blocked になる）。ただし working / idle の行が応答待ちを隠していることがあり、
+  更新前の 0.2.0（Node 版）のデーモンは `blocked` を出さないため、misao 窓では Tier 0 idle の精緻化（§1）と同じ画面確認を、
   tmux 座標ではなく窓の mux ref と `driver.captureScreen`（第1ペイン）で行う。**タイトルの前置確認は
   しない。** `tier0_mux` の working 行で画面が応答待ちなら blocked になり（`decidedBy` は
   `tier0_mux` のまま、`refinedBy: tier2_title`）、`tier0_mux` の idle 行も既存の idle 精緻化で同様に

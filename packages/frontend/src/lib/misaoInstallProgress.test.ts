@@ -3,8 +3,13 @@ import { interpretInstallProgress } from './misaoInstallProgress';
 
 describe('interpretInstallProgress', () => {
   it('reads the last step of a running install', () => {
-    expect(interpretInstallProgress({ state: 'running', steps: ['inspect', 'transfer'] })).toEqual({ kind: 'running', step: 'transfer' });
-    expect(interpretInstallProgress({ state: 'running', steps: [] })).toEqual({ kind: 'running', step: null });
+    expect(interpretInstallProgress({ state: 'running', steps: ['inspect', 'transfer'] })).toEqual({ kind: 'running', step: 'transfer', action: null });
+    expect(interpretInstallProgress({ state: 'running', steps: [] })).toEqual({ kind: 'running', step: null, action: null });
+  });
+
+  it('names the action of a running run, so a run started elsewhere is shown as an update too', () => {
+    expect(interpretInstallProgress({ state: 'running', action: 'update', steps: ['stop'] })).toEqual({ kind: 'running', step: 'stop', action: 'update' });
+    expect(interpretInstallProgress({ state: 'running', action: 'install', steps: [] })).toEqual({ kind: 'running', step: null, action: 'install' });
   });
 
   it('ends on done, so the row stops following and checks the server again', () => {

@@ -41,13 +41,23 @@ jobs:
             --arch ${{ matrix.arch }} \
             --repo ${{ github.repository }}
 
-      # Runs the bundled misao the way the installed service does (bundled node + node-pty, a mode-700 data dir),
-      # checks that server.info reports both versions, and stops it — a broken asset or native module fails the release here.
+      # Runs the bundled misao binary that fits this runner the way the installed service does (a mode-700 data dir, no node),
+      # checks that server.info reports both versions and that a pane opens, and stops it — a broken or mismatched binary fails the release here.
       - name: Smoke-test bundled misao
         run: |
           SMOKE=$(mktemp -d)
           tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
           bash packages/server/scripts/smoke-misao.sh "$SMOKE"
+
+      # The Intel macOS binary is shipped for agent hosts, but no runner of this matrix is Intel: make sure it at least starts
+      # (under Rosetta) on the Apple-silicon one.
+      - name: Run the bundled x86_64 macOS misao under Rosetta
+        if: matrix.platform == 'darwin' && matrix.arch == 'arm64'
+        run: |
+          softwareupdate --install-rosetta --agree-to-license || true
+          SMOKE=$(mktemp -d)
+          tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
+          arch -x86_64 "$SMOKE/misao/x86_64-apple-darwin/misao" --version
 
       - name: Verify no data/ in tarball
         run: |

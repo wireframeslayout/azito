@@ -12,7 +12,7 @@ import { MISAO_ERROR_STATUS, requireOperator } from './misaoRouteSupport';
 export interface AgentMisaoRoutesOptions {
   serverRepo: Pick<IServerRepository, 'findByName'>;
   transportFactory: Pick<TransportFactory, 'getAgentTransport'>;
-  installer: Pick<MisaoAgentInstaller, 'install'>;
+  installer: Pick<MisaoAgentInstaller, 'install' | 'update'>;
   misaoServers: Pick<MisaoServers, 'ensureAgentNode'>;
   /** The per-server-name lock the other server routes use, so an install cannot interleave with an edit or a window creation. */
   serverIsolationMutex: Pick<KeyedMutex, 'withLock'>;
@@ -22,9 +22,11 @@ export interface AgentMisaoRoutesOptions {
   connectTimeoutMs?: number;
 }
 
-/** What the last install-misao run of a server is doing / did, for the UI to show while the POST is still in flight. */
+/** What the last install-misao / update-misao run of a server is doing / did, for the UI to show while the POST is still in flight. */
 export interface MisaoInstallProgress {
   state: 'idle' | 'running' | 'done' | 'failed';
+  /** What the run is (absent while idle). */
+  action?: 'install' | 'update';
   /** Every step reported so far, in order (`MisaoInstallStep` codes); the last one is what is happening now. */
   steps: string[];
   error?: string;
@@ -46,6 +48,10 @@ async function waitUntilAvailable(connection: Pick<MisaoConnection, 'availabilit
  * a host its pane server (a daemon that runs commands as the agent's user), so it is operator-only in both auth modes.
  * Two things trigger it: the install of a new agent server, and a misao window being asked for on a server that has none
  * (the UI asks the operator first, then calls this). `GET` on the same path reports how the last run is going.
+ *
+ * `POST /api/servers/:name/update-misao` is the explicit switch of a running older release to the bundled one. It stops the
+ * daemon, which closes every pane of the server, so the UI confirms it first; the same operator-only rule applies, and its
+ * progress is reported by the same `GET` (an install and an update of one server never run at once: they share the lock).
  */
 const agentMisaoRoutes: FastifyPluginCallback<AgentMisaoRoutesOptions> = (fastify, opts, done) => {
   const { serverRepo, transportFactory, installer, misaoServers, serverIsolationMutex, onInstalled } = opts;
@@ -57,38 +63,42 @@ const agentMisaoRoutes: FastifyPluginCallback<AgentMisaoRoutesOptions> = (fastif
     return progress.get(request.params.name) ?? ({ state: 'idle', steps: [] } satisfies MisaoInstallProgress);
   });
 
-  fastify.post<{ Params: { name: string } }>(
-    '/api/servers/:name/install-misao',
-    { preHandler: requireOperator('servers.install_misao') },
-    async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
-      const srv = serverRepo.findByName(request.params.name);
-      if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      if (srv.type !== 'agent') {
-        return reply.status(400).send({ error: "A local server's misao is installed from Settings > System (/api/system/misao/install).", code: 'usage' });
-      }
+  const register = (action: 'install' | 'update'): void => {
+    fastify.post<{ Params: { name: string } }>(
+      `/api/servers/:name/${action}-misao`,
+      { preHandler: requireOperator(`servers.${action}_misao`) },
+      async (request, reply) => serverIsolationMutex.withLock(request.params.name, async () => {
+        const srv = serverRepo.findByName(request.params.name);
+        if (!srv) return reply.status(404).send({ error: 'Server not found' });
+        if (srv.type !== 'agent') {
+          return reply.status(400).send({ error: "A local server's misao is managed from Settings > System (/api/system/misao).", code: 'usage' });
+        }
 
-      const steps: string[] = [];
-      progress.set(srv.name, { state: 'running', steps: [] });
-      try {
-        const result = await installer.install(transportFactory.getAgentTransport(srv), (message) => {
-          steps.push(message);
-          progress.set(srv.name, { state: 'running', steps: [...steps] });
-        });
-        const node = misaoServers.ensureAgentNode(srv);
-        await waitUntilAvailable(node.connection, opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
-        onInstalled(srv);
-        const daemon = await describeMisaoDaemon(node.connection);
-        progress.set(srv.name, { state: 'done', steps });
-        return { ok: true, ...result, steps, daemon };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        progress.set(srv.name, { state: 'failed', steps, error: message, ...(err instanceof MisaoServiceError ? { code: err.code } : {}) });
-        // A refusal is answered with its code; anything else (the agent is unreachable) is the global error handler's.
-        if (!(err instanceof MisaoServiceError)) throw err;
-        return reply.status(MISAO_ERROR_STATUS[err.code]).send({ error: message, code: err.code, steps });
-      }
-    }),
-  );
+        const steps: string[] = [];
+        progress.set(srv.name, { state: 'running', action, steps: [] });
+        try {
+          const result = await installer[action](transportFactory.getAgentTransport(srv), (message) => {
+            steps.push(message);
+            progress.set(srv.name, { state: 'running', action, steps: [...steps] });
+          });
+          const node = misaoServers.ensureAgentNode(srv);
+          await waitUntilAvailable(node.connection, opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
+          onInstalled(srv);
+          const daemon = await describeMisaoDaemon(node.connection);
+          progress.set(srv.name, { state: 'done', action, steps });
+          return { ok: true, ...result, steps, daemon };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          progress.set(srv.name, { state: 'failed', action, steps, error: message, ...(err instanceof MisaoServiceError ? { code: err.code } : {}) });
+          // A refusal is answered with its code; anything else (the agent is unreachable) is the global error handler's.
+          if (!(err instanceof MisaoServiceError)) throw err;
+          return reply.status(MISAO_ERROR_STATUS[err.code]).send({ error: message, code: err.code, steps });
+        }
+      }),
+    );
+  };
+  register('install');
+  register('update');
 
   done();
 };

@@ -14,9 +14,9 @@ import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { taskWindowRef } from '../tmux/windowIdentity';
 import type { Window } from './Window';
 import { WindowRespawnService } from './WindowRespawnService';
+import { MISAO_CLI } from '../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const SOCKET_BYTES_MAX = 107;
 const WORKSPACE = 'wrs-ws';
 const DISPLAY_NAME = 'task-7--ab12';
@@ -59,7 +59,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wrs-'));
     const socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 

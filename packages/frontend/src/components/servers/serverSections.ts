@@ -38,6 +38,8 @@ export interface InstallStatusItem {
   installable?: boolean;
   /** misao on an agent server only: the release this hub would install. */
   bundledVersion?: string;
+  /** The release the server's managed layout points at; set even when the daemon cannot be connected to. */
+  installedVersion?: string;
   /** misao on an agent server only: the daemon runs another release than the bundled one (it is not switched on its own). */
   updateAvailable?: boolean;
 }

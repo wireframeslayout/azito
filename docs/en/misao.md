@@ -20,6 +20,7 @@ On a fresh install the local server's default terminal is misao.
   It edits `.env`, so restart the hub afterwards (panes are not affected).
 - **Updates**: updating the hub neither updates nor restarts misao (restarting it would end every pane). When the running version differs
   from the bundled one, the Setup row says so. You switch explicitly with `azito misao update`, or "Update misao (running panes will end)".
+  An install of 0.2.0 (the Node build) moves to 0.3.0 (the native binary) the same way: the unit is regenerated on update (it has no node in it any more), the old version directory is left in place, and a failed update restores the previous unit and version.
 - On a host without tmux, the "Terminal" choice when adding a window disables tmux (with the reason), and the Setup tmux row is labelled "Optional".
 
 For the service layout, commands and manual setup see [Install and update](./install-and-update.md#misao-service).
@@ -32,13 +33,13 @@ A release build uses the same setting when you want it to talk to another daemon
 ### 1. Install and start misao
 
 misao lives in its own repository ([wireframeslayout/misao](https://github.com/wireframeslayout/misao)).
-It requires Node.js 24 or later. Build it, put `misao` on your PATH, and start the daemon.
+It is a single native binary (no Node.js needed). Download the archive for your OS / architecture from the
+[Releases](https://github.com/wireframeslayout/misao/releases) page (`misao-<version>-<target>.tar.gz`, targets
+`x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`, `aarch64-apple-darwin`, `x86_64-apple-darwin`), put `misao` on your PATH, and start the daemon.
 
 ```bash
-git clone https://github.com/wireframeslayout/misao.git
-cd misao
-npm ci && npm run build
-mkdir -p ~/.local/bin && ln -sf "$PWD/packages/cli/dist/main.js" ~/.local/bin/misao
+tar xzf misao-0.3.0-x86_64-unknown-linux-musl.tar.gz
+mkdir -p ~/.local/bin && install -m 755 misao-0.3.0-x86_64-unknown-linux-musl/misao ~/.local/bin/misao
 misao serve            # runs in the foreground; use a systemd user unit to keep it running
 ```
 
@@ -107,9 +108,12 @@ server uses the daemon on its host, reached through the agent.
 ### Installing misao on an agent server
 
 The hub sends **its own bundled misao** through the agent (the release files are checked against the manifest sha256 on both ends; the
-agent downloads nothing). It is installed under `~/.azito/misao/<version>/` with `current` -> `<version>`, the agent's own node and node-pty,
-and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background process (cleared environment, no
-reboot survival) when the host has no user systemd. Only Linux x86_64 agents are supported.
+agent downloads nothing). Every hub carries the binary for all four Unix targets (the hub installs its own misao from the same bundle, and hubs run on
+Linux x86_64 / arm64 and macOS arm64) and sends the one that fits the agent's own OS / architecture
+(Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). In practice the agent
+installer of this release accepts x86_64 hosts only, so an arm64 agent server is not supported yet; that is a separate matter from what the hub bundles. It is installed under
+`~/.azito/misao/<version>/` with `current` -> `<version>` and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background
+process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved.
 
 - When you add an agent server (auto-install), misao is installed after the agent. A host without tmux no longer fails the preflight, and its
   default mux becomes misao. If only the misao step fails, the agent stays installed and the response carries `misaoError`.
@@ -118,7 +122,14 @@ reboot survival) when the host has no user systemd. Only Linux x86_64 agents are
 - An update of the agent (`AgentUpdater`) never stops or restarts the misao daemon. A daemon of another release than the bundled one is left
   as it is (the Setup row says so): switching it ends every pane.
 - A hub run from a source checkout carries no bundled misao, so it cannot install one on an agent server.
-- Not covered yet: startup recovery of stuck tasks (local servers only), and switching a running agent-side daemon to a newer release.
+- **Updating a running agent-side daemon** (for example a 0.2.0 Node build) to the bundled release is an explicit action: the "Update misao"
+  button on the Setup row (shown only when the running release differs; a confirmation dialog first, because every pane of that server ends), or
+  `POST /api/servers/:name/update-misao` (operator only, also in compat mode; progress through the same `GET`). It saves the previous `current`
+  link and unit file, stops the daemon (the systemd unit, `misao stop`, then a SIGTERM to the process whose command line names the managed socket, which also
+  covers a daemon started in the background), switches `current` and the unit, starts the new one and waits for its socket. If any step fails,
+  the previous link and unit file are put back and the previous release is started again. An install on a host where nothing is running behaves the same
+  way for the unit and link (restored on failure).
+- Not covered yet: startup recovery of stuck tasks (local servers only).
 
 ## When it cannot connect
 

@@ -87,17 +87,30 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (config, outside the versioned dir) and `~/.azito/data/` (DB, keys, token).
 - In-app update: Settings → System. Works under systemd and launchd; not for a source checkout, and
   not for pre-releases (GitHub's `releases/latest` returns stable releases only).
-- The tarball also carries `misao/{misao.mjs,LICENSES.txt,manifest.json}` (a pinned release asset: version, URL and sha256 are
-  constants in `scripts/misaoAssets.ts`, verified at build time; offline builds set `AZITO_MISAO_ASSET_DIR`) plus
-  `deploy/azito-misao.service` / `com.azito.misao.plist`. node-pty is the hub's own copy. misao is **a separate service**
+- The tarball also carries the misao **native binary** (Rust, no Node / node-pty needed) for every Unix target
+  (`misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for `x86_64`/`aarch64-unknown-linux-musl` and
+  `aarch64`/`x86_64-apple-darwin`, plus `misao/manifest.json` with each file's sha256) (every hub tarball has all four: the hub installs its own from them, since hubs run on linux x64 / arm64 and
+  darwin arm64, and the same bundle serves an agent host of another OS / architecture; `AgentInstaller`'s preflight currently accepts
+  x86_64 agents only, so arm64 agent support is out of scope here). The archives are pinned release assets: version, URL and sha256 are constants in
+  `scripts/misaoAssets.ts`, verified at build time (offline builds set `AZITO_MISAO_ASSET_DIR`). The install target is chosen from the
+  host's OS / architecture (`misaoTargetFor` in `MisaoBundle.ts`; the hub uses its own, an agent reports its own); a host without a
+  binary is an `unsupported_host` error, never a fallback. Also `deploy/azito-misao.service` / `com.azito.misao.plist`
+  (`ExecStart=<prefix>/misao/current/misao serve ...`, no `__NODE__`). misao is **a separate service**
   (`azito-misao` / `com.azito.misao`) unpacked to `~/.azito/misao/<version>/` with `misao/current` switched only by an explicit
   `azito misao update` (or the Setup row's update button): stopping the daemon closes every pane, so a hub update or restart never
   touches it. `azito misao install|update|start|status` (`cli/misaoCommand.ts`) and `GET/POST /api/system/misao[/install|start|update]`
   share `modules/system/misao/MisaoServiceService`; `install.sh` just calls the bundled CLI. tmux is optional on a release install.
-  The same bundled misao is installed on **agent servers** by `modules/system/misao/MisaoAgentInstaller` (files sent through the agent and
-  sha256-checked on both ends, never downloaded by the agent; the unit template is rendered by the shared `misaoUnit.ts`; it never switches or
-  stops a running daemon): `AgentInstaller.install` runs it after the agent is healthy, and `POST /api/servers/:name/install-misao`
-  (`system/misao/agentMisaoRoutes.ts`, operator only even in compat mode; `GET` = progress) runs it on demand. `AgentUpdater` never touches the daemon.
+  The same bundled misao is installed on **agent servers** by `modules/system/misao/MisaoAgentInstaller` (the binary that fits the agent's OS /
+  architecture and its licenses are sent through the agent and sha256-checked on both ends, never downloaded by the agent; the unit template is
+  rendered by the shared `misaoUnit.ts`; macOS agents run it as a background process; `install()` never switches or stops a running daemon, except that with
+  nothing running `current` is pointed at the new release, since the unit needs the binary layout; the previous link and unit are put back if that fails).
+  `update()` is the explicit switch of a running one (`POST /api/servers/:name/update-misao`, operator only even in compat mode, and the Setup row's
+  "Update misao" button after a confirmation): save the previous link + unit, stop (systemd unit, `misao stop`, SIGTERM to the process naming the managed
+  socket), switch, start, and on any failure restore both and start the previous release. For the hub's own service, an update from a Node-era 0.2.0 install
+  (`azito misao update`) keeps the old version directory, and a failed update restores the previous unit file as it was (not a re-rendered one; launchd
+  jobs are booted out before a definition changes, since a loaded job keeps its old one). `AgentInstaller.install` runs the install after the agent is healthy, and
+  `POST /api/servers/:name/install-misao` (`system/misao/agentMisaoRoutes.ts`, operator only even in compat mode; `GET` = progress for both) runs it on demand.
+  `AgentUpdater` never touches the daemon.
 
 ## Architecture
 
@@ -421,8 +434,8 @@ packages/
   `muxRuntime: 'misao'` as `defaultMux: 'misao'` for one release): no tui-supervisor (`shouldSupervise(..., windowKind)` is false for
   misao windows). `GET /api/servers/:name/sessions` stamps each session with `kind`; `?detail=1` returns `{ sessions, unavailable }`
   where `unavailable` lists the hosted muxes that could not be listed (their windows are kept, not treated as deleted). The daemon's `pane.state` events (`MisaoPaneStateEvents` → `MisaoActivityBridge`, first pane of a window only) drive
-  `tier0_mux` through `recordMuxSignal()`; because the misao core never reports `blocked`, a `tier0_mux` working/idle row on a
-  misao window is confirmed against the window's first-pane screen (resolved from `mux_ref`, no title pre-check) and refined to
+  `tier0_mux` through `recordMuxSignal()`; the Rust core does report `blocked` (from its agent profiles), and a `tier0_mux` working/idle row on a
+  misao window is still confirmed against the window's first-pane screen (resolved from `mux_ref`, no title pre-check) and refined to
   blocked with `refinedBy: 'tier2_title'`. The three hooks send `misaoPaneId` (from `$MISAO_PANE_ID`) instead of tmux fields when
   `$TMUX_PANE` is absent; Diagnostics rows carry `mux: { status, decidedBy?, at }`.
   See `docs/{ja,en}/activity-detection.md` §13
@@ -466,8 +479,9 @@ variable has no effect when unset.
 attach, task execution with the scripted `fake-agent/task-agent`, activity detection via `pane.state`,
 daemon-down notice). It starts its own `misao serve` from a temp dir (`e2e/fixtures/misaoDaemon.ts`, never the
 resident `~/.misao` daemon) and a hub with `MISAO_SOCKET` pointing at it (without `misaoSocket` the harness points it at a non-existent temp socket, so a hub never reaches the resident daemon)
-(`Harness.start({ misaoSocket })`, `fixtures/misaoTest.ts`). It needs a built misao checkout: `MISAO_CLI`
-(default `~/workspace/misao/packages/cli/dist/main.js`); without it the spec is skipped with a reason. The
+(`Harness.start({ misaoSocket })`, `fixtures/misaoTest.ts`). It needs the misao **binary**: `MISAO_CLI` names the executable (a v0.3.0 release
+binary, or `target/release/misao` of a misao checkout, which is the default `~/workspace/misao/target/release/misao`); without it the spec is
+skipped with a reason. The `*.misaoIntegration.test.ts` files read the same `MISAO_CLI` (`shared/misaoTestBinary.ts`); the CI job "misao integration tests" fetches the pinned linux-x64 binary (`scripts/fetch-misao-binary.ts`) and runs `vitest --project misao-integration` on it. The
 existing tmux specs and `fixtures/test.ts` are unaffected. Docs: `docs/{ja,en}/misao.md`.
 
 ### Adding a Migration

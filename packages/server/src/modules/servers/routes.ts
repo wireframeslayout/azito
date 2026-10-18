@@ -123,6 +123,8 @@ export interface MisaoDaemonRow {
   installable?: boolean;
   /** The release this hub would install. */
   bundledVersion?: string;
+  /** The release the agent's managed layout (`current`) points at: known even when the daemon cannot be connected to. */
+  installedVersion?: string;
   /** The daemon runs another release than the bundled one (left as it is: switching it ends every pane). */
   updateAvailable?: boolean;
 }

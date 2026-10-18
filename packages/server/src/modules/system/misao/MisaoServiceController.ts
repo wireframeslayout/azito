@@ -31,12 +31,18 @@ export interface MisaoServiceController {
   /** Unit template file name inside the bundle's `deploy/`. */
   readonly templateName: string;
   isInstalled(): boolean;
+  /** The unit/plist as installed now, or undefined when there is none (an update puts it back when it has to roll back). */
+  readDefinition(): string | undefined;
   /** Writes the unit/plist and registers it (enable at login) without starting it. */
   install(content: string): Promise<void>;
   start(): Promise<void>;
   /** Stops the daemon. It closes every pane before exiting. */
   stop(): Promise<void>;
   state(): Promise<MisaoServiceState>;
+}
+
+function readIfExists(file: string): string | undefined {
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : undefined;
 }
 
 async function mustSucceed(run: CommandRunner, file: string, args: string[], what: string): Promise<CommandResult> {
@@ -59,6 +65,10 @@ export class SystemdMisaoController implements MisaoServiceController {
 
   isInstalled(): boolean {
     return fs.existsSync(this.unitPath);
+  }
+
+  readDefinition(): string | undefined {
+    return readIfExists(this.unitPath);
   }
 
   async install(content: string): Promise<void> {
@@ -101,6 +111,10 @@ export class LaunchdMisaoController implements MisaoServiceController {
 
   isInstalled(): boolean {
     return fs.existsSync(this.plistPath);
+  }
+
+  readDefinition(): string | undefined {
+    return readIfExists(this.plistPath);
   }
 
   async install(content: string): Promise<void> {
