@@ -215,7 +215,8 @@ describe('WindowsSecretFileGuard（実行器を差し替えるので全 OS で�
     expect(fs.readFileSync(target, 'utf-8')).toBe('x\nd\n');
   });
 
-  it('appendSecretFile: 保護している間に別のファイルへ置き換えられたら、置き換え先には書かず投げる', () => {
+  // Windows では、開いている間のファイルは別のファイルで置き換えも削除もできない（その検証は POSIX のセマンティクスが前提）
+  it.skipIf(process.platform === 'win32')('appendSecretFile: 保護している間に別のファイルへ置き換えられたら、置き換え先には書かず投げる', () => {
     const target = path.join(dir, 'update.log');
     fs.writeFileSync(target, 'old\n');
     const intruder = path.join(dir, 'intruder');
@@ -228,7 +229,8 @@ describe('WindowsSecretFileGuard（実行器を差し替えるので全 OS で�
     expect(fs.readFileSync(target, 'utf-8')).toBe('loose\n');
   });
 
-  it('appendSecretFile: 保護している間に消されても、保護の無いファイルを作り直さない（O_CREAT なし）', () => {
+  // Windows では、開いている間のファイルは別のファイルで置き換えも削除もできない（その検証は POSIX のセマンティクスが前提）
+  it.skipIf(process.platform === 'win32')('appendSecretFile: 保護している間に消されても、保護の無いファイルを作り直さない（O_CREAT なし）', () => {
     const target = path.join(dir, 'update.log');
     fs.writeFileSync(target, 'old\n');
     const run: PowerShellRunner = (_script, p) => { fs.rmSync(p); return ''; };
