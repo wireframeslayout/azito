@@ -13,6 +13,7 @@ import { terminalWsParams, legacyTargetWsParams, terminalRefFromTabTarget, termi
 import TerminalBackdrop from './TerminalBackdrop';
 import { TERMINAL_CLOSE } from '@azito/shared';
 import type { PaneUnavailableReason } from '../lib/paneState';
+import { createReconnectCounter } from '../lib/reconnectCounter';
 
 // SP端末クイックキーフッター（TerminalQuickKeyBar）と⌨透過パッド（MobileKeyboardOverlay）が
 // 送出しうるキー全種を網羅する。両者ともこのマップ経由でアクティブなWS接続へ直接キーを流す
@@ -33,6 +34,8 @@ function agentLaunchLabel(token: string | null, t: (key: string) => string): str
 const RECONNECT_MAX_ATTEMPTS = 8;
 const RECONNECT_BASE_DELAY_MS = 1000;
 const RECONNECT_MAX_DELAY_MS = 15000;
+// open からこの時間以上持続した接続だけを「安定」とみなし、再接続カウンタをリセットする。
+const STABLE_CONNECTION_MS = 5000;
 // オフラインのペイン（tmux target は存在するが出力が一切流れてこない）に接続すると、WS の
 // open は成立してもデータが永久に来ず、useSupervisedLoadingOverlay の「接続中…」スピナーが
 // 無期限に回り続ける。初回接続に限りこのタイムアウトで打ち切り、明示的なエラー状態へ遷移させる。
@@ -313,7 +316,12 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
 
       waitForSize(() => {
         if (disposed) return;
-        let reconnectAttempts = 0;
+        const counter = createReconnectCounter({
+          maxAttempts: RECONNECT_MAX_ATTEMPTS,
+          baseDelayMs: RECONNECT_BASE_DELAY_MS,
+          maxDelayMs: RECONNECT_MAX_DELAY_MS,
+          stableMs: STABLE_CONNECTION_MS,
+        });
         let firstDisconnect = true;
 
         function connect() {
@@ -346,13 +354,13 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
           connectDataTimerRef.current = setTimeout(() => {
             if (disposed || !firstMsg) return;
             connectTimedOut = true;
-            if (reconnectAttempts === 0) {
+            if (counter.isFirstAttempt()) {
               onConnectTimeout?.();
             }
             try { ws.close(); } catch { /* already closed */ }
           }, CONNECT_DATA_TIMEOUT_MS);
           ws.onopen = () => {
-            reconnectAttempts = 0;
+            counter.onOpen(Date.now());
             firstDisconnect = true;
             terminal.focus();
             fitAddon.fit();
@@ -367,7 +375,7 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
           ws.onclose = (e) => {
             clearTimeout(connectDataTimerRef.current);
             if (disposed) return;
-            if (connectTimedOut && reconnectAttempts === 0) return;
+            if (connectTimedOut && counter.isFirstAttempt()) return;
             if (e.code === TERMINAL_CLOSE.windowNotFound.code) { onWindowNotFound?.(); return; }
             if (e.code === TERMINAL_CLOSE.paneStopped.code) { onPaneUnavailable?.('pane_stopped'); return; }
             if (e.code === TERMINAL_CLOSE.windowEmpty.code) { onPaneUnavailable?.('window_empty'); return; }
@@ -376,11 +384,10 @@ const XTermView = forwardRef<XTermViewHandle, XTermViewProps>(function XTermView
               firstDisconnect = false;
               onDisconnect?.();
             }
-            if (reconnectAttempts < RECONNECT_MAX_ATTEMPTS) {
-              const delay = Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttempts), RECONNECT_MAX_DELAY_MS);
-              reconnectAttempts++;
-              terminal.write(`\r\n\x1b[33m[Disconnected — reconnecting (${reconnectAttempts}/${RECONNECT_MAX_ATTEMPTS})...]\x1b[0m\r\n`);
-              reconnectTimerRef.current = setTimeout(connect, delay);
+            const decision = counter.onClose(Date.now());
+            if (decision.action === 'reconnect') {
+              terminal.write(`\r\n\x1b[33m[Disconnected — reconnecting (${decision.attempt}/${RECONNECT_MAX_ATTEMPTS})...]\x1b[0m\r\n`);
+              reconnectTimerRef.current = setTimeout(connect, decision.delayMs);
             } else {
               terminal.write('\r\n\x1b[33m[Connection closed]\x1b[0m\r\n');
               onMaxRetriesReached?.();
