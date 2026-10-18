@@ -32,7 +32,7 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); });
 
 describe('MisaoChangeEvents', () => {
-  it.each(['workspace.created', 'workspace.closed', 'workspace.renamed', 'window.created', 'window.closed', 'window.renamed', 'pane.opened', 'pane.closed', 'pane.exited', 'pane.title', 'pane.label'])('notifies on %s', async (type) => {
+  it.each(['workspace.created', 'workspace.closed', 'workspace.renamed', 'window.created', 'window.closed', 'window.renamed', 'pane.opened', 'pane.closed', 'pane.exited', 'pane.label'])('notifies on %s', async (type) => {
     const { events, emit, onChange } = setup();
     await events.install('local');
     emit(type);
@@ -40,7 +40,7 @@ describe('MisaoChangeEvents', () => {
     expect(onChange).toHaveBeenCalledWith('local');
   });
 
-  it.each(['pane.state', 'pane.resized', 'input', 'client.attached', 'daemon.started', 'focus', 'something.new'])('ignores %s', async (type) => {
+  it.each(['pane.state', 'pane.title', 'pane.resized', 'input', 'client.attached', 'daemon.started', 'focus', 'something.new'])('ignores %s', async (type) => {
     const { events, emit, onChange } = setup();
     await events.install('local');
     emit(type);
@@ -53,7 +53,7 @@ describe('MisaoChangeEvents', () => {
     await events.install('a');
     await events.install('b');
     expect(subscribeEvents).toHaveBeenCalledTimes(1);
-    for (let i = 0; i < 20; i++) emit('pane.title');
+    for (let i = 0; i < 20; i++) emit('pane.label');
     await vi.advanceTimersByTimeAsync(CHANGE_COALESCE_MS);
     expect(onChange.mock.calls.map((c) => c[0]).sort()).toEqual(['a', 'b']);
     emit('window.created');

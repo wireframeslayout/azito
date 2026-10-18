@@ -73,6 +73,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       listSessions: vi.fn(async () => []),
       createSession: vi.fn(async () => {}),
     } as unknown as ProjectsRouteOptions['tmux'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), openWorkspace: vi.fn(async () => {}) })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
       findByName: vi.fn(() => ({

@@ -70,6 +70,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       listWorkspaces: vi.fn(async () => []),
       openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
     } as unknown as ProjectsRouteOptions['tmux'],
+    muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), openWorkspace: vi.fn(async () => {}) })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
       findByName: vi.fn(() => null),
@@ -96,7 +97,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     },
     fetchDistributionService: null,
     ...overrides,
-  };
+  } as ProjectsRouteOptions;
 }
 
 describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328 / Issue #29 Step 3a)', () => {
@@ -293,6 +294,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
   // the assertion can tell the two apart.
   it('creates the project tmux session using the server row re-read inside the isolation lock, not the one resolved before the lock', async () => {
     let generation = 0;
+    const muxOpenWorkspace = vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } }));
     const opts = makeOpts({
       serverRepo: {
         findAll: vi.fn(() => []),
@@ -321,6 +323,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
         openWorkspace: vi.fn(async () => ({ ref: { kind: 'tmux', workspace: 'p', window: 'default' }, result: { stdout: '', stderr: '', code: 0 } })),
         uiTokenEnvForServer: vi.fn(() => ({})),
       } as unknown as ProjectsRouteOptions['tmux'],
+      muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), openWorkspace: muxOpenWorkspace })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
     });
     const app = Fastify();
     await app.register(projectsRoutes, opts);
@@ -333,9 +336,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
     });
 
     expect(res.statusCode).toBe(200);
-    // The FIRST findByName call (top of the handler, `srv`) produced
-    // `gen-1` — openWorkspace must NOT have seen that row.
-    expect(opts.tmux.openWorkspace).toHaveBeenCalledWith(
+    expect(muxOpenWorkspace).toHaveBeenCalledWith(
       expect.not.objectContaining({ agentVersion: 'gen-1' }),
       'p',
       expect.anything(),

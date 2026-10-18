@@ -450,6 +450,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
       if (serverRepo.findByName(name))
         return reply.status(409).send({ error: 'Server already exists' });
+      if (type === 'local' && serverRepo.findAll().some((s) => s.type === 'local'))
+        return reply.status(409).send({ error: 'local_server_exists', message: 'Only one local server is allowed' });
       try {
         serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime, validDefaultMux);
         notifyServerCreated(name);
