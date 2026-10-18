@@ -95,7 +95,8 @@ describe('PaneOutputStream', () => {
     expect(markers.filter(m => m === 'questions_json')).toHaveLength(0);
   });
 
-  it('should accumulate buffer across multiple writes', async () => {
+  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
+  it.skipIf(process.platform === 'win32')('should accumulate buffer across multiple writes', async () => {
     stream = new PaneOutputStream('test-5');
     stream.start();
 
@@ -134,7 +135,8 @@ describe('PaneOutputStream', () => {
     expect(markers).toHaveLength(0);
   });
 
-  it('should detect markers only in new output after enableMarkerDetection', async () => {
+  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
+  it.skipIf(process.platform === 'win32')('should detect markers only in new output after enableMarkerDetection', async () => {
     stream = new PaneOutputStream('test-guard-2');
     stream.start();
     const markers: string[] = [];
@@ -226,7 +228,8 @@ describe('PaneOutputStream', () => {
     expect(parsed[0].text).toBe('質問');
   });
 
-  it('should detect QUESTIONS_JSON spanning multiple lines (terminal line wrap)', async () => {
+  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
+  it.skipIf(process.platform === 'win32')('should detect QUESTIONS_JSON spanning multiple lines (terminal line wrap)', async () => {
     stream = new PaneOutputStream('test-multiline-1');
     stream.start();
     stream.setMarkers('AZITO_DONE_42_ml1', 'AZITO_QUESTIONS_42_ml1');
@@ -250,7 +253,8 @@ describe('PaneOutputStream', () => {
     expect(parsed[1].text).toBe('サイドバーの表示形式は？');
   });
 
-  it('should detect generic QUESTIONS_JSON spanning multiple lines', async () => {
+  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
+  it.skipIf(process.platform === 'win32')('should detect generic QUESTIONS_JSON spanning multiple lines', async () => {
     stream = new PaneOutputStream('test-multiline-2');
     stream.start();
     stream.enableMarkerDetection();

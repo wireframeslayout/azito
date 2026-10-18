@@ -90,7 +90,8 @@ describe('LaunchdMisaoController', () => {
 });
 
 describe('misaoPaths', () => {
-  it('keeps the misao directory beside hub/, not inside it, so a hub update cannot touch it', () => {
+  // Windows では動かない: POSIX のパス連結前提（/home/u）
+  it.skipIf(process.platform === 'win32')('keeps the misao directory beside hub/, not inside it, so a hub update cannot touch it', () => {
     const paths = resolveMisaoPaths('/home/u/.azito');
     expect(paths).toMatchObject({ root: '/home/u/.azito/misao', current: '/home/u/.azito/misao/current', socket: '/home/u/.azito/misao/misao.sock', hubEnvFile: '/home/u/.azito/hub/.env' });
   });
@@ -114,7 +115,8 @@ describe('misaoPaths', () => {
     expect(resolveInstallPrefix(null)).toBeNull();
   });
 
-  it('builds a PATH with the existing tool locations first, without duplicates', () => {
+  // Windows では動かない: PATH の区切りが : 前提（Windows は ;）
+  it.skipIf(process.platform === 'win32')('builds a PATH with the existing tool locations first, without duplicates', () => {
     const result = buildServicePath({ PATH: '/usr/bin:/opt/x/bin' }, '/home/u', (dir) => dir === '/home/u/.local/bin' || dir === '/usr/local/bin');
     expect(result).toBe('/home/u/.local/bin:/usr/local/bin:/usr/bin:/opt/x/bin:/bin:/usr/sbin:/sbin');
   });
@@ -125,7 +127,8 @@ describe('hasMisaoToRelyOn', () => {
   it('is false with neither a service definition nor MISAO_SOCKET, so a fresh install without misao starts on tmux', () => {
     expect(hasMisaoToRelyOn({}, '/home/u', none)).toBe(false);
   });
-  it('is true once MISAO_SOCKET is set or either service definition exists', () => {
+  // Windows では動かない: POSIX のパス連結前提（/home/u）
+  it.skipIf(process.platform === 'win32')('is true once MISAO_SOCKET is set or either service definition exists', () => {
     expect(hasMisaoToRelyOn({ MISAO_SOCKET: '/s' }, '/home/u', none)).toBe(true);
     expect(hasMisaoToRelyOn({}, '/home/u', (f) => f === '/home/u/.config/systemd/user/azito-misao.service')).toBe(true);
     expect(hasMisaoToRelyOn({}, '/home/u', (f) => f === '/home/u/Library/LaunchAgents/com.azito.misao.plist')).toBe(true);
@@ -137,14 +140,16 @@ describe('upsertEnvValue', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aze-')); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  it('tightens an existing file that was more permissive to mode 600', () => {
+  // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('tightens an existing file that was more permissive to mode 600', () => {
     const file = path.join(dir, '.env');
     fs.writeFileSync(file, 'A=1\n', { mode: 0o644 });
     upsertEnvValue(file, 'MISAO_SOCKET', '/s');
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
   });
 
-  it('creates a missing file with mode 600', () => {
+  // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('creates a missing file with mode 600', () => {
     const file = path.join(dir, 'hub', '.env');
     upsertEnvValue(file, 'MISAO_SOCKET', '/s');
     expect(fs.readFileSync(file, 'utf-8')).toBe('MISAO_SOCKET=/s\n');

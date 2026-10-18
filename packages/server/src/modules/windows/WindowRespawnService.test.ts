@@ -1124,7 +1124,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     }
   });
 
-  it('cds into the resolved path for a single-pane window inside the project root', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('cds into the resolved path for a single-pane window inside the project root', async () => {
     const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: rootDir });
     const { service, sentCommands } = buildService({
       window: win,
@@ -1137,7 +1138,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     expect(sentCommands).toContain(`cd -- '${rootDir}'`);
   });
 
-  it('accepts a resolved path containing shell metacharacters and quotes it through to the cd command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; window respawn already sends `cd -- ${shellQuote(cwd)}`, so quoting at that shell boundary is what keeps this safe)', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('accepts a resolved path containing shell metacharacters and quotes it through to the cd command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; window respawn already sends `cd -- ${shellQuote(cwd)}`, so quoting at that shell boundary is what keeps this safe)', async () => {
     // A directory name with `;`, whitespace, `$(...)`, and a single quote —
     // all legal in a Linux filename — must reach the pane only inside the
     // single-quoted `cd --` argument, never unquoted.
@@ -1156,7 +1158,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     expect(sentCommands).toContain(`cd -- '${dangerousDir.replace(/'/g, "'\\''")}'`);
   });
 
-  it('guards a resolved path starting with "-" from being read as a cd option', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('guards a resolved path starting with "-" from being read as a cd option', async () => {
     const dashDir = path.join(rootDir, '-rf');
     mkdirSync(dashDir);
     const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dashDir });
@@ -1171,7 +1174,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     expect(sentCommands).toContain(`cd -- '${dashDir}'`);
   });
 
-  it('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
     const dotDotCacheDir = path.join(rootDir, '..cache');
     mkdirSync(dotDotCacheDir);
     const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: dotDotCacheDir });

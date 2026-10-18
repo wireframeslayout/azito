@@ -103,8 +103,7 @@ describe('HubRepoCache', () => {
 
     expect(headSha).toBe(originSha);
     expect(fs.existsSync(bundlePath)).toBe(true);
-    // 実 git を何度も起動するため、Windows の CI では既定の 5 秒を超えることがある。
-  }, 30000);
+  });
 
   it('self-heals a pre-existing cache created under the old default fetch refspec', () => {
     const originDir = makeTmpDir('azito-hubrepocache-origin-');

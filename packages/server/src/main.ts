@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'misao') {
-    await misaoCommand(process.argv.slice(3));
+    await misaoCommand(process.argv.slice(3), hostEnv.platform);
     return;
   }
 

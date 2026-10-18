@@ -21,22 +21,22 @@ describe('azito misao', () => {
   });
 
   it('prints the usage without a command', async () => {
-    await misaoCommand([]);
+    await misaoCommand([], process.platform);
     expect(out.join('\n')).toContain('Usage: azito misao');
     expect(process.exitCode).toBeUndefined();
   });
 
   it('rejects an unknown option as a usage error, not a crash', async () => {
-    await misaoCommand(['install', '--bogus']);
+    await misaoCommand(['install', '--bogus'], process.platform);
     expect(err.join('\n')).toContain('Unknown option: --bogus');
     expect(process.exitCode).toBe(1);
   });
 
   it('reports a source checkout as unmanaged in status and refuses to install', async () => {
-    await misaoCommand(['status']);
+    await misaoCommand(['status'], process.platform);
     expect(out.join('\n')).toContain('source_install');
 
-    await misaoCommand(['install']);
+    await misaoCommand(['install'], process.platform);
     expect(err.join('\n')).toContain('source checkout');
     expect(process.exitCode).toBe(1);
   });
@@ -45,7 +45,7 @@ describe('azito misao', () => {
     const isTTY = process.stdin.isTTY;
     Object.defineProperty(process.stdin, 'isTTY', { value: false, configurable: true });
     try {
-      await misaoCommand(['update']);
+      await misaoCommand(['update'], process.platform);
     } finally {
       Object.defineProperty(process.stdin, 'isTTY', { value: isTTY, configurable: true });
     }

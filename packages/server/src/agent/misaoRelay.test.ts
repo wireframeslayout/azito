@@ -8,7 +8,8 @@ import { MAX_MISAO_RELAYS, createMisaoRelay } from './misaoRelay';
 import { MISAO_RELAY_CLOSE, readMisaoSocketStatus, resolveAgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 
 describe('resolveAgentMisaoSocket', () => {
-  it('defaults to the managed socket under the home directory', () => {
+  // Windows では動かない: POSIX のパス連結前提（/home/u）
+  it.skipIf(process.platform === 'win32')('defaults to the managed socket under the home directory', () => {
     expect(resolveAgentMisaoSocket({}, '/home/u').path).toBe('/home/u/.azito/misao/misao.sock');
   });
 
@@ -16,7 +17,8 @@ describe('resolveAgentMisaoSocket', () => {
     expect(resolveAgentMisaoSocket({ MISAO_SOCKET: '/run/misao.sock' }, '/home/u').path).toBe('/run/misao.sock');
   });
 
-  it('treats an empty MISAO_SOCKET as unset', () => {
+  // Windows では動かない: POSIX のパス連結前提（/home/u）
+  it.skipIf(process.platform === 'win32')('treats an empty MISAO_SOCKET as unset', () => {
     expect(resolveAgentMisaoSocket({ MISAO_SOCKET: '' }, '/home/u').path).toBe('/home/u/.azito/misao/misao.sock');
   });
 
@@ -51,7 +53,8 @@ describe('relay to a unix socket', () => {
     return new Promise((resolve) => ws.once('close', (code) => resolve({ code })));
   }
 
-  it('carries bytes both ways to the fixed socket', async () => {
+  // Windows では動かない: Unix ドメインソケットの listen が EACCES（Windows は名前付きパイプ）
+  it.skipIf(process.platform === 'win32')('carries bytes both ways to the fixed socket', async () => {
     const dir = tmpDir();
     const socketPath = path.join(dir, 'm.sock');
     const server = net.createServer((conn) => conn.on('data', (chunk) => conn.write(Buffer.concat([Buffer.from('echo:'), chunk]))));
@@ -73,7 +76,8 @@ describe('relay to a unix socket', () => {
     expect((await closeInfo(ws)).code).toBe(MISAO_RELAY_CLOSE.daemonUnreachable);
   });
 
-  it('refuses a relay beyond the limit, and serves again once one has closed', async () => {
+  // Windows では動かない: Unix ドメインソケットの listen が EACCES（Windows は名前付きパイプ）
+  it.skipIf(process.platform === 'win32')('refuses a relay beyond the limit, and serves again once one has closed', async () => {
     const dir = tmpDir();
     const socketPath = path.join(dir, 'm.sock');
     const server = net.createServer((conn) => conn.on('data', (chunk) => conn.write(chunk)));
@@ -121,7 +125,8 @@ describe('readMisaoSocketStatus', () => {
     }
   });
 
-  it('reports a socket and the version current points at under the home directory\'s managed layout', async () => {
+  // Windows では動かない: POSIX のパス連結前提（/home/u）
+  it.skipIf(process.platform === 'win32')('reports a socket and the version current points at under the home directory\'s managed layout', async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'azrelay-'));
     const dir = path.join(home, '.azito', 'misao');
     fs.mkdirSync(dir, { recursive: true });

@@ -78,7 +78,7 @@ function printStatus(status: MisaoServiceStatus): void {
 }
 
 /** `azito misao ...`: install, update, start and inspect the AZITO-managed misao service from the bundled hub. */
-export async function misaoCommand(argv: string[]): Promise<void> {
+export async function misaoCommand(argv: string[], platform: NodeJS.Platform): Promise<void> {
   try {
     const args = parseArgs(argv);
     if (!args.command || !['status', 'install', 'update', 'start'].includes(args.command)) {
@@ -92,7 +92,7 @@ export async function misaoCommand(argv: string[]): Promise<void> {
     const service = new MisaoServiceService({
       paths: prefix ? pathsOrUsageError(prefix) : null,
       bundle: readMisaoBundle(bundleRoot),
-      controller: createMisaoServiceController(process.platform, runCommand),
+      controller: createMisaoServiceController(platform, runCommand),
       env: process.env,
     });
 

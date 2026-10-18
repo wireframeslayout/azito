@@ -86,7 +86,8 @@ describe('registerMisaoDriver', () => {
 describe('resolveMisaoRuntimeForHub', () => {
   const input = { env: { MISAO_SOCKET: `/tmp/${'a'.repeat(120)}.sock` }, homeDir: '/home/x', shell: '/bin/bash' };
 
-  it('keeps a usable socket as is', async () => {
+  // Windows では動かない: MISAO_SOCKET が Unix ソケットパス前提（Windows は名前付きパイプ）
+  it.skipIf(process.platform === 'win32')('keeps a usable socket as is', async () => {
     const warn = vi.fn();
     const resolved = await resolveMisaoRuntimeForHub({ ...input, env: { MISAO_SOCKET: '/tmp/ok.sock' } }, true, { warn });
     expect(resolved.socketPath).toBe('/tmp/ok.sock');
@@ -109,14 +110,16 @@ describe('resolveMisaoRuntimeForHub', () => {
 });
 
 describe('resolveMisaoRuntime', () => {
-  it('loads the ESM SDK and resolves the socket from the environment given', async () => {
+  // Windows では動かない: MISAO_SOCKET が Unix ソケットパス前提（Windows は名前付きパイプ）
+  it.skipIf(process.platform === 'win32')('loads the ESM SDK and resolves the socket from the environment given', async () => {
     const resolved = await resolveMisaoRuntime({ env: { MISAO_SOCKET: '/tmp/claude-1000/azm.sock' }, homeDir: '/home/x', shell: '/bin/zsh' });
     expect(resolved.socketPath).toBe('/tmp/claude-1000/azm.sock');
     expect(resolved.shell).toBe('/bin/zsh');
     expect(typeof resolved.sdk.MisaoClient).toBe('function');
   });
 
-  it('falls back to the default socket under the home directory', async () => {
+  // Windows では動かない: MISAO_SOCKET が Unix ソケットパス前提（Windows は名前付きパイプ）
+  it.skipIf(process.platform === 'win32')('falls back to the default socket under the home directory', async () => {
     const resolved = await resolveMisaoRuntime({ env: {}, homeDir: '/home/x', shell: '/bin/bash' });
     expect(resolved.socketPath).toBe('/home/x/.misao/misao.sock');
   });
