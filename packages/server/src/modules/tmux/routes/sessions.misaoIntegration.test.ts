@@ -13,9 +13,9 @@ import { MisaoConnection, connectDedicatedMisaoClient } from '../misao/MisaoConn
 import { MisaoMuxClient } from '../misao/MisaoMuxClient';
 import { describeMisaoDaemon } from '../misao/misaoDriver';
 import sessionsRoutes, { invalidateSessionCache } from './sessions';
+import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const server = { name: 'misao-it', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
 const WORKSPACE = 'azs-ws';
@@ -42,7 +42,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azs-'));
     socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 
@@ -195,7 +195,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('sessions routes against a real misao
       const exited = new Promise<void>((resolve) => daemon.once('exit', () => resolve()));
       process.kill(daemonPid, 'SIGTERM');
       await exited;
-      daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+      daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
       daemonPid = daemon.pid!;
 
       await vi.waitFor(async () => {

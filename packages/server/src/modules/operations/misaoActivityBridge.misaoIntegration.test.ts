@@ -15,9 +15,9 @@ import { MisaoPaneStateEvents } from '../tmux/misao/misaoPaneStateEvents';
 import { MisaoActivityBridge } from './misaoActivityBridge';
 import { AgentActivityMonitor } from './AgentActivityMonitor';
 import { PaneHandleResolver } from './PaneHandleResolver';
+import { MISAO_CLI } from '../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const SOCKET_BYTES_MAX = 107;
 const SERVER = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 
@@ -113,7 +113,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
     const socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
     fs.writeFileSync(path.join(dir, 'fake-agent.js'), FAKE_AGENT);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 

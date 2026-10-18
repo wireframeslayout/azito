@@ -7,9 +7,9 @@ import * as path from 'node:path';
 import { asPaneHandle, type PaneHandle } from '@azito/shared';
 import { MisaoConnection } from './MisaoConnection';
 import { MisaoPaneStream } from './MisaoPaneStream';
+import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const SOCKET_BYTES_MAX = 107;
 
 /** A unix-socket relay between the hub and the daemon that can be cut and restored, to simulate a lost connection. */
@@ -72,7 +72,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoPaneStream against a real misao
     const socketPath = path.join(dir, 'm.sock');
     const proxyPath = path.join(dir, 'p.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 

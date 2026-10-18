@@ -7,7 +7,8 @@
 //  - 停止は起動時に記録した PID にだけシグナルを送る（pkill / killall は使わない）。
 //  - ソケットパスは UNIX ドメインソケットの上限（107 バイト）以内であることを起動前に確認する。
 //
-// misao CLI のビルド成果物（MISAO_CLI、既定 ~/workspace/misao/packages/cli/dist/main.js）が無い環境では
+// misao のバイナリ（MISAO_CLI = 実行ファイルのパス。v0.3.0 のリリースバイナリ、または misao チェックアウトの
+// target/release/misao。既定は ~/workspace/misao/target/release/misao）が無い環境では
 // {@link MisaoDaemon.cliPath} が null を返し、spec 側が理由付きで skip する。
 
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
@@ -48,16 +49,16 @@ export class MisaoDaemon {
     private readonly searchPath: string | undefined,
   ) {}
 
-  /** misao CLI のパス。ビルド成果物が無ければ null（spec はこの場合 skip する）。 */
+  /** misao バイナリのパス。無ければ null（spec はこの場合 skip する）。 */
   static cliPath(): string | null {
-    const cli = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
+    const cli = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/target/release/misao');
     return fs.existsSync(cli) ? cli : null;
   }
 
   /** `path` を渡すと、デーモン（とそのペイン）の PATH をそれに置き換える。 */
   static async start(options: { path?: string } = {}): Promise<MisaoDaemon> {
     const cli = MisaoDaemon.cliPath();
-    if (cli === null) throw new Error('misao CLI not found (set MISAO_CLI to packages/cli/dist/main.js of a misao checkout)');
+    if (cli === null) throw new Error('misao binary not found (set MISAO_CLI to the misao executable: a release binary, or target/release/misao of a misao checkout)');
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-'));
     const socketPath = path.join(dir, 'm.sock');
@@ -65,7 +66,7 @@ export class MisaoDaemon {
       fs.rmSync(dir, { recursive: true, force: true });
       throw new Error(`misao socket path exceeds ${SOCKET_BYTES_MAX} bytes: ${socketPath}`);
     }
-    const child = spawn(process.execPath, [cli, 'serve', '--socket', socketPath, '--data', dir], {
+    const child = spawn(cli, ['serve', '--socket', socketPath, '--data', dir], {
       env: isolatedEnv(socketPath, options.path),
       stdio: 'ignore',
     });
@@ -101,7 +102,7 @@ export class MisaoDaemon {
   }
 
   private async run(args: string[]): Promise<string> {
-    const { stdout } = await execFileAsync(process.execPath, [this.cli, ...args], { env: isolatedEnv(this.socketPath, this.searchPath) });
+    const { stdout } = await execFileAsync(this.cli, args, { env: isolatedEnv(this.socketPath, this.searchPath) });
     return stdout;
   }
 

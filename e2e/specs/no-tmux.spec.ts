@@ -5,7 +5,7 @@
 // 常駐デーモンや tmux の既定ソケットには触れない。シナリオは前のシナリオの状態（既定のターミナル方式・
 // 作った窓）に依存するため直列で流す。
 //
-// misao のビルド成果物（MISAO_CLI、既定 ~/workspace/misao/packages/cli/dist/main.js）が無い環境では
+// misao のバイナリ（MISAO_CLI、既定 ~/workspace/misao/target/release/misao）が無い環境では
 // 理由付きで skip する。
 
 import fs from 'node:fs';
@@ -14,7 +14,7 @@ import { createGitRepo, runScriptedTaskToReview } from '../fixtures/scriptedTask
 
 test.skip(
   MisaoDaemon.cliPath() === null,
-  'misao CLI が見つからない（misao をビルドして MISAO_CLI=<misao>/packages/cli/dist/main.js を指定する）',
+  'misao バイナリが見つからない（v0.3.0 のリリースバイナリ、または misao をビルドした target/release/misao を MISAO_CLI に指定する）',
 );
 test.describe.configure({ mode: 'serial' });
 

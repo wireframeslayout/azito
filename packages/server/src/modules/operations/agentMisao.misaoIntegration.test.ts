@@ -19,10 +19,10 @@ import { PaneStreamFactory } from '../tmux/PaneStreamFactory';
 import { MisaoActivityBridge } from './misaoActivityBridge';
 import { PaneHandleResolver } from './PaneHandleResolver';
 import { composePaneEnv } from '../tmux/hubPaneEnv';
+import { MISAO_CLI } from '../../shared/misaoTestBinary';
 
 // Drives a real agent process (started here, on a throwaway port and token) in front of a real misao daemon started in a
 // throwaway directory (never the resident ~/.misao one). The hub side is the real driver stack over the agent's relay.
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const SOCKET_BYTES_MAX = 107;
 const AGENT_MAIN = path.resolve(__dirname, '../../agent/main.ts');
 const TSX_CLI = path.join(path.dirname(require.resolve('tsx/package.json')), 'dist', 'cli.mjs');
@@ -81,7 +81,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
     const socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
     // The daemon inherits a "secret" the way a daemon started from the agent's environment would.
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], {
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], {
       stdio: 'ignore',
       env: { ...process.env, AZITO_AGENT_TOKEN: DAEMON_LEAK, AZITO_UI_TOKEN: DAEMON_LEAK, AZITO_WEBHOOK_TOKEN: DAEMON_LEAK },
     });

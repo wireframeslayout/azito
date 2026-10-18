@@ -13,9 +13,9 @@ import { MisaoConnection } from '../misao/MisaoConnection';
 import { NO_AGENT_MISAO, registerMisaoDriver } from '../misao/misaoDriver';
 import type { MisaoMuxClient } from '../misao/MisaoMuxClient';
 import { handleTerminalConnection } from './terminalHandler';
+import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
 const transportFactory = { getTransport: () => { throw new Error('tmux transport must not be used'); } } as unknown as TransportFactory;
@@ -80,7 +80,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-'));
     const socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 

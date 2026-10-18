@@ -13,9 +13,9 @@ import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoConnection, connectDedicatedMisaoClient } from './MisaoConnection';
 import { MisaoMuxClient } from './MisaoMuxClient';
 import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
+import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const SOCKET_BYTES_MAX = 107;
 const isolatedServer = { ...server, isolationIntent: true } as ServerConfig;
@@ -45,7 +45,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-'));
     const socketPath = path.join(dir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore', env: { ...process.env, ...DAEMON_SENTINELS } });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', dir], { stdio: 'ignore', env: { ...process.env, ...DAEMON_SENTINELS } });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 

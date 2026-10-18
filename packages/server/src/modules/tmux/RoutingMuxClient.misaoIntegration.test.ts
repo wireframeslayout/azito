@@ -16,10 +16,10 @@ import { NO_AGENT_MISAO, registerMisaoDriver } from './misao/misaoDriver';
 import { handleTerminalConnection } from './ws/terminalHandler';
 import sessionsRoutes, { invalidateSessionCache } from './routes/sessions';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { MISAO_CLI } from '../../shared/misaoTestBinary';
 
 // One local server holding a tmux window and a misao window side by side (#311), driven through the routing driver.
 // tmux runs on a throwaway socket (TMUX_TMPDIR) and misao is a throwaway daemon: the resident ones are never touched.
-const MISAO_CLI = process.env.MISAO_CLI ?? path.join(os.homedir(), 'workspace/misao/packages/cli/dist/main.js');
 const SOCKET_BYTES_MAX = 107;
 const WORKSPACE = 'azr-mixed';
 const server = { name: 'local', type: 'local', defaultMux: 'tmux' as const, muxRuntime: 'system' } as ServerConfig;
@@ -72,7 +72,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('one local server with a tmux and a m
     misaoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-'));
     const socketPath = path.join(misaoDir, 'm.sock');
     expect(Buffer.byteLength(socketPath)).toBeLessThanOrEqual(SOCKET_BYTES_MAX);
-    daemon = spawn(process.execPath, [MISAO_CLI, 'serve', '--socket', socketPath, '--data', misaoDir], { stdio: 'ignore' });
+    daemon = spawn(MISAO_CLI, ['serve', '--socket', socketPath, '--data', misaoDir], { stdio: 'ignore' });
     daemonPid = daemon.pid!;
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 
