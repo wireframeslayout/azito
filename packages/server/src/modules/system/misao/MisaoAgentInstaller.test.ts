@@ -187,6 +187,151 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(fs.readFileSync(path.join(home, '.config', 'systemd', 'user', 'azito-misao.service'), 'utf-8')).toContain(`ExecStart=${root}/current/misao serve`);
   });
 
+  /** A Node-era 0.2.0 install: its directory, `current`, and (with `unit`) the unit file that runs it with a node; optionally its daemon, running. */
+  async function installNodeEra(options: { unit: boolean; running: boolean }): Promise<string> {
+    const root = path.join(home, '.azito', 'misao');
+    fs.mkdirSync(path.join(root, '0.2.0'), { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(root, '0.2.0', 'misao.mjs'), OLD_DAEMON);
+    fs.symlinkSync('0.2.0', path.join(root, 'current'));
+    const socket = agentMisaoManagedSocket(home);
+    const legacyUnit = `[Service]\nExecStart=${process.execPath} ${root}/current/misao.mjs serve --socket ${socket} --data ${root}\n`;
+    if (options.unit) {
+      fs.mkdirSync(path.join(home, '.config', 'systemd', 'user'), { recursive: true });
+      fs.writeFileSync(path.join(home, '.config', 'systemd', 'user', 'azito-misao.service'), legacyUnit);
+    }
+    if (options.running) {
+      const started = await runShell(`setsid ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(root, 'current', 'misao.mjs'))} serve --socket ${JSON.stringify(socket)} --data ${JSON.stringify(root)} >/dev/null 2>&1 < /dev/null & echo $!`, process.env);
+      daemons.push(Number(started.stdout.trim()));
+      await vi.waitFor(() => expect(fs.existsSync(socket)).toBe(true), { timeout: 5000 });
+    }
+    return legacyUnit;
+  }
+
+  const unitFile = (): string => path.join(home, '.config', 'systemd', 'user', 'azito-misao.service');
+  const listening = async (): Promise<boolean> => (await target().exec(`${JSON.stringify(process.execPath)} -e ${JSON.stringify("require('net').connect(process.argv[1]).once('connect',()=>process.exit(0)).once('error',()=>process.exit(1))")} ${JSON.stringify(agentMisaoManagedSocket(home))}`)).code === 0;
+
+  /** pids of Node-era daemons (`misao.mjs serve`) of this sandbox; `[m]` keeps the grep from matching the shell that runs it. */
+  const runningNodeEraDaemons = async (): Promise<string> => (await runShell(`pgrep -f -- ${JSON.stringify(`[m]isao.mjs serve --socket ${agentMisaoManagedSocket(home)}`)} || true`, process.env)).stdout.trim();
+
+  /** The target with the commands matching `fails` refused (exit 1), to make one step of a switch fail. */
+  function failing(fails: RegExp): MisaoInstallTarget {
+    const base = target();
+    return target({ exec: async (command, timeout) => (fails.test(command) ? { code: 1, stdout: '', stderr: 'injected failure' } : base.exec(command, timeout)) });
+  }
+
+  describe('update (the explicit switch of a running release)', { timeout: 30_000 }, () => {
+    it('stops a running Node-era daemon under systemd, switches current and the unit, and starts the bundled one', async () => {
+      installFakeSystemctl('ok');
+      const root = path.join(home, '.azito', 'misao');
+      await installNodeEra({ unit: true, running: true });
+      const steps: string[] = [];
+
+      const result = await installer().update(target(), (s) => steps.push(s));
+
+      expect(result).toEqual({ version: VERSION, runningVersion: VERSION, startMethod: 'systemd', updateAvailable: false });
+      expect(steps).toEqual(['inspect', 'transfer', 'prepare', 'stop', 'start']);
+      expect(fs.readlinkSync(path.join(root, 'current'))).toBe(VERSION);
+      expect(fs.readFileSync(unitFile(), 'utf-8')).toContain(`ExecStart=${root}/current/misao serve`);
+      expect(fs.existsSync(path.join(root, '0.2.0', 'misao.mjs'))).toBe(true);
+      expect(await listening()).toBe(true);
+      expect(await runningNodeEraDaemons()).toBe('');
+    });
+
+    it('stops a daemon that runs as a background process (no unit) by its socket, and starts the bundled one the same way', async () => {
+      installFakeSystemctl('absent');
+      const root = path.join(home, '.azito', 'misao');
+      await installNodeEra({ unit: false, running: true });
+
+      const result = await installer().update(target());
+
+      expect(result.startMethod).toBe('nohup');
+      expect(fs.readlinkSync(path.join(root, 'current'))).toBe(VERSION);
+      expect(await listening()).toBe(true);
+      expect(await runningNodeEraDaemons()).toBe('');
+    });
+
+    it('puts the previous link and unit back and starts the previous release when the switch fails', async () => {
+      installFakeSystemctl('ok');
+      const root = path.join(home, '.azito', 'misao');
+      const legacyUnit = await installNodeEra({ unit: true, running: true });
+
+      await expect(installer().update(failing(/ln -sfn '?0\.3\.0/))).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('was restored and started') });
+
+      expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
+      expect(fs.readFileSync(unitFile(), 'utf-8')).toBe(legacyUnit);
+      expect(await listening()).toBe(true);
+    });
+
+    it('also restores when the new daemon never opens its socket', async () => {
+      installFakeSystemctl('ok');
+      const root = path.join(home, '.azito', 'misao');
+      const legacyUnit = await installNodeEra({ unit: true, running: true });
+      // A bundle whose binary exits at once: the unit "starts" it and nothing ever listens.
+      writeBundle(path.join(tmp, 'hub-broken'), VERSION, '#!/bin/sh\nexit 1\n');
+      const broken = new MisaoAgentInstaller(readMisaoBundle(path.join(tmp, 'hub-broken')), { readyTimeoutMs: 800, pollIntervalMs: 50 });
+
+      await expect(broken.update(target())).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('was restored and started') });
+
+      expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
+      expect(fs.readFileSync(unitFile(), 'utf-8')).toBe(legacyUnit);
+      expect(await listening()).toBe(true);
+    });
+
+    it('stops nothing when the new release cannot be put on the host (the daemon keeps running)', async () => {
+      installFakeSystemctl('ok');
+      await installNodeEra({ unit: true, running: true });
+      const damaged = target({ uploadMisaoFile: async (_v, name) => ({ name, size: 1, sha256: 'f'.repeat(64) }) });
+
+      await expect(installer().update(damaged)).rejects.toMatchObject({ code: 'transfer_failed' });
+      expect(await listening()).toBe(true);
+    });
+
+    it('does nothing when the bundled release is already the running one', async () => {
+      installFakeSystemctl('absent');
+      await installer().install(target());
+      const upload = vi.fn();
+
+      const result = await installer().update(target({ uploadMisaoFile: upload }));
+
+      expect(result).toEqual({ version: VERSION, runningVersion: VERSION, startMethod: 'running', updateAvailable: false });
+      expect(upload).not.toHaveBeenCalled();
+    });
+
+    it('refuses a host where AZITO has not installed misao', async () => {
+      installFakeSystemctl('absent');
+      await expect(installer().update(target())).rejects.toMatchObject({ code: 'not_installed' });
+    });
+
+    it('refuses without a bundled misao', async () => {
+      await expect(installer(null).update(target())).rejects.toMatchObject({ code: 'not_managed' });
+    });
+  });
+
+  it('puts the old link and unit back when moving a stopped older install fails while writing the unit', async () => {
+    installFakeSystemctl('ok');
+    const root = path.join(home, '.azito', 'misao');
+    const legacyUnit = await installNodeEra({ unit: true, running: false });
+
+    await expect(installer().install(failing(/base64 -d/))).rejects.toMatchObject({ code: 'transfer_failed' });
+
+    expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
+    expect(fs.readFileSync(unitFile(), 'utf-8')).toBe(legacyUnit);
+  });
+
+  it('puts the old link and unit back when the new daemon cannot be started after moving a stopped older install', async () => {
+    installFakeSystemctl('ok');
+    const root = path.join(home, '.azito', 'misao');
+    const legacyUnit = await installNodeEra({ unit: true, running: false });
+    // The unit is rewritten and the service "starts", but the new daemon never listens (and the background start fails too).
+    const base = failing(/nohup/);
+    fs.writeFileSync(path.join(tmp, 'bin', 'systemctl'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+
+    await expect(new MisaoAgentInstaller(bundle, { readyTimeoutMs: 600, pollIntervalMs: 50 }).install(base)).rejects.toMatchObject({ code: 'daemon_not_ready' });
+
+    expect(fs.readlinkSync(path.join(root, 'current'))).toBe('0.2.0');
+    expect(fs.readFileSync(unitFile(), 'utf-8')).toBe(legacyUnit);
+  });
+
   it.each([
     ['linux', 'arm64', 'aarch64-unknown-linux-musl'],
     ['darwin', 'arm64', 'aarch64-apple-darwin'],

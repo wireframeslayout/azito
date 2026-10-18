@@ -18,12 +18,13 @@ export interface InstallProgress {
  * What puts misao on a freshly installed agent: the hub's own copy, through the agent (see MisaoAgentInstaller). Defined here
  * so this module does not depend on the layer that implements it.
  */
-export type AgentMisaoInstallStep = 'inspect' | 'transfer' | 'prepare' | 'start';
+export type AgentMisaoInstallStep = 'inspect' | 'transfer' | 'prepare' | 'stop' | 'start';
 
 const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
   inspect: 'Inspecting the host...',
   transfer: 'Transferring misao...',
   prepare: 'Preparing misao...',
+  stop: 'Stopping misao...',
   start: 'Starting misao...',
 };
 
