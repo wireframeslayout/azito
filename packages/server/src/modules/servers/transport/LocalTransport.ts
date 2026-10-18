@@ -59,7 +59,7 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
 export class LocalTransport implements IServerTransport, IMuxTransport {
   private sessionCounter = 0;
 
-  constructor(private rt: TmuxRuntime, private publicUrl: string) {}
+  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string) {}
 
   exec(command: string, timeoutMs?: number): Promise<ExecResult> {
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
@@ -126,7 +126,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: process.env.HOME,
+        cwd: this.homeDir,
         env: env ?? (process.env as Record<string, string>),
       });
       return new LocalTerminalStream(ptyProcess, cleanup ?? null);

@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { execFile, execSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import os from 'os';
+import { resolveCurrentHostEnv, type HostEnv } from '../shared/os/hostEnv';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import { LocalTransport } from '../modules/servers/transport/LocalTransport';
 import type { MuxRuntime } from '../modules/servers/Server';
@@ -68,14 +68,13 @@ function resolveVersion(): string {
 const agentVersion = resolveVersion();
 
 /** What the hub's misao installer needs to know about this host: its OS / architecture (to pick the binary), the node this agent runs on, and its PATH. */
-function describeMisaoHost(): AgentMisaoHost {
-  const homeDir = os.homedir();
+function describeMisaoHost(hostEnv: HostEnv): AgentMisaoHost {
   return {
-    homeDir,
-    nodePath: process.execPath,
-    servicePath: buildServicePath(process.env, homeDir, fs.existsSync),
-    platform: process.platform,
-    arch: process.arch,
+    homeDir: hostEnv.homeDir,
+    nodePath: hostEnv.execPath,
+    servicePath: buildServicePath(process.env, hostEnv.homeDir, fs.existsSync),
+    platform: hostEnv.platform,
+    arch: hostEnv.arch,
   };
 }
 
@@ -86,6 +85,7 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 // ─── Bootstrap ───
 
 async function main(): Promise<void> {
+  const hostEnv = resolveCurrentHostEnv();
   const startedAt = Date.now();
   const app = Fastify({
     logger: {
@@ -94,7 +94,7 @@ async function main(): Promise<void> {
   });
   const agentEventBus = new EventEmitter();
   const browserSessionManager = new BrowserSessionManager(
-    path.resolve(os.homedir(), '.azito', 'browser-profile'),
+    path.resolve(hostEnv.homeDir, '.azito', 'browser-profile'),
   );
 
   await app.register(websocket);
@@ -110,22 +110,22 @@ async function main(): Promise<void> {
   const muxRuntime = (process.env.AZITO_MUX_RUNTIME as MuxRuntime) || 'system';
   // The tmux endpoints (/api/tmux, mode=terminal) are tmux's. misao is reached through its own relay (mode=misao).
   const muxKind = 'tmux';
-  const hookRt = resolveTmuxRuntime(muxRuntime, os.homedir());
+  const hookRt = resolveTmuxRuntime(muxRuntime, hostEnv.homeDir);
 
-  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '');
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir);
 
   // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
   // socket path disables the relay (tmux keeps working) rather than stopping the agent.
   let misaoSocket: AgentMisaoSocket | null = null;
   try {
-    misaoSocket = resolveAgentMisaoSocket(process.env, os.homedir());
+    misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir);
   } catch (err) {
     app.log.warn(`misao relay disabled: ${(err as Error).message}`);
   }
   const relayMisao = createMisaoRelay(misaoSocket, app.log);
 
   // Registered after the auth hook above, so it is covered by it like every other /api route.
-  await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost() });
+  await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost(hostEnv) });
 
   // Conversation logs (Claude Code / Codex JSONL) for the hub's chat mode. Registered after the auth hook, so it is
   // covered by it; reads only this host's own agent session directories, addressed by agent type + session id.

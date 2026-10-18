@@ -59,8 +59,7 @@ function parseHostString(hostStr: string): ParsedHost | null {
   return { host: rest, port, username, portExplicit };
 }
 
-function findDefaultKey(): string | null {
-  const home = process.env.HOME || '';
+function findDefaultKey(home: string): string | null {
   const candidates = ['id_ed25519', 'id_rsa', 'id_ecdsa'];
   for (const name of candidates) {
     const p = path.join(home, '.ssh', name);
@@ -102,8 +101,8 @@ export class SshClient {
   private configMtime: number | null = null;
   private configPath: string;
 
-  constructor(private fingerprintStore?: FingerprintStore, configPath?: string) {
-    this.configPath = configPath ?? path.join(process.env.HOME || '', '.ssh', 'config');
+  constructor(private homeDir: string, private fingerprintStore?: FingerprintStore, configPath?: string) {
+    this.configPath = configPath ?? path.join(homeDir, '.ssh', 'config');
   }
 
   private getConfig(): ReturnType<typeof SSHConfig.parse> {
@@ -120,8 +119,8 @@ export class SshClient {
       const config = this.getConfig();
       const computed = config.compute(direct.host);
       const identityFile = computed.IdentityFile
-        ? (computed.IdentityFile as string).replace(/^~/, process.env.HOME || '')
-        : findDefaultKey();
+        ? (computed.IdentityFile as string).replace(/^~/, this.homeDir)
+        : findDefaultKey(this.homeDir);
       return {
         host: (computed.HostName as string) || direct.host,
         port: direct.portExplicit ? direct.port : parseInt((computed.Port as string) || '22', 10),
@@ -134,8 +133,8 @@ export class SshClient {
     const config = this.getConfig();
     const computed = config.compute(hostStr);
     const identityFile = computed.IdentityFile
-      ? (computed.IdentityFile as string).replace(/^~/, process.env.HOME || '')
-      : findDefaultKey();
+      ? (computed.IdentityFile as string).replace(/^~/, this.homeDir)
+      : findDefaultKey(this.homeDir);
     return {
       host: (computed.HostName as string) || hostStr,
       port: parseInt((computed.Port as string) || '22', 10),

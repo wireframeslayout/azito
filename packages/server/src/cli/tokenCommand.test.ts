@@ -80,14 +80,14 @@ describe('tokenCommand', () => {
     it('returns env token when AZITO_UI_TOKEN is set', async () => {
       process.env.AZITO_UI_TOKEN = 'env-token-123';
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show']);
+      await tokenCommand(['show'], fakeHome);
       expect(logSpy).toHaveBeenCalledWith('env-token-123');
     });
 
     it('returns .env token when only .env has the value', async () => {
       fs.writeFileSync(dotEnvPath, 'AZITO_UI_TOKEN=dotenv-token-456\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show']);
+      await tokenCommand(['show'], fakeHome);
       expect(logSpy).toHaveBeenCalledWith('dotenv-token-456');
     });
 
@@ -95,7 +95,7 @@ describe('tokenCommand', () => {
       fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
       fs.writeFileSync(uiTokenPath, 'file-token-789\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show']);
+      await tokenCommand(['show'], fakeHome);
       expect(logSpy).toHaveBeenCalledWith('file-token-789');
     });
 
@@ -103,7 +103,7 @@ describe('tokenCommand', () => {
       process.env.AZITO_UI_TOKEN = 'env-wins';
       fs.writeFileSync(dotEnvPath, 'AZITO_UI_TOKEN=dotenv-loses\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show']);
+      await tokenCommand(['show'], fakeHome);
       expect(logSpy).toHaveBeenCalledWith('env-wins');
     });
 
@@ -112,13 +112,13 @@ describe('tokenCommand', () => {
       fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
       fs.writeFileSync(uiTokenPath, 'file-loses\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['show']);
+      await tokenCommand(['show'], fakeHome);
       expect(logSpy).toHaveBeenCalledWith('dotenv-wins');
     });
 
     it('shows all checked paths when no token found', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['show'])).rejects.toThrow('process.exit');
+      await expect(tokenCommand(['show'], fakeHome)).rejects.toThrow('process.exit');
       expect(errorSpy).toHaveBeenCalledWith('UI token not found.');
       const checkedMsg = errorSpy.mock.calls.find((c: unknown[]) => typeof c[0] === 'string' && (c[0] as string).startsWith('Checked:'));
       expect(checkedMsg).toBeDefined();
@@ -153,7 +153,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['rotate'])).rejects.toThrow('process.exit');
+      await expect(tokenCommand(['rotate'], fakeHome)).rejects.toThrow('process.exit');
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining(dotEnvPath));
@@ -166,7 +166,7 @@ describe('tokenCommand', () => {
     it('aborts without writing anything when AZITO_UI_TOKEN env var is the authoritative source', async () => {
       process.env.AZITO_UI_TOKEN = 'env-authoritative';
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['rotate'])).rejects.toThrow('process.exit');
+      await expect(tokenCommand(['rotate'], fakeHome)).rejects.toThrow('process.exit');
 
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cannot rotate'));
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('environment variable'));
@@ -179,7 +179,7 @@ describe('tokenCommand', () => {
       fs.mkdirSync(path.dirname(uiTokenPath), { recursive: true });
       fs.writeFileSync(uiTokenPath, 'previous-file-token\n');
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
 
       expect(errorSpy).not.toHaveBeenCalled();
       const rotated = fs.readFileSync(uiTokenPath, 'utf-8');
@@ -189,7 +189,7 @@ describe('tokenCommand', () => {
 
     it('does not warn when .env has no AZITO_UI_TOKEN', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
@@ -201,7 +201,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(azitoctlEnvPath, before);
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
 
       expect(fs.readFileSync(azitoctlEnvPath, 'utf-8')).toBe(before);
     });
@@ -213,7 +213,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(operatorEnvPath, 'AZITO_URL=http://localhost:3001\nAZITO_UI_TOKEN=old-token\n');
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
 
       const updated = fs.readFileSync(operatorEnvPath, 'utf-8');
       expect(updated).not.toContain('old-token');
@@ -231,7 +231,7 @@ describe('tokenCommand', () => {
       fs.chmodSync(operatorEnvPath, 0o644);
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
 
       const mode = fs.statSync(operatorEnvPath).mode & 0o777;
       expect(mode).toBe(0o600);
@@ -239,7 +239,7 @@ describe('tokenCommand', () => {
 
     it('does nothing when operator.env does not exist', async () => {
       const { tokenCommand } = await import('./tokenCommand.js');
-      await expect(tokenCommand(['rotate'])).resolves.not.toThrow();
+      await expect(tokenCommand(['rotate'], fakeHome)).resolves.not.toThrow();
       expect(fs.existsSync(path.join(fakeHome, '.azito', 'operator.env'))).toBe(false);
     });
 
@@ -259,7 +259,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
 
       const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).toMatch(/^[0-9a-f]{64}$/);
@@ -276,7 +276,7 @@ describe('tokenCommand', () => {
       fs.writeFileSync(settingsPath, JSON.stringify(before, null, 2));
 
       const { tokenCommand } = await import('./tokenCommand.js');
-      await tokenCommand(['rotate']);
+      await tokenCommand(['rotate'], fakeHome);
 
       const updated = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'));
       expect(updated.mcpServers['azt-mcp'].env.AZITO_UI_TOKEN).toBeUndefined();

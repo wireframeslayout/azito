@@ -18,6 +18,7 @@ import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInt
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
+import { resolveCurrentHostEnv } from './shared/os/hostEnv';
 import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
@@ -32,8 +33,9 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 // ─── Bootstrap ───
 
 async function main(): Promise<void> {
+  const hostEnv = resolveCurrentHostEnv();
   if (process.argv[2] === 'token') {
-    await tokenCommand(process.argv.slice(3));
+    await tokenCommand(process.argv.slice(3), hostEnv.homeDir);
     return;
   }
 
@@ -57,7 +59,7 @@ async function main(): Promise<void> {
     const doctorPaths = resolveDataDir();
     migrateDataIfNeeded(doctorPaths, getLegacyPaths());
     initSecretBox(doctorPaths.masterKey);
-    await authDoctorCommand();
+    await authDoctorCommand(hostEnv.homeDir);
     return;
   }
 
@@ -122,7 +124,7 @@ async function main(): Promise<void> {
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
-  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken, hostEnv);
   const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);

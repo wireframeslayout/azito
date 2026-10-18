@@ -33,8 +33,8 @@ export function hasUiTokenLine(content: string): boolean {
   return /^AZITO_UI_TOKEN=/m.test(content);
 }
 
-export function findAzitoctlEnvFiles(): string[] {
-  const dir = path.join(process.env.HOME || '', '.azito');
+export function findAzitoctlEnvFiles(homeDir: string): string[] {
+  const dir = path.join(homeDir, '.azito');
   if (!fs.existsSync(dir)) return [];
   // `--prefix` accepts any string harness/setup.sh's caller passes (no
   // charset restriction there — see its `--prefix`/`--prefix=*` parsing),

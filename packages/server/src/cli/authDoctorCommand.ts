@@ -52,12 +52,12 @@ interface CheckResult {
   warning?: boolean;
 }
 
-function operatorEnvPath(): string {
-  return path.join(process.env.HOME || '', '.azito', 'operator.env');
+function operatorEnvPath(homeDir: string): string {
+  return path.join(homeDir, '.azito', 'operator.env');
 }
 
-function mcpSettingsPath(): string {
-  return path.join(process.env.HOME || '', '.claude', 'settings.json');
+function mcpSettingsPath(homeDir: string): string {
+  return path.join(homeDir, '.claude', 'settings.json');
 }
 
 // (a) azitoctl*.env に AZITO_UI_TOKEN が残っていないか
@@ -71,9 +71,9 @@ function mcpSettingsPath(): string {
 // independently inside try/catch, mirroring `readMcpUiToken`'s
 // present/absent/unreadable split below: an unreadable file is reported as
 // its own NG with repair guidance instead of aborting the whole command.
-function checkAzitoctlEnvNoUiToken(): CheckResult {
+function checkAzitoctlEnvNoUiToken(homeDir: string): CheckResult {
   const label = 'azitoctl*.env に AZITO_UI_TOKEN が残っていない';
-  const files = findAzitoctlEnvFiles();
+  const files = findAzitoctlEnvFiles(homeDir);
   if (files.length === 0) {
     return { ok: true, label, detail: '~/.azito/azitoctl*.env が見つかりません（未セットアップ、または対象外）' };
   }
@@ -114,9 +114,9 @@ function checkAzitoctlEnvNoUiToken(): CheckResult {
 }
 
 // (b) operator.env のパーミッションが 0600 か
-function checkOperatorEnvPermissions(): CheckResult {
+function checkOperatorEnvPermissions(homeDir: string): CheckResult {
   const label = 'operator.env のパーミッションが 0600';
-  const filePath = operatorEnvPath();
+  const filePath = operatorEnvPath(homeDir);
   if (!fs.existsSync(filePath)) {
     return { ok: true, label, detail: `${filePath} は存在しません（--ui-token 未使用、または未セットアップ）` };
   }
@@ -163,9 +163,9 @@ function readMcpUiToken(settingsPath: string): McpUiTokenResult {
 
 // (c) MCP settings の AZITO_UI_TOKEN がハブの現在値と一致するか
 //     （ローカルで読める範囲 — resolveCurrentUiToken() と同じ解決順）
-function checkMcpTokenMatchesHub(): CheckResult {
+function checkMcpTokenMatchesHub(homeDir: string): CheckResult {
   const label = 'MCP settings の AZITO_UI_TOKEN がハブの現在値と一致';
-  const settingsPath = mcpSettingsPath();
+  const settingsPath = mcpSettingsPath(homeDir);
   const mcpTokenResult = readMcpUiToken(settingsPath);
 
   if (mcpTokenResult.status === 'unreadable') {
@@ -369,7 +369,7 @@ function checkCodexMcpTokenMatchesHub(): CheckResult {
 // the flag on. Once AZITO_SCOPED_AUTH is actually enabled, this check is a
 // no-op (skipped) — draining is a one-time migration step, not an ongoing
 // invariant this command should keep flagging.
-async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
+async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string): Promise<CheckResult> {
   const label = 'scoped 認可 有効化前の生存タスクウィンドウ（ハブから全サーバーを検査）';
 
   if (resolveScopedAuthEnabled()) {
@@ -458,7 +458,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(): Promise<CheckResult> {
 
     // Every window is probed through the registry, by the driver of the mux that owns it. The misao daemon is
     // connected to only when a misao window is registered, so a tmux-only host never touches it.
-    mux = await openDoctorMux();
+    mux = await openDoctorMux(homeDir);
 
     const alive: string[] = [];
     const unverifiable: string[] = [];
@@ -544,16 +544,16 @@ function colorize(ok: boolean, text: string): string {
   return `\x1b[${code}m${text}\x1b[0m`;
 }
 
-export async function authDoctorCommand(): Promise<void> {
+export async function authDoctorCommand(homeDir: string): Promise<void> {
   console.log('azito auth doctor');
   console.log('多くの検査はこのマシンのローカルファイルのみが対象です。タスクウィンドウの生存検査（e）だけはハブから全サーバーを横断検査します — ハブ以外のホストで実行した場合はその旨を案内します。\n');
 
   const checks: CheckResult[] = [
-    checkAzitoctlEnvNoUiToken(),
-    checkOperatorEnvPermissions(),
-    checkMcpTokenMatchesHub(),
+    checkAzitoctlEnvNoUiToken(homeDir),
+    checkOperatorEnvPermissions(homeDir),
+    checkMcpTokenMatchesHub(homeDir),
     checkCodexMcpTokenMatchesHub(),
-    await checkTaskOwnedWindowsBeforeScopedAuth(),
+    await checkTaskOwnedWindowsBeforeScopedAuth(homeDir),
     checkScopedAuthFlag(),
   ];
 

@@ -57,14 +57,14 @@ describe('openDoctorMux in a release layout', () => {
 
   it('uses MISAO_SOCKET from the bundle .env when there is no parent .env', async () => {
     fs.writeFileSync(path.join(bundleDir, '.env'), 'MISAO_SOCKET=/run/bundle.sock\n');
-    await openDoctorMux();
+    await openDoctorMux(os.homedir());
     expect(socketSeenByResolver()).toBe('/run/bundle.sock');
   });
 
   it('prefers the parent .env over the bundle .env', async () => {
     fs.writeFileSync(path.join(hubDir, '.env'), 'MISAO_SOCKET=/run/parent.sock\n');
     fs.writeFileSync(path.join(bundleDir, '.env'), 'MISAO_SOCKET=/run/bundle.sock\n');
-    await openDoctorMux();
+    await openDoctorMux(os.homedir());
     expect(socketSeenByResolver()).toBe('/run/parent.sock');
   });
 });

@@ -1,4 +1,3 @@
-import os from 'os';
 import { asPaneHandle, parseMuxRef } from '@azito/shared';
 import { readEnvValue, resolveServerEnvPath } from '../shared/envFile';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
@@ -21,13 +20,13 @@ export interface DoctorMux {
  * here creates a window or writes to a pane, so the hub-side wiring the drivers normally get (change events, pane
  * environment) is left empty.
  */
-export async function openDoctorMux(): Promise<DoctorMux> {
+export async function openDoctorMux(homeDir: string): Promise<DoctorMux> {
   const registry = new MuxDriverRegistry();
-  registry.register('tmux', new TmuxClient(new TransportFactory(''), '', '', '', ''));
+  registry.register('tmux', new TmuxClient(new TransportFactory('', homeDir), '', '', '', ''));
 
   const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(resolveServerEnvPath(), 'MISAO_SOCKET');
   const runtime = await resolveMisaoRuntimeForHub(
-    { env: { ...process.env, ...(configuredSocket ? { MISAO_SOCKET: configuredSocket } : {}) }, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' },
+    { env: { ...process.env, ...(configuredSocket ? { MISAO_SOCKET: configuredSocket } : {}) }, homeDir, shell: process.env.SHELL || '/bin/bash' },
     false,
     console,
   );
