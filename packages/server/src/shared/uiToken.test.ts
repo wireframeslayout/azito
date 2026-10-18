@@ -39,7 +39,8 @@ describe('resolveUiToken', () => {
     expect(result).toBe('file-token-abc');
   });
 
-  it('generates token and writes to file when neither env nor file exists', () => {
+  // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('generates token and writes to file when neither env nor file exists', () => {
     delete process.env.AZITO_UI_TOKEN;
     const tokenPath = path.join(tmpDir, 'subdir', 'ui-token');
 
@@ -104,7 +105,8 @@ describe('resolveWebhookToken', () => {
     expect(resolveWebhookToken(tokenPath)).toBe('persisted-webhook');
   });
 
-  it('generates token with mode 600 when neither env nor file exists', () => {
+  // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('generates token with mode 600 when neither env nor file exists', () => {
     delete process.env.AZITO_WEBHOOK_TOKEN;
     const tokenPath = path.join(tmpDir, 'subdir', 'webhook-token');
 

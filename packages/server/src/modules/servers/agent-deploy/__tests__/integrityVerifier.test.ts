@@ -53,7 +53,8 @@ describe('buildSafeExtractCommand', () => {
     expect(cmd).toContain('$HOME/tmp/a.tar.gz');
   });
 
-  it('extracts a real tarball via bash with tilde paths and HOME override', () => {
+  // Windows では動かない: bash / tar / HOME 前提
+  it.skipIf(process.platform === 'win32')('extracts a real tarball via bash with tilde paths and HOME override', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'extract-test-'));
     try {
       const tarballDir = path.join(tmpRoot, '.azito', 'tmp');
@@ -77,7 +78,8 @@ describe('buildSafeExtractCommand', () => {
     }
   });
 
-  it('succeeds on a fresh HOME with no pre-existing .azito directory', () => {
+  // Windows では動かない: bash / tar / HOME 前提
+  it.skipIf(process.platform === 'win32')('succeeds on a fresh HOME with no pre-existing .azito directory', () => {
     const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'fresh-home-'));
     try {
       const stageDir = path.join(tmpRoot, 'stage');

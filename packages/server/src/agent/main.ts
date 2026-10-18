@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 
   // Health endpoint (no auth) + tmux hook receiver + browser routes
   await app.register(agentRoutes, {
-    agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS,
+    agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS, homeDir: hostEnv.homeDir,
   });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)

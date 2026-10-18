@@ -534,7 +534,7 @@ function buildExecuteTaskUseCase(
   );
 }
 
-function buildMisaoService(misao: MisaoHandle): MisaoServiceService {
+function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform): MisaoServiceService {
   const bundleRoot = getBundleRoot();
   const prefix = resolveInstallPrefix(bundleRoot);
   let paths: MisaoPaths | null = null;
@@ -550,18 +550,18 @@ function buildMisaoService(misao: MisaoHandle): MisaoServiceService {
     paths,
     ...(pathsError ? { pathsError } : {}),
     bundle: readMisaoBundle(bundleRoot),
-    controller: createMisaoServiceController(process.platform, runCommand),
+    controller: createMisaoServiceController(platform, runCommand),
     env: process.env,
     hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
   });
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle): SystemUpdateModule {
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog);
-  const deployModeDetector = new DeployModeDetector();
+  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
-  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao) };
+  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv.platform) };
 }
 
 function buildAgentActivityMonitor(
@@ -674,7 +674,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv);
 
   return {
     uiToken,

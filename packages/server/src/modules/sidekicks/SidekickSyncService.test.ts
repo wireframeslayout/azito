@@ -164,7 +164,8 @@ describe('SidekickSyncService.sync', () => {
     expect(commandsOf(exec)[0]).toContain('cat');
   });
 
-  it('transfers when the remote hash differs: lock → chunked upload → staged extract/swap → unlock', async () => {
+  // Windows では動かない: sh / tar で転送コマンドを実行する前提（5 秒で時間切れ）
+  it.skipIf(process.platform === 'win32')('transfers when the remote hash differs: lock → chunked upload → staged extract/swap → unlock', async () => {
     const pkg = makePackage({ name: 'pkg', dir });
     const { transport, exec } = makeTransport();
 

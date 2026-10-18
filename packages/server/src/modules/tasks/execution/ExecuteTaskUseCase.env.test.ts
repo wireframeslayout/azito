@@ -1753,7 +1753,8 @@ describe('ExecuteTaskUseCase working-directory containment (Issue #27)', () => {
     expect(windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ workerType: 'claude', workerModel: 'opus' }));
   });
 
-  it('accepts a resolved worktree path containing shell metacharacters and reaches the pane only via the already-quoted `cd --` command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; the shell boundary at `cd -- ${shellQuote(...)}` is what stays safe, not an upstream filter)', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の不一致、sh の cd -- 前提
+  it.skipIf(process.platform === 'win32')('accepts a resolved worktree path containing shell metacharacters and reaches the pane only via the already-quoted `cd --` command (Issue #27 review finding 2: containment verification must not restrict the character set — that rejected legitimate directory names like `/srv/repo+tools`; the shell boundary at `cd -- ${shellQuote(...)}` is what stays safe, not an upstream filter)', async () => {
     // A directory name with shell metacharacters is legal on disk and must
     // be allowed through containment verification; only quoting at the
     // shell boundary (already done here via `shellQuote`) protects the

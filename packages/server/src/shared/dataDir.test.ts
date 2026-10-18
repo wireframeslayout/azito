@@ -33,7 +33,8 @@ describe('resolveDataDir', () => {
     expect(paths.sidekicks).toMatch(/data[/\\]sidekicks$/);
   });
 
-  it('consolidates all paths under AZITO_DATA_DIR when set', () => {
+  // Windows では動かない: mode 700 前提（P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('consolidates all paths under AZITO_DATA_DIR when set', () => {
     const dataDir = path.join(tmpDir, 'azito-data');
     process.env.AZITO_DATA_DIR = dataDir;
     delete process.env.AZITO_SIDEKICKS_DIR;

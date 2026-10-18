@@ -6,7 +6,7 @@ import { DeployModeDetector } from '../system/DeployModeDetector';
 describe('GET /api/health', () => {
   it('returns 200 with status ok and expected shape', async () => {
     const app = Fastify();
-    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector(), scopedAuthEnabled: false });
+    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector('/home/test'), scopedAuthEnabled: false });
 
     const res = await app.inject({ method: 'GET', url: '/api/health' });
 
@@ -28,7 +28,7 @@ describe('GET /api/health', () => {
   // "restricted privileges" badge that isn't true.
   it('reflects scopedAuthEnabled=true when the hub was wired with it on', async () => {
     const app = Fastify();
-    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector(), scopedAuthEnabled: true });
+    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector('/home/test'), scopedAuthEnabled: true });
 
     const res = await app.inject({ method: 'GET', url: '/api/health' });
 
@@ -39,7 +39,7 @@ describe('GET /api/health', () => {
 
   it('reflects scopedAuthEnabled=false when the hub is still in compat mode', async () => {
     const app = Fastify();
-    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector(), scopedAuthEnabled: false });
+    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector('/home/test'), scopedAuthEnabled: false });
 
     const res = await app.inject({ method: 'GET', url: '/api/health' });
 
@@ -50,7 +50,7 @@ describe('GET /api/health', () => {
 
   it('no longer exposes an experimentalMisao flag', async () => {
     const app = Fastify();
-    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector(), scopedAuthEnabled: false });
+    await app.register(healthRoutes, { deployModeDetector: new DeployModeDetector('/home/test'), scopedAuthEnabled: false });
     expect('experimentalMisao' in (await app.inject({ method: 'GET', url: '/api/health' })).json()).toBe(false);
     await app.close();
   });

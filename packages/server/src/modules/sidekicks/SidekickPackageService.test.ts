@@ -48,7 +48,8 @@ describe('SidekickPackageService', () => {
       expect(pkg).toMatchObject({ name: 'my-pkg', description: 'desc', tags: [], layer: 'user' });
     });
 
-    it('writes scripts with 0o755 permissions under scripts/', () => {
+    // Windows では動かない: mode 755 前提（Windows には POSIX の mode が無い）
+    it.skipIf(process.platform === 'win32')('writes scripts with 0o755 permissions under scripts/', () => {
       service.create({
         name: 'my-pkg',
         description: 'd',
@@ -192,7 +193,8 @@ describe('SidekickPackageService', () => {
       expect(() => service.update('my-pkg', { isDefault: true })).toThrow('requires at least one phase tag');
     });
 
-    it('writes new scripts with 0o755 permissions under scripts/', () => {
+    // Windows では動かない: mode 755 前提（Windows には POSIX の mode が無い）
+    it.skipIf(process.platform === 'win32')('writes new scripts with 0o755 permissions under scripts/', () => {
       service.create({ name: 'my-pkg', description: 'd', phase: 'standalone' });
       service.update('my-pkg', { scripts: [{ filename: 'run.sh', content: '#!/bin/bash\necho hi\n' }] });
 

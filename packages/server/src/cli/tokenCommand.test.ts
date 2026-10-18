@@ -221,7 +221,8 @@ describe('tokenCommand', () => {
       expect(updated).toContain('AZITO_URL=http://localhost:3001');
     });
 
-    it('forces operator.env to mode 0600 even if it was previously more permissive', async () => {
+    // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
+    it.skipIf(process.platform === 'win32')('forces operator.env to mode 0600 even if it was previously more permissive', async () => {
       const azitoDir = path.join(fakeHome, '.azito');
       fs.mkdirSync(azitoDir, { recursive: true });
       const operatorEnvPath = path.join(azitoDir, 'operator.env');

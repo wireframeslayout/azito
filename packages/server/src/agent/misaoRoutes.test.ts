@@ -39,7 +39,8 @@ describe('agent misao routes', () => {
     expect(res.json()).not.toHaveProperty('installedVersion');
   });
 
-  it('stages a release file under the fixed layout and reports its sha256', async () => {
+  // Windows では動かない: mode 755 前提（Windows には POSIX の mode が無い）
+  it.skipIf(process.platform === 'win32')('stages a release file under the fixed layout and reports its sha256', async () => {
     const res = await upload('version=0.3.0&name=misao', 'binary-bytes');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ name: 'misao', size: 12, sha256: crypto.createHash('sha256').update('binary-bytes').digest('hex') });
@@ -49,7 +50,8 @@ describe('agent misao routes', () => {
     expect(fs.statSync(path.join(home, '.azito', 'misao')).mode & 0o777).toBe(0o700);
   });
 
-  it('stages a license file without the execute bit', async () => {
+  // Windows では動かない: mode 前提（Windows には POSIX の mode が無い）
+  it.skipIf(process.platform === 'win32')('stages a license file without the execute bit', async () => {
     const res = await upload('version=0.3.0&name=NOTICE');
     expect(res.statusCode).toBe(200);
     expect(fs.statSync(path.join(misaoStagingDir(home, '0.3.0'), 'NOTICE')).mode & 0o777).toBe(0o644);

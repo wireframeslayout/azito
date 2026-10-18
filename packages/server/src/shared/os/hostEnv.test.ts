@@ -1,32 +1,22 @@
-import { describe, it, expect } from 'vitest';
+import os from 'os';
+import { describe, it, expect, afterEach } from 'vitest';
 import { resolveHostEnv, resolveCurrentHostEnv } from './hostEnv';
 
-const base = { platform: 'linux', arch: 'x64', homeDir: '/home/u', tmpDir: '/tmp', execPath: '/usr/bin/node' };
+const base = { platform: 'linux' as const, arch: 'x64', homeDir: '/home/u', execPath: '/usr/bin/node' };
 
 describe('resolveHostEnv', () => {
-  it('linux は区切りが : で入力をそのまま返す', () => {
-    expect(resolveHostEnv(base)).toEqual({ ...base, pathDelimiter: ':' });
+  it('入力をそのまま返す', () => {
+    expect(resolveHostEnv(base)).toEqual(base);
   });
 
-  it('darwin / arm64 を受け付ける', () => {
-    const env = resolveHostEnv({ ...base, platform: 'darwin', arch: 'arm64', homeDir: '/Users/u' });
-    expect(env).toMatchObject({ platform: 'darwin', arch: 'arm64', pathDelimiter: ':' });
+  it('win32 / darwin の入力も受け付ける', () => {
+    const win = { platform: 'win32' as const, arch: 'x64', homeDir: 'C:\\Users\\u', execPath: 'C:\\node\\node.exe' };
+    expect(resolveHostEnv(win)).toEqual(win);
+    expect(resolveHostEnv({ ...base, platform: 'darwin', arch: 'arm64' }).platform).toBe('darwin');
   });
 
-  it('win32 は区切りが ; になる', () => {
-    const env = resolveHostEnv({
-      platform: 'win32', arch: 'x64', homeDir: 'C:\\Users\\u', tmpDir: 'C:\\Temp', execPath: 'C:\\node\\node.exe',
-    });
-    expect(env.pathDelimiter).toBe(';');
-    expect(env.homeDir).toBe('C:\\Users\\u');
-  });
-
-  it('未対応の platform は理由付きで投げる', () => {
-    expect(() => resolveHostEnv({ ...base, platform: 'freebsd' })).toThrow(/Unsupported platform "freebsd"/);
-  });
-
-  it('未対応の arch は理由付きで投げる', () => {
-    expect(() => resolveHostEnv({ ...base, arch: 'ia32' })).toThrow(/Unsupported architecture "ia32"/);
+  it('未対応の platform / arch でも投げない（拒否は使う側の仕事）', () => {
+    expect(resolveHostEnv({ ...base, platform: 'freebsd', arch: 'ia32' })).toMatchObject({ platform: 'freebsd', arch: 'ia32' });
   });
 
   it('homeDir が空なら投げる', () => {
@@ -34,10 +24,33 @@ describe('resolveHostEnv', () => {
   });
 });
 
-describe('resolveCurrentHostEnv', () => {
-  it('実プロセスの値を返す', () => {
+describe('resolveCurrentHostEnv (HOME の扱い)', () => {
+  const originalHome = process.env.HOME;
+
+  afterEach(() => {
+    if (originalHome === undefined) delete process.env.HOME;
+    else process.env.HOME = originalHome;
+  });
+
+  it('通常: HOME をそのまま homeDir にする', () => {
+    process.env.HOME = '/home/someone';
+    expect(resolveCurrentHostEnv().homeDir).toBe('/home/someone');
+  });
+
+  it.skipIf(process.platform === 'win32')('HOME 未設定: passwd のホームを使う（旧来の空文字 = cwd 相対にはならない）', () => {
+    delete process.env.HOME;
     const env = resolveCurrentHostEnv();
-    expect(env.execPath).toBe(process.execPath);
     expect(env.homeDir).not.toBe('');
+    expect(env.homeDir).toBe(os.homedir());
+  });
+
+  it.skipIf(process.platform === 'win32')('HOME が空文字: 起動時に投げる', () => {
+    process.env.HOME = '';
+    expect(() => resolveCurrentHostEnv()).toThrow(/home directory/);
+  });
+
+  it('platform / arch / execPath は実プロセスの値', () => {
+    const env = resolveCurrentHostEnv();
+    expect(env).toMatchObject({ platform: process.platform, arch: process.arch, execPath: process.execPath });
   });
 });

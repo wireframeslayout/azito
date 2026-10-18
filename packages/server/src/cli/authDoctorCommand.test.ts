@@ -205,7 +205,8 @@ describe('authDoctorCommand', () => {
     expect(allLogLines()).toContain('operator.env');
   });
 
-  it('passes this one check when operator.env is 0600 (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
+  // Windows では動かない: mode 600 の検査（Windows には POSIX の mode が無い。P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('passes this one check when operator.env is 0600 (overall exit is 3: hub DB + codex CLI still unverifiable in this test env)', async () => {
     const azitoDir = path.join(fakeHome, '.azito');
     fs.mkdirSync(azitoDir, { recursive: true });
     const operatorEnvPath = path.join(azitoDir, 'operator.env');
@@ -281,7 +282,8 @@ describe('authDoctorCommand', () => {
   // enabled (skips the drain check cleanly, no live-pane concern), no stray
   // AZITO_UI_TOKEN in azitoctl.env, operator.env at 0600, and both the
   // Claude and Codex azt-mcp registrations matching the hub's current token.
-  it('reports a clean pass with exit 0 when every check actually verifies something and finds it clean', async () => {
+  // Windows では動かない: operator.env の mode 600 検査を含む（P2 の SecretFileGuard で扱う）
+  it.skipIf(process.platform === 'win32')('reports a clean pass with exit 0 when every check actually verifies something and finds it clean', async () => {
     process.env.AZITO_UI_TOKEN = 'hub-token';
     process.env.AZITO_SCOPED_AUTH = '1';
 

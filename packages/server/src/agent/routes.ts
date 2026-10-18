@@ -3,7 +3,6 @@ import type { EventEmitter } from 'node:events';
 import { execFile } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import os from 'os';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
 import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
@@ -51,6 +50,8 @@ export interface AgentRoutesOptions {
    * their source address, not a loopback one.
    */
   bindAddress: string;
+  /** The agent's home directory, resolved once at startup (HostEnv). */
+  homeDir: string;
 }
 
 function execCommand(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -65,10 +66,10 @@ function execCommand(command: string, timeoutMs: number): Promise<{ stdout: stri
 
 let runtimeMismatchWarned = false;
 
-function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
+function execTmuxCommand(args: string[], timeoutMs: number, homeDir: string, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
   let rt: ReturnType<typeof resolveTmuxRuntime>;
   try {
-    rt = resolveTmuxRuntime(mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system', os.homedir());
+    rt = resolveTmuxRuntime(mux ?? (process.env.AZITO_MUX_RUNTIME as MuxRuntime) ?? 'system', homeDir);
   } catch (err) {
     if (!runtimeMismatchWarned) {
       runtimeMismatchWarned = true;
@@ -85,9 +86,9 @@ function execTmuxCommand(args: string[], timeoutMs: number, mux?: MuxRuntime): P
   });
 }
 
-function execMuxCommand(req: { kind: string; args?: string[]; method?: string; params?: unknown }, timeoutMs: number, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
+function execMuxCommand(req: { kind: string; args?: string[]; method?: string; params?: unknown }, timeoutMs: number, homeDir: string, mux?: MuxRuntime): Promise<{ stdout: string; stderr: string; code: number }> {
   if (req.kind === 'tmux') {
-    return execTmuxCommand(req.args ?? [], timeoutMs, mux);
+    return execTmuxCommand(req.args ?? [], timeoutMs, homeDir, mux);
   }
   return Promise.reject({ statusCode: 501, message: `Mux kind "${req.kind}" not implemented on this agent` });
 }
@@ -95,7 +96,7 @@ function execMuxCommand(req: { kind: string; args?: string[]; method?: string; p
 const VALID_HOOK_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
-  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress } = opts;
+  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress, homeDir } = opts;
 
   // ── GET /health (no auth required — registered before auth hook) ──
   fastify.get('/health', async () => {
@@ -112,7 +113,7 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
   // ── POST /api/tmux (compatibility wrapper) ──
   fastify.post('/api/tmux', async (request) => {
     const { args, timeoutMs, mux } = request.body as { args: string[]; timeoutMs?: number; mux?: MuxRuntime };
-    return execMuxCommand({ kind: 'tmux', args }, timeoutMs ?? 15000, mux);
+    return execMuxCommand({ kind: 'tmux', args }, timeoutMs ?? 15000, homeDir, mux);
   });
 
   // ── POST /api/mux ──
@@ -121,7 +122,7 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
 
     const { timeoutMs, action: _a, session: _s, mux, ...muxReq } = req;
     try {
-      return await execMuxCommand(muxReq, timeoutMs ?? 15000, mux);
+      return await execMuxCommand(muxReq, timeoutMs ?? 15000, homeDir, mux);
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'statusCode' in err) {
         const e = err as Record<string, unknown>;

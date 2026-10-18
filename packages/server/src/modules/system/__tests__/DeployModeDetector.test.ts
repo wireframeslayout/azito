@@ -19,21 +19,17 @@ const mockedExecFileSync = vi.mocked(execFileSync);
 
 describe('DeployModeDetector', () => {
   let originalPlatform: PropertyDescriptor | undefined;
-  let originalHome: string | undefined;
   let tmpHome: string;
 
   beforeEach(() => {
     originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
-    originalHome = process.env.HOME;
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-deploymode-test-'));
-    process.env.HOME = tmpHome;
     mockedIsReleaseMode.mockReset();
     mockedExecFileSync.mockReset();
   });
 
   afterEach(() => {
     if (originalPlatform) Object.defineProperty(process, 'platform', originalPlatform);
-    process.env.HOME = originalHome;
     fs.rmSync(tmpHome, { recursive: true, force: true });
   });
 
@@ -43,7 +39,7 @@ describe('DeployModeDetector', () => {
 
   it('returns "source" when not running in release mode', () => {
     mockedIsReleaseMode.mockReturnValue(false);
-    const detector = new DeployModeDetector();
+    const detector = new DeployModeDetector(tmpHome);
     expect(detector.detect()).toBe('source');
     expect(detector.canUpdate()).toBe(false);
     expect(detector.serviceManager()).toBeNull();
@@ -54,7 +50,7 @@ describe('DeployModeDetector', () => {
     setPlatform('darwin');
     fs.mkdirSync(path.join(tmpHome, 'Library', 'LaunchAgents'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, 'Library', 'LaunchAgents', 'com.azito.hub.plist'), '');
-    const detector = new DeployModeDetector();
+    const detector = new DeployModeDetector(tmpHome);
     expect(detector.detect()).toBe('launchd');
     expect(detector.canUpdate()).toBe(true);
     expect(detector.serviceManager()).toBe('launchd');
@@ -64,7 +60,7 @@ describe('DeployModeDetector', () => {
     mockedIsReleaseMode.mockReturnValue(true);
     setPlatform('linux');
     mockedExecFileSync.mockReturnValue(Buffer.from('active'));
-    const detector = new DeployModeDetector();
+    const detector = new DeployModeDetector(tmpHome);
     expect(detector.detect()).toBe('systemd');
     expect(detector.canUpdate()).toBe(true);
   });
@@ -75,7 +71,7 @@ describe('DeployModeDetector', () => {
     mockedExecFileSync.mockImplementation(() => {
       throw new Error('systemctl not found');
     });
-    const detector = new DeployModeDetector();
+    const detector = new DeployModeDetector(tmpHome);
     expect(detector.detect()).toBe('source');
   });
 
@@ -84,17 +80,17 @@ describe('DeployModeDetector', () => {
     setPlatform('darwin');
     fs.mkdirSync(path.join(tmpHome, 'Library', 'LaunchAgents'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, 'Library', 'LaunchAgents', 'com.azito.hub.plist'), '');
-    const launchdDetector = new DeployModeDetector();
+    const launchdDetector = new DeployModeDetector(tmpHome);
     expect(launchdDetector.getDisabledReason()).toBeNull();
 
     mockedIsReleaseMode.mockReturnValue(false);
-    const sourceDetector = new DeployModeDetector();
+    const sourceDetector = new DeployModeDetector(tmpHome);
     expect(sourceDetector.getDisabledReason()).toMatch(/開発モード/);
 
     mockedIsReleaseMode.mockReturnValue(true);
     setPlatform('linux');
     mockedExecFileSync.mockReturnValue(Buffer.from('active'));
-    const systemdDetector = new DeployModeDetector();
+    const systemdDetector = new DeployModeDetector(tmpHome);
     expect(systemdDetector.getDisabledReason()).toBeNull();
   });
 });
