@@ -23,6 +23,7 @@ import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { findWindowTerminalTabs } from '../lib/retargetTab';
+import { resolveActiveTabAfterPaneClose } from '../lib/paneCloseActiveTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
@@ -431,12 +432,10 @@ function WorkspaceInner() {
       const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
 
       layout.close(paneId, tabId);
+      setActiveTabId((prev) => resolveActiveTabAfterPaneClose(prev, tabId, nextActiveTabId));
       closeTabAndRefreshBrowserUnconfirmed(tabId);
-      if (nextActiveTabId && activeTabId !== nextActiveTabId) {
-        setActiveTabId(nextActiveTabId);
-      }
     });
-  }, [layout, closeTabAndRefreshBrowserUnconfirmed, activeTabId, setActiveTabId, confirmTabClose]);
+  }, [layout, closeTabAndRefreshBrowserUnconfirmed, setActiveTabId, confirmTabClose]);
 
   // beforeunload guard: as long as any tab has unsaved edits, warn before the
   // browser tab/window itself is closed or reloaded (Issue #27 review
