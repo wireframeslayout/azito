@@ -4,9 +4,17 @@ import path from 'path';
 import os from 'os';
 import { resolveDataDir, _resetReleaseDefaultNotice } from './dataDir';
 import * as releaseInfo from './releaseInfo';
-import { createSecretFileGuard } from './os/secretFileGuard';
+import { createSecretFileGuard, type SecretFileGuard } from './os/secretFileGuard';
 
 const secretFileGuard = createSecretFileGuard(process.platform, process.env);
+
+/**
+ * AZITO_DATA_DIR を使わないケースは、実際のリポジトリの data/ や ~/.azito/data を指す。
+ * 作成・権限（ACL）の変更を避けるため、保護は呼ばれるだけの代役にする。
+ */
+function stubGuard(): SecretFileGuard & { ensureProtectedDir: ReturnType<typeof vi.fn> } {
+  return { ensureProtectedDir: vi.fn() } as unknown as SecretFileGuard & { ensureProtectedDir: ReturnType<typeof vi.fn> };
+}
 
 describe('resolveDataDir', () => {
   let tmpDir: string;
@@ -27,10 +35,9 @@ describe('resolveDataDir', () => {
   it('returns repo-root-relative paths when AZITO_DATA_DIR is unset', () => {
     delete process.env.AZITO_DATA_DIR;
     delete process.env.AZITO_SIDEKICKS_DIR;
-    // 開発モードはリポジトリの実際の data/ を指す: 作成・chmod / ACL の変更を避けるため、保護は呼ばれるだけの代役にする。
-    const ensureProtectedDir = vi.fn();
-    const paths = resolveDataDir({ ensureProtectedDir } as never);
-    expect(ensureProtectedDir).toHaveBeenCalledWith(path.join(path.dirname(paths.db), 'data'));
+    const stub = stubGuard();
+    const paths = resolveDataDir(stub);
+    expect(stub.ensureProtectedDir).toHaveBeenCalledWith(path.join(path.dirname(paths.db), 'data'));
     expect(paths.db).toMatch(/data\.db$/);
     expect(paths.masterKey).toMatch(/data[/\\]master\.key$/);
     expect(paths.vapidKeys).toMatch(/data[/\\]vapid-keys\.json$/);
@@ -73,7 +80,7 @@ describe('resolveDataDir', () => {
     const customSidekicks = path.join(tmpDir, 'custom-sidekicks');
     process.env.AZITO_SIDEKICKS_DIR = customSidekicks;
 
-    const paths = resolveDataDir(secretFileGuard);
+    const paths = resolveDataDir(stubGuard());
     expect(paths.sidekicks).toBe(customSidekicks);
   });
 
@@ -93,7 +100,7 @@ describe('resolveDataDir', () => {
       delete process.env.AZITO_SIDEKICKS_DIR;
       isReleaseModeSpy.mockReturnValue(true);
 
-      const paths = resolveDataDir(secretFileGuard);
+      const paths = resolveDataDir(stubGuard());
       const expected = path.join(os.homedir(), '.azito', 'data');
 
       expect(paths.dir).toBe(expected);
@@ -111,8 +118,8 @@ describe('resolveDataDir', () => {
       _resetReleaseDefaultNotice();
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        resolveDataDir(secretFileGuard);
-        resolveDataDir(secretFileGuard);
+        resolveDataDir(stubGuard());
+        resolveDataDir(stubGuard());
         const notices = logSpy.mock.calls.filter(([m]) => String(m).startsWith('AZITO_DATA_DIR not set'));
         expect(notices).toHaveLength(1);
       } finally {
@@ -126,7 +133,7 @@ describe('resolveDataDir', () => {
       isReleaseModeSpy.mockReturnValue(true);
 
       const bundleRoot = releaseInfo.resolveRoot();
-      const paths = resolveDataDir(secretFileGuard);
+      const paths = resolveDataDir(stubGuard());
 
       for (const [key, value] of Object.entries(paths)) {
         if (typeof value === 'string') {
@@ -150,7 +157,7 @@ describe('resolveDataDir', () => {
       delete process.env.AZITO_SIDEKICKS_DIR;
       isReleaseModeSpy.mockReturnValue(false);
 
-      const paths = resolveDataDir(secretFileGuard);
+      const paths = resolveDataDir(stubGuard());
       expect(paths.db).toMatch(/data\.db$/);
       expect(paths.masterKey).toMatch(/data[/\\]master\.key$/);
     });

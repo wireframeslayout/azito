@@ -39,6 +39,10 @@ const BUILD_RULE =
   "$rule=New-Object System.Security.AccessControl.FileSystemAccessRule($sid,[System.Security.AccessControl.FileSystemRights]'FullControl',$inh,[System.Security.AccessControl.PropagationFlags]'None',[System.Security.AccessControl.AccessControlType]'Allow'); " +
   '$acl.AddAccessRule($rule); ';
 
+/** 保護スクリプトの出力: 既に方針どおりで書かなかった / ACL を書いた（テストが実際の出力で確かめる）。 */
+export const PROTECT_UNCHANGED = 'unchanged';
+export const PROTECT_CHANGED = 'protected';
+
 /**
  * 既存のファイル / ディレクトリを、所有者と DACL を現在のユーザーだけにして置き換える。ディレクトリは子へ継承させる。
  * 読み出した明示的な許可（他のユーザーのもの）は PurgeAccessRules で全部除く
@@ -52,10 +56,10 @@ const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
   '$rules=@($acl.Access); $ruleOk=$false; ' +
   'if($rules.Count -eq 1){ $r=$rules[0]; $rs=\'\'; try { $rs=$r.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}; ' +
   "$ruleOk=($r.AccessControlType -eq 'Allow' -and $rs -eq $sid.Value -and $r.FileSystemRights -eq [System.Security.AccessControl.FileSystemRights]'FullControl' -and $r.InheritanceFlags -eq $inh -and $r.PropagationFlags -eq [System.Security.AccessControl.PropagationFlags]'None') }; " +
-  'if($acl.AreAccessRulesProtected -and $ownerOk -and $ruleOk){ exit 0 }; ' +
+  `if($acl.AreAccessRulesProtected -and $ownerOk -and $ruleOk){ Write-Output '${PROTECT_UNCHANGED}'; exit 0 }; ` +
   'foreach($r in @($acl.Access)){ $acl.PurgeAccessRules($r.IdentityReference) }; ' +
   BUILD_RULE +
-  '$info.SetAccessControl($acl)';
+  `$info.SetAccessControl($acl); Write-Output '${PROTECT_CHANGED}'`;
 
 /**
  * 空のファイルを、作成の時点から保護 DACL と所有者を付けて排他作成する（CreateNew）。
@@ -152,11 +156,28 @@ export function evaluateAcl(snapshot: AclSnapshot, targetPath: string, kind: Sec
   return { ok: false, summary: `${parts.join('。')}。`, fix };
 }
 
-/** ファイルの実体の識別子（無ければ null）。パスだけでは、削除や置き換えの後も同じと見なしてしまう。 */
-function identityOf(filePath: string): string | null {
+/** 実体の識別子。パスだけでは、削除や置き換えの後も同じと見なしてしまう。 */
+function identityString(st: fs.BigIntStats): string {
+  return `${st.dev}:${st.ino}`;
+}
+
+function pathIdentity(filePath: string): string | null {
   try {
-    const st = fs.statSync(filePath, { bigint: true });
-    return `${st.dev}:${st.ino}`;
+    return identityString(fs.statSync(filePath, { bigint: true }));
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw err;
+  }
+}
+
+function fdIdentity(fd: number): string {
+  return identityString(fs.fstatSync(fd, { bigint: true }));
+}
+
+/** O_CREAT なしで追記用に開く。無ければ null。 */
+function openForAppend(filePath: string): number | null {
+  try {
+    return fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_APPEND);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw err;
@@ -225,18 +246,23 @@ export class WindowsSecretFileGuard implements SecretFileGuard {
 
   appendSecretFile(filePath: string, content: string): void {
     this.ensureParent(path.dirname(filePath));
-    let identity = identityOf(filePath);
-    if (identity === null) {
+    // fd を基準にする: 開いた実体に対してだけ保護を確かめ、書く。パスの stat → 保護 → open の順だと、間に置き換えられた緩いファイルへ書いてしまう。
+    // O_CREAT なし: 無ければ保護付きで作ってから開く（確認後に消されても、保護の無いファイルを作り直さない）。
+    let fd = openForAppend(filePath);
+    if (fd === null) {
       this.createProtected(filePath);
-      identity = identityOf(filePath);
-    } else if (this.appendTargets.get(filePath) !== identity) {
-      this.protect(filePath);
+      fd = openForAppend(filePath);
+      if (fd === null) throw new Error(`Cannot append to ${filePath}: the file disappeared`);
     }
-    if (identity === null) throw new Error(`Cannot append to ${filePath}: the file disappeared`);
-    this.appendTargets.set(filePath, identity);
-    // O_CREAT を付けない: 確かめた後に消されても、保護の無いファイルを作り直さない。
-    const fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_APPEND);
     try {
+      const identity = fdIdentity(fd);
+      if (this.appendTargets.get(filePath) !== identity) {
+        this.protect(filePath);
+        if (pathIdentity(filePath) !== identity) {
+          throw new Error(`Refusing to append to ${filePath}: the file was replaced while it was being protected`);
+        }
+        this.appendTargets.set(filePath, identity);
+      }
       fs.writeSync(fd, content);
     } finally {
       fs.closeSync(fd);

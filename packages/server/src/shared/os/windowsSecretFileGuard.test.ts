@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { openDatabase } from '../db/Database';
 import {
   createPowerShellRunner,
+  PROTECT_CHANGED,
+  PROTECT_UNCHANGED,
   evaluateAcl,
   parseAclSnapshot,
   resolveWindowsPowerShellPath,
@@ -195,11 +197,13 @@ describe('WindowsSecretFileGuard（実行器を差し替えるので全 OS で�
     const guard = make(fakeRun(calls));
     guard.appendSecretFile(target, 'a\n');
     guard.appendSecretFile(target, 'b\n');
-    expect(calls).toEqual(['create:update.log']);
+    expect(calls).toEqual(['create:update.log', 'protect:update.log']);
 
     fs.rmSync(target);
     guard.appendSecretFile(target, 'c\n');
-    expect(calls).toEqual(['create:update.log', 'create:update.log']);
+    // 作り直したファイルは保護付きで作られる（inode が再利用されると dev:ino が同じになり、追加の保護は省かれる）
+    expect(calls.slice(0, 3)).toEqual(['create:update.log', 'protect:update.log', 'create:update.log']);
+    const afterRecreate = calls.length;
     expect(fs.readFileSync(target, 'utf-8')).toBe('c\n');
 
     // 別のファイルが同じ名前になった（rename で置き換え）: 実体が違うので保護し直す
@@ -207,18 +211,28 @@ describe('WindowsSecretFileGuard（実行器を差し替えるので全 OS で�
     fs.writeFileSync(other, 'x\n');
     fs.renameSync(other, target);
     guard.appendSecretFile(target, 'd\n');
-    expect(calls).toEqual(['create:update.log', 'create:update.log', 'protect:update.log']);
+    expect(calls.slice(afterRecreate)).toEqual(['protect:update.log']);
     expect(fs.readFileSync(target, 'utf-8')).toBe('x\nd\n');
   });
 
-  it('appendSecretFile: 追記は既存のファイルを開く形で、確かめた後に消されても作り直さない', () => {
+  it('appendSecretFile: 保護している間に別のファイルへ置き換えられたら、置き換え先には書かず投げる', () => {
     const target = path.join(dir, 'update.log');
-    const guard = make(fakeRun());
-    guard.appendSecretFile(target, 'a\n');
-    // 実体の確認と書き込みの間の削除は、次のように ENOENT になる（保護の無いファイルが作られない）
-    const fdOpen = (): number => fs.openSync(target, fs.constants.O_WRONLY | fs.constants.O_APPEND);
-    fs.rmSync(target);
-    expect(fdOpen).toThrow();
+    fs.writeFileSync(target, 'old\n');
+    const intruder = path.join(dir, 'intruder');
+    fs.writeFileSync(intruder, 'loose\n');
+    const run: PowerShellRunner = (script, p) => {
+      if (!script.includes('CreateNew')) fs.renameSync(intruder, p);
+      return '';
+    };
+    expect(() => make(run).appendSecretFile(target, 'SECRET\n')).toThrow('replaced');
+    expect(fs.readFileSync(target, 'utf-8')).toBe('loose\n');
+  });
+
+  it('appendSecretFile: 保護している間に消されても、保護の無いファイルを作り直さない（O_CREAT なし）', () => {
+    const target = path.join(dir, 'update.log');
+    fs.writeFileSync(target, 'old\n');
+    const run: PowerShellRunner = (_script, p) => { fs.rmSync(p); return ''; };
+    expect(() => make(run).appendSecretFile(target, 'SECRET\n')).toThrow('replaced');
     expect(fs.existsSync(target)).toBe(false);
   });
 });
@@ -324,21 +338,35 @@ describe.skipIf(process.platform !== 'win32')('WindowsSecretFileGuard（実際�
     }
   });
 
-  it('方針どおりのディレクトリには書き込まない（2 回目の ensureProtectedDir で ACL が変わらず、継承の伝播も起きない）', () => {
+  it('方針どおりのディレクトリには書き込まない（保護スクリプトが unchanged を出力し、継承の伝播も起きない）', () => {
+    const real = createPowerShellRunner(powershellPath, process.env);
+    const outputs: string[] = [];
+    const observing = new WindowsSecretFileGuard({
+      powershellPath,
+      env: process.env,
+      run: (script, p) => {
+        const out = real(script, p).trim();
+        outputs.push(out);
+        return out;
+      },
+    });
     const data = path.join(dir, 'data');
-    guard.ensureProtectedDir(data);
+    observing.ensureProtectedDir(data);
+    expect(outputs.at(-1)).toBe(PROTECT_CHANGED);
+
     const child = path.join(data, 'browser-profile');
     fs.mkdirSync(child);
     for (let i = 0; i < 50; i++) fs.writeFileSync(path.join(child, `f${i}`), 'x');
-    guard.protectFile(child);
     const ctimeOf = (p: string): number => fs.statSync(p).ctimeMs;
     const before = [data, child, path.join(child, 'f0')].map(ctimeOf);
-    guard.ensureProtectedDir(data);
+    observing.ensureProtectedDir(data);
+    expect(outputs.at(-1)).toBe(PROTECT_UNCHANGED);
     expect([data, child, path.join(child, 'f0')].map(ctimeOf)).toEqual(before);
 
-    // 対照: 緩めれば直す（ACL が書き換わる）
+    // 対照: 緩めれば直す（ACL を書く）
     execFileSync('icacls', [data, '/grant', '*S-1-1-0:(OI)(CI)R']);
-    guard.ensureProtectedDir(data);
+    observing.ensureProtectedDir(data);
+    expect(outputs.at(-1)).toBe(PROTECT_CHANGED);
     expect(guard.inspect(data, 'dir')).toEqual({ ok: true });
   });
 

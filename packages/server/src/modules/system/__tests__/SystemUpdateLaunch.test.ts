@@ -7,20 +7,14 @@ vi.mock('../../../shared/releaseInfo', () => ({
   getReleaseInfo: vi.fn(),
 }));
 
-vi.mock('child_process', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('child_process')>();
-  return {
-    // promisify(execFile) needs a callback-style function to wrap.
-    execFile: vi.fn((_file: string, _args: string[], cb: (err: Error | null, out: { stdout: string; stderr: string }) => void) => {
-      cb(null, { stdout: '', stderr: '' });
-    }),
-    spawn: vi.fn(() => ({ unref: vi.fn() })),
-    // powershell.exe is the Windows SecretFileGuard's way to write an ACL: let it run for real.
-    execFileSync: vi.fn((...args: unknown[]) => (/powershell\.exe$/i.test(String(args[0]))
-      ? (actual.execFileSync as (...a: unknown[]) => string)(...args)
-      : undefined)),
-  };
-});
+vi.mock('child_process', () => ({
+  // promisify(execFile) needs a callback-style function to wrap.
+  execFile: vi.fn((_file: string, _args: string[], cb: (err: Error | null, out: { stdout: string; stderr: string }) => void) => {
+    cb(null, { stdout: '', stderr: '' });
+  }),
+  spawn: vi.fn(() => ({ unref: vi.fn() })),
+  execFileSync: vi.fn(),
+}));
 
 import { execFile, spawn } from 'child_process';
 import { getReleaseInfo } from '../../../shared/releaseInfo';
@@ -30,9 +24,9 @@ import { UpdateStateManager } from '../UpdateStateManager';
 import type { DeployModeDetector } from '../DeployModeDetector';
 import type { DataPaths } from '../../../shared/dataDir';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
-import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
+import { UnixSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
-const secretFileGuard = createSecretFileGuard(process.platform, process.env);
+const secretFileGuard = new UnixSecretFileGuard();
 
 const mockedGetReleaseInfo = vi.mocked(getReleaseInfo);
 const mockedSpawn = vi.mocked(spawn);
