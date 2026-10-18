@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { asPaneHandle } from '@azito/shared';
-import { WorkerWaiter } from './WorkerWaiter';
+import { WorkerWaiter, choosePlanExtractionSource } from './WorkerWaiter';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import type { ServerConfig } from '../../servers/Server';
 
@@ -69,5 +69,57 @@ describe('WorkerWaiter.waitForWorker cleanup', () => {
     await waiting;
     expect(driver.stopOutputStream).toHaveBeenCalledTimes(stopCalls);
     expect(stream.stop).toHaveBeenCalled();
+  });
+});
+
+describe('choosePlanExtractionSource', () => {
+  const long = 'x'.repeat(1000);
+  it('tmux prefers the pane capture over a longer pipe output', () => {
+    expect(choosePlanExtractionSource('tmux', 'pane', long)).toBe('pane');
+  });
+  it('tmux falls back to pipe output when the pane capture is empty', () => {
+    expect(choosePlanExtractionSource('tmux', '', 'pipe')).toBe('pipe');
+  });
+  it('tmux returns empty when both are empty', () => {
+    expect(choosePlanExtractionSource('tmux', '', '')).toBe('');
+  });
+  it('misao prefers pipe output', () => {
+    expect(choosePlanExtractionSource('misao', 'pane', 'pipe')).toBe('pipe');
+  });
+  it('misao falls back to pane text when pipe output is empty', () => {
+    expect(choosePlanExtractionSource('misao', 'pane', '')).toBe('pane');
+  });
+  it('misao returns empty when both are empty', () => {
+    expect(choosePlanExtractionSource('misao', '', '')).toBe('');
+  });
+});
+
+describe('WorkerWaiter.extractPlanWithFallback', () => {
+  function setupPlan(screen: string) {
+    const captureScreen = vi.fn(async () => ({ stdout: screen }));
+    const extractPlan = vi.fn(async () => ({ planMarkdown: null }));
+    const waiter = new WorkerWaiter(
+      { resolve: () => ({ captureScreen }) } as never, {} as never, {} as never,
+      { extractPlan } as never, { create: vi.fn() }, vi.fn(), () => {}, {} as never,
+    );
+    return { captureScreen, extractPlan, waiter };
+  }
+  const plan = '## 実装計画\n' + '- step\n'.repeat(200);
+
+  it('misao: extracts from the accumulated pipe output without capturing the screen', async () => {
+    const { waiter, captureScreen, extractPlan } = setupPlan('visible only');
+    const result = await waiter.extractPlanWithFallback(server, asPaneHandle('p_01HZZZZZZZZZZZZZZZZZZZZZZZ'), plan);
+    expect(captureScreen).not.toHaveBeenCalled();
+    expect(extractPlan).toHaveBeenCalledWith(expect.stringContaining('- step'));
+    expect(result).toContain('## 実装計画');
+    expect(result).toContain('- step');
+  });
+
+  it('tmux: extracts from the scrollback capture', async () => {
+    const { waiter, captureScreen, extractPlan } = setupPlan(plan);
+    const result = await waiter.extractPlanWithFallback(server, asPaneHandle('%0'), 'unused pipe');
+    expect(captureScreen).toHaveBeenCalledWith(server, '%0', -3000);
+    expect(extractPlan).toHaveBeenCalledWith(expect.stringContaining('## 実装計画'));
+    expect(result).toContain('## 実装計画');
   });
 });
