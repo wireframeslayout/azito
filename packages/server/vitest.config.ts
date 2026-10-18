@@ -2,7 +2,10 @@ import { defineConfig } from 'vitest/config';
 import { WINDOWS_EXCLUDED_UNIT_TESTS } from './vitest.windowsExclude';
 
 // Windows の CI だけ、まだ通らないファイルを unit から外す（理由は vitest.windowsExclude.ts）。他の OS の挙動は変えない。
-const windowsOnlyExcludes = process.platform === 'win32' ? WINDOWS_EXCLUDED_UNIT_TESTS.map((e) => e.file) : [];
+const isWindows = process.platform === 'win32';
+const windowsOnlyExcludes = isWindows ? WINDOWS_EXCLUDED_UNIT_TESTS.map((e) => e.file) : [];
+// 実 git を起動するテストは Windows の CI では既定の 5 秒を超えることがある（Linux / macOS は既定のまま）。
+const unitTestTimeout = isWindows ? { testTimeout: 30000 } : {};
 
 // Test-stabilization fix (third-party review): `*.tmuxIntegration.test.ts`
 // files drive REAL tmux (spawn a session, wait for a real shell prompt,
@@ -22,6 +25,7 @@ export default defineConfig({
         extends: true,
         test: {
           name: 'unit',
+          ...unitTestTimeout,
           include: ['src/**/*.test.ts'],
           exclude: ['src/**/*.tmuxIntegration.test.ts', 'src/**/*.misaoIntegration.test.ts', ...windowsOnlyExcludes],
         },
