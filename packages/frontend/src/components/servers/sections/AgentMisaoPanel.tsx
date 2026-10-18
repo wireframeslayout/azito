@@ -42,13 +42,13 @@ export function AgentMisaoPanel({ item, state, onInstall, onUpdate }: AgentMisao
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }}>
-      {item.installed && item.updateAvailable && (
+      {item.updateAvailable && (
         <Notice tone="warning" sub={t('agentMisao.updateAvailableSub')}>
           {t('agentMisao.updateAvailable', { running: item.daemonVersion ?? '?', bundled: item.bundledVersion ?? '?' })}
         </Notice>
       )}
 
-      {item.installed && item.updateAvailable && (
+      {item.updateAvailable && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
           <Button
             size="sm"
@@ -58,7 +58,7 @@ export function AgentMisaoPanel({ item, state, onInstall, onUpdate }: AgentMisao
             disabled={installing}
             onClick={() => { void handleUpdate(); }}
           >
-            {error && action === null ? t('agentMisao.retry') : t('agentMisao.update')}
+            {error ? t('agentMisao.retry') : t('agentMisao.update')}
           </Button>
           <span style={mutedStyle}>{t('agentMisao.updateDesc')}</span>
         </div>
@@ -68,7 +68,7 @@ export function AgentMisaoPanel({ item, state, onInstall, onUpdate }: AgentMisao
         <div style={mutedStyle}>{t('agentMisao.notInstallable')}</div>
       )}
 
-      {!item.installed && item.installable !== false && (
+      {!item.installed && !item.updateAvailable && item.installable !== false && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexWrap: 'wrap' }}>
           <Button size="sm" variant="primary" loading={installing} loadingLabel={t('agentMisao.installing')} disabled={installing} onClick={onInstall}>
             {error ? t('agentMisao.retry') : t('agentMisao.install')}

@@ -8,7 +8,7 @@ export type AgentMisaoAction = 'install' | 'update';
 export interface AgentMisaoInstallState {
   /** An install or update is running (started here, or already running when the row appeared). */
   installing: boolean;
-  /** What a run started by this hook is doing; null when nothing runs, or the run was started elsewhere. */
+  /** What the run is doing (from the hub's progress report, so a run started elsewhere is named too); null when nothing runs. */
   action: AgentMisaoAction | null;
   /** The step in progress (the last one reported). */
   step: string | null;
@@ -47,7 +47,7 @@ export function useAgentMisaoInstall(serverName: string, onChanged: () => void, 
   const follow = useCallback((progress: MisaoInstallProgress) => {
     const outcome = interpretInstallProgress(progress);
     if (outcome.kind === 'running') {
-      setState((s) => ({ ...s, installing: true, step: outcome.step ?? s.step }));
+      setState((s) => ({ ...s, installing: true, action: outcome.action ?? s.action, step: outcome.step ?? s.step }));
       return;
     }
     if (ownRun.current || outcome.kind === 'idle') return;

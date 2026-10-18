@@ -25,6 +25,8 @@ export interface AgentMisaoRoutesOptions {
 /** What the last install-misao / update-misao run of a server is doing / did, for the UI to show while the POST is still in flight. */
 export interface MisaoInstallProgress {
   state: 'idle' | 'running' | 'done' | 'failed';
+  /** What the run is (absent while idle). */
+  action?: 'install' | 'update';
   /** Every step reported so far, in order (`MisaoInstallStep` codes); the last one is what is happening now. */
   steps: string[];
   error?: string;
@@ -73,21 +75,21 @@ const agentMisaoRoutes: FastifyPluginCallback<AgentMisaoRoutesOptions> = (fastif
         }
 
         const steps: string[] = [];
-        progress.set(srv.name, { state: 'running', steps: [] });
+        progress.set(srv.name, { state: 'running', action, steps: [] });
         try {
           const result = await installer[action](transportFactory.getAgentTransport(srv), (message) => {
             steps.push(message);
-            progress.set(srv.name, { state: 'running', steps: [...steps] });
+            progress.set(srv.name, { state: 'running', action, steps: [...steps] });
           });
           const node = misaoServers.ensureAgentNode(srv);
           await waitUntilAvailable(node.connection, opts.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
           onInstalled(srv);
           const daemon = await describeMisaoDaemon(node.connection);
-          progress.set(srv.name, { state: 'done', steps });
+          progress.set(srv.name, { state: 'done', action, steps });
           return { ok: true, ...result, steps, daemon };
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          progress.set(srv.name, { state: 'failed', steps, error: message, ...(err instanceof MisaoServiceError ? { code: err.code } : {}) });
+          progress.set(srv.name, { state: 'failed', action, steps, error: message, ...(err instanceof MisaoServiceError ? { code: err.code } : {}) });
           // A refusal is answered with its code; anything else (the agent is unreachable) is the global error handler's.
           if (!(err instanceof MisaoServiceError)) throw err;
           return reply.status(MISAO_ERROR_STATUS[err.code]).send({ error: message, code: err.code, steps });

@@ -108,17 +108,17 @@ describe('POST /api/servers/:name/install-misao', () => {
       return RESULT;
     });
     const running = post('a1');
-    await vi.waitFor(async () => expect((await get()).json()).toEqual({ state: 'running', steps: ['transfer'] }));
+    await vi.waitFor(async () => expect((await get()).json()).toEqual({ state: 'running', action: 'install', steps: ['transfer'] }));
     release();
     await running;
-    expect((await get()).json()).toEqual({ state: 'done', steps: ['transfer'] });
+    expect((await get()).json()).toEqual({ state: 'done', action: 'install', steps: ['transfer'] });
   });
 
   it('keeps a refusal as the outcome of the run', async () => {
     install.mockRejectedValueOnce(new MisaoServiceError('unsupported_host', 'not x86_64'));
     await post('a1');
     const res = await app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' });
-    expect(res.json()).toEqual({ state: 'failed', steps: [], error: 'not x86_64', code: 'unsupported_host' });
+    expect(res.json()).toEqual({ state: 'failed', action: 'install', steps: [], error: 'not x86_64', code: 'unsupported_host' });
   });
 
   it('is 404 for the progress of an unknown server', async () => {
@@ -167,7 +167,7 @@ describe('POST /api/servers/:name/install-misao', () => {
       const res = await postUpdate('a1');
       expect(res.statusCode).toBe(502);
       expect(res.json()).toEqual({ error: 'restored the previous release', code: 'update_failed', steps: ['stop'] });
-      expect((await app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' })).json()).toEqual({ state: 'failed', steps: ['stop'], error: 'restored the previous release', code: 'update_failed' });
+      expect((await app.inject({ method: 'GET', url: '/api/servers/a1/install-misao' })).json()).toEqual({ state: 'failed', action: 'update', steps: ['stop'], error: 'restored the previous release', code: 'update_failed' });
       expect(onInstalled).not.toHaveBeenCalled();
     });
 

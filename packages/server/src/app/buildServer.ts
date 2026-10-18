@@ -80,6 +80,7 @@ import { TmuxHookManager, syncTmuxChangeHooks } from '../modules/tmux/TmuxHookMa
 import { AgentEventStream } from '../modules/servers/transport/AgentEventStream';
 import { notifyAgentWatchesOnIdle } from '../modules/notifications/agentWatchBridge';
 import { asPaneHandle, type PaneOrdinal } from '@azito/shared';
+import { agentMisaoUpdateAvailable } from '../modules/system/misao/agentMisaoUpdate';
 import { describeMisaoDaemon, syncMisaoNodes } from '../modules/tmux/misao/misaoDriver';
 import type { MisaoPaneStateEvents } from '../modules/tmux/misao/misaoPaneStateEvents';
 import { buildMisaoObservers } from './misaoObservers';
@@ -482,16 +483,22 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       // An agent server's row also says whether this hub can install misao there, and when its daemon is another release.
       const bundled = wiring.misaoAgentInstaller.bundledVersion;
       const installable = { installable: bundled !== undefined, ...(bundled ? { bundledVersion: bundled } : {}) };
+      // The release the agent's managed layout points at: known even when the daemon cannot be connected to.
+      const installedVersion = bundled
+        ? await transportFactory.getAgentTransport(srv).fetchMisaoStatus().then((status) => status.installedVersion, () => undefined)
+        : undefined;
+      const updateOffer = (daemon?: { daemonVersion?: string; detail?: string }): { updateAvailable?: true } =>
+        (agentMisaoUpdateAvailable({ bundledVersion: bundled, daemon, installedVersion }) ? { updateAvailable: true } : {});
       try {
         // An agent that has a daemon socket but no node yet (set up by hand) gets one here.
         await wiring.misao.servers.discoverAgentNode(srv);
       } catch (err) {
-        return { installed: false, detail: err instanceof Error ? err.message : String(err), ...installable };
+        return { installed: false, detail: err instanceof Error ? err.message : String(err), ...installable, ...updateOffer() };
       }
       const node = wiring.misao.servers.agentNode(srv.name);
-      if (!node) return { installed: false, detail: 'not_installed', ...installable };
+      if (!node) return { installed: false, detail: 'not_installed', ...installable, ...updateOffer() };
       const daemon = await describeMisaoDaemon(node.connection);
-      return { ...daemon, ...installable, ...(bundled && daemon.daemonVersion && daemon.daemonVersion !== bundled ? { updateAvailable: true } : {}) };
+      return { ...daemon, ...installable, ...updateOffer(daemon) };
     },
     onMuxChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);
