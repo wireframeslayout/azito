@@ -101,8 +101,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
 
   const installer = (b: MisaoBundle | null = bundle) => new MisaoAgentInstaller(b, { readyTimeoutMs: 8_000, pollIntervalMs: 50 });
 
-  // Windows では動かない: home の安全パス検査が C:\ を拒否する（POSIX パス前提）
-  it.skipIf(process.platform === 'win32')('puts the bundled release on the host, runs it as a background process when there is no user systemd, and a second install changes nothing', async () => {
+  it('puts the bundled release on the host, runs it as a background process when there is no user systemd, and a second install changes nothing', async () => {
     installFakeSystemctl('absent');
     const progress: string[] = [];
     const result = await installer().install(target(), (m) => progress.push(m));
@@ -126,8 +125,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  // Windows では動かない: home の安全パス検査が C:\ を拒否する（POSIX パス前提）
-  it.skipIf(process.platform === 'win32')('writes the systemd unit (the binary runs directly, no node) and starts it through systemctl --user', async () => {
+  it('writes the systemd unit (the binary runs directly, no node) and starts it through systemctl --user', async () => {
     installFakeSystemctl('ok');
     const result = await installer().install(target());
 
@@ -141,8 +139,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(fs.readFileSync(systemctlLog, 'utf-8')).toBe('--user daemon-reload\n--user enable azito-misao\n--user start azito-misao\n');
   });
 
-  // Windows では動かない: home の安全パス検査が C:\ を拒否する（POSIX パス前提）
-  it.skipIf(process.platform === 'win32')('starts the background process with a cleared environment, so nothing of the agent reaches its panes', async () => {
+  it('starts the background process with a cleared environment, so nothing of the agent reaches its panes', async () => {
     installFakeSystemctl('absent');
     const exec = vi.fn(target().exec);
     // The agent's own secrets are in the environment the exec runs in; the daemon must not see them.
@@ -158,8 +155,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(stdout).not.toContain('AZITO_AGENT_TOKEN');
   });
 
-  // Windows では動かない: home の安全パス検査が C:\ を拒否する（POSIX パス前提）
-  it.skipIf(process.platform === 'win32')('leaves a running older release alone and reports the update that is left to do', async () => {
+  it('leaves a running older release alone and reports the update that is left to do', async () => {
     installFakeSystemctl('absent');
     const root = path.join(home, '.azito', 'misao');
     fs.mkdirSync(path.join(root, '0.1.0'), { recursive: true, mode: 0o700 });
@@ -176,8 +172,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     expect(fs.existsSync(path.join(root, VERSION, 'misao'))).toBe(true);
   });
 
-  // Windows では動かない: home の安全パス検査が C:\ を拒否する、systemd / プロセス操作の POSIX 前提
-  it.skipIf(process.platform === 'win32')('switches a stopped Node-era install to the bundled release: current moves to the bundled binary release and the old directory stays', async () => {
+  it('switches a stopped Node-era install to the bundled release: current moves to the bundled binary release and the old directory stays', async () => {
     installFakeSystemctl('ok');
     const root = path.join(home, '.azito', 'misao');
     fs.mkdirSync(path.join(root, '0.2.0', 'node_modules'), { recursive: true, mode: 0o700 });
@@ -234,8 +229,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
   }
 
   describe('update (the explicit switch of a running release)', { timeout: 30_000 }, () => {
-    // Windows では動かない: home の安全パス検査が C:\ を拒否する、systemd / プロセス操作の POSIX 前提
-    it.skipIf(process.platform === 'win32')('stops a running Node-era daemon under systemd, switches current and the unit, and starts the bundled one', async () => {
+    it('stops a running Node-era daemon under systemd, switches current and the unit, and starts the bundled one', async () => {
       installFakeSystemctl('ok');
       const root = path.join(home, '.azito', 'misao');
       await installNodeEra({ unit: true, running: true });
