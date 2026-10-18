@@ -271,6 +271,7 @@
     "notInstallable": "このハブは misao を同梱していないため、サーバーに導入できません。",
     "failed": "misao を導入できませんでした",
     "updateAvailable": "稼働中の misao（{{running}}）が同梱版（{{bundled}}）と異なります",
+    "updateAvailableInstalled": "インストール済みの misao（{{installed}}）が同梱版（{{bundled}}）と異なります（稼働中の版は分かりません）",
     "updateAvailableSub": "自動では切り替えません。切り替えるとこのサーバーのペインがすべて終了するため、作業が動いていないときに更新してください。",
     "step": {
       "inspect": "サーバーを確認中…",

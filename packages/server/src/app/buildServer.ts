@@ -487,18 +487,19 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       const installedVersion = bundled
         ? await transportFactory.getAgentTransport(srv).fetchMisaoStatus().then((status) => status.installedVersion, () => undefined)
         : undefined;
+      const installedRow = installedVersion !== undefined ? { installedVersion } : {};
       const updateOffer = (daemon?: { daemonVersion?: string; detail?: string }): { updateAvailable?: true } =>
         (agentMisaoUpdateAvailable({ bundledVersion: bundled, daemon, installedVersion }) ? { updateAvailable: true } : {});
       try {
         // An agent that has a daemon socket but no node yet (set up by hand) gets one here.
         await wiring.misao.servers.discoverAgentNode(srv);
       } catch (err) {
-        return { installed: false, detail: err instanceof Error ? err.message : String(err), ...installable, ...updateOffer() };
+        return { installed: false, detail: err instanceof Error ? err.message : String(err), ...installable, ...installedRow, ...updateOffer() };
       }
       const node = wiring.misao.servers.agentNode(srv.name);
-      if (!node) return { installed: false, detail: 'not_installed', ...installable, ...updateOffer() };
+      if (!node) return { installed: false, detail: 'not_installed', ...installable, ...installedRow, ...updateOffer() };
       const daemon = await describeMisaoDaemon(node.connection);
-      return { ...daemon, ...installable, ...updateOffer(daemon) };
+      return { ...daemon, ...installable, ...installedRow, ...updateOffer(daemon) };
     },
     onMuxChanged: ({ previous, next }) => {
       transportFactory.invalidate(next.name);

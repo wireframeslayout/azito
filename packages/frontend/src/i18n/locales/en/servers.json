@@ -271,6 +271,7 @@
     "notInstallable": "This hub does not bundle misao, so it cannot install it on a server.",
     "failed": "misao could not be installed",
     "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",
+    "updateAvailableInstalled": "The installed misao ({{installed}}) differs from the bundled release ({{bundled}}); its running version is unknown",
     "updateAvailableSub": "It is not switched automatically: switching ends every pane on this server. Update it when no work is running there.",
     "step": {
       "inspect": "Checking the server…",

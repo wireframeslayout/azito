@@ -44,7 +44,9 @@ export function AgentMisaoPanel({ item, state, onInstall, onUpdate }: AgentMisao
     <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', minWidth: 0 }}>
       {item.updateAvailable && (
         <Notice tone="warning" sub={t('agentMisao.updateAvailableSub')}>
-          {t('agentMisao.updateAvailable', { running: item.daemonVersion ?? '?', bundled: item.bundledVersion ?? '?' })}
+          {item.daemonVersion !== undefined
+            ? t('agentMisao.updateAvailable', { running: item.daemonVersion, bundled: item.bundledVersion ?? '?' })
+            : t('agentMisao.updateAvailableInstalled', { installed: item.installedVersion ?? '?', bundled: item.bundledVersion ?? '?' })}
         </Notice>
       )}
 
