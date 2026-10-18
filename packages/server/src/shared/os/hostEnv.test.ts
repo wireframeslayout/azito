@@ -32,7 +32,8 @@ describe('resolveCurrentHostEnv (HOME の扱い)', () => {
     else process.env.HOME = originalHome;
   });
 
-  it('通常: HOME をそのまま homeDir にする', () => {
+  // Windows の os.homedir() は HOME ではなく USERPROFILE を読む
+  it.skipIf(process.platform === 'win32')('通常: HOME をそのまま homeDir にする', () => {
     process.env.HOME = '/home/someone';
     expect(resolveCurrentHostEnv().homeDir).toBe('/home/someone');
   });
