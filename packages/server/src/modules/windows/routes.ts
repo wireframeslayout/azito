@@ -17,7 +17,7 @@ import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
-import { shouldBlockMcp, ensureClaudeMcpBlock, ensureCodexMcpBlock } from '../agents/shouldBlockMcp';
+import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
@@ -454,26 +454,27 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const strategy = sessionStrategyFactory.create(win.workerType);
       let effectiveCommand = command;
-      if (blockMcp) {
-        if (win.workerType === 'claude') {
-          effectiveCommand = ensureClaudeMcpBlock(effectiveCommand);
-        } else if (win.workerType === 'codex') {
-          effectiveCommand = ensureCodexMcpBlock(effectiveCommand);
-        }
-      }
+
+      // Session ID processing first (operates on the original command)
       if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
-        const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(command)?.[1]
-          ?? /(?:^|\s)--resume\s+(\S+)/.exec(command)?.[1];
+        const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(effectiveCommand)?.[1]
+          ?? /(?:^|\s)--resume\s+(\S+)/.exec(effectiveCommand)?.[1];
         if (existingId) {
           windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, existingId);
         } else {
           const sessionId = randomUUID();
           const flags = strategy.buildNewSessionFlags(sessionId);
           if (flags) {
-            effectiveCommand = `${command} ${flags}`;
+            effectiveCommand = `${effectiveCommand} ${flags}`;
             windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
           }
         }
+      }
+
+      // MCP flag injection last (just before supervisor wrapping) so it
+      // is never overwritten by the session-id append above.
+      if (blockMcp) {
+        effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));

@@ -253,17 +253,20 @@ export class WindowRespawnService {
     // null) has nothing to rotate either.
     const isPrimary = task !== null && isPrimaryTaskWindow(win);
 
-    // Issue #471: resolve MCP blocking for this window. isPrimary windows
-    // always block. Non-primary windows attached to untrusted tasks check
-    // the execution gate (defense-in-depth: enforceExecutionGate above
-    // already rejects unapproved respawns, but this guards against
-    // gateAlreadyEnforced callers and keeps the decision explicit).
-    const linkedTask = task === null
-      ? null
-      : task.inputTrust !== 'untrusted'
-        ? { executionAllowed: true }
-        : (() => { try { return { executionAllowed: this.isTaskExecutionAllowed(task, server.name) }; } catch { return 'unknown' as const; } })();
-    const blockMcp = shouldBlockMcp({ isPrimary, linkedTask });
+    // Issue #471: resolve MCP blocking for this window.
+    // Use win.isPrimary directly (not the token-scoped `isPrimary` above)
+    // so a window whose task was deleted still triggers fail-closed blocking.
+    // When taskId is set but the task row is gone, treat it as 'unknown'
+    // (fail-closed) rather than null (no task → no block).
+    const mcpLinkedTask: { executionAllowed: boolean } | null | 'unknown' =
+      win.taskId === null
+        ? null
+        : task === null
+          ? 'unknown'
+          : task.inputTrust !== 'untrusted'
+            ? { executionAllowed: true }
+            : (() => { try { return { executionAllowed: this.isTaskExecutionAllowed(task, server.name) }; } catch { return 'unknown' as const; } })();
+    const blockMcp = shouldBlockMcp({ isPrimary: win.isPrimary, linkedTask: mcpLinkedTask });
 
     // Resolve and verify every working directory this respawn will `cd`
     // into before touching tmux or the DB at all. Containment verification

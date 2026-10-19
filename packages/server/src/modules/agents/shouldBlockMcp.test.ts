@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shouldBlockMcp, ensureClaudeMcpBlock, ensureCodexMcpBlock } from './shouldBlockMcp';
+import { shouldBlockMcp, ensureClaudeMcpBlock, ensureCodexMcpBlock, ensureMcpBlockByCommand } from './shouldBlockMcp';
 
 describe('shouldBlockMcp', () => {
   it('blocks when isPrimary is undefined (fail-closed)', () => {
@@ -60,5 +60,32 @@ describe('ensureCodexMcpBlock', () => {
 
   it('handles empty string', () => {
     expect(ensureCodexMcpBlock('')).toBe(' -c mcp_servers.azt-mcp.enabled=false');
+  });
+});
+
+describe('ensureMcpBlockByCommand', () => {
+  it('applies claude MCP block when command starts with claude', () => {
+    expect(ensureMcpBlockByCommand('claude --dangerously-skip-permissions'))
+      .toBe('claude --dangerously-skip-permissions --strict-mcp-config');
+  });
+
+  it('applies codex MCP block when command starts with codex', () => {
+    expect(ensureMcpBlockByCommand('codex --dangerously-bypass-approvals-and-sandbox'))
+      .toBe('codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false');
+  });
+
+  it('returns command unchanged for unrecognised CLI tool', () => {
+    const cmd = '/usr/local/bin/my-agent --flag';
+    expect(ensureMcpBlockByCommand(cmd)).toBe(cmd);
+  });
+
+  it('does not match claude/codex mid-string', () => {
+    const cmd = '/opt/claude --flag';
+    expect(ensureMcpBlockByCommand(cmd)).toBe(cmd);
+  });
+
+  it('does not duplicate existing flags', () => {
+    const cmd = 'claude --strict-mcp-config';
+    expect(ensureMcpBlockByCommand(cmd)).toBe(cmd);
   });
 });

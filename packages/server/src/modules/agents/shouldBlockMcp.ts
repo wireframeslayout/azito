@@ -59,3 +59,14 @@ export function ensureCodexMcpBlock(command: string): string {
   if (command.includes(CODEX_MCP_DISABLE_TOKEN)) return command;
   return `${command} ${CODEX_MCP_DISABLE_TOKEN}`;
 }
+
+/**
+ * Detect the CLI tool from the command's leading word and apply the
+ * corresponding MCP blocking flag.  Falls back to no-op when the
+ * command is not recognised (generic / unknown worker types).
+ */
+export function ensureMcpBlockByCommand(command: string): string {
+  if (/^claude\b/.test(command)) return ensureClaudeMcpBlock(command);
+  if (/^codex\b/.test(command)) return ensureCodexMcpBlock(command);
+  return command;
+}
