@@ -21,6 +21,7 @@ import { getReleaseInfo } from '../../../shared/releaseInfo';
 import { SystemUpdateService } from '../SystemUpdateService';
 import { UpdateChannelResolver } from '../UpdateChannelResolver';
 import { UpdateStateManager } from '../UpdateStateManager';
+import { DuplicateLoadError, type ServiceManager } from '../serviceManager';
 import type { DeployModeDetector } from '../DeployModeDetector';
 import type { DataPaths } from '../../../shared/dataDir';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
@@ -88,7 +89,7 @@ describe('SystemUpdateService.launchUpdateScript', () => {
   });
 
   it('launches the update through systemd-run under systemd', async () => {
-    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('systemd'), dataPaths, taskRepoStub);
+    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('systemd'), dataPaths, taskRepoStub, null);
 
     await expect(service.startUpdate()).resolves.toEqual({ started: true });
 
@@ -99,8 +100,19 @@ describe('SystemUpdateService.launchUpdateScript', () => {
     expect(args).toContain('systemd');
   });
 
+  it('refuses to start an update when launchd has the hub loaded into both domains, before anything is switched', async () => {
+    const hubService = { loadedDomain: async () => { throw new DuplicateLoadError('com.azito.hub', 501, 'Run `azito service stop`, then `azito service start`.'); } } as unknown as ServiceManager;
+    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub, hubService);
+
+    const result = await service.startUpdate();
+
+    expect(result).toMatchObject({ started: false, error: expect.stringContaining('azito service stop') });
+    expect(mockedSpawn).not.toHaveBeenCalled();
+    expect(stateManager.read()).toBeNull();
+  });
+
   it('detaches the update process directly under launchd, where systemd-run does not exist', async () => {
-    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub);
+    const service = new SystemUpdateService(channelResolver, stateManager, detectorFor('launchd'), dataPaths, taskRepoStub, null);
 
     await expect(service.startUpdate()).resolves.toEqual({ started: true });
 

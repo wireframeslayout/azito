@@ -3,7 +3,7 @@ import { Button, Chip, Notice, Spinner } from '../../ui';
 import type { ChipTone } from '../../ui';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { useMisaoService } from '../../../hooks/useMisaoService';
-import { misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
+import { misaoActionsBlocked, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey, type MisaoNotice, type MisaoServiceChipState } from '../../../lib/misaoService';
 
 const STATE_CHIP: Record<MisaoServiceChipState, { key: string; tone: ChipTone }> = {
   active: { key: 'stateActive', tone: 'green' },
@@ -13,7 +13,8 @@ const STATE_CHIP: Record<MisaoServiceChipState, { key: string; tone: ChipTone }>
   unknown: { key: 'stateUnknown', tone: 'default' },
 };
 
-const NOTICE_TONE: Record<MisaoNotice, 'warning' | 'info'> = {
+const NOTICE_TONE: Record<MisaoNotice, 'danger' | 'warning' | 'info'> = {
+  duplicateLoad: 'danger',
   incompatible: 'warning',
   updateAvailable: 'warning',
   needsHubRestart: 'info',
@@ -59,6 +60,7 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
   const versions = misaoVersions(status);
   const notices = misaoNotices(status);
   const chipState = misaoServiceChipState(status);
+  const blocked = misaoActionsBlocked(status);
 
   const handleInstall = async (): Promise<void> => {
     if (status.socketSetting === 'custom') {
@@ -112,20 +114,21 @@ export function MisaoServicePanel({ onChanged }: MisaoServicePanelProps) {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)', flexWrap: 'wrap' }}>
         {mode === 'not_installed' && (
-          <Button size="sm" variant="primary" loading={busy === 'install'} loadingLabel={t('misaoService.installing')} disabled={busy !== null} onClick={() => { void handleInstall(); }}>
+          <Button size="sm" variant="primary" loading={busy === 'install'} loadingLabel={t('misaoService.installing')} disabled={busy !== null || blocked} onClick={() => { void handleInstall(); }}>
             {t('misaoService.install')}
           </Button>
         )}
         {mode === 'stopped' && (
-          <Button size="sm" variant="primary" loading={busy === 'start'} loadingLabel={t('misaoService.starting')} disabled={busy !== null} onClick={() => { void misao.start(); }}>
+          <Button size="sm" variant="primary" loading={busy === 'start'} loadingLabel={t('misaoService.starting')} disabled={busy !== null || blocked} onClick={() => { void misao.start(); }}>
             {t('misaoService.start')}
           </Button>
         )}
         {mode !== 'not_installed' && status.updateAvailable && (
-          <Button size="sm" variant="danger" loading={busy === 'update'} loadingLabel={t('misaoService.updating')} disabled={busy !== null} onClick={() => { void handleUpdate(); }}>
+          <Button size="sm" variant="danger" loading={busy === 'update'} loadingLabel={t('misaoService.updating')} disabled={busy !== null || blocked} onClick={() => { void handleUpdate(); }}>
             {t('misaoService.update')}
           </Button>
         )}
+        {blocked && <span style={mutedStyle}>{t('misaoService.actionsBlocked')}</span>}
       </div>
 
       {actionError && (

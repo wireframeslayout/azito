@@ -83,7 +83,7 @@ describe('SystemUpdateService', () => {
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const status = await service.checkForUpdate();
 
     expect(status.status).toBe('update-available');
@@ -105,7 +105,7 @@ describe('SystemUpdateService', () => {
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const status = await service.checkForUpdate();
 
     expect(status.status).toBe('check-failed');
@@ -118,12 +118,12 @@ describe('SystemUpdateService', () => {
       json: () => Promise.resolve({ tag_name: 'v1.1.0', body: null, published_at: '2026-01-01T00:00:00Z' }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     await expect(service.checkForUpdate()).resolves.toMatchObject({ status: 'check-failed' });
   });
 
   it('startUpdate refuses when non-terminal tasks are running', async () => {
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(2));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(2), null);
     const result = await service.startUpdate();
     expect(result.started).toBe(false);
     expect(result.error).toMatch(/2/);
@@ -136,7 +136,7 @@ describe('SystemUpdateService', () => {
     });
     vi.stubGlobal('fetch', vi.fn(() => pending));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const first = service.startUpdate();
     const second = await service.startUpdate();
 
@@ -157,7 +157,7 @@ describe('SystemUpdateService', () => {
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const status = await service.checkForUpdate();
 
     expect(status.status).toBe('update-available');
@@ -176,7 +176,7 @@ describe('SystemUpdateService', () => {
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const status = await service.checkForUpdate();
 
     expect(status.commits).toEqual([
@@ -197,7 +197,7 @@ describe('SystemUpdateService', () => {
       }),
     } as Response)));
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const status = await service.checkForUpdate();
 
     expect(status.commits).toEqual([
@@ -219,7 +219,7 @@ describe('SystemUpdateService', () => {
     stateManager.write(state);
     stateManager.appendLog('Update succeeded');
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const result = service.getProgress();
 
     expect(result.state).not.toBeNull();
@@ -240,7 +240,7 @@ describe('SystemUpdateService', () => {
     };
     stateManager.write(state);
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const result = service.getProgress();
 
     expect(result.state).toBeNull();
@@ -260,7 +260,7 @@ describe('SystemUpdateService', () => {
     };
     stateManager.write(state);
 
-    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, makeTaskRepoStub(0), null);
     const result = service.getProgress();
 
     expect(result.state).toBeNull();
@@ -274,7 +274,7 @@ describe('SystemUpdateService', () => {
       canUpdate: () => false,
       getDisabledReason: () => '開発モードで起動中のため、画面からは更新できません。ターミナルで git pull を実行してください',
     } as unknown as DeployModeDetector;
-    const service = new SystemUpdateService(channelResolver, stateManager, disabledDetector, dataPaths, makeTaskRepoStub(0));
+    const service = new SystemUpdateService(channelResolver, stateManager, disabledDetector, dataPaths, makeTaskRepoStub(0), null);
     const result = await service.startUpdate();
     expect(result).toEqual({ started: false, error: disabledDetector.getDisabledReason() });
   });

@@ -149,6 +149,7 @@ export class MisaoServiceService {
 
   private async doInstall(opts: { replaceSocketSetting?: boolean }): Promise<MisaoServiceStatus> {
     const { bundle, controller } = this.requireManaged();
+    await controller.loadedDomain();
     if (this.socketSetting() === 'custom' && !opts.replaceSocketSetting) {
       throw new MisaoServiceError('custom_socket', `MISAO_SOCKET in ${this.paths.hubEnvFile} points at another daemon (${readEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET')}). Installing the managed service would move the hub away from it; run \`azito misao install --replace-socket\` to do that on purpose.`);
     }
@@ -233,6 +234,7 @@ export class MisaoServiceService {
 
   private async doStart(): Promise<MisaoServiceStatus> {
     const { controller } = this.requireManaged();
+    await controller.loadedDomain();
     if (!controller.isInstalled()) throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     if ((await controller.state()) !== 'active') {
       await controller.start();
@@ -252,6 +254,8 @@ export class MisaoServiceService {
 
   private async doUpdate(): Promise<MisaoServiceStatus> {
     const { bundle, controller } = this.requireManaged();
+    // A job loaded twice is refused before anything else (the same-version shortcut below and "already active" would otherwise report success).
+    await controller.loadedDomain();
     if (!controller.isInstalled() || !this.installedVersion()) {
       throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     }

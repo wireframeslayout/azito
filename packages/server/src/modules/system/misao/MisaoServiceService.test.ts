@@ -426,6 +426,19 @@ describe('MisaoServiceService', () => {
   });
 
   describe('start', () => {
+    it('refuses a job loaded into both launchd domains instead of reporting an active service as started', async () => {
+      const service = newService();
+      await service.install();
+      controller.domains = ['gui', 'user'];
+      controller.calls.length = 0;
+
+      await expect(service.start()).rejects.toMatchObject({ code: 'duplicate_load' });
+      // The same version as installed: update would otherwise return through the "already on the bundled version" shortcut.
+      await expect(service.update()).rejects.toMatchObject({ code: 'duplicate_load' });
+      await expect(service.install()).rejects.toMatchObject({ code: 'duplicate_load' });
+      expect(controller.calls).toEqual([]);
+    });
+
     it('starts a stopped service and never restarts a running one', async () => {
       const service = newService();
       await service.install();

@@ -39,6 +39,7 @@ export function resolveCurrentHostEnv(): HostEnv {
     homeDir: os.homedir(),
     tmpDir: os.tmpdir(),
     execPath: process.execPath,
-    uid: os.userInfo().uid,
+    // os.userInfo() throws when the uid has no passwd entry (docker run -u <uid>); only launchd needs the uid anyway.
+    uid: typeof process.getuid === 'function' ? process.getuid() : -1,
   });
 }

@@ -25,17 +25,23 @@ export function misaoServiceChipState(status: MisaoServiceStatus): MisaoServiceC
 }
 
 /** Notices for the row, most urgent first (urgent → context → detail). Each key is an i18n key under `servers:misaoService.notice`. */
-export type MisaoNotice = 'incompatible' | 'updateAvailable' | 'needsHubRestart' | 'customSocket';
+export type MisaoNotice = 'duplicateLoad' | 'incompatible' | 'updateAvailable' | 'needsHubRestart' | 'customSocket';
 
 export function misaoNotices(status: MisaoServiceStatus): MisaoNotice[] {
   const notices: MisaoNotice[] = [];
   const mode = misaoServiceMode(status);
   if (mode === 'unmanaged') return notices;
+  if (status.serviceDuplicateLoad) notices.push('duplicateLoad');
   if (status.daemon.detail === 'protocol_incompatible') notices.push('incompatible');
   else if (status.updateAvailable) notices.push('updateAvailable');
   if (status.needsHubRestart) notices.push('needsHubRestart');
   if (mode === 'not_installed' && status.socketSetting === 'custom') notices.push('customSocket');
   return notices;
+}
+
+/** launchd has the service loaded into both domains: install / start / update are refused until one copy is booted out, so the buttons are off. */
+export function misaoActionsBlocked(status: MisaoServiceStatus): boolean {
+  return status.managed && status.serviceDuplicateLoad === true;
 }
 
 /** i18n key (under `servers:misaoService.unmanaged`) explaining why the hub does not manage misao. */

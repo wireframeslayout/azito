@@ -62,6 +62,6 @@ describe('resolveCurrentHostEnv (HOME の扱い)', () => {
 
   it('platform / arch / execPath は実プロセスの値', () => {
     const env = resolveCurrentHostEnv();
-    expect(env).toMatchObject({ platform: process.platform, arch: process.arch, execPath: process.execPath, uid: os.userInfo().uid });
+    expect(env).toMatchObject({ platform: process.platform, arch: process.arch, execPath: process.execPath, uid: typeof process.getuid === 'function' ? process.getuid() : -1 });
   });
 });

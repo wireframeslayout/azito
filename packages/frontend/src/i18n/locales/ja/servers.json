@@ -250,7 +250,10 @@
     "replaceSocketTitle": "ハブの接続先を切り替えますか？",
     "replaceSocketMessage": "ハブの設定（MISAO_SOCKET）は、AZITO が管理する misao とは別のデーモンを指しています。インストールすると、設定を管理下のソケットに書き換えます（ハブの再起動後に反映）。",
     "replaceSocketConfirm": "書き換えてインストール",
+    "actionsBlocked": "サービスが二重に読み込まれている間は使えません。",
     "notice": {
+      "duplicateLoad": "misao のサービスが launchd の両方のドメインに読み込まれています（2 つ動いています）",
+      "duplicateLoadSub": "片方を外すまで、インストール・起動・更新は拒否されます。`launchctl bootout gui/$UID/com.azito.misao` と `launchctl bootout user/$UID/com.azito.misao` を実行して（持っているペインは終了します）、ここの起動ボタンか `azito misao start` で起動し直してください。",
       "incompatible": "misao のプロトコルがこのハブと合いません",
       "incompatibleSub": "同梱版の misao へ更新すると解消します。更新すると実行中のペインは終了します。",
       "updateAvailable": "同梱版（{{bundled}}）と異なる misao が動いています（{{running}}）",

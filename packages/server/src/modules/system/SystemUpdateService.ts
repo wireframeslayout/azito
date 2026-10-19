@@ -10,6 +10,7 @@ import { UpdateStateManager, type UpdateState } from './UpdateStateManager';
 import { DeployModeDetector, type DeployMode } from './DeployModeDetector';
 import { compareVersions, isNewer } from './semver';
 import { isDiagnosticsEnabled } from './diagnosticsEligibility';
+import { DuplicateLoadError, type ServiceManager } from './serviceManager';
 
 const execFileAsync = promisify(execFile);
 
@@ -149,6 +150,8 @@ export class SystemUpdateService {
     private deployModeDetector: DeployModeDetector,
     private dataPaths: DataPaths,
     private taskRepo: SqliteTaskRepository,
+    /** The hub's own service on this host (null where there is none); asked before an update starts whether launchd has it loaded twice. */
+    private hubService: ServiceManager | null,
   ) {}
 
   async getStatus(): Promise<UpdateStatusResponse> {
@@ -224,6 +227,16 @@ export class SystemUpdateService {
     }
     if (!version && !isNewer(target.version, currentVersion)) {
       return { started: false, error: '既に最新バージョンです' };
+    }
+
+    // A job loaded into both launchd domains would only be found at the restart step, after the new version is already switched in.
+    if (this.hubService && this.deployModeDetector.serviceManager()) {
+      try {
+        await this.hubService.loadedDomain();
+      } catch (err) {
+        if (err instanceof DuplicateLoadError) return { started: false, error: err.message };
+        throw err;
+      }
     }
 
     const initialState: UpdateState = {

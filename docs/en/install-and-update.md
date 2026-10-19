@@ -239,12 +239,21 @@ install call the bundled CLI directly:
 ~/.azito/hub/current/node ~/.azito/hub/current/azito-hub.cjs service status    # or start | stop | restart | reload
 ```
 
-To update the wrapper itself, take it from the current release's `install.sh` (the installer never overwrites an installed hub, so this only replaces the wrapper):
+To update the wrapper itself, take it from the `install.sh` of the version you have installed (it must be a release that contains this
+wrapper; the installer never touches an installed hub, only the wrapper is written). The old wrapper is replaced only after the new one is checked, so a failed download leaves it as it was:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/azito-install.sh https://github.com/wireframeslayout/azito/releases/latest/download/install.sh
-sed -n "/<<'WRAPPER'/,/^WRAPPER$/p" /tmp/azito-install.sh | sed '1d;$d' > ~/.local/bin/azito && chmod +x ~/.local/bin/azito
-rm /tmp/azito-install.sh
+(
+  set -euo pipefail
+  VERSION="$(head -1 ~/.azito/hub/current/version.txt)"   # the same value `azito version` prints, e.g. v0.12.0
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+  curl --proto '=https' --tlsv1.2 -fsSL -o "$TMP/install.sh" "https://github.com/wireframeslayout/azito/releases/download/${VERSION}/install.sh"
+  sed -n "/<<'WRAPPER'/,/^WRAPPER$/p" "$TMP/install.sh" | sed '1d;$d' > "$TMP/azito"
+  test -s "$TMP/azito"        # not empty
+  bash -n "$TMP/azito"        # valid shell
+  install -m 755 "$TMP/azito" ~/.local/bin/azito
+)
 ```
 
 ### misao service

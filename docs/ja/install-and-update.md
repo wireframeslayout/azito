@@ -236,12 +236,20 @@ macOS 自身が `gui/<uid>` に読み込みます。
 ~/.azito/hub/current/node ~/.azito/hub/current/azito-hub.cjs service status    # start | stop | restart | reload も同じ
 ```
 
-ラッパー自体を更新するには、現在のリリースの `install.sh` から取り出します（インストール済みのハブには何もしないので、置き換わるのはラッパーだけです）:
+ラッパー自体を更新するには、インストール済みの版の `install.sh` から取り出します（この変更を含むリリースである必要があります。インストーラーはインストール済みのハブには何もせず、書くのはラッパーだけです）。新しいラッパーを確かめてから置き換えるので、取得に失敗しても既存のラッパーはそのままです:
 
 ```bash
-curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/azito-install.sh https://github.com/wireframeslayout/azito/releases/latest/download/install.sh
-sed -n "/<<'WRAPPER'/,/^WRAPPER$/p" /tmp/azito-install.sh | sed '1d;$d' > ~/.local/bin/azito && chmod +x ~/.local/bin/azito
-rm /tmp/azito-install.sh
+(
+  set -euo pipefail
+  VERSION="$(head -1 ~/.azito/hub/current/version.txt)"   # `azito version` が出す値と同じ（例: v0.12.0）
+  TMP="$(mktemp -d)"
+  trap 'rm -rf "$TMP"' EXIT
+  curl --proto '=https' --tlsv1.2 -fsSL -o "$TMP/install.sh" "https://github.com/wireframeslayout/azito/releases/download/${VERSION}/install.sh"
+  sed -n "/<<'WRAPPER'/,/^WRAPPER$/p" "$TMP/install.sh" | sed '1d;$d' > "$TMP/azito"
+  test -s "$TMP/azito"        # 空でない
+  bash -n "$TMP/azito"        # シェルとして正しい
+  install -m 755 "$TMP/azito" ~/.local/bin/azito
+)
 ```
 
 ### misao サービス

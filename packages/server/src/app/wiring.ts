@@ -30,7 +30,7 @@ import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { probeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
-import { createServiceManager, runCommand } from '../modules/system/serviceManager';
+import { HUB_SERVICE, createServiceManager, runCommand } from '../modules/system/serviceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
 import { MISAO_SERVICE, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
@@ -581,7 +581,8 @@ function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misa
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
   const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
-  const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
+  const hubService = createServiceManager(hostEnv, HUB_SERVICE, runCommand);
+  const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null);
   return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv, secretFileGuard) };
 }
 
