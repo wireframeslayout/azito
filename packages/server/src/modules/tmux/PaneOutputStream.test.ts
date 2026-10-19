@@ -9,6 +9,14 @@ function pipeFile(id: string): string {
   return path.join(os.tmpdir(), `azito-pipe-${id}-${Date.now()}.log`);
 }
 
+async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor: timed out');
+    await sleep(10);
+  }
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -403,6 +411,18 @@ describe('PaneOutputStream', () => {
     expect(parsed[0].type).toBe('text');
     stream.stop();
     stream = null;
+  });
+
+  it('reports a failure while following as stream_failed, never as an unhandled error event', async () => {
+    stream = new PaneOutputStream(pipeFile('test-failure'));
+    const failures: Error[] = [];
+    stream.on('stream_failed', (e: Error) => failures.push(e));
+    stream.on('data', () => { throw new Error('listener broke'); });
+    stream.start();
+    fs.appendFileSync(stream.getFilePath(), 'line\n');
+    await waitFor(() => failures.length === 1);
+    expect(failures[0].message).toBe('listener broke');
+    expect(stream.listenerCount('error')).toBe(0);
   });
 
   it('should truncate buffer when exceeding 2MB limit, preserving tail', async () => {

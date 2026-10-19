@@ -152,6 +152,7 @@ function makeRunner(overrides: {
     sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[], _ctx?: unknown) => {}),
   };
   const workerWaiter = {
+    streamFailure: vi.fn(() => null),
     startPaneStream: vi.fn(() => ({ stop: vi.fn() })),
     startSignalStream: vi.fn(() => ({ getFilePath: () => '/tmp/sig', stop: vi.fn() })),
     waitForWorker: vi.fn(async () => ({ output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } })),

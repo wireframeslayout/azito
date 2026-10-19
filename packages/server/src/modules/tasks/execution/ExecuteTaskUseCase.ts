@@ -2087,6 +2087,14 @@ export class ExecuteTaskUseCase {
       // For non-LLM modes: send the comment with marker instructions to the worker
       // (supervisor PTY when supervised+connected, tmux send-keys otherwise —
       // see WorkerInputService)
+      const streamFailure = this.workerWaiter.streamFailure(followUpStream) ?? this.workerWaiter.streamFailure(followUpSignalStream);
+      if (streamFailure) {
+        followUpStream.stop();
+        followUpSignalStream.stop();
+        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: streamFailure.message });
+        this.taskRepo.updateStatus(taskId, 'failed');
+        return;
+      }
       try {
         await runtime.sendPrompt({ server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId }, commentWithMarkers);
       } catch (err: unknown) {
@@ -2121,7 +2129,7 @@ export class ExecuteTaskUseCase {
 
       if (classification.status === 'stopped' && !abortController.signal.aborted) {
         this.appendLog(taskId, unitId, 'output', output);
-        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: 'Agent stopped unexpectedly during follow-up' });
+        this.appendLog(taskId, unitId, 'status_change', { status: 'error', message: classification.reason ?? 'Agent stopped unexpectedly during follow-up' });
         this.taskRepo.updateStatus(taskId, 'failed');
         return;
       }

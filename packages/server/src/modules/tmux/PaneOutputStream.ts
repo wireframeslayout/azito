@@ -180,7 +180,8 @@ export class PaneOutputStream extends BasePaneStream {
         if (this.closed) return;
         this.processChunk(text);
       },
-      onError: (err) => this.emit('error', err),
+      // 'error' with no listener would take the process down; the owner of the task fails just that task on 'stream_failed'.
+      onError: (err) => this.emit('stream_failed', err),
     });
     this.follower.start();
   }

@@ -95,6 +95,11 @@ export class WorkerWaiter {
     return paneStream;
   }
 
+  /** The failure a stream reported ('stream_failed'), if any. */
+  streamFailure(stream: IPaneStream): Error | null {
+    return this.streamFailures.get(stream) ?? null;
+  }
+
   /** Subscribed before start(): a stream that can never work must fail its own task, not surface as an unhandled event. */
   private watchStreamFailure(stream: IPaneStream, taskId: number, unitId: number): void {
     stream.on('stream_failed', (err: Error) => {
@@ -291,7 +296,7 @@ export class WorkerWaiter {
       // A stream that can never deliver (e.g. the agent is too old) ends this wait as a stopped worker, which fails only this task.
       const onStreamFailed = (err: Error) => {
         this.appendLog(taskId, unitId, 'command', { type: 'wait_stream_failed', message: err.message });
-        finish({ output: paneStream.getBuffer(), classification: { status: 'stopped' } });
+        finish({ output: paneStream.getBuffer(), classification: { status: 'stopped', reason: err.message } });
       };
       for (const stream of signalStream ? [paneStream, signalStream] : [paneStream]) {
         const earlier = this.streamFailures.get(stream);

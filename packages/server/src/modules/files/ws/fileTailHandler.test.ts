@@ -13,6 +13,8 @@ class FakeSocket extends EventEmitter {
   readonly sent: string[] = [];
   send = vi.fn((data: string) => { this.sent.push(data); });
   close = vi.fn(() => { this.readyState = 3; this.emit('close'); });
+  ping = vi.fn();
+  terminate = vi.fn(() => { this.readyState = 3; this.emit('close'); });
 }
 
 async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
@@ -74,6 +76,24 @@ describe('fileTailHandler (managed stream files)', () => {
     fs.symlinkSync(secret, file);
     open(file);
     expect(ws.sent).toEqual([JSON.stringify({ error: 'Path not allowed' })]);
+  });
+
+  it('pings, and terminates a connection that never answers, which frees its registration', async () => {
+    const file = path.join(dir, 'azito-pipe-42-5.log');
+    managed.register(file);
+    handleFileTail(ws as unknown as WebSocket, file, managed, 20);
+    await waitFor(() => ws.terminate.mock.calls.length > 0);
+    expect(ws.ping).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a connection that answers the ping', async () => {
+    const file = path.join(dir, 'azito-pipe-42-6.log');
+    managed.register(file);
+    ws.ping.mockImplementation(() => { setImmediate(() => ws.emit('pong')); });
+    handleFileTail(ws as unknown as WebSocket, file, managed, 20);
+    await new Promise((r) => setTimeout(r, 150));
+    expect(ws.ping.mock.calls.length).toBeGreaterThan(2);
+    expect(ws.terminate).not.toHaveBeenCalled();
   });
 
   it('sends nothing after the socket closes', async () => {

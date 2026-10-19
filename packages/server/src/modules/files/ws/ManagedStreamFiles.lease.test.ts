@@ -61,14 +61,26 @@ describe('ManagedStreamFiles leases and limits', () => {
     expect(warnings).toEqual([]);
   });
 
-  it('at the limit, evicts the oldest idle registration and logs it', () => {
+  it('at the limit, protects registrations still within their lease and refuses the new one', () => {
     const managed = make(2);
     managed.register(file(1));
     managed.register(file(2));
+    expect(() => managed.register(file(3))).toThrow(InvalidStreamFileError);
+    expect(managed.isManaged(file(1))).toBe(true);
+    expect(fs.existsSync(file(1))).toBe(true);
+    expect(warnings.join('\n')).toContain('refusing');
+  });
+
+  it('at the limit, takes the space of a registration whose lease has run out', () => {
+    const managed = make(2);
+    managed.register(file(1));
+    clock += 30_000;
+    managed.register(file(2));
+    clock += 31_000;
     managed.register(file(3));
     expect(managed.isManaged(file(1))).toBe(false);
+    expect(managed.isManaged(file(2))).toBe(true);
     expect(managed.isManaged(file(3))).toBe(true);
-    expect(warnings.join('\n')).toContain('evicting');
   });
 
   it('refuses, and logs, when every registration is in use', () => {

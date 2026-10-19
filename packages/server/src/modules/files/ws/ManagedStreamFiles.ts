@@ -4,8 +4,13 @@ import * as path from 'path';
 /** ハブが pane の出力を追跡させるために作らせるファイル名（`azito-pipe-<paneId>-<stamp>.log`）。 */
 const STREAM_FILE_NAME = /^azito-pipe-[A-Za-z0-9_-]+\.log$/;
 const DEFAULT_MAX_FILES = 1024;
-/** WS の接続が無い状態がこの時間続いた登録は、所有者（ハブ）がいなくなったとみなして外す。再接続の間隔（最大 30 秒）より十分長い。 */
-const DEFAULT_LEASE_MS = 5 * 60_000;
+/**
+ * WS の接続が無い状態がこの時間続いた登録は、所有者（ハブ）がいなくなったとみなして外す。
+ * ハブ（AgentPaneStream）は登録が通らない・切れている間、最大 11 回試す: 待ちは 1+2+4+8+16+30×5 = 181 秒、
+ * 各回の HTTP の待ちは最大 20 秒（15 秒の期限 + 5 秒の余裕）で 220 秒、合わせて約 401 秒。それより長い 10 分にして、
+ * ハブがまだ再試行している間の登録を回収しないようにする。
+ */
+const DEFAULT_LEASE_MS = 10 * 60_000;
 
 /** ハブが登録を要求したパスが、管理対象にできない形だった。 */
 export class InvalidStreamFileError extends Error {}
@@ -32,7 +37,7 @@ const flag = (name: 'O_NOFOLLOW' | 'O_NONBLOCK'): number => fs.constants[name] ?
  * 登録はメモリ上だけなので、エージェントが再起動すると消える。ハブは再接続のたびに登録し直す。
  *
  * 解除が届かなかった登録（ハブのクラッシュなど）は、リースで回収する: WS の接続が無い状態が `leaseMs` 続いたら、
- * 次の登録のときにファイルごと外す。上限に達したら、期限切れ、ファイルが消えたもの、最も古い接続の無いもの、の順に外す。
+ * 次の登録のときにファイルごと外す。上限に達したら、期限切れ、ファイルが消えたもの、の順に外し、それでも空かなければ（猶予中の登録は守る）新しい登録を拒否してログに出す。
  */
 export class ManagedStreamFiles {
   private readonly files = new Map<string, Entry>();
@@ -94,15 +99,8 @@ export class ManagedStreamFiles {
     }
     if (this.files.size < this.maxFiles) return;
 
-    // Map は挿入順なので、先に見つかる接続の無い登録が最も古い。
-    for (const [file, entry] of this.files) {
-      if (entry.connections === 0) {
-        this.options.logger?.warn(`[pane-streams] ${this.files.size} registrations: evicting the oldest idle one (${file})`);
-        this.unregister(file);
-        return;
-      }
-    }
-    this.options.logger?.warn(`[pane-streams] refusing a registration: ${this.files.size} files are all in use`);
+    // 猶予（リース）の中にある登録は、接続が無くても守る（切断直後のハブがまだ再接続を試している）。空きが作れないなら拒否する。
+    this.options.logger?.warn(`[pane-streams] refusing a registration: ${this.files.size} files, none past its lease or missing`);
     throw new InvalidStreamFileError('Too many managed stream files');
   }
 

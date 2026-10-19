@@ -11,8 +11,8 @@ export interface PaneStreamGapEvent {
  * Besides 'data' and 'marker', a stream reading from a live source (MisaoPaneStream) may emit:
  * - 'gap' with a {@link PaneStreamGapEvent}
  * - 'subscription_error' with an `Error`: the stream could not (re)subscribe and delivers nothing more
- * - 'stream_failed' with an `Error` (AgentPaneStream): the stream is unusable for good (e.g. the agent is too old); the task that owns it fails
- * Local file-backed streams emit none of these.
+ * - 'stream_failed' with an `Error` (the file-backed streams, local and agent): the stream is unusable for good (a read error, or an agent
+ *   that is too old); the task that owns it fails. These streams never emit 'error', which nobody listens for.
  */
 export interface IPaneStream extends EventEmitter {
   setMarkers(done: string, questions: string): void;

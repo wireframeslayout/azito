@@ -535,6 +535,14 @@ export class PhaseLoopRunner {
         });
 
         const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+        // A pane stream that already failed (e.g. an agent too old to register it) cannot see the answer: fail with the reason, do not prompt.
+        const streamFailure = this.workerWaiter.streamFailure(phaseStream) ?? this.workerWaiter.streamFailure(phaseSignalStream);
+        if (streamFailure) {
+          phaseSignalStream.stop();
+          this.appendLog(task.id, unit.id, 'status_change', { status: 'error', message: streamFailure.message });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
         try {
           await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
         } catch (err: unknown) {
@@ -645,7 +653,7 @@ export class PhaseLoopRunner {
 
       if (classification.status === 'stopped') {
         this.appendLog(task.id, unit.id, 'output', output);
-        this.appendLog(task.id, unit.id, 'status_change', { status: 'error', message: 'Agent stopped unexpectedly' });
+        this.appendLog(task.id, unit.id, 'status_change', { status: 'error', message: classification.reason ?? 'Agent stopped unexpectedly' });
         this.taskRepo.updateStatus(task.id, 'failed');
         return;
       }

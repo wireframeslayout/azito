@@ -12,6 +12,8 @@ export interface PaneQuestion {
 export interface PaneClassification {
   status: PaneStatus;
   questions?: PaneQuestion[];
+  /** Why the status is 'stopped', when something other than the worker ending is the cause (e.g. a pane stream that failed). */
+  reason?: string;
 }
 
 const QUESTIONS_JSON_MARKER = 'QUESTIONS_JSON:';

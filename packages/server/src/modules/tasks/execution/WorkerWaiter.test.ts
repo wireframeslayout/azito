@@ -3,6 +3,10 @@ import { EventEmitter } from 'events';
 import { asPaneHandle } from '@azito/shared';
 import { WorkerWaiter, choosePlanExtractionSource } from './WorkerWaiter';
 import type { IPaneStream } from '../../tmux/PaneStream';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { ServerConfig } from '../../servers/Server';
 
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
@@ -121,6 +125,23 @@ describe('WorkerWaiter.extractPlanWithFallback', () => {
     expect(captureScreen).toHaveBeenCalledWith(server, '%0', -3000);
     expect(extractPlan).toHaveBeenCalledWith(expect.stringContaining('## 実装計画'));
     expect(result).toContain('## 実装計画');
+  });
+});
+
+describe('WorkerWaiter with a local file stream that fails', () => {
+  it('ends only that wait as stopped, with the read error as the reason', async () => {
+    const file = path.join(os.tmpdir(), `azito-pipe-waiter-${Date.now()}.log`);
+    const real = new PaneOutputStream(file);
+    const waiter = new WorkerWaiter(
+      { resolve: () => ({ startOutputStream: async () => undefined, stopOutputStream: async () => undefined }) } as never,
+      {} as never, {} as never, {} as never, { create: () => real }, vi.fn(), () => {}, {} as never,
+    );
+    waiter.startPaneStream(server, handle, 1, 2);
+    real.on('data', () => { throw new Error('disk read failed'); });
+    const waiting = waiter.waitForWorker(server, handle, 1, 2, new AbortController().signal, real);
+    fs.appendFileSync(file, 'x\n');
+    await expect(waiting).resolves.toMatchObject({ classification: { status: 'stopped', reason: 'disk read failed' } });
+    expect(waiter.streamFailure(real)?.message).toBe('disk read failed');
   });
 });
 
