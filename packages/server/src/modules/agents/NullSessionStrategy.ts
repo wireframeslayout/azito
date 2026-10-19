@@ -16,7 +16,7 @@ export class NullSessionStrategy implements ISessionStrategy {
     return '';
   }
 
-  buildRespawnCommand(_agentSessionId: string | null, model: string | null, extraArgs: string | null): string | null {
+  buildRespawnCommand(_agentSessionId: string | null, model: string | null, extraArgs: string | null, _blockMcp?: boolean): string | null {
     return buildWorkerLaunchCommand(this.workerType, model, extraArgs);
   }
 

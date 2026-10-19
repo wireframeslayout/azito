@@ -65,6 +65,14 @@ describe('catalog helpers (default registry)', () => {
     expect(listAgentDefinitions().map((a) => a.type).sort()).toEqual(['claude', 'codex', 'generic']);
   });
 
+  it('listAgentDefinitions launchCommands omit MCP blocking flags (Issue #471)', () => {
+    const defs = listAgentDefinitions();
+    const claude = defs.find((d) => d.type === 'claude')!;
+    const codex = defs.find((d) => d.type === 'codex')!;
+    expect(claude.launchCommand).not.toContain('--strict-mcp-config');
+    expect(codex.launchCommand).not.toContain('mcp_servers.azt-mcp.enabled=false');
+  });
+
   it('getAgentsForContext filters by context', () => {
     const subagentAgents = getAgentsForContext('subagent').map((a) => a.type).sort();
     expect(subagentAgents).toEqual(['claude', 'codex']);

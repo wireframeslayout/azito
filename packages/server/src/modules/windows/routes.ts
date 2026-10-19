@@ -17,6 +17,7 @@ import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
+import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
@@ -63,6 +64,20 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   const muxUnavailableBody = (srv: ServerConfig, kind: MuxDriverKind): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
     const availability = opts.muxDriverRegistry.availabilityFor(kind, srv);
     return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
+  };
+
+  // Issue #471: resolve a task's execution-allowed status for the MCP
+  // blocking decision. Delegates to respawnService.isTaskExecutionAllowed()
+  // which has the full ExecutionGate dependencies.
+  const resolveLinkedTaskForMcp = (taskId: number, serverName: string): { executionAllowed: boolean } | 'unknown' => {
+    try {
+      const task = taskRepo.findById(taskId);
+      if (!task) return 'unknown';
+      if (task.inputTrust !== 'untrusted') return { executionAllowed: true };
+      return { executionAllowed: respawnService.isTaskExecutionAllowed(task, serverName) };
+    } catch {
+      return 'unknown';
+    }
   };
 
   // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
@@ -428,21 +443,38 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
 
+      // Issue #471: enforce MCP blocking for task worker windows, but not
+      // user-added windows. The command from the frontend was built without
+      // MCP flags (listAgentDefinitions now returns unblocked commands), so
+      // we must add them when the window requires blocking.
+      const blockMcp = shouldBlockMcp({
+        isPrimary: win.isPrimary,
+        linkedTask: win.taskId !== null ? resolveLinkedTaskForMcp(win.taskId, win.serverName) : null,
+      });
+
       const strategy = sessionStrategyFactory.create(win.workerType);
       let effectiveCommand = command;
+
+      // Session ID processing first (operates on the original command)
       if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
-        const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(command)?.[1]
-          ?? /(?:^|\s)--resume\s+(\S+)/.exec(command)?.[1];
+        const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(effectiveCommand)?.[1]
+          ?? /(?:^|\s)--resume\s+(\S+)/.exec(effectiveCommand)?.[1];
         if (existingId) {
           windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, existingId);
         } else {
           const sessionId = randomUUID();
           const flags = strategy.buildNewSessionFlags(sessionId);
           if (flags) {
-            effectiveCommand = `${command} ${flags}`;
+            effectiveCommand = `${effectiveCommand} ${flags}`;
             windowRepo.updateAgentSessionIdByWindow(win.serverName, win.tmuxTarget, sessionId);
           }
         }
+      }
+
+      // MCP flag injection last (just before supervisor wrapping) so it
+      // is never overwritten by the session-id append above.
+      if (blockMcp) {
+        effectiveCommand = ensureMcpBlockByCommand(effectiveCommand);
       }
 
       const supervised = shouldSupervise(srv.type, win.windowType, windowKindOf(win));
