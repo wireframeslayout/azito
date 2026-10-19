@@ -98,6 +98,12 @@ describe('isHostPathContained', () => {
       expect(isHostPathContained('win32', { target: 'C:\\work', allowedRoot: root })).toBe(false);
     });
 
+    it('does not take the same directory spelled with another case for the root itself', () => {
+      expect(isHostPathContained('win32', { target: 'C:\\work\\Proj', allowedRoot: root })).toBe(false);
+      expect(isHostPathContained('win32', { target: 'C:\\WORK\\proj', allowedRoot: root })).toBe(false);
+      expect(isHostPathContained('win32', { target: root, allowedRoot: root })).toBe(true);
+    });
+
     it('does not fold case: a directory may be case-sensitive, where Proj is not proj', () => {
       expect(isHostPathContained('win32', { target: 'C:\\work\\Proj\\src', allowedRoot: root })).toBe(false);
       expect(isHostPathContained('win32', { target: 'C:\\work\\proj\\Src', allowedRoot: root })).toBe(true);

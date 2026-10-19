@@ -198,7 +198,7 @@ packages/
   (neither is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
 
 ### File operations (IFileOps, #379 P7)
-- `IServerTransport.files()` returns the host's `IFileOps` (list / stat / read / write / create / remove / rename / realpath / which / tmpPath): Node `fs` on the machine that owns the files, no shell,
+- `IServerTransport.files()` returns the host's `IFileOps` (list / stat / read / write / create / remove / rename / realpath): Node `fs` on the machine that owns the files, no shell,
   the same code on every OS. `LocalFileOps` (`shared/fs/`) is the hub's own and what the agent runs for each request; an agent server gets `RemoteFileOps` over `POST /api/fileops`
   (`shared/fs/fileOpsWire.ts`: Zod-validated request, the refusal in the 200 body as a `FileOpsError`). An agent registered before its OS was recorded (`hostProfile` NULL) has no such endpoint and gets
   `ShellFileOps` (the old sh commands); `AgentTransport.files()` chooses once, and a failing route is never retried through the other.

@@ -4,7 +4,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError } from './fileOps';
 import { executeFileOp, fileOpRequestSchema, MAX_FILE_OPS_BYTES, RemoteFileOps, type FileOpRequest } from './fileOpsWire';
-import { LocalFileOps, localFileOpsHostFromEnv } from './LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from './LocalFileOps';
 
 let dir: string;
 let local: LocalFileOps;
@@ -13,7 +13,7 @@ let remote: RemoteFileOps;
 
 beforeEach(() => {
   dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-fileops-wire-')));
-  local = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env));
+  local = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: dir }));
   sent = [];
   // The agent route in one process: the request and the response both go through JSON, as they do over HTTP.
   remote = new RemoteFileOps(local.platform, async (request) => {
@@ -44,8 +44,6 @@ describe('RemoteFileOps over executeFileOp', () => {
     await remote.rename(file, path.join(dir, 'b.txt'));
     await remote.remove(path.join(dir, 'b.txt'));
     expect((await remote.list(dir)).map((e) => e.name)).toEqual(['sub']);
-    expect(path.basename(await remote.tmpPath('azito-x'))).toMatch(/^azito-x-/);
-    expect(await remote.which('azito-no-such-command-xyz')).toBeNull();
   });
 
   it('rethrows a refusal of the host as the same error with its details', async () => {

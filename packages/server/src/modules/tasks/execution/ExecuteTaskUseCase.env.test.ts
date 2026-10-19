@@ -26,10 +26,10 @@ import type { ServerConfig, IServerRepository } from '../../servers/Server';
 import type { ProjectDetail, IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 
 // Containment resolves real paths through the host's file operations: here the real ones, on this machine.
-const hostFiles = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: '/', tmpDir: '/tmp' }, process.env));
+const hostFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: '/' }));
 
 // ─── Fixtures ───
 

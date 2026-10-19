@@ -36,8 +36,6 @@ export const fileOpRequestSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('remove'), path: filePath }),
   z.object({ op: z.literal('rename'), from: filePath, to: filePath }),
   z.object({ op: z.literal('realpath'), path: filePath }),
-  z.object({ op: z.literal('which'), command: filePath }),
-  z.object({ op: z.literal('tmpPath'), prefix: filePath }),
 ]);
 export type FileOpRequest = z.infer<typeof fileOpRequestSchema>;
 
@@ -66,8 +64,6 @@ const resultSchemas = {
   remove: z.null(),
   rename: z.null(),
   realpath: z.string(),
-  which: z.string().nullable(),
-  tmpPath: z.string(),
 };
 
 async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> {
@@ -87,8 +83,6 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
     case 'remove': await ops.remove(request.path); return null;
     case 'rename': await ops.rename(request.from, request.to); return null;
     case 'realpath': return ops.realpath(request.path);
-    case 'which': return ops.which(request.command);
-    case 'tmpPath': return ops.tmpPath(request.prefix);
   }
 }
 
@@ -146,13 +140,5 @@ export class RemoteFileOps implements IFileOps {
 
   realpath(path: string): Promise<string> {
     return this.call('realpath', { op: 'realpath', path });
-  }
-
-  which(command: string): Promise<string | null> {
-    return this.call('which', { op: 'which', command });
-  }
-
-  tmpPath(prefix: string): Promise<string> {
-    return this.call('tmpPath', { op: 'tmpPath', prefix });
   }
 }

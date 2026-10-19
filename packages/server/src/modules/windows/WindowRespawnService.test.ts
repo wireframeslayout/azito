@@ -6,10 +6,10 @@ import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { KeyedMutex } from '../../shared/keyedMutex';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
 // Containment resolves real paths through the host's file operations: here the real ones, on this machine.
-const hostFiles = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: tmpdir(), tmpDir: tmpdir() }, process.env));
+const hostFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import * as detectDefaultBranchModule from '../git/detectDefaultBranch';
 import type { Window, IWindowRepository } from './Window';

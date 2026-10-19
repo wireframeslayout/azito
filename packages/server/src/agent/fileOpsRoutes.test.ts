@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import fileOpsRoutes from './fileOpsRoutes';
 import { agentAuthHook } from './authHook';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 
 const AUTH = { authorization: 'Bearer secret' };
 
@@ -17,7 +17,7 @@ describe('agent POST /api/fileops', () => {
     dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-agent-fileops-')));
     app = Fastify();
     // As in agent/main.ts: the routes are registered, then the auth hook covers them.
-    await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env)) });
+    await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: dir })) });
     app.addHook('onRequest', agentAuthHook((header) => header === 'Bearer secret'));
     await app.ready();
   });

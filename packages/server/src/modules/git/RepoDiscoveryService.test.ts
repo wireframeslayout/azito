@@ -9,7 +9,7 @@ import type { ServerConfig } from '../servers/Server';
 import { CommandSpawnError, CommandTimeoutError, type CommandResult, type CommandSpec } from '../../shared/exec/commandSpec';
 import { argvOfShellLine, argvOfSpec, failed, ok } from '../../shared/exec/testing/commandTesting';
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
 function makeServer(): ServerConfig {
   return {
@@ -254,7 +254,7 @@ describe('RepoDiscoveryService', () => {
       if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
     });
 
-    const files = () => new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: tmpdir(), tmpDir: tmpdir() }, process.env));
+    const files = () => new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
 
     /**
      * Excluding all hidden directories silently excluded AZITO's own task worktrees, which live under a hidden `.worktrees/`

@@ -43,8 +43,7 @@ export function invalidHostPathReason(platform: HostPlatform, input: string): st
 export function isHostPathContained(platform: HostPlatform, { target, allowedRoot }: { target: string; allowedRoot: string }): boolean {
   const api = pathApiFor(platform);
   const rel = api.relative(allowedRoot, target);
-  if (rel === '') return true;
-  if (api.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + api.sep)) return false;
+  if (rel !== '' && (api.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + api.sep))) return false;
   if (platform !== 'win32') return true;
   // Both in the same fully qualified form (a rooted path without a drive gets the current one), so their segments line up.
   const rootSegments = api.resolve(allowedRoot).split(/[\\/]+/).filter(Boolean);

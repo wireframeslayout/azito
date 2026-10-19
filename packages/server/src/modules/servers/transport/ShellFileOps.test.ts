@@ -258,19 +258,6 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       expect(sh.commands[0]).toContain('p="$HOME"');
     });
   });
-
-  describe('which / tmpPath', () => {
-    it('finds a command on the host and not a missing one', async () => {
-      expect(await ops.which('sh')).toMatch(/\/sh$/);
-      expect(await ops.which('azito-no-such-command-xyz')).toBeNull();
-    });
-
-    it('names a path under /tmp without running anything', async () => {
-      const before = sh.commands.length;
-      expect(await ops.tmpPath('azito-x')).toMatch(/^\/tmp\/azito-x-[0-9a-f]{16}$/);
-      expect(sh.commands.length).toBe(before);
-    });
-  });
 });
 
 // The details that need a host whose tools differ (BSD/macOS, no hash tool): the command texts and what is made of their output.

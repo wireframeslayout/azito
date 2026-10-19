@@ -2,10 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import { assertDirectoryContained, assertNewPathContained, assertPathContained } from './PathContainment';
 
-const ops = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: tmpdir(), tmpDir: tmpdir() }, process.env));
+const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
 
 let base: string;
 let root: string;

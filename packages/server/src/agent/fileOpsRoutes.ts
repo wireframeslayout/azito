@@ -8,7 +8,7 @@ export interface FileOpsRoutesOptions {
 }
 
 /**
- * File operations on the agent's host (list / stat / read / write / create / remove / rename / realpath / which / tmpPath), the
+ * File operations on the agent's host (list / stat / read / write / create / remove / rename / realpath), the
  * same functions the hub runs for its own server. Registered after the token check like every /api route. The request is
  * validated here; how an operation ended, a refusal included, is in the body (HTTP 200), and only a malformed request is 400.
  */

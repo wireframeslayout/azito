@@ -102,6 +102,7 @@ function toBrowseError(err: unknown, messages: BrowseMessages = {}): unknown {
   switch (err.code) {
     case 'NOT_FOUND': return new FileBrowseError('Not found', 404);
     case 'NOT_A_FILE': return new FileBrowseError('Not a regular file', 400);
+    case 'NOT_A_DIRECTORY': return new FileBrowseError('Not a directory', 400);
     case 'TOO_LARGE': return new FileBrowseError(messages.tooLarge?.(err.details.size ?? 0) ?? err.message, 400);
     case 'INVALID_PATH': return new FileBrowseError('Invalid path', 400);
     case 'SYMLINK_REFUSED': return new FileBrowseError('Refusing to write through a symlink', 400);
@@ -175,7 +176,7 @@ export class FileBrowseService {
   async listFiles(srv: ServerConfig, dirPath: string, showHidden: boolean): Promise<FileEntry[]> {
     const ops = this.ops(srv);
     const separator = pathApiFor(ops.platform).sep;
-    const entries: FileEntry[] = (await ops.list(dirPath))
+    const entries: FileEntry[] = (await browsing(() => ops.list(dirPath)))
       .filter((entry) => showHidden || !entry.name.startsWith('.'))
       .map((entry) => {
         const isDir = entry.kind === 'directory';

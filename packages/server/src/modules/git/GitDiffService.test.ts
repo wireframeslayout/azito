@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import { GitDiffService, SAFE_HASH } from './GitDiffService';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
@@ -15,7 +15,7 @@ type GitResponder = (spec: CommandSpec, index: number) => CommandResult;
 /** git goes through `run`; an untracked file is read through the host's file operations (here the real ones, on this machine). */
 function makeService(onGit: GitResponder = () => ok()) {
   const gitCalls: CommandSpec[] = [];
-  const files = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: tmpdir(), tmpDir: tmpdir() }, process.env));
+  const files = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
   const transport = {
     run: async (spec: CommandSpec) => onGit(spec, gitCalls.push(spec)),
     files: () => files,

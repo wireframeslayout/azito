@@ -1,7 +1,11 @@
 import { createHash } from 'crypto';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
-import { FileOpsError } from '../../../shared/fs/fileOps';
+import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import { pathApiFor } from '../../../shared/os/hostPath';
+import { KeyedMutex } from '../../../shared/keyedMutex';
+
+/** Two projects registering at once would each read the same file and the later write would drop the earlier registration. */
+const configLocks = new KeyedMutex();
 
 export type EnsureClaudeTrustResult =
   | { action: 'registered' }
@@ -17,7 +21,12 @@ export type EnsureClaudeTrustResult =
 export async function ensureClaudeTrust(transport: IServerTransport, projectPath: string): Promise<EnsureClaudeTrustResult> {
   const ops = transport.files();
   const configPath = pathApiFor(ops.platform).join(await ops.realpath('~'), '.claude.json');
+  // The whole read, update and save of one config file is one step for this process; the write's own check
+  // (the hash of what was read) is the guard against anything else that changes the file.
+  return configLocks.withLock(configPath, () => registerTrust(ops, configPath, projectPath));
+}
 
+async function registerTrust(ops: IFileOps, configPath: string, projectPath: string): Promise<EnsureClaudeTrustResult> {
   let raw: Buffer;
   try {
     raw = (await ops.read(configPath)).data;

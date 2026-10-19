@@ -10,6 +10,14 @@ import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import type { FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
 import { isHostPathContained, pathApiFor } from '../../shared/os/hostPath';
+import type { HostPlatform } from '../../shared/os/hostEnv';
+
+/** `.git` as the host's filesystem sees it: case-insensitive on win32 / darwin, and win32 ignores trailing dots and spaces. */
+export function isGitDirectoryName(platform: HostPlatform, name: string): boolean {
+  if (platform === 'linux') return name === '.git';
+  const folded = name.toLowerCase();
+  return (platform === 'win32' ? folded.replace(/[. ]+$/, '') : folded) === '.git';
+}
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
@@ -232,6 +240,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       try {
         return await fileBrowseService.listFiles(srv, dirPath, showHidden);
       } catch (err: unknown) {
+        if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message });
         return reply.status(500).send({ error: (err as Error).message });
       }
     },
@@ -454,7 +463,9 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (/[\x00-\x1f]/.test(rawPath)) return reply.status(400).send({ error: 'Invalid path' });
 
       const api = pathApiFor(transportFactory.getFileOps(srv).platform);
-      if (api.basename(rawPath) === '.git') return reply.status(400).send({ error: 'Cannot delete .git directory' });
+      // A "." or ".." segment would let the last element name something other than what the checks below look at
+      // (<root>/.. is the root's parent; <root>\.git\. is .git on Windows).
+      if (rawPath.split(/[\\/]+/).some((segment) => segment === '.' || segment === '..')) return reply.status(400).send({ error: 'Invalid path' });
 
       const ps = projectServerRepo.find(projectId, srv.name);
       if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
@@ -464,13 +475,15 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
         const parentDir = api.dirname(rawPath);
         const resolvedParent = await assertDirectoryContained(fileOps, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
         const resolvedRoot = await fileOps.realpath(ps.workingDirectory);
-        if (resolvedParent === resolvedRoot && api.basename(rawPath) === '.') {
-          return reply.status(400).send({ error: 'Cannot delete the root directory' });
-        }
+        // What is deleted is the checked path itself (the contained parent + the last element), not the raw request.
         const resolvedTarget = api.join(resolvedParent, api.basename(rawPath));
         if (resolvedTarget === resolvedRoot) return reply.status(400).send({ error: 'Cannot delete the root directory' });
+        if (!isHostPathContained(fileOps.platform, { target: resolvedTarget, allowedRoot: resolvedRoot })) {
+          return reply.status(400).send({ error: 'target path escapes the allowed directory' });
+        }
+        if (isGitDirectoryName(fileOps.platform, api.basename(resolvedTarget))) return reply.status(400).send({ error: 'Cannot delete .git directory' });
 
-        await fileBrowseService.deleteEntry(srv, rawPath);
+        await fileBrowseService.deleteEntry(srv, resolvedTarget);
         return { ok: true };
       } catch (err: unknown) {
         if (err instanceof FileBrowseError) return reply.status(err.status).send({ error: err.message });

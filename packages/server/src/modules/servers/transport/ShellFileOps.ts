@@ -215,14 +215,4 @@ export class ShellFileOps implements IFileOps {
     if (!resolved) throw new FileOpsError('NOT_FOUND', `realpath failed for '${path}'`);
     return resolved;
   }
-
-  async which(command: string): Promise<string | null> {
-    const found = (await this.out(`command -v -- ${sq(this.checked(command))} 2>/dev/null`)).trim();
-    return found.startsWith('/') ? found : null;
-  }
-
-  async tmpPath(prefix: string): Promise<string> {
-    if (!/^[A-Za-z0-9._-]+$/.test(prefix)) throw new FileOpsError('INVALID_PATH', `Invalid temporary file prefix: ${prefix}`);
-    return `/tmp/${prefix}-${randomBytes(8).toString('hex')}`;
-  }
 }

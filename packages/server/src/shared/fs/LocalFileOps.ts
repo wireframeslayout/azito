@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from 'crypto';
 import * as fs from 'fs';
 import { promisify } from 'util';
+import { KeyedMutex } from '../keyedMutex';
 import type { HostEnv, HostPlatform } from '../os/hostEnv';
 import { invalidHostPathReason, pathApiFor, type HostPathApi } from '../os/hostPath';
-import { pathDelimiterFor } from '../os/hostProfile';
 import {
   FileOpsError,
   type DirEntry,
@@ -19,15 +19,7 @@ import {
 export interface LocalFileOpsHost {
   platform: HostPlatform;
   homeDir: string;
-  tmpDir: string;
-  /** The host's PATH variable (undefined: not set, so no command is found by name). */
-  pathEnv: string | undefined;
-  /** The host's PATHEXT variable; only read on win32. */
-  pathExt: string | undefined;
 }
-
-/** The Windows default of PATHEXT, used when the variable is not set. */
-const DEFAULT_PATHEXT = '.COM;.EXE;.BAT;.CMD';
 
 /** An OS AZITO has no profile for (freebsd...) is handled with POSIX path rules, like an agent registered before its OS was recorded. */
 function toFileOpsPlatform(platform: NodeJS.Platform): HostPlatform {
@@ -35,16 +27,8 @@ function toFileOpsPlatform(platform: NodeJS.Platform): HostPlatform {
   return platform === 'darwin' ? 'darwin' : 'linux';
 }
 
-/** The boundary: reads the process environment once and hands the core resolved values. */
-export function localFileOpsHostFromEnv(hostEnv: Pick<HostEnv, 'platform' | 'homeDir' | 'tmpDir'>, env: NodeJS.ProcessEnv): LocalFileOpsHost {
-  const platform = toFileOpsPlatform(hostEnv.platform);
-  // Windows names variables without regard to case (`Path`).
-  const lookup = (name: string): string | undefined => {
-    if (platform !== 'win32') return env[name];
-    const key = Object.keys(env).find((k) => k.toUpperCase() === name);
-    return key === undefined ? undefined : env[key];
-  };
-  return { platform, homeDir: hostEnv.homeDir, tmpDir: hostEnv.tmpDir, pathEnv: lookup('PATH'), pathExt: lookup('PATHEXT') };
+export function localFileOpsHost(hostEnv: Pick<HostEnv, 'platform' | 'homeDir'>): LocalFileOpsHost {
+  return { platform: toFileOpsPlatform(hostEnv.platform), homeDir: hostEnv.homeDir };
 }
 
 function kindOf(stats: fs.Stats | fs.Dirent): EntryKind {
@@ -91,6 +75,13 @@ async function statOrNull(target: string, followLinks: boolean): Promise<fs.Stat
 
 /** The OS's own resolution (`fs.promises.realpath` is Node's JS one): it follows junctions and returns the filesystem's notation. */
 const realpathNative = promisify(fs.realpath.native);
+
+/**
+ * Serializes, within this process, the operations that check something and then change it (a lock-checked write, a rename
+ * that must not overwrite). The hub's own files and an agent's requests are each one process, so this closes the race between
+ * two callers; a different process on the host can still interleave (see `rename` and `write` for what is guaranteed then).
+ */
+const pathLocks = new KeyedMutex();
 
 function sha256Of(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
@@ -148,31 +139,70 @@ export class LocalFileOps implements IFileOps {
 
   async write(path: string, data: Buffer, options: WriteOptions = {}): Promise<WriteResult> {
     const target = this.checked(path);
-    return guarded(async () => {
+    // The check of the lock and the replace are one step as far as other callers of this process are concerned.
+    return pathLocks.withLock(`write:${target}`, () => guarded(async () => {
       const existing = await statOrNull(target, false);
       if (existing?.isSymbolicLink()) throw new FileOpsError('SYMLINK_REFUSED', 'Refusing to write through a symlink');
       if (existing && !existing.isFile()) throw new FileOpsError('NOT_A_FILE', `Not a regular file: ${target}`);
+      // A file that may not be written is not replaced either (a rename would get past its permission bits).
+      if (existing) await fs.promises.access(target, fs.constants.W_OK);
       if (options.expect) await this.assertUnchanged(target, existing, options.expect);
 
-      // Staged next to the target (the same filesystem, so the rename is atomic), owner-only until it is complete. A new
-      // file takes the process's umask like any file the host creates; an existing one keeps its permission bits.
-      const staging = this.api.join(this.api.dirname(target), `.${this.api.basename(target)}.azito-tmp-${randomBytes(8).toString('hex')}`);
-      try {
-        const handle = await fs.promises.open(staging, 'wx', existing ? 0o600 : 0o666);
-        try {
-          await handle.writeFile(data);
-          if (existing && this.host.platform !== 'win32') await handle.chmod(existing.mode & 0o7777);
-          await handle.sync();
-        } finally {
-          await handle.close();
-        }
-        await fs.promises.rename(staging, target);
-      } catch (err) {
-        await fs.promises.rm(staging, { force: true }).catch(() => undefined);
-        throw err;
+      if (existing && this.host.platform === 'win32') {
+        await this.writeInPlace(target, data);
+      } else {
+        await this.replaceAtomically(target, data, existing);
       }
       return { mtimeMs: (await fs.promises.stat(target)).mtimeMs, sha256: sha256Of(data) };
-    });
+    }));
+  }
+
+  /**
+   * Windows: a replaced file loses its explicit ACL (the new file gets the folder's), so an existing file is rewritten where it
+   * is. That is not atomic (a crash mid-write leaves a partial file); keeping the ACL was chosen over atomicity here.
+   */
+  private async writeInPlace(target: string, data: Buffer): Promise<void> {
+    const handle = await fs.promises.open(target, 'r+');
+    try {
+      await handle.truncate(0);
+      await handle.writeFile(data);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  /**
+   * Staged next to the target (the same filesystem, so the rename is atomic) and owner-only until it is complete. A new file takes
+   * the process's umask like any file the host creates; an existing one keeps its permission bits, owner and group. If the owner
+   * or group cannot be kept (another user's file), nothing is changed and the write fails. Extended attributes / POSIX ACLs of
+   * the old file are not copied.
+   */
+  private async replaceAtomically(target: string, data: Buffer, existing: fs.Stats | null): Promise<void> {
+    const staging = this.api.join(this.api.dirname(target), `.${this.api.basename(target)}.azito-tmp-${randomBytes(8).toString('hex')}`);
+    try {
+      const handle = await fs.promises.open(staging, 'wx', existing ? 0o600 : 0o666);
+      try {
+        await handle.writeFile(data);
+        if (existing) {
+          const created = await handle.stat();
+          if (created.uid !== existing.uid || created.gid !== existing.gid) {
+            await handle.chown(existing.uid, existing.gid).catch((err: NodeJS.ErrnoException) => {
+              if (err.code === 'EPERM') throw new FileOpsError('PERMISSION_DENIED', `Cannot keep the owner and group of ${target}; the file was not changed`);
+              throw err;
+            });
+          }
+          await handle.chmod(existing.mode & 0o7777);
+        }
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      await fs.promises.rename(staging, target);
+    } catch (err) {
+      await fs.promises.rm(staging, { force: true }).catch(() => undefined);
+      throw err;
+    }
   }
 
   /** Fails closed: a file that is gone, or whose mtime / content differs from what the caller saw, is a conflict. */
@@ -206,20 +236,42 @@ export class LocalFileOps implements IFileOps {
 
   async remove(path: string): Promise<void> {
     const target = this.checked(path);
+    // "." and ".." as the last element name something other than the path that was checked (the parent of the root, or `.git`
+    // on Windows): never a thing to remove.
+    const last = this.api.basename(target);
+    if (last === '.' || last === '..') throw new FileOpsError('INVALID_PATH', `Invalid path: cannot remove "${last}"`);
     return guarded(async () => {
       await fs.promises.lstat(target);
       await fs.promises.rm(target, { recursive: true, force: true });
     });
   }
 
+  /**
+   * Moves without overwriting. Callers of this process are serialized per destination, so the second of two moves to the same
+   * name is `ALREADY_EXISTS`. Against another process: a non-directory on Unix is moved with `link` then `unlink`, and `link`
+   * refuses an existing name atomically; a directory, and anything on Windows (whose rename replaces a file), are checked and
+   * then renamed, so another process creating the destination in between can still be overwritten there.
+   */
   async rename(from: string, to: string): Promise<void> {
     const source = this.checked(from);
     const destination = this.checked(to);
-    return guarded(async () => {
-      await fs.promises.lstat(source);
+    return pathLocks.withLock(`rename:${destination}`, () => guarded(async () => {
+      const moving = await fs.promises.lstat(source);
       if (await statOrNull(destination, false)) throw new FileOpsError('ALREADY_EXISTS', `Already exists: ${destination}`);
+      if (this.host.platform !== 'win32' && !moving.isDirectory()) {
+        try {
+          await fs.promises.link(source, destination);
+          await fs.promises.unlink(source);
+          return;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (code === 'EEXIST') throw new FileOpsError('ALREADY_EXISTS', `Already exists: ${destination}`);
+          // A filesystem without hard links (or a move across filesystems) is left to the plain rename, which reports its own error.
+          if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV' && code !== 'EMLINK' && code !== 'ENOSYS') throw err;
+        }
+      }
       await fs.promises.rename(source, destination);
-    });
+    }));
   }
 
   async realpath(path: string): Promise<string> {
@@ -231,39 +283,5 @@ export class LocalFileOps implements IFileOps {
     if (target === '~') return this.host.homeDir;
     if (target.startsWith('~/') || (this.host.platform === 'win32' && target.startsWith('~\\'))) return this.api.join(this.host.homeDir, target.slice(2));
     return target;
-  }
-
-  async which(command: string): Promise<string | null> {
-    const name = this.checked(command);
-    const win32 = this.host.platform === 'win32';
-    const extensions = win32 ? (this.host.pathExt ?? DEFAULT_PATHEXT).split(';').filter(Boolean) : [];
-    const hasKnownExtension = extensions.some((ext) => name.toLowerCase().endsWith(ext.toLowerCase()));
-    const withExtensions = (base: string): string[] => (win32 && !hasKnownExtension ? extensions.map((ext) => base + ext) : [base]);
-
-    const hasSeparator = name.includes('/') || (win32 && name.includes('\\'));
-    const bases = hasSeparator
-      ? [name]
-      : (this.host.pathEnv ?? '').split(pathDelimiterFor({ platform: this.host.platform })).filter(Boolean).map((dir) => this.api.join(dir, name));
-    for (const base of bases) {
-      for (const candidate of withExtensions(base)) {
-        if (await this.isExecutableFile(candidate)) return candidate;
-      }
-    }
-    return null;
-  }
-
-  private async isExecutableFile(candidate: string): Promise<boolean> {
-    try {
-      if (!(await fs.promises.stat(candidate)).isFile()) return false;
-      if (this.host.platform !== 'win32') await fs.promises.access(candidate, fs.constants.X_OK);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async tmpPath(prefix: string): Promise<string> {
-    if (!/^[A-Za-z0-9._-]+$/.test(prefix)) throw new FileOpsError('INVALID_PATH', `Invalid temporary file prefix: ${prefix}`);
-    return this.api.join(this.host.tmpDir, `${prefix}-${randomBytes(8).toString('hex')}`);
   }
 }

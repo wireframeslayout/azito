@@ -29,10 +29,6 @@ export interface IFileOps {
   rename(from: string, to: string): Promise<void>;
   /** The real path of an existing entry (symbolic links and junctions followed, notation made the filesystem's own). A leading `~` is the host's home directory. */
   realpath(path: string): Promise<string>;
-  /** The executable a command name resolves to through the host's PATH (and PATHEXT on Windows), or null. A name with a separator is checked as a path. */
-  which(command: string): Promise<string | null>;
-  /** A path that does not exist yet in the host's temporary directory, named `<prefix>-<random>`. Nothing is created. */
-  tmpPath(prefix: string): Promise<string>;
 }
 
 export type EntryKind = 'file' | 'directory' | 'symlink' | 'other';

@@ -26,7 +26,7 @@ import { createMisaoRelay } from './misaoRelay';
 import misaoRoutes from './misaoRoutes';
 import hostRoutes from './hostRoutes';
 import fileOpsRoutes from './fileOpsRoutes';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
@@ -142,7 +142,7 @@ async function main(): Promise<void> {
   // The host's own report (OS, architecture, default shell) for the hub, behind the same token check.
   await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: resolveLoginShell(process.env) } });
   // File operations on this host (list / read / write / create / remove / rename / realpath / which), the hub's files API for an agent server.
-  await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHostFromEnv(hostEnv, process.env)) });
+  await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHost(hostEnv)) });
 
   // Conversation logs (Claude Code / Codex JSONL) for the hub's chat mode. Registered after the auth hook, so it is
   // covered by it; reads only this host's own agent session directories, addressed by agent type + session id.

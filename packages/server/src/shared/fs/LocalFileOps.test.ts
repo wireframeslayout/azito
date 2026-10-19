@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathS
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError, type FileOpsErrorCode } from './fileOps';
-import { LocalFileOps, localFileOpsHostFromEnv, type LocalFileOpsHost } from './LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from './LocalFileOps';
 
 const isWindows = process.platform === 'win32';
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -12,10 +12,6 @@ const sha256 = (data: string | Buffer): string => createHash('sha256').update(da
 let dir: string;
 let home: string;
 let ops: LocalFileOps;
-
-function opsWith(overrides: Partial<LocalFileOpsHost> = {}): LocalFileOps {
-  return new LocalFileOps({ ...localFileOpsHostFromEnv({ platform: process.platform, homeDir: home, tmpDir: dir }, process.env), ...overrides });
-}
 
 async function codeOf(run: Promise<unknown>): Promise<FileOpsErrorCode> {
   try {
@@ -31,7 +27,7 @@ beforeEach(() => {
   dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-fileops-')));
   home = path.join(dir, 'home');
   mkdirSync(home);
-  ops = opsWith();
+  ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: home }));
 });
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
@@ -158,6 +154,42 @@ describe('LocalFileOps.write', () => {
     expect(await codeOf(ops.write(dir, Buffer.from('x')))).toBe('NOT_A_FILE');
   });
 
+  // root bypasses permission bits; Windows has no such bits to set
+  it.skipIf(isWindows || process.getuid?.() === 0)('refuses to replace a file that may not be written, as opening it for writing always did', async () => {
+    const target = path.join(dir, 'readonly.txt');
+    writeFileSync(target, 'keep');
+    chmodSync(target, 0o444);
+    expect(await codeOf(ops.write(target, Buffer.from('changed')))).toBe('PERMISSION_DENIED');
+    expect(readFileSync(target, 'utf8')).toBe('keep');
+    expect(readdirSync(dir).filter((n) => n.includes('azito-tmp'))).toEqual([]);
+  });
+
+  it.skipIf(isWindows)('keeps the owner and group of an existing file (a write that cannot is refused, not done with another owner)', async () => {
+    const target = path.join(dir, 'owned.txt');
+    writeFileSync(target, 'v1');
+    await ops.write(target, Buffer.from('v2'));
+    const after = statSync(target);
+    expect({ uid: after.uid, gid: after.gid }).toEqual({ uid: process.getuid!(), gid: process.getgid!() });
+  });
+
+  it('serializes lock-checked writes to the same file: of two writes expecting the same version only one lands', async () => {
+    const target = path.join(dir, 'f.txt');
+    writeFileSync(target, 'v1');
+    const expect1 = { sha256: sha256('v1') };
+    const results = await Promise.allSettled([ops.write(target, Buffer.from('A'), { expect: expect1 }), ops.write(target, Buffer.from('B'), { expect: expect1 })]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!.reason).toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it.skipIf(!isWindows)('rewrites an existing file where it is on Windows, so that its ACL stays', async () => {
+    const target = path.join(dir, 'acl.txt');
+    writeFileSync(target, 'v1');
+    const before = statSync(target).ino;
+    await ops.write(target, Buffer.from('v2'));
+    expect(statSync(target).ino).toBe(before);
+    expect(readFileSync(target, 'utf8')).toBe('v2');
+  });
+
   it('is NOT_FOUND when the parent directory is missing', async () => {
     expect(await codeOf(ops.write(path.join(dir, 'no', 'such', 'f.txt'), Buffer.from('x')))).toBe('NOT_FOUND');
   });
@@ -251,6 +283,15 @@ describe('LocalFileOps.remove', () => {
     expect(await codeOf(ops.remove(path.join(dir, 'missing')))).toBe('NOT_FOUND');
   });
 
+  it('refuses a path whose last element is "." or "..", and removes nothing', async () => {
+    mkdirSync(path.join(dir, 'root', 'sub'), { recursive: true });
+    writeFileSync(path.join(dir, 'sibling.txt'), '');
+    for (const p of [`${dir}${path.sep}root${path.sep}..`, `${dir}${path.sep}root${path.sep}sub${path.sep}..${path.sep}..`, `${dir}${path.sep}root${path.sep}.`]) {
+      expect(await codeOf(ops.remove(p)), p).toBe('INVALID_PATH');
+    }
+    expect(readdirSync(dir).sort()).toEqual(['home', 'root', 'sibling.txt']);
+  });
+
   it.skipIf(isWindows)('removes a link itself, not what it points at', async () => {
     mkdirSync(path.join(dir, 'real'));
     writeFileSync(path.join(dir, 'real', 'keep'), '');
@@ -276,6 +317,26 @@ describe('LocalFileOps.rename', () => {
   });
 });
 
+describe('LocalFileOps.rename races', () => {
+  it('lets only one of two concurrent moves to the same name win, and keeps the loser\'s source', async () => {
+    writeFileSync(path.join(dir, 'a'), 'A');
+    writeFileSync(path.join(dir, 'b'), 'B');
+    const results = await Promise.allSettled([ops.rename(path.join(dir, 'a'), path.join(dir, 'c')), ops.rename(path.join(dir, 'b'), path.join(dir, 'c'))]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const loser = results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!;
+    expect(loser.reason).toMatchObject({ code: 'ALREADY_EXISTS' });
+    const winnerContent = readFileSync(path.join(dir, 'c'), 'utf8');
+    expect(readdirSync(dir).sort()).toEqual(winnerContent === 'A' ? ['b', 'c', 'home'] : ['a', 'c', 'home']);
+  });
+
+  it.skipIf(isWindows)('moves a directory, and refuses to move onto an existing name', async () => {
+    mkdirSync(path.join(dir, 'd1'));
+    mkdirSync(path.join(dir, 'd2'));
+    await ops.rename(path.join(dir, 'd1'), path.join(dir, 'd3'));
+    expect(await codeOf(ops.rename(path.join(dir, 'd3'), path.join(dir, 'd2')))).toBe('ALREADY_EXISTS');
+  });
+});
+
 describe('LocalFileOps.realpath', () => {
   it.skipIf(isWindows)('resolves links to the real path', async () => {
     mkdirSync(path.join(dir, 'real'));
@@ -294,71 +355,6 @@ describe('LocalFileOps.realpath', () => {
   });
 });
 
-describe('LocalFileOps.which', () => {
-  const exe = isWindows ? 'azito-tool.cmd' : 'azito-tool';
-
-  function installTool(into: string): string {
-    mkdirSync(into, { recursive: true });
-    const file = path.join(into, exe);
-    writeFileSync(file, isWindows ? '@echo off\r\n' : '#!/bin/sh\n');
-    chmodSync(file, 0o755);
-    return file;
-  }
-
-  it('finds a command on the PATH, in PATH order', async () => {
-    const first = installTool(path.join(dir, 'bin1'));
-    installTool(path.join(dir, 'bin2'));
-    const withPath = opsWith({ pathEnv: [path.join(dir, 'bin1'), path.join(dir, 'bin2')].join(path.delimiter), pathExt: '.COM;.EXE;.BAT;.CMD' });
-    // PATHEXT's spelling of the extension is what comes back on Windows (.CMD), whatever the file is called there.
-    expect((await withPath.which('azito-tool'))?.toLowerCase()).toBe(first.toLowerCase());
-  });
-
-  it('is null for a command that is on no PATH entry, and with no PATH at all', async () => {
-    installTool(path.join(dir, 'bin'));
-    expect(await opsWith({ pathEnv: path.join(dir, 'elsewhere'), pathExt: '.CMD' }).which('azito-tool')).toBeNull();
-    expect(await opsWith({ pathEnv: undefined, pathExt: undefined }).which('azito-tool')).toBeNull();
-  });
-
-  it('checks a name with a directory as a path', async () => {
-    const file = installTool(path.join(dir, 'bin'));
-    expect(await opsWith({ pathEnv: '', pathExt: '.CMD' }).which(file)).toBe(file);
-  });
-
-  it.skipIf(isWindows)('ignores a file that is not executable', async () => {
-    const file = installTool(path.join(dir, 'bin'));
-    chmodSync(file, 0o644);
-    expect(await opsWith({ pathEnv: path.join(dir, 'bin') }).which('azito-tool')).toBeNull();
-  });
-
-  it('ignores a directory with the name', async () => {
-    mkdirSync(path.join(dir, 'bin', exe), { recursive: true });
-    expect(await opsWith({ pathEnv: path.join(dir, 'bin'), pathExt: '.CMD' }).which('azito-tool')).toBeNull();
-  });
-
-  it.skipIf(!isWindows)('adds the extensions of PATHEXT on Windows, and accepts a name that already has one', async () => {
-    const file = installTool(path.join(dir, 'bin'));
-    const withPath = opsWith({ pathEnv: path.join(dir, 'bin'), pathExt: '.COM;.EXE;.BAT;.CMD' });
-    expect((await withPath.which('azito-tool'))?.toLowerCase()).toBe(file.toLowerCase());
-    expect(await withPath.which('azito-tool.cmd')).toBe(file);
-  });
-});
-
-describe('LocalFileOps.tmpPath', () => {
-  it('names a path in the host temporary directory without creating it, different each time', async () => {
-    const first = await ops.tmpPath('azito-test');
-    const second = await ops.tmpPath('azito-test');
-    expect(path.dirname(first)).toBe(dir);
-    expect(path.basename(first)).toMatch(/^azito-test-[0-9a-f]{16}$/);
-    expect(first).not.toBe(second);
-    expect(readdirSync(dir)).toEqual(['home']);
-  });
-
-  it('refuses a prefix that could name another place', async () => {
-    expect(await codeOf(ops.tmpPath('../escape'))).toBe('INVALID_PATH');
-    expect(await codeOf(ops.tmpPath(''))).toBe('INVALID_PATH');
-  });
-});
-
 describe('LocalFileOps input checks', () => {
   it('refuses an empty path and a NUL byte on every operation', async () => {
     expect(await codeOf(ops.stat(''))).toBe('INVALID_PATH');
@@ -368,20 +364,14 @@ describe('LocalFileOps input checks', () => {
   });
 });
 
-describe('localFileOpsHostFromEnv', () => {
-  it('reads PATH and PATHEXT from the environment it is handed', () => {
-    const host = localFileOpsHostFromEnv({ platform: 'linux', homeDir: '/h', tmpDir: '/t' }, { PATH: '/a:/b', PATHEXT: '.X' });
-    expect(host).toEqual({ platform: 'linux', homeDir: '/h', tmpDir: '/t', pathEnv: '/a:/b', pathExt: '.X' });
-  });
-
-  it('finds Path in any case on win32, where variable names are case-insensitive', () => {
-    const host = localFileOpsHostFromEnv({ platform: 'win32', homeDir: 'C:\\h', tmpDir: 'C:\\t' }, { Path: 'C:\\a;C:\\b', PathExt: '.EXE' });
-    expect(host.pathEnv).toBe('C:\\a;C:\\b');
-    expect(host.pathExt).toBe('.EXE');
+describe('localFileOpsHost', () => {
+  it('keeps the home directory and narrows the platform', () => {
+    expect(localFileOpsHost({ platform: 'linux', homeDir: '/h' })).toEqual({ platform: 'linux', homeDir: '/h' });
+    expect(localFileOpsHost({ platform: 'win32', homeDir: 'C:\\h' })).toEqual({ platform: 'win32', homeDir: 'C:\\h' });
   });
 
   it('treats an OS AZITO has no profile for as POSIX', () => {
-    expect(localFileOpsHostFromEnv({ platform: 'freebsd', homeDir: '/h', tmpDir: '/t' }, {}).platform).toBe('linux');
-    expect(localFileOpsHostFromEnv({ platform: 'darwin', homeDir: '/h', tmpDir: '/t' }, {}).platform).toBe('darwin');
+    expect(localFileOpsHost({ platform: 'freebsd', homeDir: '/h' }).platform).toBe('linux');
+    expect(localFileOpsHost({ platform: 'darwin', homeDir: '/h' }).platform).toBe('darwin');
   });
 });

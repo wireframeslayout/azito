@@ -3,14 +3,14 @@ import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import { ensureClaudeTrust } from './ensureClaudeTrust';
 
 let fakeHome: string;
 
 /** A transport whose host is this machine with `fakeHome` as its home directory: the file operations are the real ones. */
 function transportWithHome(homeDir: string): IServerTransport {
-  const ops = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir, tmpDir: tmpdir() }, process.env));
+  const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir }));
   return { files: () => ops } as unknown as IServerTransport;
 }
 
@@ -75,6 +75,14 @@ describe('ensureClaudeTrust', () => {
     expect(config.numStartups).toBe(3);
     expect(config.projects['/other']).toEqual({ x: 1 });
     expect(config.projects['/wt']).toEqual({ allowedTools: ['Bash'], hasTrustDialogAccepted: true });
+  });
+
+  it('keeps both registrations when two projects register at the same time', async () => {
+    writeFileSync(configPath(), JSON.stringify({ projects: {} }));
+    const transport = transportWithHome(fakeHome);
+    const results = await Promise.all(['/a', '/b', '/c'].map((p) => ensureClaudeTrust(transport, p)));
+    expect(results.map((r) => r.action)).toEqual(['registered', 'registered', 'registered']);
+    expect(Object.keys(readConfig().projects).sort()).toEqual(['/a', '/b', '/c']);
   });
 
   it('does not overwrite a file that changed after it was read', async () => {

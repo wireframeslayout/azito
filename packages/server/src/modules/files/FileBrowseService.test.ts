@@ -6,13 +6,13 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { FileBrowseService, FileBrowseError, MAX_FILE_SIZE } from './FileBrowseService';
 import type { ServerConfig } from '../servers/Server';
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 const localSrv = { type: 'local', name: 'local' } as unknown as ServerConfig;
 
 function localFileOps(dir: string): LocalFileOps {
-  return new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env));
+  return new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: dir }));
 }
 
 /** A service over the files of this machine: the real file operations behind the factory. */
@@ -65,8 +65,10 @@ describe('FileBrowseService on a real directory', () => {
       expect((await svc.listFiles(localSrv, tmpDir + path.sep, false))[0].path).toBe(tmpDir + path.sep + 'a');
     });
 
-    it('lets the reason a directory cannot be listed through', async () => {
-      await expect(svc.listFiles(localSrv, path.join(tmpDir, 'missing'), false)).rejects.toThrow(/ENOENT/);
+    it('answers 404 for a directory that is not there and 400 for a file', async () => {
+      expect(await statusOf(svc.listFiles(localSrv, path.join(tmpDir, 'missing'), false))).toBe(404);
+      fs.writeFileSync(path.join(tmpDir, 'f.txt'), '');
+      expect(await statusOf(svc.listFiles(localSrv, path.join(tmpDir, 'f.txt'), false))).toBe(400);
     });
   });
 
@@ -389,7 +391,7 @@ describe('FileBrowseService with a host whose operations refuse', () => {
   /** File operations that all fail the same way: what the service makes of each refusal is what is under test. */
   function refusing(error: FileOpsError): IFileOps {
     const fail = async (): Promise<never> => { throw error; };
-    return { platform: 'linux', list: fail, stat: fail, read: fail, write: fail, create: fail, remove: fail, rename: fail, realpath: fail, which: fail, tmpPath: fail };
+    return { platform: 'linux', list: fail, stat: fail, read: fail, write: fail, create: fail, remove: fail, rename: fail, realpath: fail };
   }
   const srv = { type: 'agent', name: 'a' } as unknown as ServerConfig;
 
@@ -434,8 +436,6 @@ describe('FileBrowseService on a host with Windows path rules', () => {
       remove: async (p) => { seen.push(p); },
       rename: async (from, to) => { seen.push(from, to); },
       realpath: async (p) => p,
-      which: async () => null,
-      tmpPath: async () => 'C:\\tmp\\x',
     };
     return { ops, seen };
   }

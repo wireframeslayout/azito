@@ -18,9 +18,9 @@ vi.mock('../git/providers/cliToken', async (importOriginal) => {
 
 import type { Task } from './Task';
 import { KeyedMutex } from '../../shared/keyedMutex';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
-const hostFiles = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: tmpdir(), tmpDir: tmpdir() }, process.env));
+const hostFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
 
 // Containment checks (Issue #27) resolve real paths via fs.realpath, so the
 // working directory / worktree path fixtures below must exist on disk —

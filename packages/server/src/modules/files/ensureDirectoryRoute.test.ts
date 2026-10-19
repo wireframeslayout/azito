@@ -1,10 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import { fileBrowseRoutes, type FileBrowseRouteOptions } from './routes';
-import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import { tmpdir, homedir } from 'os';
 
-const localOps = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: homedir(), tmpDir: tmpdir() }, process.env));
+const localOps = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: homedir() }));
 
 // Issue #87 review, Important finding 1: the project wizard's "existing
 // directory" mode showed "このパスを作成します" for a path discovery found

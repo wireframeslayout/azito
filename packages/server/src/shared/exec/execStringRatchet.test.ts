@@ -11,19 +11,19 @@ import * as path from 'path';
  * - a file that lost a call: lower its number (delete the line at zero), so the ratchet only ever tightens.
  *
  * What it counts, in non-test code, on lines that are not comments: a call on a receiver that is a transport —
- * `transport.exec(`, `target.exec(`, `this.transport.exec(`, `<factory>.getTransport(...).exec(` — and `this.exec(` (the
+ * `transport.exec(`, `target.exec(`, `this.transport.exec(`, `<factory>.getTransport(...).exec(` — and `this.exec(` / `this.out(` (the
  * private wrappers around one). `db.exec(`, `RegExp#exec` and `llmClient.exec(` are not transports and not counted.
  */
 const SRC_ROOT = path.resolve(__dirname, '..', '..');
 
-const EXEC_STRING_CALL = /(?:[tT]ransport|\btarget|getTransport\([^)]*\))\.exec\(|\bthis\.exec\(/g;
+const EXEC_STRING_CALL = /(?:[tT]ransport|\btarget|getTransport\([^)]*\))\.exec\(|\bthis\.(?:exec|out)\(/g;
 
 /** Remaining calls by file, relative to src/, grouped by what is to replace them. */
 const REMAINING: Record<string, number> = {
   // C-1: shell file operations (find / test / wc / cat / rm / mkdir...) → IFileOps (P7). What is left:
   // - the shell implementation of IFileOps for an agent registered before its OS was recorded (a Unix one without
   //   /api/fileops). AgentTransport.files() chooses it once; every other file operation goes through IFileOps
-  'modules/servers/transport/ShellFileOps.ts': 9,
+  'modules/servers/transport/ShellFileOps.ts': 22,
   // - not yet moved: the file-name search (`find -printf | sort` with find's own -regex / -path dialect), the sync of the
   //   sidekick tree (tar + base64 on the target) and the session scans (`find -newermt`, `head -1` of each rollout)
   'modules/files/FileSearchService.ts': 1,
@@ -78,7 +78,7 @@ function currentCounts(): Record<string, number> {
 
 describe('exec(<shell string>) ratchet', () => {
   it('counts only calls on a transport', () => {
-    expect(countCalls('await transport.exec(cmd);\nawait this.transportFactory.getTransport(srv).exec(cmd);\nthis.exec(a); target.exec(b);')).toBe(4);
+    expect(countCalls('await transport.exec(cmd);\nawait this.transportFactory.getTransport(srv).exec(cmd);\nthis.exec(a); target.exec(b); this.out(c);')).toBe(5);
     expect(countCalls('db.exec(sql); re.exec(s); this.llmClient.exec(p);\n// transport.exec(x)\n * transport.exec(y)')).toBe(0);
   });
 
