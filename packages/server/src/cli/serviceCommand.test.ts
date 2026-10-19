@@ -80,7 +80,7 @@ describe('azito service', () => {
 
     launchctl.results[`launchctl bootstrap gui/${uid} ${plistPath()}`] = 5;
     await serviceCommand(['reload'], { platform: 'darwin', homeDir: home });
-    expect(err.join('\n')).toMatch(/launchctl bootstrap gui\/\d+ failed \(exit 5\)/);
+    expect(err.join('\n')).toMatch(/launchctl bootstrap gui\/-?\d+ failed \(exit 5\)/);
     expect(process.exitCode).toBe(1);
   });
 
