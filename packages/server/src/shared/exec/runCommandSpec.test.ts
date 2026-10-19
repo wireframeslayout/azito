@@ -35,7 +35,8 @@ describe('runCommandSpec', () => {
   it('runs in cwd', async () => {
     const dir = os.tmpdir();
     const result = await runCommandSpec(node('process.stdout.write(process.cwd())', [], { cwd: dir }));
-    expect(result.stdout.toLowerCase()).toBe(fs.realpathSync.native(dir).toLowerCase());
+    // Both sides resolved: the OS may hand the directory back by another spelling (a symlink, a Windows 8.3 short name).
+    expect(fs.realpathSync.native(result.stdout).toLowerCase()).toBe(fs.realpathSync.native(dir).toLowerCase());
   });
 
   it('adds env to the process environment', async () => {
