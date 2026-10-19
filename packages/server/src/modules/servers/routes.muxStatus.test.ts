@@ -20,7 +20,7 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
     agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: misao,
     tmux: {} as ServersRouteOptions['tmux'],
-    transportFactory: { getTransport: () => ({ exec }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    transportFactory: { getTransport: () => ({ execMux: exec }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
@@ -64,14 +64,18 @@ describe('GET /api/servers/:name/status is per mux', () => {
 });
 
 describe('muxStatus helpers', () => {
-  it('runs the managed tmux binary for a managed runtime', async () => {
-    const exec = vi.fn(async () => ({ stdout: 'tmux 3.5\n', stderr: '', code: 0 }));
-    expect(await checkTmuxStatus({ exec }, 'managed')).toEqual({ available: true, version: 'tmux 3.5' });
-    expect(exec).toHaveBeenCalledWith(expect.stringContaining('$HOME/.azito/tmux/bin/tmux'));
+  it('asks the transport\'s own tmux for its version (the transport knows the runtime, managed or system)', async () => {
+    const execMux = vi.fn(async () => ({ stdout: 'tmux 3.5\n', stderr: '', code: 0 }));
+    expect(await checkTmuxStatus({ execMux })).toEqual({ available: true, version: 'tmux 3.5' });
+    expect(execMux).toHaveBeenCalledWith({ kind: 'tmux', args: ['-V'] });
+  });
+
+  it('reports a tmux that exited non-zero as not found', async () => {
+    expect(await checkTmuxStatus({ execMux: async () => ({ stdout: '', stderr: 'x', code: 127 }) })).toEqual({ available: false, detail: 'tmux not found' });
   });
 
   it('turns an exec failure into a status instead of throwing', async () => {
-    const status = await checkTmuxStatus({ exec: async () => { throw new Error('connection reset'); } }, 'system');
+    const status = await checkTmuxStatus({ execMux: async () => { throw new Error('connection reset'); } });
     expect(status).toEqual({ available: false, detail: 'connection reset' });
   });
 

@@ -285,9 +285,16 @@ describe('PUT /api/servers/:name onMuxChanged', () => {
 
 describe('GET /api/servers/:name/install-status', () => {
   function withTransport(opts: ServersRouteOptions) {
-    const exec = vi.fn(async (cmd: string) => ({ stdout: cmd === 'uname -s' ? 'Linux\n' : '', stderr: '', code: 0 }));
-    const transportFactory = { invalidate: vi.fn(), getTransport: vi.fn(() => ({ exec })) } as unknown as ServersRouteOptions['transportFactory'];
-    return { exec, opts: { ...opts, transportFactory } };
+    const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
+    const execMux = vi.fn(async () => ({ stdout: '', stderr: '', code: 1 }));
+    // The host is not recorded, so the OS name is probed with `uname -s`; every other probe finds nothing.
+    const run = vi.fn(async (spec: { file: string }) => ({ exitCode: 0, signal: null, stdout: spec.file === 'uname' ? 'Linux\n' : '', stderr: '' }));
+    const transportFactory = {
+      invalidate: vi.fn(),
+      hostProfileFor: () => null,
+      getTransport: vi.fn(() => ({ exec, execMux, run })),
+    } as unknown as ServersRouteOptions['transportFactory'];
+    return { exec, execMux, opts: { ...opts, transportFactory } };
   }
 
   it('reports the misao daemon for a misao server, and tmux as an optional row (installed or not)', async () => {
@@ -327,12 +334,12 @@ describe('GET /api/servers/:name/install-status', () => {
   it('keeps the tmux check for a tmux server, and still lists misao as an optional row (it carries the service controls)', async () => {
     const stored = makeServer();
     const misaoDaemonStatus = vi.fn(async () => ({ installed: false, detail: 'daemon_unreachable' }));
-    const { exec, opts } = withTransport({ ...makeOpts(stored), misaoDaemonStatus });
+    const { execMux, opts } = withTransport({ ...makeOpts(stored), misaoDaemonStatus });
 
     const res = await (await buildApp(opts)).inject({ method: 'GET', url: '/api/servers/srv/install-status' });
 
     expect(res.json()).toHaveProperty('tmux');
     expect(res.json().misao).toEqual({ installed: false, detail: 'daemon_unreachable', optional: true });
-    expect(exec).toHaveBeenCalledWith('tmux -V');
+    expect(execMux).toHaveBeenCalledWith({ kind: 'tmux', args: ['-V'] });
   });
 });
