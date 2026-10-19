@@ -6,7 +6,7 @@ export interface ISessionStrategy {
   readonly needsPostLaunchScan: boolean;
   buildNewSessionFlags(sessionId: string): string;
   buildResumeFlags(sessionId: string): string;
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null): string | null;
+  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp?: boolean): string | null;
   scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null>;
   excludeSessionId?(id: string): void;
 }
