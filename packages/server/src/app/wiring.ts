@@ -679,7 +679,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // table.
   const distributionStateRepo = new SqliteDistributionStateRepository(db);
   const hubGitIdentity = readHubGitIdentity();
-  const hubGitSupport = new HubGitSupport(hostEnv, secretFileGuard);
+  const hubGitSupport = new HubGitSupport(hostEnv, secretFileGuard, path.join(dataPaths.dir, 'git-support'));
   const fetchDistributionService = buildFetchDistributionService(infra, hubGitSupport, dataPaths, distributionStateRepo, hubGitIdentity);
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, hubGitIdentity, harnessPrefix);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);

@@ -26,8 +26,8 @@ describe('HubGitSupport', () => {
   }
 
   function makeSupport(tmpDir: string): HubGitSupport {
-    const hostEnv = { ...resolveCurrentHostEnv(), tmpDir };
-    return new HubGitSupport(hostEnv, createSecretFileGuard(hostEnv.platform, process.env));
+    const hostEnv = resolveCurrentHostEnv();
+    return new HubGitSupport(hostEnv, createSecretFileGuard(hostEnv.platform, process.env), path.join(tmpDir, 'git-support'));
   }
 
   /** Runs the launcher the way git does: the whole GIT_ASKPASS value is the executable, the prompt is its only argument. */
@@ -98,6 +98,35 @@ describe('HubGitSupport', () => {
       const dirMode = fs.statSync(path.dirname(env.GIT_ASKPASS as string)).mode & 0o777;
       expect(launcherMode).toBe(0o700);
       expect(dirMode).toBe(0o700);
+    });
+  });
+
+  describe('support directory', () => {
+    it('is rewritten when the process starts again, even if its contents were removed or tampered with', () => {
+      const tmpDir = makeSpacedTmpDir();
+      const first = makeSupport(tmpDir);
+      const dir = first.dir;
+      fs.writeFileSync(path.join(dir, 'hooks', 'post-checkout'), 'evil');
+      fs.rmSync(path.join(dir, 'askpass.cjs'));
+
+      const second = makeSupport(tmpDir);
+      expect(second.dir).toBe(dir);
+      expect(fs.existsSync(path.join(dir, 'askpass.cjs'))).toBe(true);
+      expect(fs.readdirSync(path.join(dir, 'hooks'))).toEqual([]);
+      expect(runLauncher(second.askPassEnv(TOKEN).GIT_ASKPASS as string, 'Password for x', second.askPassEnv(TOKEN)).stdout.trim()).toBe(TOKEN);
+    });
+
+    it('removes what it wrote and rethrows when creation fails part-way', () => {
+      const dir = path.join(makeSpacedTmpDir(), 'git-support');
+      const hostEnv = { platform: 'win32' as const, execPath: 'C:\\100%\\node.exe' };
+      const guard = createSecretFileGuard(process.platform, process.env);
+      expect(() => new HubGitSupport(hostEnv, guard, dir)).toThrow('cannot take literally');
+      expect(fs.existsSync(dir)).toBe(false);
+    });
+
+    it.skipIf(isWindows)('is readable by its owner only (Unix)', () => {
+      const support = makeSupport(makeSpacedTmpDir());
+      expect(fs.statSync(support.dir).mode & 0o777).toBe(0o700);
     });
   });
 

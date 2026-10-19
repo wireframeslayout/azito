@@ -8,27 +8,7 @@ import { ASKPASS_HELPER_SOURCE, ASKPASS_TOKEN_ENV, ASKPASS_USERNAME_ENV } from '
 /** The non-secret username the hub puts in a clone / push URL (the token is only the password). */
 export const ASKPASS_USERNAME = 'x-access-token';
 
-export type HubGitHostEnv = Pick<HostEnv, 'platform' | 'tmpDir' | 'execPath'>;
-
-interface SupportFiles {
-  launcherPath: string;
-  hooksDir: string;
-}
-
-/** Directories to remove when the process exits, so each hub start does not leave its support directory behind. */
-const liveDirs = new Set<string>();
-let exitHookInstalled = false;
-
-function removeOnExit(dir: string): void {
-  liveDirs.add(dir);
-  if (exitHookInstalled) return;
-  exitHookInstalled = true;
-  process.once('exit', () => {
-    for (const d of liveDirs) {
-      try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* best-effort cleanup at exit */ }
-    }
-  });
-}
+export type HubGitHostEnv = Pick<HostEnv, 'platform' | 'execPath'>;
 
 /**
  * What the git commands that run on the HUB's own machine need that differs by OS:
@@ -37,23 +17,51 @@ function removeOnExit(dir: string): void {
  *    environment of the git child (`askPassEnv`).
  *  - `core.hooksPath`: an empty directory we own, instead of `/dev/null` (which Windows does not have).
  *
- * The files are created once per process, on first use, in a fresh directory under `HostEnv.tmpDir` that only the
- * current user can enter (`SecretFileGuard.ensureProtectedDir`) — another user must not be able to swap the launcher,
- * because the launcher is what receives the token. The directory is removed when the process exits.
+ * The files live in a directory only the current user can enter (`SecretFileGuard.ensureProtectedDir`) — another user must
+ * not be able to swap the launcher, because the launcher is what receives the token.
  */
 export class HubGitSupport {
-  private files: SupportFiles | null = null;
+  private readonly launcherPath: string;
+  private readonly hooksDir: string;
 
+  /**
+   * `dir` is resolved once at startup (under the data directory, never the shared temp folder: a periodic temp cleaner
+   * would delete it, and on a multi-user host another user could re-create files at a predictable temp path).
+   * The contents are rewritten on every construction. A failure part-way removes what was written and rethrows.
+   */
   constructor(
     private readonly hostEnv: HubGitHostEnv,
     private readonly guard: SecretFileGuard,
-  ) {}
+    readonly dir: string,
+  ) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      this.guard.ensureProtectedDir(dir);
+
+      const helperPath = path.join(dir, 'askpass.cjs');
+      fs.writeFileSync(helperPath, ASKPASS_HELPER_SOURCE);
+
+      const isWindows = hostEnv.platform === 'win32';
+      this.launcherPath = path.join(dir, isWindows ? 'askpass.cmd' : 'askpass.sh');
+      if (isWindows) {
+        fs.writeFileSync(this.launcherPath, windowsLauncher(hostEnv.execPath, helperPath));
+      } else {
+        fs.writeFileSync(this.launcherPath, `#!/bin/sh\nexec ${shellQuote(hostEnv.execPath)} ${shellQuote(helperPath)} "$@"\n`, { mode: 0o700 });
+      }
+
+      this.hooksDir = path.join(dir, 'hooks');
+      fs.mkdirSync(this.hooksDir);
+    } catch (err) {
+      try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* the original error matters more */ }
+      throw err;
+    }
+  }
 
   /** Environment entries for a git child that may ask for credentials. Spread over the base env of the git call. */
   askPassEnv(token: string): NodeJS.ProcessEnv {
     if (token === '') throw new Error('askPassEnv: token must not be empty');
     return {
-      GIT_ASKPASS: this.ensureFiles().launcherPath,
+      GIT_ASKPASS: this.launcherPath,
       [ASKPASS_TOKEN_ENV]: token,
       [ASKPASS_USERNAME_ENV]: ASKPASS_USERNAME,
     };
@@ -61,30 +69,7 @@ export class HubGitSupport {
 
   /** `-c core.hooksPath=<managed empty dir>`: git never runs a hook from the repository being operated on. */
   hooksPathArgs(): string[] {
-    return ['-c', `core.hooksPath=${this.ensureFiles().hooksDir}`];
-  }
-
-  private ensureFiles(): SupportFiles {
-    if (this.files) return this.files;
-    const dir = fs.mkdtempSync(path.join(this.hostEnv.tmpDir, 'azito-git-'));
-    removeOnExit(dir);
-    this.guard.ensureProtectedDir(dir);
-
-    const helperPath = path.join(dir, 'askpass.cjs');
-    fs.writeFileSync(helperPath, ASKPASS_HELPER_SOURCE);
-
-    const isWindows = this.hostEnv.platform === 'win32';
-    const launcherPath = path.join(dir, isWindows ? 'askpass.cmd' : 'askpass.sh');
-    if (isWindows) {
-      fs.writeFileSync(launcherPath, windowsLauncher(this.hostEnv.execPath, helperPath));
-    } else {
-      fs.writeFileSync(launcherPath, `#!/bin/sh\nexec ${shellQuote(this.hostEnv.execPath)} ${shellQuote(helperPath)} "$@"\n`, { mode: 0o700 });
-    }
-
-    const hooksDir = path.join(dir, 'hooks');
-    fs.mkdirSync(hooksDir);
-    this.files = { launcherPath, hooksDir };
-    return this.files;
+    return ['-c', `core.hooksPath=${this.hooksDir}`];
   }
 }
 

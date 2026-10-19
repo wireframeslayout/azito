@@ -93,25 +93,27 @@ describe('LocalRepoCloneService', () => {
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('never leaves the askpass script (which holds the token) behind after a successful clone', async () => {
+  it('never writes the token into any file of the support directory after a successful clone', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
     const token = 'super-secret-token-value';
 
-    const service = new LocalRepoCloneService(testHubGitSupport());
+    const support = testHubGitSupport(makeTmpDir('azito-clone-support-'));
+    const service = new LocalRepoCloneService(support);
     await service.clone(makeIdentity(origin), token, 'main', targetDir);
 
-    // The askpass script (mode 0700, holds the token) must be cleaned up —
-    // it is the only place the token is ever written to disk.
-    const leftover = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('azito-clone-askpass-'));
-    expect(leftover).toEqual([]);
+    // The token reaches git only through the environment, so no launcher / helper file may contain it.
+    const files = fs.readdirSync(support.dir, { withFileTypes: true }).filter((e) => e.isFile());
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) expect(fs.readFileSync(path.join(support.dir, f.name), 'utf-8')).not.toContain(token);
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('never leaks the token into a thrown error, and cleans up the askpass script on failure too (no real remote touched)', async () => {
-    const service = new LocalRepoCloneService(testHubGitSupport());
+  it('never leaks the token into a thrown error, and leaves no token in the support directory on failure either (no real remote touched)', async () => {
+    const support = testHubGitSupport(makeTmpDir('azito-clone-support-'));
+    const service = new LocalRepoCloneService(support);
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
     const token = 'super-secret-token-value';
@@ -129,8 +131,9 @@ describe('LocalRepoCloneService', () => {
     expect(thrown).not.toBeNull();
     expect(thrown!.message).not.toContain(token);
 
-    const leftover = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('azito-clone-askpass-'));
-    expect(leftover).toEqual([]);
+    for (const f of fs.readdirSync(support.dir, { withFileTypes: true }).filter((e) => e.isFile())) {
+      expect(fs.readFileSync(path.join(support.dir, f.name), 'utf-8')).not.toContain(token);
+    }
   });
 
   it('returns a Promise rather than blocking synchronously (review finding: sync clone froze the whole hub for up to 300s)', () => {
