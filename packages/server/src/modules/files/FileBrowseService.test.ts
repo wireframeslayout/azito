@@ -34,7 +34,7 @@ describe('FileBrowseService on a real directory', () => {
   let svc: FileBrowseService;
 
   beforeEach(() => {
-    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-')));
+    tmpDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-')));
     svc = serviceFor(localFileOps(tmpDir));
   });
   afterEach(() => {
@@ -288,7 +288,7 @@ describe('FileBrowseService on a real directory', () => {
       const linkPath = path.join(tmpDir, 'link.txt');
       fs.symlinkSync(outsideFile, linkPath);
 
-      expect(await svc.resolveExistingTargetRealPath(localSrv, linkPath)).toBe(fs.realpathSync(outsideFile));
+      expect(await svc.resolveExistingTargetRealPath(localSrv, linkPath)).toBe(fs.realpathSync.native(outsideFile));
       fs.rmSync(outsideDir, { recursive: true, force: true });
     });
 

@@ -188,7 +188,7 @@ describe('GitDiffService.getDiff with scope=uncommitted', () => {
   describe('untracked files', () => {
     let repo: string;
     beforeEach(() => {
-      repo = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-gitdiff-')));
+      repo = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-gitdiff-')));
     });
     afterEach(() => {
       rmSync(repo, { recursive: true, force: true });

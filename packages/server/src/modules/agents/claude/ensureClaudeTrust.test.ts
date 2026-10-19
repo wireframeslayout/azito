@@ -20,7 +20,7 @@ const readConfig = (): { projects: Record<string, Record<string, unknown>> } =>
 
 describe('ensureClaudeTrust', () => {
   beforeEach(() => {
-    fakeHome = realpathSync(mkdtempSync(join(tmpdir(), 'claude-trust-')));
+    fakeHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-trust-')));
   });
   afterEach(() => {
     rmSync(fakeHome, { recursive: true, force: true });

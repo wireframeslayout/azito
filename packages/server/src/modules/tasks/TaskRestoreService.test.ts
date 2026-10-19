@@ -274,7 +274,7 @@ describe('TaskRestoreService', () => {
   function mockDriver() { return (deps.muxDriverRegistry as any)._driver; }
 
   beforeEach(() => {
-    rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-task-restore-')));
+    rootDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-task-restore-')));
     worktreeDir = path.join(rootDir, '.worktrees', 'task-1');
     mkdirSync(worktreeDir, { recursive: true });
     deps = makeDeps();
@@ -504,8 +504,8 @@ describe('TaskRestoreService', () => {
     // so it carries no symlink indirection here; asserting equality with the
     // resolved value (not a raw string literal) documents that the persisted
     // path is the one assertDirectoryContained returned.
-    expect(result.worktreePath).toBe(realpathSync(worktreeDir));
-    expect(deps.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ worktreePath: realpathSync(worktreeDir) }));
+    expect(result.worktreePath).toBe(realpathSync.native(worktreeDir));
+    expect(deps.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ worktreePath: realpathSync.native(worktreeDir) }));
   });
 
   it('skips worktree creation when no workingDir is available', async () => {

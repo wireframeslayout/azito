@@ -28,7 +28,7 @@ async function codeOf(run: Promise<unknown>): Promise<FileOpsErrorCode> {
 }
 
 beforeEach(() => {
-  dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-fileops-')));
+  dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-fileops-')));
   home = path.join(dir, 'home');
   mkdirSync(home);
   ops = opsWith();
@@ -309,7 +309,8 @@ describe('LocalFileOps.which', () => {
     const first = installTool(path.join(dir, 'bin1'));
     installTool(path.join(dir, 'bin2'));
     const withPath = opsWith({ pathEnv: [path.join(dir, 'bin1'), path.join(dir, 'bin2')].join(path.delimiter), pathExt: '.COM;.EXE;.BAT;.CMD' });
-    expect(await withPath.which('azito-tool')).toBe(first);
+    // PATHEXT's spelling of the extension is what comes back on Windows (.CMD), whatever the file is called there.
+    expect((await withPath.which('azito-tool'))?.toLowerCase()).toBe(first.toLowerCase());
   });
 
   it('is null for a command that is on no PATH entry, and with no PATH at all', async () => {
@@ -337,7 +338,7 @@ describe('LocalFileOps.which', () => {
   it.skipIf(!isWindows)('adds the extensions of PATHEXT on Windows, and accepts a name that already has one', async () => {
     const file = installTool(path.join(dir, 'bin'));
     const withPath = opsWith({ pathEnv: path.join(dir, 'bin'), pathExt: '.COM;.EXE;.BAT;.CMD' });
-    expect(await withPath.which('azito-tool')).toBe(file);
+    expect((await withPath.which('azito-tool'))?.toLowerCase()).toBe(file.toLowerCase());
     expect(await withPath.which('azito-tool.cmd')).toBe(file);
   });
 });

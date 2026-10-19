@@ -12,7 +12,7 @@ let root: string;
 let outside: string;
 
 beforeEach(() => {
-  base = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-containment-')));
+  base = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-containment-')));
   root = path.join(base, 'root');
   outside = path.join(base, 'outside');
   mkdirSync(root);

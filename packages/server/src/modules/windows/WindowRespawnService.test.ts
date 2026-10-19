@@ -1017,7 +1017,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   }
 
   beforeEach(() => {
-    rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-')));
+    rootDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-')));
   });
 
   afterEach(() => {

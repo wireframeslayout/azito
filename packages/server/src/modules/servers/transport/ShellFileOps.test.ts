@@ -42,7 +42,7 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
   let ops: ShellFileOps;
 
   beforeEach(() => {
-    dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-shellfileops-')));
+    dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-shellfileops-')));
     sh = shell();
     ops = new ShellFileOps(sh);
   });
@@ -253,7 +253,7 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
     });
 
     it('expands a leading ~ with $HOME, and the rest stays quoted', async () => {
-      const home = realpathSync(process.env.HOME ?? '/');
+      const home = realpathSync.native(process.env.HOME ?? '/');
       expect(await ops.realpath('~')).toBe(home);
       expect(sh.commands[0]).toContain('p="$HOME"');
     });

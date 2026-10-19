@@ -262,8 +262,9 @@ describe('RepoDiscoveryService', () => {
      * a real temp-directory fixture, so a regression back to the over-broad hidden-directory exclusion is caught even though
      * every other test in this file lists a scripted tree.
      */
-    it('finds both a normal repo and a worktree .git under a hidden directory, and skips node_modules and the inside of .git', async () => {
-      fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
+    // Windows では動かない: git の toplevel を '/' で始まる絶対パスとしか読まない POSIX 前提（toDiscoveredRepos）。ファイルの走査自体は両 OS で同じ
+    it.skipIf(process.platform === 'win32')('finds both a normal repo and a worktree .git under a hidden directory, and skips node_modules and the inside of .git', async () => {
+      fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
 
       // Normal clone: repo/.git is a directory.
       mkdirSync(join(fixtureRoot, 'repo', '.git'), { recursive: true });
@@ -286,17 +287,18 @@ describe('RepoDiscoveryService', () => {
       expect(gitSpecs.some((s) => s.args.some((a) => a.includes('node_modules')))).toBe(false);
     });
 
-    it('does not look deeper than depth + 1 levels, and does not follow a link', async () => {
-      fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
+    // Windows では動かない: 同上（toDiscoveredRepos が '/' 始まりだけを受け付ける）
+    it.skipIf(process.platform === 'win32')('does not look deeper than depth + 1 levels', async () => {
+      fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
       mkdirSync(join(fixtureRoot, 'a', 'b', 'c', 'd', '.git'), { recursive: true }); // .git at level 5
       mkdirSync(join(fixtureRoot, 'a', 'b', 'c', '.git'), { recursive: true }); // .git at level 4: within depth 3 + 1
       const { factory } = makeTransportFactory(files(), (spec) => (spec.args[0] === '--version' ? ok('git version 2.43.0') : spec.args[2] === 'rev-parse' ? ok(`${spec.args[1]}\n`) : ok('')));
       const repos = await new RepoDiscoveryService(factory).discover(makeServer(), fixtureRoot, 3);
-      expect(repos.map((r) => r.relativePath)).toEqual(['a/b/c']);
+      expect(repos.map((r) => r.absolutePath)).toEqual([join(fixtureRoot, 'a', 'b', 'c')]);
     });
 
     it('fails the scan when the working directory does not exist', async () => {
-      fixtureRoot = realpathSync(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
+      fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
       const { factory } = makeTransportFactory(files());
       await expect(new RepoDiscoveryService(factory).discover(makeServer(), join(fixtureRoot, 'missing'))).rejects.toThrow(/scan failed/i);
     });

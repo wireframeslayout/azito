@@ -11,7 +11,7 @@ import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFile
 
 const localOps = (dir: string): LocalFileOps => new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env));
 
-const isPathContained = (pair: { target: string; allowedRoot: string }): boolean => isHostPathContained('linux', pair);
+const isPathContained = (pair: { target: string; allowedRoot: string }): boolean => isHostPathContained(process.platform === 'win32' ? 'win32' : 'linux', pair);
 import type { IServerRepository } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';

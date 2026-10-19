@@ -12,7 +12,7 @@ let sent: FileOpRequest[];
 let remote: RemoteFileOps;
 
 beforeEach(() => {
-  dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-fileops-wire-')));
+  dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-fileops-wire-')));
   local = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env));
   sent = [];
   // The agent route in one process: the request and the response both go through JSON, as they do over HTTP.
