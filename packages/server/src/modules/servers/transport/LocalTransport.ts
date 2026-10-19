@@ -15,6 +15,8 @@ import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tm
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
+import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
+import { runCommandSpec } from '../../../shared/exec/runCommandSpec';
 
 export function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
@@ -64,6 +66,10 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
 
   /** `hostProfile`: the host this transport runs commands on (the hub's own, from its HostEnv). Null when the hub's OS / architecture is not one AZITO knows: unknown, treated as POSIX like an unrecorded agent. */
   constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile | null) {}
+
+  run(spec: CommandSpec): Promise<CommandResult> {
+    return runCommandSpec(spec);
+  }
 
   /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */
   async exec(command: string, timeoutMs?: number): Promise<ExecResult> {

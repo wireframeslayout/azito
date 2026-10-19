@@ -7,6 +7,8 @@ import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
 import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
 import { HostProfileError, assertPosixHost, type HostProfile } from '../shared/os/hostProfile';
+import { commandSpecSchema } from '../shared/exec/commandSpec';
+import { AGENT_RUN_PATH, runToResponse } from '../shared/exec/runWire';
 const EXT_LANG: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescript',
   '.js': 'javascript', '.jsx': 'javascript',
@@ -118,6 +120,17 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
       throw err;
     }
     return execCommand(command, timeoutMs ?? 15000);
+  });
+
+  // ── POST /api/run ──
+  // Runs one program with its arguments, with no shell, on any OS — the same function the hub runs a local server's commands with.
+  // The body is untrusted input: it is validated here, the boundary. Secured by the token like every /api route.
+  fastify.post(AGENT_RUN_PATH, async (request, reply) => {
+    const parsed = commandSpecSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'invalid_command_spec', issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
+    }
+    return runToResponse(parsed.data);
   });
 
   // ── POST /api/tmux (compatibility wrapper) ──
