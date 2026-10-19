@@ -206,25 +206,25 @@ test.describe('misao ドライバ', () => {
     expect(panes).toHaveLength(3);
     const [first, second, third] = panes.map((p) => p.handle);
 
-    await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
-    const windowRow = app.locator('.row-hover, [class*="row"]').filter({ hasText: label }).first();
-    await expect(windowRow).toBeVisible({ timeout: 20_000 });
-
     const shortBadge = (h: string) => `#${h.slice(-4)}`;
-    await harness.api(`/windows/${windowId}/panes/2?handle=${encodeURIComponent(second)}`, { method: 'DELETE' });
 
-    await expect.poll(async () => {
-      const s2 = await harness.api<{ sessions: Array<{ name: string; windows: Array<{ panes: Array<{ handle: string }> }> }> }>('/servers/local/sessions?detail=1');
-      return s2.sessions.find((s) => s.name === label)!.windows[0].panes.length;
-    }, { timeout: 10_000 }).toBe(2);
+    await app.setViewportSize({ width: 1280, height: 800 });
+    await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
+    await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
+    const expander = app.locator('[role="button"][aria-expanded="false"]').first();
+    await expect(expander).toBeVisible({ timeout: 20_000 });
+    await expander.click();
 
-    await app.reload();
-    await expect(windowRow).toBeVisible({ timeout: 20_000 });
+    for (const h of [first, second, third]) await expect(app.getByText(shortBadge(h), { exact: true })).toBeVisible();
 
-    const pageText = await app.locator('body').textContent();
-    expect(pageText).toContain(shortBadge(first));
-    expect(pageText).toContain(shortBadge(third));
-    expect(pageText).not.toContain(shortBadge(second));
+    await app.getByText(shortBadge(second), { exact: true }).click({ button: 'right' });
+    await app.getByText('ペインを削除', { exact: true }).click();
+    await expect(app.getByText(/を終了しますか/)).toBeVisible();
+    await app.getByRole('button', { name: '確認', exact: true }).click();
+
+    await expect(app.getByText(shortBadge(second), { exact: true })).toHaveCount(0, { timeout: 15_000 });
+    await expect(app.getByText(shortBadge(first), { exact: true })).toBeVisible();
+    await expect(app.getByText(shortBadge(third), { exact: true })).toBeVisible();
   });
 
   test('デーモン断: 概要に「misao に接続できません」が出る', async ({ app, harness, misaoDaemon }) => {
