@@ -12,7 +12,7 @@ import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
 import { canRenamePane } from '../lib/windowRowPlan';
 import { buildWindowMenuItems, type WindowMenuItemDescriptor, type WindowMenuParams } from '../lib/windowMenuItems';
-import { paneDeletePath, refTabMatchesTarget } from '../lib/terminalRef';
+import { isTabOfPane, paneDeletePath, refTabMatchesTarget } from '../lib/terminalRef';
 
 interface ConfirmDialog {
   title: string;
@@ -223,6 +223,7 @@ export function useWindowActions(
         setWindowActionLoading(true);
         try {
           await api(paneDeletePath({ kind: 'windowId', serverName, windowId, pane: ordinal }, handle), { method: 'DELETE' });
+          tabs.filter((tab) => isTabOfPane(tab, serverName, windowId, ordinal)).forEach((tab) => closeTab(tab.id));
           setConfirmDialog(null);
           refreshWorkspace();
           void refreshSessions?.();
@@ -234,7 +235,7 @@ export function useWindowActions(
         }
       },
     });
-  }, [refreshWorkspace, refreshSessions, showToast]);
+  }, [tabs, closeTab, refreshWorkspace, refreshSessions, showToast]);
 
   const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
     const linkedTask = findTaskByTarget(w.tmuxTarget);
