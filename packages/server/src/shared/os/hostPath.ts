@@ -46,7 +46,8 @@ export function isHostPathContained(platform: HostPlatform, { target, allowedRoo
   if (rel === '') return true;
   if (api.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + api.sep)) return false;
   if (platform !== 'win32') return true;
-  const rootSegments = allowedRoot.split(/[\\/]+/).filter(Boolean);
-  const targetSegments = target.split(/[\\/]+/).filter(Boolean);
+  // Both in the same fully qualified form (a rooted path without a drive gets the current one), so their segments line up.
+  const rootSegments = api.resolve(allowedRoot).split(/[\\/]+/).filter(Boolean);
+  const targetSegments = api.resolve(target).split(/[\\/]+/).filter(Boolean);
   return rootSegments.every((segment, i) => targetSegments[i] === segment);
 }
