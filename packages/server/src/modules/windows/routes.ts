@@ -114,6 +114,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   }
 
   function notifyWindowsChanged(serverName: string): void {
+    opts.invalidateSessionCache?.(serverName);
     opts.notificationBus?.emit({ type: 'sessions:updated', payload: { serverName } });
   }
 

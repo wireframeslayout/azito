@@ -7,6 +7,7 @@ import { WindowIdChip } from './WindowIdChip';
 import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
 import { Chip } from './Chip';
 import { isPaneLive } from '../../lib/paneState';
+import { paneRowBadge } from '../../lib/paneRowBadge';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { canActOnMux, planWindowRow } from '../../lib/windowRowPlan';
 import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
@@ -575,7 +576,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
             }}
           >
             <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) && !plan.stale ? undefined : DIMMED_PANE_OPACITY }}>
-              <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
+              <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>{paneRowBadge(pane)}</span>
               {paneLabel}
             </span>
             {plan.stale ? <StaleChip /> : <PaneStateChip pane={pane} />}
