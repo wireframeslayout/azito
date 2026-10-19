@@ -62,8 +62,8 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
 export class LocalTransport implements IServerTransport, IMuxTransport, IHostBoundTransport {
   private sessionCounter = 0;
 
-  /** `hostProfile`: the host this transport runs commands on (the hub's own, from its HostEnv). */
-  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile) {}
+  /** `hostProfile`: the host this transport runs commands on (the hub's own, from its HostEnv). Null when the hub's OS / architecture is not one AZITO knows: unknown, treated as POSIX like an unrecorded agent. */
+  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile | null) {}
 
   /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */
   async exec(command: string, timeoutMs?: number): Promise<ExecResult> {

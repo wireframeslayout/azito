@@ -6,7 +6,7 @@ vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 import { TransportFactory } from './TransportFactory';
 import { AgentTransport } from './AgentTransport';
 import { LocalTransport } from './LocalTransport';
-import { resolveHubHostProfile } from '../../../shared/os/hostProfile';
+import { HostProfileError, resolveHubHostProfile } from '../../../shared/os/hostProfile';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 describe('TransportFactory', () => {
@@ -80,11 +80,22 @@ describe('TransportFactory', () => {
     expect(factory.getTransport({ ...baseServer, hostProfile: { platform: 'linux', arch: 'x64' } })).toBe(t2);
   });
 
-  it('refuses a local transport on a hub whose OS is not supported', () => {
+  it('still gives a local transport on a hub whose OS is not supported: its profile is unknown (null), treated as POSIX', async () => {
     const factory = new TransportFactory('http://hub:3001', os.homedir(), new TaskTempFiles('/tmp', 'linux'), resolveHubHostProfile({ platform: 'freebsd', arch: 'x64' }));
     const local = { name: 'local', type: 'local' as const, host: null, hostProfile: null, agentPort: null, agentToken: null, muxRuntime: 'system' as const };
-    expect(() => factory.getTransport(local)).toThrowError(expect.objectContaining({ code: 'unsupported_host' }));
+    const transport = factory.getTransport(local);
+    expect(transport).toBeInstanceOf(LocalTransport);
+    expect(transport.hostProfile).toBeNull();
     // Listing servers must not fail because of it: the hub's host is just unknown.
     expect(factory.hostProfileFor(local)).toBeNull();
+  });
+
+  it("keeps the hub's own sh and tmux operations reachable on linux/arm (a source-checkout hub AZITO has no profile for)", async () => {
+    const factory = new TransportFactory('http://hub:3001', os.homedir(), new TaskTempFiles('/tmp', 'linux'), resolveHubHostProfile({ platform: 'linux', arch: 'arm' }));
+    const transport = factory.getTransport({ name: 'local', type: 'local' as const, host: null, hostProfile: null, agentPort: null, agentToken: null, muxRuntime: 'system' as const });
+    if (process.platform !== 'win32') expect((await transport.exec('echo hi')).stdout.trim()).toBe('hi');
+    // The tmux binary may be absent here; what matters is that the call reaches it instead of being refused for the host.
+    const outcome = await transport.execMux({ kind: 'tmux', args: ['-V'] }).then(() => null, (err: unknown) => err);
+    expect(outcome).not.toBeInstanceOf(HostProfileError);
   });
 });

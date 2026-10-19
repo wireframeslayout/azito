@@ -168,6 +168,24 @@ describe('AgentHostRecorder', () => {
       expect(repo.updateHostProfile).not.toHaveBeenCalled();
     });
 
+    it('an explicit record after an update is not poisoned by a late 404 from the read that was in flight before it', async () => {
+      const pending: Array<{ resolve: (i: Info) => void; reject: (e: Error) => void }> = [];
+      const { recorder, repo, fetch } = setup(() => new Promise<Info>((resolve, reject) => { pending.push({ resolve, reject }); }));
+      const stale = recorder.recordIfUnknown(agent()); // the agent as it was before the update: slow
+      const fresh = recorder.record(agent()); // the update succeeded: a new generation, with its own read
+      expect(fetch).toHaveBeenCalledTimes(2);
+      pending[0].reject(new AgentHostOutdatedError('a1')); // the old read answers 404 late
+      await stale;
+      pending[1].resolve(LINUX); // the new agent answers
+      expect(await fresh).toEqual({ platform: 'linux', arch: 'x64' });
+      expect(repo.updateHostProfile).toHaveBeenCalledWith('a1', { platform: 'linux', arch: 'x64' });
+      // And it is not remembered as too old: an unrecorded host is asked again.
+      const third = recorder.recordIfUnknown(agent());
+      expect(fetch).toHaveBeenCalledTimes(3);
+      pending[2].resolve(LINUX);
+      await third;
+    });
+
     it('does not remember a 404 that belongs to the old settings', async () => {
       let stored = agent();
       let release!: (e: Error) => void;

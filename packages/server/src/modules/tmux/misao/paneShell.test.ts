@@ -69,6 +69,12 @@ describe('agentPaneShell', () => {
     expect(logger.warn.mock.calls[0][0]).toMatch(/agent_outdated/);
   });
 
+  it("tells a Windows hub's user to update the agent, not that this hub is unsupported, for an agent too old to report", async () => {
+    const winHub = hubPaneShell('/bin/bash', { platform: 'win32', arch: 'x64' });
+    const resolve = agentPaneShell(server(), async () => { throw new AgentHostOutdatedError('a1'); }, winHub, log());
+    await expect(resolve()).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringMatching(/agent server a1.*agent_outdated.*Update the agent/) });
+  });
+
   it('propagates an unreachable agent', async () => {
     const resolve = agentPaneShell(server(), async () => { throw new Error('Agent unreachable'); }, hub, log());
     await expect(resolve()).rejects.toThrow('unreachable');

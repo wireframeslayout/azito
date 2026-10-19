@@ -408,12 +408,12 @@ describe('AgentUpdater', () => {
       vi.unstubAllGlobals();
     });
 
-    it('keeps up_to_date when the read of an unrecorded host throws', async () => {
+    it('sets no hostError for the read of an unrecorded host: that read logs its own failures and does not reject (only the record() after an update can set hostError)', async () => {
       const mocks = makeMocks('abc1234');
       reachable('abc1234');
-      mocks.hostRecorder.recordIfUnknown.mockRejectedValue(new Error('boom'));
+      mocks.hostRecorder.recordIfUnknown.mockResolvedValue(null);
       const result = await build(mocks).checkAndUpdate(makeServer());
-      expect(result).toMatchObject({ status: 'up_to_date', hostError: 'boom' });
+      expect(result).toEqual({ name: 'test-server', status: 'up_to_date', currentVersion: 'abc1234' });
       vi.unstubAllGlobals();
     });
   });

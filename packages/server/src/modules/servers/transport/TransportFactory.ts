@@ -4,7 +4,7 @@ import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
-import { requireHubHostProfile, HostProfileError, type HostProfile, type HubHostProfile } from '../../../shared/os/hostProfile';
+import { HostProfileError, type HostProfile, type HubHostProfile } from '../../../shared/os/hostProfile';
 
 type TransportServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime' | 'hostProfile'>;
 
@@ -17,7 +17,8 @@ export class TransportFactory {
   /**
    * The OS / architecture of a server's host. A local server is the hub itself: it comes from the hub's HostEnv and is
    * never stored. An agent server's is the one recorded for it (null until recorded: a Unix agent from before the OS was kept).
-   * A hub on an OS / architecture AZITO does not know has none (null: shown as unknown); only a local transport is refused, with the reason.
+   * A hub on an OS / architecture AZITO does not know has none (null: unknown, treated as POSIX): its own tmux and sh
+   * operations keep working as before. Only what really needs the host (the hub's misao panes) refuses, with the reason.
    */
   hostProfileFor(server: Pick<ServerConfig, 'type' | 'hostProfile'>): HostProfile | null {
     if (server.type === 'local') return this.hubHost instanceof HostProfileError ? null : this.hubHost;
@@ -41,7 +42,7 @@ export class TransportFactory {
 
     let transport: IServerTransport & IMuxTransport & IHostBoundTransport;
     if (server.type === 'local') {
-      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir, this.taskTempFiles, requireHubHostProfile(this.hubHost));
+      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir, this.taskTempFiles, this.hostProfileFor(server));
     } else if (server.type === 'agent') {
       transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name, server.hostProfile);
     } else {

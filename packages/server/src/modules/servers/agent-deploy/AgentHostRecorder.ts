@@ -56,9 +56,10 @@ export class AgentHostRecorder {
    * reached, answers with an error, or runs on an OS / architecture AZITO does not support (`unsupported_host`: nothing is stored).
    */
   async record(server: ServerConfig): Promise<HostProfile | null> {
-    const state = this.stateFor(server);
-    state.outdated = false;
-    return this.read(server, state);
+    // A fresh generation: a read still in flight from before (e.g. to the agent as it was before an update) must neither be
+    // joined nor be allowed to leave its answer (a late 404) behind.
+    this.forget(server.name);
+    return this.read(server, this.stateFor(server));
   }
 
   /**

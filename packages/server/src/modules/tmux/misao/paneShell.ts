@@ -53,7 +53,12 @@ export function agentPaneShell(
       // Not remembered: once the agent is updated, the next pane gets its own shell.
       if (!warnedOutdated) log.warn(`[misao] agent server ${server.name} cannot report its host (agent_outdated): its panes use the hub's shell. Update the agent to use its own.`);
       warnedOutdated = true;
-      return legacyShell();
+      try {
+        return await legacyShell();
+      } catch (hubErr) {
+        if (!(hubErr instanceof HostProfileError)) throw hubErr;
+        throw new HostProfileError(hubErr.code, `agent server ${server.name} cannot report its host (agent_outdated), so its panes would use this hub's shell, which cannot start one (${hubErr.message}). Update the agent.`);
+      }
     }
     if (toHostProfile(info.platform, info.arch).platform === 'win32') throw windowsNotSupported(`agent server ${server.name}`);
     if (info.shell === null) {
