@@ -287,6 +287,16 @@ export function isTabOfPane(tab: { type: string; serverName?: string; target?: s
   return false;
 }
 
+type PaneDeleteTab = { id: string; type: string; serverName?: string; target?: string; terminalRef?: TerminalRef };
+
+export function tabsToCloseAfterPaneDelete<T extends PaneDeleteTab>(
+  tabs: T[],
+  ctx: { serverName: string; windowId: number; ordinal: number; windowKind: MuxDriverKind | undefined },
+): T[] {
+  if (ctx.windowKind !== 'misao') return [];
+  return tabs.filter((tab) => isTabOfPane(tab, ctx.serverName, ctx.windowId, ctx.ordinal));
+}
+
 /**
  * A TerminalRef that can actually be addressed: a positive integer windowId or a
  * non-empty ref string, plus a positive integer pane. Guards against callers that

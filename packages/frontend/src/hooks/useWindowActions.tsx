@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatWindowId, type MuxRef } from '@azito/shared';
+import { formatWindowId, type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
@@ -12,7 +12,7 @@ import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
 import { canRenamePane } from '../lib/windowRowPlan';
 import { buildWindowMenuItems, type WindowMenuItemDescriptor, type WindowMenuParams } from '../lib/windowMenuItems';
-import { isTabOfPane, paneDeletePath, refTabMatchesTarget } from '../lib/terminalRef';
+import { paneDeletePath, refTabMatchesTarget, tabsToCloseAfterPaneDelete } from '../lib/terminalRef';
 
 interface ConfirmDialog {
   title: string;
@@ -215,7 +215,7 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const handleDeletePane = useCallback((serverName: string, windowId: number, ordinal: number, handle: string | undefined, label: string) => {
+  const handleDeletePane = useCallback((serverName: string, windowId: number, ordinal: number, handle: string | undefined, label: string, windowKind: MuxDriverKind | undefined) => {
     setConfirmDialog({
       title: t('servers:confirm.killPane'),
       message: t('servers:confirm.killPaneMessage', { name: label }),
@@ -223,7 +223,7 @@ export function useWindowActions(
         setWindowActionLoading(true);
         try {
           await api(paneDeletePath({ kind: 'windowId', serverName, windowId, pane: ordinal }, handle), { method: 'DELETE' });
-          tabs.filter((tab) => isTabOfPane(tab, serverName, windowId, ordinal)).forEach((tab) => closeTab(tab.id));
+          tabsToCloseAfterPaneDelete(tabs, { serverName, windowId, ordinal, windowKind }).forEach((tab) => closeTab(tab.id));
           setConfirmDialog(null);
           refreshWorkspace();
           void refreshSessions?.();
@@ -261,7 +261,7 @@ export function useWindowActions(
       respawn: { icon: <Icon name="refresh" size={16} />, run: () => void handleRespawnWindow(w.id, w.serverName) },
       'show-task': { icon: <Icon name="tasks" size={16} />, run: () => openTask(linkedTask!.id, linkedTask!.title) },
       detach: { icon: <Icon name="external-link" size={16} />, run: () => void handleDetachWindow(w.id) },
-      'delete-pane': { icon: <Icon name="trash" size={16} />, run: (d) => handleDeletePane(w.serverName, w.id, d.paneOrdinal!, d.paneHandle, extra!.paneTitle || extra!.paneTarget!) },
+      'delete-pane': { icon: <Icon name="trash" size={16} />, run: (d) => handleDeletePane(w.serverName, w.id, d.paneOrdinal!, d.paneHandle, extra!.paneTitle || extra!.paneTarget!, w.muxRef?.kind) },
       'delete-window': { icon: <Icon name="trash" size={16} />, run: () => void handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
     };
     const items: ContextMenuItem[] = descriptors.map((d) => ({
