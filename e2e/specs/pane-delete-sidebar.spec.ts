@@ -21,16 +21,17 @@ test('tmux: ペインを削除するとサイドバーからその行だけが�
   await app.setViewportSize({ width: 1280, height: 800 });
   await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
   await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
-  const windowRow = app.locator('.row-hover, [class*="row"]').filter({ hasText: label }).first();
-  await expect(windowRow).toBeVisible({ timeout: 20_000 });
-  await windowRow.getByRole('button', { expanded: false }).first().click();
+  // ウィンドウ行は表示名（ウィンドウ名由来）で出るので、プロジェクトに1つだけの行の展開ボタンを開く。
+  const expander = app.locator('[role="button"][aria-expanded="false"]').first();
+  await expect(expander).toBeVisible({ timeout: 20_000 });
+  await expander.click();
 
   for (const handle of handles) await expect(app.getByText(handle, { exact: true })).toBeVisible();
 
   await app.getByText(second, { exact: true }).click({ button: 'right' });
-  await app.getByRole('menuitem', { name: 'ペインを削除' }).click();
-  const confirm = app.getByRole('button', { name: /^(削除|OK|はい)$/ });
-  if (await confirm.count()) await confirm.first().click();
+  await app.getByText('ペインを削除', { exact: true }).click();
+  await expect(app.getByText(/を終了しますか/)).toBeVisible();
+  await app.getByRole('button', { name: '確認', exact: true }).click();
 
   await expect(app.getByText(second, { exact: true })).toHaveCount(0, { timeout: 15_000 });
   await expect(app.getByText(first, { exact: true })).toBeVisible();
