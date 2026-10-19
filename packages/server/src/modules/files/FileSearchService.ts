@@ -3,13 +3,18 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shellQuote } from '../../shared/shellQuote';
 import { FileBrowseError } from './FileBrowseService';
 import { parseRipgrepJson } from './parseRipgrepJson';
+import { buildCommandSpec, CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandResult } from '../../shared/exec/commandSpec';
 
 const MAX_RESULTS = 200;
 const SEARCH_TIMEOUT_MS = 10_000;
 const RG_CHECK_TTL_MS = 5 * 60 * 1000;
+const RG_CHECK_TIMEOUT_MS = 3000;
+/** rg / grep stop here: a search that matches more than this is cut, and the hits so far are used. */
+const SEARCH_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const EXCLUDED_DIRS = ['node_modules', '.git', 'dist', '.worktrees'];
 
 function isTimeoutError(err: unknown): boolean {
+  if (err instanceof CommandTimeoutError) return true;
   if (!(err instanceof Error)) return false;
   return (err as Error & { killed?: boolean }).killed === true || err.message.includes('timed out');
 }
@@ -77,12 +82,15 @@ export class FileSearchService {
     }
     const transport = this.transportFactory.getTransport(server);
     try {
-      const result = await transport.exec('command -v rg', 3000);
-      const available = result.code === 0 && result.stdout.trim().length > 0;
+      const result = await transport.run(buildCommandSpec('rg', ['--version'], { timeoutMs: RG_CHECK_TIMEOUT_MS }));
+      const available = result.exitCode === 0;
       this.rgCache.set(server.name, { available, checkedAt: Date.now() });
       return available;
-    } catch {
-      this.rgCache.set(server.name, { available: false, checkedAt: Date.now() });
+    } catch (err) {
+      // rg is not installed: remembered. Any other failure (a slow or unreachable host) is not an answer about rg, so grep
+      // serves this search and the next one asks again.
+      const notInstalled = err instanceof CommandSpawnError;
+      if (notInstalled) this.rgCache.set(server.name, { available: false, checkedAt: Date.now() });
       return false;
     }
   }
@@ -107,19 +115,20 @@ export class FileSearchService {
   }
 
   private async searchContent(server: ServerConfig, opts: SearchOptions, engine: 'rg' | 'grep'): Promise<SearchHit[]> {
-    const cmd = engine === 'rg'
-      ? this.buildRgCommand(opts)
-      : this.buildGrepCommand(opts);
+    const spec = engine === 'rg'
+      ? buildCommandSpec('rg', this.buildRgArgs(opts), { timeoutMs: SEARCH_TIMEOUT_MS, maxOutputBytes: SEARCH_MAX_OUTPUT_BYTES })
+      : buildCommandSpec('grep', this.buildGrepArgs(opts), { timeoutMs: SEARCH_TIMEOUT_MS, maxOutputBytes: SEARCH_MAX_OUTPUT_BYTES });
 
     const transport = this.transportFactory.getTransport(server);
     try {
-      const result = await transport.exec(cmd, SEARCH_TIMEOUT_MS);
-      if (!result.stdout.trim()) return [];
+      // rg and grep exit 1 for "no match" and 2 for an error that may still have produced hits: the output decides.
+      const stdout = await this.readSearchOutput(transport.run(spec));
+      if (!stdout.trim()) return [];
 
       const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
 
       if (engine === 'rg') {
-        const matches = parseRipgrepJson(result.stdout);
+        const matches = parseRipgrepJson(stdout);
         return matches.slice(0, MAX_RESULTS).map(m => ({
           path: m.path.startsWith(root) ? m.path.slice(root.length) : m.path,
           line: m.line,
@@ -130,7 +139,7 @@ export class FileSearchService {
         }));
       }
 
-      return this.parseGrepOutput(result.stdout, root, opts).slice(0, MAX_RESULTS);
+      return this.parseGrepOutput(stdout, root, opts).slice(0, MAX_RESULTS);
     } catch (err: unknown) {
       if (isTimeoutError(err)) {
         throw new FileBrowseError('Search timed out', 504);
@@ -162,8 +171,17 @@ export class FileSearchService {
     return `LC_ALL=C command find ${root} \\( ${pruneExprs} \\) -prune -o -type f${includeExpr} ${nameFlag} ${sq(pattern)} -print | head -${MAX_RESULTS}`;
   }
 
-  buildRgCommand(opts: SearchOptions): string {
-    const sq = shellQuote;
+  /** The stdout of a finished search; when the output cap cut it, the lines read before the cut (without the half line). */
+  private async readSearchOutput(running: Promise<CommandResult>): Promise<string> {
+    try {
+      return (await running).stdout;
+    } catch (err) {
+      if (err instanceof CommandOutputLimitError) return err.stdout.slice(0, err.stdout.lastIndexOf('\n') + 1);
+      throw err;
+    }
+  }
+
+  buildRgArgs(opts: SearchOptions): string[] {
     const flags: string[] = ['--json', '--line-number', '--color', 'never', '--max-count', '5'];
 
     if (!opts.regex) flags.push('-F');
@@ -171,22 +189,21 @@ export class FileSearchService {
     if (opts.wholeWord) flags.push('-w');
 
     for (const dir of EXCLUDED_DIRS) {
-      flags.push('-g', sq('!' + dir));
+      flags.push('-g', '!' + dir);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.include)) {
-      flags.push('-g', sq(pattern));
+      flags.push('-g', pattern);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.excludeExtra)) {
-      flags.push('-g', sq('!' + pattern));
+      flags.push('-g', '!' + pattern);
     }
 
-    return `rg ${flags.join(' ')} -- ${sq(opts.query)} ${sq(opts.root)}`;
+    return [...flags, '--', opts.query, opts.root];
   }
 
-  buildGrepCommand(opts: SearchOptions): string {
-    const sq = shellQuote;
+  buildGrepArgs(opts: SearchOptions): string[] {
     const flags: string[] = ['-rn', '-H', '--binary-files=without-match'];
 
     if (!opts.regex) flags.push('-F');
@@ -194,18 +211,18 @@ export class FileSearchService {
     if (opts.wholeWord) flags.push('-w');
 
     for (const dir of EXCLUDED_DIRS) {
-      flags.push(`--exclude-dir=${sq(dir)}`);
+      flags.push(`--exclude-dir=${dir}`);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.include)) {
-      flags.push(`--include=${sq(pattern)}`);
+      flags.push(`--include=${pattern}`);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.excludeExtra)) {
-      flags.push(`--exclude=${sq(pattern)}`, `--exclude-dir=${sq(pattern)}`);
+      flags.push(`--exclude=${pattern}`, `--exclude-dir=${pattern}`);
     }
 
-    return `grep ${flags.join(' ')} -- ${sq(opts.query)} ${sq(opts.root)} | head -${MAX_RESULTS}`;
+    return [...flags, '--', opts.query, opts.root];
   }
 
   private splitGlobPatterns(patterns: string | undefined): string[] {
