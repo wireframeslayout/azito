@@ -296,6 +296,67 @@ describe('RemoteWorktreeService', () => {
     });
   });
 
+  // `~/...` is a supported form of a stored working directory. The shell used to expand it; `cwd` and git's arguments are literal.
+  describe('a working directory that starts with ~', () => {
+    const HOME = '/home/u';
+    const TILDE_DIR = '~/ws/repo';
+    const REAL_DIR = `${HOME}/ws/repo`;
+
+    /** `cd -- "$HOME"'/ws/repo' && pwd -P` (the path resolver) answers like a host whose home is /home/u. */
+    const resolverExec = (rest: ExecResponder = defaultExec()): ExecResponder => (command) => {
+      if (command.startsWith('cd -- "$HOME"')) return execOk(`${HOME}${command.match(/'([^']*)' && pwd -P$/)![1]}\n`);
+      return rest(command);
+    };
+
+    it('resolves it against the target host before listing: git runs in the absolute directory', async () => {
+      const { svc, gitCalls, execCalls } = setup(() => ok('worktree /home/u/ws/repo\nHEAD abc\nbranch refs/heads/main\n\n'), resolverExec());
+      await svc.list(TILDE_DIR);
+      expect(execCalls[0]).toBe(`cd -- "$HOME"'/ws/repo' && pwd -P`);
+      expect(gitCalls[0].cwd).toBe(REAL_DIR);
+    });
+
+    it('creates the worktree under the resolved directory, and returns its absolute path', async () => {
+      const { svc, gitCalls, execCalls } = setup(() => ok(), resolverExec());
+      const result = await svc.create(TILDE_DIR, 5, 'slug', 'main');
+
+      expect(result.path).toBe(`${REAL_DIR}/.worktrees/task-5`);
+      expect(execCalls).toContain(`mkdir -p ${REAL_DIR}/.worktrees`);
+      expect(gitCalls.every((c) => c.cwd === REAL_DIR)).toBe(true);
+      expect(gitCalls.at(-1)!.args).toEqual(['worktree', 'add', '-b', 'task/5-slug', `${REAL_DIR}/.worktrees/task-5`, 'main']);
+      expect(JSON.stringify([gitCalls, execCalls.filter((c) => !c.startsWith('cd -- "$HOME"'))])).not.toContain('~');
+    });
+
+    it('resolves the worktree path too for remove, getBranch, getDiff and exists', async () => {
+      const { svc, gitCalls } = setup(() => ok('b\n'), resolverExec(() => execOk('yes\n')));
+      const worktree = '~/ws/repo/.worktrees/task-1';
+      await svc.remove(TILDE_DIR, worktree);
+      await svc.getBranch(worktree);
+      await svc.getDiff(worktree, 'main');
+      expect(await svc.exists(worktree)).toBe(true);
+
+      const real = `${REAL_DIR}/.worktrees/task-1`;
+      expect(gitCalls.map((c) => c.args)).toEqual([
+        ['worktree', 'remove', real, '--force'],
+        ['worktree', 'prune'],
+        ['-C', real, 'branch', '--show-current'],
+        ['-c', 'core.quotepath=false', '-C', real, 'diff', '--name-status', 'main...HEAD'],
+      ]);
+      expect(gitCalls.slice(0, 2).every((c) => c.cwd === REAL_DIR)).toBe(true);
+    });
+
+    it('fails, rather than running git in a directory named "~", when the host cannot resolve it', async () => {
+      const { svc, gitCalls } = setup(() => ok(), (command) => (command.startsWith('cd -- "$HOME"') ? { stdout: '', stderr: 'no such directory', code: 1 } : execOk()));
+      await expect(svc.list(TILDE_DIR)).rejects.toThrow(/realpath failed/);
+      expect(gitCalls).toHaveLength(0);
+    });
+
+    it('leaves an absolute directory alone (no resolution round trip)', async () => {
+      const { svc, execCalls } = setup(() => ok('worktree /w\nHEAD a\nbranch refs/heads/main\n\n'));
+      await svc.list('/w');
+      expect(execCalls).toHaveLength(0);
+    });
+  });
+
   // Each migrated call is pinned to what the old shell string became: the argv a real sh makes of the old `git ...` part equals the new args.
   describe.skipIf(process.platform === 'win32')('argv is the same as the old shell strings', () => {
     it('matches every git command of the old implementation', async () => {

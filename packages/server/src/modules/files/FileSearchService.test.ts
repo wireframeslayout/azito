@@ -33,6 +33,9 @@ function createMockTransportFactory(answers: Answers = {}) {
   return { factory: { getTransport: () => transport } as any, runSpecs, execCommands, transport };
 }
 
+/** `rg` is not installed: the one case grep stands in for it. */
+const NO_RG = new CommandSpawnError('ENOENT', 'spawn rg ENOENT');
+
 const baseServer = {
   name: 'test-server', type: 'local' as const, host: '', agentPort: 0, agentToken: '',
   muxRuntime: 'tmux' as const, agentVersion: null, sshHost: null, sshHostFingerprint: null, createdAt: '',
@@ -165,7 +168,7 @@ describe('FileSearchService', () => {
     });
 
     it('runs the engine the search chose with exactly those args', async () => {
-      const grepSide = createMockTransportFactory({ rgVersion: failed(1) });
+      const grepSide = createMockTransportFactory({ rgVersion: NO_RG });
       await new FileSearchService(grepSide.factory).search(baseServer, opts);
       expect(argvOfSpec(grepSide.runSpecs.at(-1)!)).toEqual(['grep', ...service.buildGrepArgs(opts)]);
 
@@ -190,25 +193,32 @@ describe('FileSearchService', () => {
       expect(checks()).toBe(before);
     });
 
-    it('falls back to grep when rg exits non-zero', async () => {
-      const { factory } = createMockTransportFactory({ rgVersion: failed(1) });
-      expect((await new FileSearchService(factory).search(baseServer, baseOpts)).engine).toBe('grep');
+    it('fails, instead of searching with grep, when rg is there but exits non-zero', async () => {
+      const { factory, runSpecs } = createMockTransportFactory({ rgVersion: failed(2, 'rg: broken') });
+      await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toThrow(/rg --version exited with 2/);
+      expect(runSpecs.every((s) => s.file === 'rg' && s.args[0] === '--version')).toBe(true);
     });
 
-    it('falls back to grep, and remembers it, when rg is not installed', async () => {
-      const { factory, runSpecs } = createMockTransportFactory({ rgVersion: new CommandSpawnError('ENOENT', 'spawn rg ENOENT') });
+    it('fails when rg cannot be started for a reason other than not being installed', async () => {
+      const { factory } = createMockTransportFactory({ rgVersion: new CommandSpawnError('EACCES', 'spawn rg EACCES') });
+      await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ code: 'EACCES' });
+    });
+
+    it('falls back to grep, and remembers it, only when rg is not installed', async () => {
+      const { factory, runSpecs } = createMockTransportFactory({ rgVersion: NO_RG });
       const service = new FileSearchService(factory);
       expect((await service.search(baseServer, baseOpts)).engine).toBe('grep');
       await service.search(baseServer, baseOpts);
       expect(runSpecs.filter((s) => s.args[0] === '--version')).toHaveLength(1);
     });
 
-    it('uses grep for this search but asks again next time when the rg check times out', async () => {
+    it('answers 504, not a grep result, when the rg check times out, and asks again next time', async () => {
       const { factory, runSpecs } = createMockTransportFactory({ rgVersion: new CommandTimeoutError(3000, '', '') });
       const service = new FileSearchService(factory);
-      expect((await service.search(baseServer, baseOpts)).engine).toBe('grep');
-      await service.search(baseServer, baseOpts);
+      await expect(service.search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
+      await expect(service.search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
       expect(runSpecs.filter((s) => s.args[0] === '--version')).toHaveLength(2);
+      expect(runSpecs.some((s) => s.file === 'grep')).toBe(false);
     });
 
     it('returns rg content hits relative to the root', async () => {
@@ -226,26 +236,54 @@ describe('FileSearchService', () => {
     });
 
     it('parses grep output', async () => {
-      const { factory } = createMockTransportFactory({ rgVersion: failed(1), content: ok('/project/src/a.ts:3:a test line\n/project/b.ts:7:test\n') });
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, content: ok('/project/src/a.ts:3:a test line\n/project/b.ts:7:test\n') });
       const result = await new FileSearchService(factory).search(baseServer, baseOpts);
       expect(result.contentHits.map((h) => [h.path, h.line])).toEqual([['src/a.ts', 3], ['b.ts', 7]]);
     });
 
-    it('uses the hits read before the output cap cut the search, without the half line', async () => {
+    it('uses the hits read before the output cap cut the search, without the half line, and says it was cut', async () => {
       const partial = '/project/a.ts:1:test\n/project/b.ts:2:test\n/project/c.ts:3:te';
-      const { factory } = createMockTransportFactory({ rgVersion: failed(1), content: new CommandOutputLimitError(8 * 1024 * 1024, partial, '') });
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, content: new CommandOutputLimitError(1024 * 1024, partial, '') });
       const result = await new FileSearchService(factory).search(baseServer, baseOpts);
       expect(result.contentHits.map((h) => h.path)).toEqual(['a.ts', 'b.ts']);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('is not truncated when nothing was cut and there are few hits', async () => {
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, content: ok('/project/a.ts:1:test\n') });
+      expect((await new FileSearchService(factory).search(baseServer, baseOpts)).truncated).toBe(false);
+    });
+
+    it('reports truncated when the output cap hit before even one whole line', async () => {
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, content: new CommandOutputLimitError(1024 * 1024, 'x'.repeat(100), '') });
+      const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+      expect(result.contentHits).toEqual([]);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('returns the hits read when the deadline ended a large scan, as a truncated result, not a 504', async () => {
+      const partial = '/project/a.ts:1:test\n/project/b.ts:2:te';
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, content: new CommandTimeoutError(10_000, partial, '') });
+      const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+      expect(result.contentHits.map((h) => h.path)).toEqual(['a.ts']);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('stops rg and grep at an output size that fits the 200 hits, not megabytes', async () => {
+      const { factory, runSpecs } = createMockTransportFactory({ rgVersion: NO_RG });
+      await new FileSearchService(factory).search(baseServer, baseOpts);
+      const grep = runSpecs.find((s) => s.file === 'grep')!;
+      expect(grep.maxOutputBytes).toBeLessThanOrEqual(1024 * 1024);
     });
 
     it('answers 504 when the content search times out', async () => {
-      const { factory } = createMockTransportFactory({ rgVersion: failed(1), content: new CommandTimeoutError(10_000, '', '') });
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, content: new CommandTimeoutError(10_000, '', '') });
       await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
     });
 
     it('returns name matches from find output (a shell file operation, still on exec)', async () => {
       const { factory, execCommands } = createMockTransportFactory({
-        rgVersion: failed(1),
+        rgVersion: NO_RG,
         find: { stdout: '/project/src/test.ts\n/project/src/test.spec.ts\n', stderr: '', code: 0 },
       });
       const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, root: '/project/' });
@@ -256,7 +294,7 @@ describe('FileSearchService', () => {
 
     it('sets truncated when results exceed limit', async () => {
       const names = Array.from({ length: 200 }, (_, i) => `/project/file${i}.ts`).join('\n');
-      const { factory } = createMockTransportFactory({ rgVersion: failed(1), find: { stdout: names + '\n', stderr: '', code: 0 } });
+      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, find: { stdout: names + '\n', stderr: '', code: 0 } });
       const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, query: 'file', root: '/project/' });
       expect(result.truncated).toBe(true);
       expect(result.nameMatches).toHaveLength(200);
