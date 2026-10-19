@@ -83,6 +83,17 @@ the operator's full-power token out of files that task-side processes read.
 skill works whether it's invoked from inside a task pane or from a human's manually-started
 terminal.
 
+### MCP blocking scope
+
+Agent processes launched in a task's worker window (`is_primary = 1`) receive flags that block
+access to the `azt-mcp` MCP server (Claude: `--strict-mcp-config`, Codex:
+`-c mcp_servers.azt-mcp.enabled=false`). This prevents a task agent from reaching the
+full-authority API surface through the operator's `AZITO_UI_TOKEN`-carrying MCP server.
+
+User-added windows (`is_primary = 0`) do **not** receive these blocking flags. These windows
+are interactive development sessions that need MCP server access. Non-primary windows attached
+to a task with `inputTrust = 'untrusted'` are fail-closed (blocking is applied).
+
 ### `~/.azito/operator.env`
 
 When you pass `--ui-token` to `setup.sh`, it writes `AZITO_URL` and `AZITO_UI_TOKEN` into

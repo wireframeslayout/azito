@@ -83,6 +83,17 @@ harness 配布分離（Phase B）を説明します。
 ため、タスクのペイン内から呼ばれても、人間が手動で開いたターミナルから呼ばれても同じスキルが動作
 します。
 
+### MCP 遮断の範囲
+
+タスクワーカーの窓（`is_primary = 1`）で起動されるエージェントには、`azt-mcp` MCP サーバーへの
+アクセスを遮断するフラグが付与されます（Claude: `--strict-mcp-config`、Codex:
+`-c mcp_servers.azt-mcp.enabled=false`）。これにより、タスクエージェントがオペレーターの
+`AZITO_UI_TOKEN` を持つ MCP サーバー経由で全権 API にアクセスすることを防ぎます。
+
+ユーザーが追加した窓（`is_primary = 0`）にはこの遮断を適用しません。ユーザーの窓は対話的な
+開発セッションであり、MCP サーバーへのアクセスが必要です。タスクに紐付いた非プライマリ窓で
+入力信頼度が untrusted のタスクの場合はフェイルクローズ（遮断する）で動作します。
+
 ### `~/.azito/operator.env`
 
 `setup.sh` に `--ui-token` を渡すと、`AZITO_URL` と `AZITO_UI_TOKEN` を `~/.azito/operator.env`
