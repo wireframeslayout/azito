@@ -56,6 +56,7 @@
     "deleteTitle": "Delete Window",
     "deleteMessage": "Kill this tmux window and remove it from the project? All panes will be terminated.",
     "deleteFailed": "Failed to delete window: {{error}}",
+    "deletePaneFailed": "Failed to delete pane: {{error}}",
     "renameLabel": "Rename label",
     "renameLabelPrompt": "Label:",
     "renameWindow": "Rename window",
@@ -81,6 +82,8 @@
     "windowCount_other": "{{count}} windows",
     "detachFromProject": "Detach from project",
     "deleteWindow": "Delete window",
+    "deleteEntireWindow": "Delete entire window",
+    "deletePane": "Delete pane",
     "quickAddTitle": "Add {{label}} — {{serverName}}"
   },
   "addWindow": {

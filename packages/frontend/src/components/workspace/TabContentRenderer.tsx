@@ -58,7 +58,7 @@ interface TabContentRendererProps {
   openSidekickForm: (opts: { mode: 'create' | 'edit'; sidekickName?: string }) => void;
   switchSidebarMode: (mode: SidebarMode) => void;
   onOpenAddWindow?: (forTask?: boolean, taskProjectId?: number, taskId?: number) => void;
-  onSplitPane?: (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => void;
+  onSplitPane?: (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string, ordinal?: number) => void;
   onPaneDisconnect?: () => void;
   openIssue?: (repoId: number, owner: string, repo: string, issueNumber: number, title: string) => void;
   openProjectTasks?: (projectId: number, projectName: string) => void;
@@ -159,7 +159,7 @@ export default function TabContentRenderer({
               allTasks={allTasks}
               sessions={sessionData[tab.serverName!]}
               onWindowChanged={refreshWorkspace}
-              onSplitPane={onSplitPane ? (dir) => onSplitPane(tab.serverName!, tab.target!, dir, tab.terminalRef?.kind === 'windowId' ? tab.terminalRef.windowId : undefined, tab.terminalRef?.kind === 'ref' ? tab.terminalRef.ref : undefined) : undefined}
+              onSplitPane={onSplitPane ? (dir) => onSplitPane(tab.serverName!, tab.target!, dir, tab.terminalRef?.kind === 'windowId' ? tab.terminalRef.windowId : undefined, tab.terminalRef?.kind === 'ref' ? tab.terminalRef.ref : undefined, tab.terminalRef?.pane) : undefined}
               onOpenTask={openTask}
               onDisconnect={onPaneDisconnect}
               onCloseTab={() => closeTab(tab.id)}

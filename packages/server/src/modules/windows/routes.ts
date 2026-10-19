@@ -706,7 +706,9 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
         const direction = (body.direction || 'v') as 'h' | 'v';
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const handle = await resolvePaneHandle(driverFor(srv), srv, ref, ordinal);
-        await driverFor(srv).splitPaneByHandle(srv, handle, direction, paneEnv.extraEnv);
+        const { result } = await driverFor(srv).splitPaneByHandle(srv, handle, direction, paneEnv.extraEnv);
+        const err = execResultError(result);
+        if (err) return reply.status(err.status).send({ error: err.error });
         notifyWindowsChanged(win.serverName);
         return { ok: true };
       });

@@ -277,6 +277,26 @@ export function terminalRefMatchesWindow(r: TerminalRef, windowId: number): bool
   return r.kind === 'windowId' && r.windowId === windowId;
 }
 
+export function isTabOfPane(tab: { type: string; serverName?: string; target?: string; terminalRef?: TerminalRef }, serverName: string, windowId: number, ordinal: number): boolean {
+  if (tab.type !== 'terminal' || tab.serverName !== serverName) return false;
+  if (tab.terminalRef?.kind === 'windowId' && tab.terminalRef.windowId === windowId && tab.terminalRef.pane === ordinal) return true;
+  if (tab.target) {
+    const m = tab.target.match(/^w(\d+)\.(\d+)$/);
+    if (m && parseInt(m[1], 10) === windowId && parseInt(m[2], 10) === ordinal) return true;
+  }
+  return false;
+}
+
+type PaneDeleteTab = { id: string; type: string; serverName?: string; target?: string; terminalRef?: TerminalRef };
+
+export function tabsToCloseAfterPaneDelete<T extends PaneDeleteTab>(
+  tabs: T[],
+  ctx: { serverName: string; windowId: number; ordinal: number; windowKind: MuxDriverKind | undefined },
+): T[] {
+  if (ctx.windowKind !== 'misao') return [];
+  return tabs.filter((tab) => isTabOfPane(tab, ctx.serverName, ctx.windowId, ctx.ordinal));
+}
+
 /**
  * A TerminalRef that can actually be addressed: a positive integer windowId or a
  * non-empty ref string, plus a positive integer pane. Guards against callers that

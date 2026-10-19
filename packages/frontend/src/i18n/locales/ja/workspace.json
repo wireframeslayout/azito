@@ -56,6 +56,7 @@
     "deleteTitle": "ウィンドウを削除",
     "deleteMessage": "この tmux ウィンドウを終了してプロジェクトから削除しますか？すべてのペインが終了されます。",
     "deleteFailed": "ウィンドウの削除に失敗しました: {{error}}",
+    "deletePaneFailed": "ペインの削除に失敗しました: {{error}}",
     "renameLabel": "ラベルを変更",
     "renameLabelPrompt": "ラベル:",
     "renameWindow": "ウィンドウ名を変更",
@@ -81,6 +82,8 @@
     "windowCount_other": "{{count}}ウィンドウ",
     "detachFromProject": "プロジェクトから切り離す",
     "deleteWindow": "ウィンドウを削除",
+    "deleteEntireWindow": "ウィンドウ全体を削除",
+    "deletePane": "ペインを削除",
     "quickAddTitle": "{{label}} を追加 — {{serverName}}"
   },
   "addWindow": {

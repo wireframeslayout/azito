@@ -941,7 +941,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         const handle = await resolvePaneHandle(muxClient, freshSrv, ref, ordinal);
-        await muxClient.splitPaneByHandle(freshSrv, handle, direction, paneEnv.extraEnv);
+        const { result } = await muxClient.splitPaneByHandle(freshSrv, handle, direction, paneEnv.extraEnv);
+        const err = execResultError(result);
+        if (err) return reply.status(err.status).send({ error: err.error });
         notifySessionsChanged(request.params.name);
         return { ok: true };
       });

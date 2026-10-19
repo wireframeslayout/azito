@@ -428,17 +428,6 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     refreshAll();
   }, [refreshAll, defaultKindOf, showToast, tw, withMisaoInstall]);
 
-  const handleSplitPane = useCallback(async (serverName: string, sessionName: string, windowName: string, direction: string, windowId?: number, ref?: string) => {
-    if (windowId != null) {
-      await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else if (refUsesMuxRoutes(ref)) {
-      await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    } else {
-      await api(`/servers/${serverName}/sessions/${sessionName}/windows/${encodeURIComponent(windowName)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
-    }
-    refreshAll();
-  }, [refreshAll]);
-
   const handleRenameWindow = useCallback(async (serverName: string, target: string, currentName: string, windowId?: number, ref?: string) => {
     const newName = prompt('Rename window:', currentName);
     if (!newName || newName === currentName) return;
@@ -513,7 +502,6 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     handleRenameSession,
     handleKillSession,
     handleAddWindow,
-    handleSplitPane,
     handleRenameWindow,
     handleRenamePane,
     handleKillWindow,
