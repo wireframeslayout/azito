@@ -1,7 +1,9 @@
 import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
-import { buildListCandidatesWithMeta, normalizePath, parseCandidates } from '../sessionScanUtils';
+import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
+import { pathApiFor } from '../../../shared/os/hostPath';
+import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta, ROLLOUT_HEAD_BYTES, type RolloutCandidate } from '../sessionScanUtils';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildCodexLaunchCommand, buildCodexRespawnCommand } from './launchCommand';
 
@@ -32,20 +34,32 @@ export class CodexSessionStrategy implements ISessionStrategy {
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {
-    const transport = this.transportFactory.getTransport(server);
+    const files = this.transportFactory.getFileOps(server);
+    const sessionsDir = pathApiFor(files.platform).join(await files.realpath('~'), '.codex', 'sessions');
 
-    const cmd = buildListCandidatesWithMeta('~/.codex/sessions/', 'rollout-*.jsonl', afterTimestamp);
+    // Oldest first; the first one that passes the filters is the answer, so the rest are not read.
+    const rollouts = await findFilesByMtime(files, sessionsDir, (name) => name.startsWith('rollout-') && name.endsWith('.jsonl'), afterTimestamp);
+    for (const rollout of rollouts) {
+      const candidate = await this.readCandidate(files, rollout.path);
+      if (!candidate) continue;
+      if (this.excludedIds.has(candidate.sessionId)) continue;
+      if (candidate.originator === 'codex_exec') continue;
+      if (workingDirectory !== null && candidate.cwd !== null && normalizePath(candidate.cwd) !== normalizePath(workingDirectory)) continue;
+      return candidate.sessionId;
+    }
+    return null;
+  }
 
-    const result = await transport.exec(cmd);
-    const candidates = parseCandidates(result.stdout);
-    const filtered = candidates.filter((candidate) => {
-      if (this.excludedIds.has(candidate.sessionId)) return false;
-      if (candidate.originator === 'codex_exec') return false;
-      if (workingDirectory !== null && candidate.cwd !== null) {
-        return normalizePath(candidate.cwd) === normalizePath(workingDirectory);
-      }
-      return true;
-    });
-    return filtered[0]?.sessionId ?? null;
+  /** The rollout's session metadata, or null when the file vanished or its first line holds none (a missing file's `head -1` gave nothing either). */
+  private async readCandidate(files: IFileOps, filePath: string): Promise<RolloutCandidate | null> {
+    let head: Buffer;
+    try {
+      head = (await files.read(filePath, { headBytes: ROLLOUT_HEAD_BYTES })).data;
+    } catch (err) {
+      if (err instanceof FileOpsError) return null;
+      throw err;
+    }
+    const line = firstLineOf(head);
+    return line === null ? null : parseRolloutMeta(filePath, line);
   }
 }

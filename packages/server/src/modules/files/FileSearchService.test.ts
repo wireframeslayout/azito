@@ -1,6 +1,12 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { FileSearchService, type SearchOptions } from './FileSearchService';
 import { CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandSpec } from '../../shared/exec/commandSpec';
+import { ShellFileOps } from '../servers/transport/ShellFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+import type { IFileOps } from '../../shared/fs/fileOps';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { argvOfShellLine, argvOfSpec, failed, ok } from '../../shared/exec/testing/commandTesting';
 
 type RunAnswer = ReturnType<typeof ok> | Error;
@@ -9,8 +15,10 @@ interface Answers {
   rgVersion?: RunAnswer;
   /** the content search (rg or grep) */
   content?: RunAnswer;
-  /** the name search (`find`, through exec) */
+  /** the name search of an agent without file operations (`find`, through exec) */
   find?: { stdout: string; stderr: string; code: number } | Error;
+  /** the host's file operations; by default the shell ones of an agent whose OS was never recorded */
+  files?: IFileOps;
 }
 
 function createMockTransportFactory(answers: Answers = {}) {
@@ -30,7 +38,8 @@ function createMockTransportFactory(answers: Answers = {}) {
       return unwrap(answers.find ?? { stdout: '', stderr: '', code: 1 });
     }),
   };
-  return { factory: { getTransport: () => transport } as any, runSpecs, execCommands, transport };
+  const files = answers.files ?? new ShellFileOps(transport);
+  return { factory: { getTransport: () => ({ ...transport, files: () => files }) } as any, runSpecs, execCommands, transport };
 }
 
 /** `rg` is not installed: the one case grep stands in for it. */
@@ -295,7 +304,7 @@ describe('FileSearchService', () => {
       await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
     });
 
-    it('returns name matches from find output (a shell file operation, still on exec)', async () => {
+    it('returns name matches from find output (an agent without file operations)', async () => {
       const { factory, execCommands } = createMockTransportFactory({
         rgVersion: NO_RG,
         find: { stdout: '/project/src/test.ts\n/project/src/test.spec.ts\n', stderr: '', code: 0 },
@@ -312,6 +321,68 @@ describe('FileSearchService', () => {
       const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, query: 'file', root: '/project/' });
       expect(result.truncated).toBe(true);
       expect(result.nameMatches).toHaveLength(200);
+    });
+  });
+
+  describe('name search with the host\'s file operations', () => {
+    let root: string;
+
+    beforeEach(() => {
+      root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-filesearch-')));
+    });
+    afterEach(() => {
+      rmSync(root, { recursive: true, force: true });
+    });
+
+    function serviceOver(files: IFileOps): { service: FileSearchService; execCommands: string[] } {
+      const { factory, execCommands } = createMockTransportFactory({ rgVersion: NO_RG, files });
+      return { service: new FileSearchService(factory), execCommands };
+    }
+
+    function writeFiles(...names: string[]): void {
+      for (const name of names) {
+        mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+        writeFileSync(path.join(root, name), '');
+      }
+    }
+
+    const local = (): LocalFileOps => new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: root }));
+
+    it('lists names through IFileOps without running find, skipping the excluded directories', async () => {
+      writeFiles('src/test.ts', 'src/test.spec.ts', 'node_modules/p/test.js', '.git/test', 'dist/test.js', 'readme.md');
+      const { service, execCommands } = serviceOver(local());
+
+      const result = await service.search(baseServer, { ...baseOpts, root });
+
+      expect(result.nameMatches).toEqual(['src/test.spec.ts', 'src/test.ts']);
+      expect(execCommands).toEqual([]);
+    });
+
+    it('applies include, exclude, case and regex as the find command did', async () => {
+      writeFiles('A/Test.ts', 'A/test.js', 'B/test.ts', 'vendor/test.ts');
+      const { service } = serviceOver(local());
+
+      const names = async (o: Partial<SearchOptions>): Promise<string[]> => (await service.search(baseServer, { ...baseOpts, root, ...o })).nameMatches;
+
+      expect(await names({ include: '*.ts', excludeExtra: 'vendor' })).toEqual(['A/Test.ts', 'B/test.ts']);
+      expect(await names({ caseSensitive: true })).toEqual(['A/test.js', 'B/test.ts', 'vendor/test.ts']);
+      expect(await names({ regex: true, query: '.*/B/.*' })).toEqual(['B/test.ts']);
+    });
+
+    it('is truncated at 200 names', async () => {
+      writeFiles(...Array.from({ length: 205 }, (_, i) => `file${i}.ts`));
+      const { service } = serviceOver(local());
+
+      const result = await service.search(baseServer, { ...baseOpts, root, query: 'file' });
+
+      expect(result.nameMatches).toHaveLength(200);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('lets a failure of the host propagate instead of answering with no names', async () => {
+      const unreachable = { platform: 'linux', list: async () => { throw new Error('agent unreachable'); } } as unknown as IFileOps;
+
+      await expect(serviceOver(unreachable).service.search(baseServer, baseOpts)).rejects.toThrow('agent unreachable');
     });
   });
 });

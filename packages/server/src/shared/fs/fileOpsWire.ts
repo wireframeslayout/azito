@@ -25,7 +25,9 @@ const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
 export const fileOpRequestSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('list'), path: filePath }),
   z.object({ op: z.literal('stat'), path: filePath, followLinks: z.boolean().optional() }),
-  z.object({ op: z.literal('read'), path: filePath, maxBytes: z.number().int().positive().max(MAX_FILE_OPS_BYTES).optional() }),
+  z.object({ op: z.literal('read'), path: filePath, maxBytes: z.number().int().positive().max(MAX_FILE_OPS_BYTES).optional(),
+    headBytes: z.number().int().positive().max(MAX_FILE_OPS_BYTES).optional(),
+  }),
   z.object({
     op: z.literal('write'),
     path: filePath,
@@ -56,7 +58,7 @@ const fileOpResponseSchema = z.discriminatedUnion('ok', [
 export type FileOpResponse = z.infer<typeof fileOpResponseSchema>;
 
 const resultSchemas = {
-  list: z.array(z.object({ name: z.string(), kind: entryKind, size: z.number().optional() })),
+  list: z.array(z.object({ name: z.string(), kind: entryKind, size: z.number().optional(), mtimeMs: z.number().optional() })),
   stat: fileStatSchema.nullable(),
   read: z.object({ dataBase64: z.string(), stat: fileStatSchema }),
   write: z.object({ mtimeMs: z.number(), sha256 }),
@@ -71,7 +73,9 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
     case 'list': return ops.list(request.path);
     case 'stat': return ops.stat(request.path, { followLinks: request.followLinks });
     case 'read': {
-      const { data, stat } = await ops.read(request.path, { maxBytes: request.maxBytes ?? MAX_FILE_OPS_BYTES });
+      // A head read returns at most `headBytes`, so the size limit of a whole read does not apply to it.
+      const maxBytes = request.maxBytes ?? (request.headBytes === undefined ? MAX_FILE_OPS_BYTES : undefined);
+      const { data, stat } = await ops.read(request.path, { maxBytes, headBytes: request.headBytes });
       return { dataBase64: data.toString('base64'), stat };
     }
     case 'write': {
@@ -117,8 +121,8 @@ export class RemoteFileOps implements IFileOps {
     return this.call('stat', { op: 'stat', path, followLinks: options.followLinks });
   }
 
-  async read(path: string, options: { maxBytes?: number } = {}): Promise<FileContent> {
-    const { dataBase64, stat } = await this.call('read', { op: 'read', path, maxBytes: options.maxBytes });
+  async read(path: string, options: { maxBytes?: number; headBytes?: number } = {}): Promise<FileContent> {
+    const { dataBase64, stat } = await this.call('read', { op: 'read', path, maxBytes: options.maxBytes, headBytes: options.headBytes });
     return { data: Buffer.from(dataBase64, 'base64'), stat };
   }
 

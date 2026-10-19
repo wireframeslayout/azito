@@ -3,6 +3,9 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shellQuote } from '../../shared/shellQuote';
 import { FileBrowseError } from './FileBrowseService';
 import { parseRipgrepJson } from './parseRipgrepJson';
+import { NameSearchTimeoutError, searchFileNames } from './nameSearch';
+import { isShellFileOps } from '../servers/transport/ShellFileOps';
+import type { IServerTransport } from '../servers/transport/ServerTransport';
 import { buildCommandSpec, CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandResult } from '../../shared/exec/commandSpec';
 
 const MAX_RESULTS = 200;
@@ -101,11 +104,35 @@ export class FileSearchService {
     }
   }
 
+  /**
+   * File names are searched by walking the tree with the host's file operations (`searchFileNames`), the same on every OS. An agent
+   * registered before its OS was recorded has no such operations, only shell commands (the route is fixed by what is
+   * recorded of the host, see `ShellFileOps`), so it keeps asking `find` for them.
+   */
   private async searchByName(server: ServerConfig, opts: SearchOptions): Promise<string[]> {
-    const cmd = this.buildFindCommand(opts);
     const transport = this.transportFactory.getTransport(server);
+    const files = transport.files();
     try {
-      const result = await transport.exec(cmd, SEARCH_TIMEOUT_MS);
+      if (isShellFileOps(files)) return await this.searchByFind(transport, opts);
+      return await searchFileNames(files, {
+        root: opts.root,
+        query: opts.query,
+        caseSensitive: opts.caseSensitive,
+        regex: opts.regex,
+        include: this.splitGlobPatterns(opts.include),
+        excludeNames: [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)],
+      }, { maxResults: MAX_RESULTS, deadlineMs: Date.now() + SEARCH_TIMEOUT_MS });
+    } catch (err: unknown) {
+      if (err instanceof NameSearchTimeoutError || isTimeoutError(err)) {
+        throw new FileBrowseError('Search timed out', 504);
+      }
+      throw err;
+    }
+  }
+
+  private async searchByFind(transport: IServerTransport, opts: SearchOptions): Promise<string[]> {
+    try {
+      const result = await transport.exec(this.buildFindCommand(opts), SEARCH_TIMEOUT_MS);
       if (!result.stdout.trim()) return [];
       const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
       return result.stdout.trim().split('\n')
@@ -113,9 +140,7 @@ export class FileSearchService {
         .map(p => p.startsWith(root) ? p.slice(root.length) : p)
         .slice(0, MAX_RESULTS);
     } catch (err: unknown) {
-      if (isTimeoutError(err)) {
-        throw new FileBrowseError('Search timed out', 504);
-      }
+      if (isTimeoutError(err)) throw err;
       return [];
     }
   }

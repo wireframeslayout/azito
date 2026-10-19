@@ -13,8 +13,12 @@ export interface IFileOps {
   list(dir: string): Promise<DirEntry[]>;
   /** What is at `path`, or null when nothing is. Follows symbolic links unless `followLinks` is false. */
   stat(path: string, options?: { followLinks?: boolean }): Promise<FileStat | null>;
-  /** The whole content of a regular file with its stat. A file larger than `maxBytes` is `TOO_LARGE` (nothing is read). */
-  read(path: string, options?: { maxBytes?: number }): Promise<FileContent>;
+  /**
+   * The content of a regular file with its stat. A file larger than `maxBytes` is `TOO_LARGE` (nothing is read). With
+   * `headBytes` only the first `headBytes` bytes (fewer for a shorter file) are read, however large the file is; `stat` is
+   * still the whole file's.
+   */
+  read(path: string, options?: { maxBytes?: number; headBytes?: number }): Promise<FileContent>;
   /**
    * Replaces the content of a file atomically (a temporary file in the same directory, then a rename), creating it when it
    * is missing. An existing file keeps its permission bits. Writing through a symbolic link is `SYMLINK_REFUSED`: the link's
@@ -39,6 +43,8 @@ export interface DirEntry {
   kind: EntryKind;
   /** Size in bytes of what a non-directory entry points at; absent for a directory or when it cannot be read (a dangling link). */
   size?: number;
+  /** Modification time of what a non-directory entry points at; absent for a directory or when it cannot be read (a dangling link). */
+  mtimeMs?: number;
 }
 
 export interface FileStat {

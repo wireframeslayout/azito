@@ -35,14 +35,14 @@ afterEach(() => {
 });
 
 describe('LocalFileOps.list', () => {
-  it('lists entries with their kind and, for files, the size', async () => {
+  it('lists entries with their kind and, for files, the size and mtime', async () => {
     writeFileSync(path.join(dir, 'a.txt'), 'hello');
     mkdirSync(path.join(dir, 'sub'));
     writeFileSync(path.join(dir, '.hidden'), '');
     const entries = (await ops.list(dir)).sort((a, b) => a.name.localeCompare(b.name));
     expect(entries).toEqual([
-      { name: '.hidden', kind: 'file', size: 0 },
-      { name: 'a.txt', kind: 'file', size: 5 },
+      { name: '.hidden', kind: 'file', size: 0, mtimeMs: statSync(path.join(dir, '.hidden')).mtimeMs },
+      { name: 'a.txt', kind: 'file', size: 5, mtimeMs: statSync(path.join(dir, 'a.txt')).mtimeMs },
       { name: 'home', kind: 'directory' },
       { name: 'sub', kind: 'directory' },
     ]);
@@ -53,7 +53,7 @@ describe('LocalFileOps.list', () => {
     symlinkSync('target.txt', path.join(dir, 'link'));
     symlinkSync('missing', path.join(dir, 'dangling'));
     const byName = Object.fromEntries((await ops.list(dir)).map((e) => [e.name, e]));
-    expect(byName.link).toEqual({ name: 'link', kind: 'symlink', size: 3 });
+    expect(byName.link).toEqual({ name: 'link', kind: 'symlink', size: 3, mtimeMs: statSync(path.join(dir, 'target.txt')).mtimeMs });
     expect(byName.dangling).toEqual({ name: 'dangling', kind: 'symlink' });
   });
 
@@ -105,6 +105,16 @@ describe('LocalFileOps.read', () => {
       expect((err as FileOpsError).details.size).toBe(100);
     }
     expect((await ops.read(path.join(dir, 'big'), { maxBytes: 100 })).data.length).toBe(100);
+  });
+
+  it('reads only the first headBytes of a file, however large, and all of a shorter one', async () => {
+    writeFileSync(path.join(dir, 'rollout'), 'first line\nsecond line\n');
+    const head = await ops.read(path.join(dir, 'rollout'), { headBytes: 10 });
+    expect(head.data.toString()).toBe('first line');
+    expect(head.stat.size).toBe(23);
+    expect((await ops.read(path.join(dir, 'rollout'), { headBytes: 1000 })).data.toString()).toBe('first line\nsecond line\n');
+    writeFileSync(path.join(dir, 'empty'), '');
+    expect((await ops.read(path.join(dir, 'empty'), { headBytes: 10 })).data.length).toBe(0);
   });
 
   it('is NOT_FOUND for a missing path and NOT_A_FILE for a directory', async () => {

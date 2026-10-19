@@ -20,16 +20,14 @@ const EXEC_STRING_CALL = /(?:[tT]ransport|\btarget|getTransport\([^)]*\))\.exec\
 
 /** Remaining calls by file, relative to src/, grouped by what is to replace them. */
 const REMAINING: Record<string, number> = {
-  // C-1: shell file operations (find / test / wc / cat / rm / mkdir...) → IFileOps (P7). What is left:
+  // C-1: shell file operations (find / test / wc / cat / rm / mkdir...) → IFileOps (P7, P7b). What is left:
   // - the shell implementation of IFileOps for an agent registered before its OS was recorded (a Unix one without
   //   /api/fileops). AgentTransport.files() chooses it once; every other file operation goes through IFileOps
   'modules/servers/transport/ShellFileOps.ts': 22,
-  // - not yet moved: the file-name search (`find -printf | sort` with find's own -regex / -path dialect), the sync of the
-  //   sidekick tree (tar + base64 on the target) and the session scans (`find -newermt`, `head -1` of each rollout)
+  // - the file-name search of such an agent (`find`); every other host searches names with IFileOps.list
   'modules/files/FileSearchService.ts': 1,
-  'modules/sidekicks/SidekickSyncService.ts': 6,
-  'modules/agents/claude/SessionStrategy.ts': 1,
-  'modules/agents/codex/SessionStrategy.ts': 1,
+  // - the sidekick sync of such an agent (tar + base64 through exec); every other host writes the tarball with IFileOps and runs `tar`
+  'modules/sidekicks/shellSidekickSync.ts': 6,
   'modules/windows/WindowRespawnService.ts': 1,
   'modules/transcripts/WindowSessionResolver.ts': 2,
   'modules/tasks/execution/WorkerWaiter.ts': 2,

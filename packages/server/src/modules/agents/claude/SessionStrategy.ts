@@ -1,7 +1,8 @@
 import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
-import { buildFindLatestByMtime } from '../sessionScanUtils';
+import { findFilesByMtime } from '../sessionScanUtils';
+import { pathApiFor } from '../../../shared/os/hostPath';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildClaudeLaunchCommand } from './launchCommand';
 
@@ -35,17 +36,16 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {
     if (!workingDirectory) return null;
-    const transport = this.transportFactory.getTransport(server);
+    const files = this.transportFactory.getFileOps(server);
     const normalized = workingDirectory.replace(/\/+$/, '');
     const encoded = normalized.replace(/[/.]/g, '-');
 
-    const cmd = buildFindLatestByMtime(`~/.claude/projects/${encoded}/`, '*.jsonl', afterTimestamp);
+    const projectDir = pathApiFor(files.platform).join(await files.realpath('~'), '.claude', 'projects', encoded);
+    const candidates = await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp);
+    const latest = candidates[candidates.length - 1];
+    if (!latest) return null;
 
-    const result = await transport.exec(cmd);
-    const filePath = result.stdout.trim();
-    if (!filePath) return null;
-
-    const match = filePath.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
+    const match = latest.path.match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i);
     return match ? match[1] : null;
   }
 }

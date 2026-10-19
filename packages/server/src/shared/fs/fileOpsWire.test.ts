@@ -46,6 +46,17 @@ describe('RemoteFileOps over executeFileOp', () => {
     expect((await remote.list(dir)).map((e) => e.name)).toEqual(['sub']);
   });
 
+  it('carries mtimeMs in a listing and a head read, which is not limited by the size of the file', async () => {
+    const file = path.join(dir, 'rollout.jsonl');
+    writeFileSync(file, 'head line\nthe rest of a file\n');
+    const listed = (await remote.list(dir)).find((e) => e.name === 'rollout.jsonl');
+    expect(listed?.mtimeMs).toBe((await remote.stat(file))?.mtimeMs);
+    const head = await remote.read(file, { headBytes: 9 });
+    expect(head.data.toString()).toBe('head line');
+    expect(head.stat.size).toBe(29);
+    expect(sent.at(-1)).toMatchObject({ op: 'read', headBytes: 9 });
+  });
+
   it('rethrows a refusal of the host as the same error with its details', async () => {
     const file = path.join(dir, 'a.txt');
     writeFileSync(file, 'v1');
@@ -96,6 +107,8 @@ describe('fileOpRequestSchema', () => {
   it('bounds a read and refuses a malformed hash', () => {
     expect(fileOpRequestSchema.safeParse({ op: 'read', path: '/a', maxBytes: MAX_FILE_OPS_BYTES + 1 }).success).toBe(false);
     expect(fileOpRequestSchema.safeParse({ op: 'read', path: '/a', maxBytes: 0 }).success).toBe(false);
+    expect(fileOpRequestSchema.safeParse({ op: 'read', path: '/a', headBytes: MAX_FILE_OPS_BYTES + 1 }).success).toBe(false);
+    expect(fileOpRequestSchema.safeParse({ op: 'read', path: '/a', headBytes: 100 }).success).toBe(true);
     expect(fileOpRequestSchema.safeParse({ op: 'write', path: '/a', dataBase64: '', expect: { sha256: 'xyz' } }).success).toBe(false);
   });
 });

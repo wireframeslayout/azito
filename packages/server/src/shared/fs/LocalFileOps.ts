@@ -73,6 +73,18 @@ async function statOrNull(target: string, followLinks: boolean): Promise<fs.Stat
   }
 }
 
+/** The first `count` bytes of a file (fewer when it is shorter). */
+async function readHead(target: string, count: number): Promise<Buffer> {
+  const handle = await fs.promises.open(target, 'r');
+  try {
+    const buffer = Buffer.alloc(count);
+    const { bytesRead } = await handle.read(buffer, 0, count, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** The OS's own resolution (`fs.promises.realpath` is Node's JS one): it follows junctions and returns the filesystem's notation. */
 const realpathNative = promisify(fs.realpath.native);
 
@@ -112,9 +124,9 @@ export class LocalFileOps implements IFileOps {
       return Promise.all(items.map(async (item): Promise<DirEntry> => {
         const kind = kindOf(item);
         if (kind === 'directory') return { name: item.name, kind };
-        // The size of what a link points at; a dangling link has none.
-        const size = await fs.promises.stat(this.api.join(target, item.name)).then((s) => s.size, () => undefined);
-        return size === undefined ? { name: item.name, kind } : { name: item.name, kind, size };
+        // The size and mtime of what a link points at; a dangling link has neither.
+        const stats = await fs.promises.stat(this.api.join(target, item.name)).catch(() => undefined);
+        return stats === undefined ? { name: item.name, kind } : { name: item.name, kind, size: stats.size, mtimeMs: stats.mtimeMs };
       }));
     });
   }
@@ -125,7 +137,7 @@ export class LocalFileOps implements IFileOps {
     return stats && toFileStat(stats);
   }
 
-  async read(path: string, options: { maxBytes?: number } = {}): Promise<FileContent> {
+  async read(path: string, options: { maxBytes?: number; headBytes?: number } = {}): Promise<FileContent> {
     const target = this.checked(path);
     return guarded(async () => {
       const stats = await fs.promises.stat(target);
@@ -133,6 +145,7 @@ export class LocalFileOps implements IFileOps {
       if (options.maxBytes !== undefined && stats.size > options.maxBytes) {
         throw new FileOpsError('TOO_LARGE', `File too large (${stats.size} bytes, limit ${options.maxBytes})`, { size: stats.size });
       }
+      if (options.headBytes !== undefined) return { data: await readHead(target, options.headBytes), stat: toFileStat(stats) };
       return { data: await fs.promises.readFile(target), stat: toFileStat(stats) };
     });
   }

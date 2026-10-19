@@ -46,15 +46,15 @@ export class ShellFileOps implements IFileOps {
   }
 
   async list(dir: string): Promise<DirEntry[]> {
-    const stdout = await this.out(`LC_ALL=C command find ${sq(this.checked(dir))} -maxdepth 1 -mindepth 1 -printf '%y %s %f\\n' 2>/dev/null | sort`);
+    const stdout = await this.out(`LC_ALL=C command find ${sq(this.checked(dir))} -maxdepth 1 -mindepth 1 -printf '%y %s %T@ %f\\n' 2>/dev/null | sort`);
     const entries: DirEntry[] = [];
     for (const line of stdout.trim().split('\n').filter(Boolean)) {
-      const match = line.match(/^(\S)\s+(\d+)\s+(.+)$/);
+      const match = line.match(/^(\S)\s+(\d+)\s+(\d+(?:\.\d+)?)\s+(.+)$/);
       if (!match) continue;
-      const [, typeChar, sizeText, name] = match;
+      const [, typeChar, sizeText, mtimeText, name] = match;
       if (name === '.' || name === '..') continue;
       const kind: EntryKind = typeChar === 'd' ? 'directory' : typeChar === 'f' ? 'file' : typeChar === 'l' ? 'symlink' : 'other';
-      entries.push(kind === 'directory' ? { name, kind } : { name, kind, size: parseInt(sizeText, 10) || 0 });
+      entries.push(kind === 'directory' ? { name, kind } : { name, kind, size: parseInt(sizeText, 10) || 0, mtimeMs: parseFloat(mtimeText) * 1000 });
     }
     return entries;
   }
@@ -81,7 +81,7 @@ export class ShellFileOps implements IFileOps {
     return { stat: { kind, size, mtimeMs: seconds * 1000, mode: parseInt(fields[2], 8) || 0 }, precise: fields[1].includes('.') };
   }
 
-  async read(path: string, options: { maxBytes?: number } = {}): Promise<FileContent> {
+  async read(path: string, options: { maxBytes?: number; headBytes?: number } = {}): Promise<FileContent> {
     const q = sq(this.checked(path));
     const found = await this.statPrecise(path, true);
     if (!found) throw new FileOpsError('NOT_FOUND', `No such file: ${path}`);
@@ -92,11 +92,18 @@ export class ShellFileOps implements IFileOps {
     }
     // The file goes through base64 so that no byte of it can be taken for the end of the command's output (a plain `cat` lost
     // a trailing newline). `< file` instead of an argument because BSD `base64` has no `--`; `-w0` is GNU-only, so it falls back
-    // to the wrapped form, whose line breaks are removed below. The marker tells a failed read from an empty file.
-    const stdout = await this.out(`(base64 -w0 < ${q} 2>/dev/null || base64 < ${q} 2>/dev/null) && echo AZITO_READ_OK`);
+    // to the wrapped form, whose line breaks are removed below. The marker tells a failed read from an empty file. A head read
+    // takes the first bytes with `head -c` (plain `base64` wraps or not, depending on the host; the breaks are removed alike).
+    if (options.headBytes !== undefined && !(Number.isInteger(options.headBytes) && options.headBytes > 0)) {
+      throw new FileOpsError('FAILED', 'headBytes must be a positive integer');
+    }
+    const encode = options.headBytes !== undefined
+      ? `head -c ${options.headBytes} < ${q} | base64`
+      : `(base64 -w0 < ${q} 2>/dev/null || base64 < ${q} 2>/dev/null)`;
+    const stdout = await this.out(`${encode} && echo AZITO_READ_OK`);
     if (!stdout.includes('AZITO_READ_OK')) throw new FileOpsError('FAILED', 'Failed to read file');
     const data = Buffer.from(stdout.replace('AZITO_READ_OK', '').replace(/[\r\n]/g, ''), 'base64');
-    if (data.length !== stat.size) throw new FileOpsError('FAILED', 'Failed to read file: content size mismatch');
+    if (options.headBytes === undefined && data.length !== stat.size) throw new FileOpsError('FAILED', 'Failed to read file: content size mismatch');
     return { data, stat };
   }
 
@@ -215,4 +222,9 @@ export class ShellFileOps implements IFileOps {
     if (!resolved) throw new FileOpsError('NOT_FOUND', `realpath failed for '${path}'`);
     return resolved;
   }
+}
+
+/** Whether `files` is the shell implementation, i.e. the agent behind it predates `/api/fileops` (a route fixed before the call). */
+export function isShellFileOps(files: IFileOps): files is ShellFileOps {
+  return files instanceof ShellFileOps;
 }

@@ -12,6 +12,10 @@ import {
   PAYLOAD_CHUNK_SIZE,
 } from './SidekickSyncService';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
+import { ShellFileOps } from '../servers/transport/ShellFileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+import { runCommandSpec } from '../../shared/exec/runCommandSpec';
+import { CommandSpawnError, type CommandResult, type CommandSpec } from '../../shared/exec/commandSpec';
 import type { SidekickPackage } from './SidekickPackage';
 
 function makePackage(overrides: Partial<SidekickPackage> = {}): SidekickPackage {
@@ -63,7 +67,8 @@ function makeTransport(overrides: TransportOverrides = {}) {
     }
     return { stdout: echoMarker(cmd), stderr: '', code: 0 };
   });
-  const transport = { exec, execMux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() } as unknown as IServerTransport;
+  // An agent whose OS was never recorded: its files() is the shell implementation, which selects the shell route of the sync.
+  const transport = { exec, files: () => new ShellFileOps({ exec }), execMux: vi.fn(), openTerminal: vi.fn(), createPaneStream: vi.fn() } as unknown as IServerTransport;
   return { transport, exec };
 }
 
@@ -141,7 +146,7 @@ describe('resolveSidekickDir', () => {
   });
 });
 
-describe('SidekickSyncService.sync', () => {
+describe('SidekickSyncService.sync (an agent without file operations: shell commands)', () => {
   let dir: string;
 
   beforeEach(() => {
@@ -363,6 +368,139 @@ describe('SidekickSyncService.sync', () => {
 
       expect(commandsOf(a.exec).some((c) => c.includes('tar xzf'))).toBe(true);
       expect(commandsOf(b.exec).some((c) => c.includes('tar xzf'))).toBe(true);
+    });
+  });
+});
+
+describe('SidekickSyncService.sync (file operations + run)', () => {
+  let dir: string;
+  let home: string;
+  let specs: CommandSpec[];
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sync-ops-'));
+    home = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sync-home-')));
+    // 644 on purpose: the sync is what makes a script runnable.
+    writeTree(dir, { 'SKILL.md': 'body', 'scripts/push.sh': '#!/bin/bash\necho push', 'references/r.md': 'ref' });
+    fs.chmodSync(path.join(dir, 'scripts', 'push.sh'), 0o644);
+    specs = [];
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  /** The hub's own host: real files under a temporary home, and a real `tar`. `onRun` may answer a spec itself. */
+  function makeHost(onRun?: (spec: CommandSpec) => CommandResult | undefined): IServerTransport {
+    const files = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: home }));
+    return {
+      files: () => files,
+      run: async (spec: CommandSpec) => {
+        specs.push(spec);
+        return onRun?.(spec) ?? runCommandSpec(spec, { windows: process.platform === 'win32', systemRoot: process.env.SystemRoot } as Parameters<typeof runCommandSpec>[1]);
+      },
+      exec: vi.fn(async () => { throw new Error('the file operations route must not use a shell'); }),
+    } as unknown as IServerTransport;
+  }
+
+  const sidekicksDir = (): string => path.join(home, '.azito', 'sidekicks');
+  const leftovers = (): string[] => fs.readdirSync(path.join(home, '.azito')).filter((name) => name !== 'sidekicks');
+
+  it('extracts the packages into ~/.azito/sidekicks with the hash marker, and leaves no payload, staging or lock behind', async () => {
+    const pkg = makePackage({ name: 'pkg', dir });
+
+    await new SidekickSyncService(fastOpts).sync('myserver', makeHost(), [pkg]);
+
+    expect(fs.readFileSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md'), 'utf8')).toBe('body');
+    expect(fs.readFileSync(path.join(sidekicksDir(), 'pkg', 'references', 'r.md'), 'utf8')).toBe('ref');
+    expect(fs.readFileSync(path.join(sidekicksDir(), '.azito-sidekicks-hash'), 'utf8').trim()).toBe(computeSidekicksHash([pkg]));
+    expect(leftovers()).toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('makes the scripts executable, as chmod -R 755 on scripts/ did', async () => {
+    await new SidekickSyncService(fastOpts).sync('myserver', makeHost(), [makePackage({ name: 'pkg', dir })]);
+
+    expect(fs.statSync(path.join(sidekicksDir(), 'pkg', 'scripts', 'push.sh')).mode & 0o777).toBe(0o755);
+    expect(fs.statSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md')).mode & 0o111).toBe(0);
+  });
+
+  it('runs tar without a shell, in ~/.azito, with relative paths only (no drive letter reaches its arguments)', async () => {
+    await new SidekickSyncService(fastOpts).sync('myserver', makeHost(), [makePackage({ name: 'pkg', dir })]);
+
+    expect(specs).toHaveLength(1);
+    expect(specs[0]).toMatchObject({ file: 'tar', cwd: path.join(home, '.azito') });
+    expect(specs[0].args).toEqual(['xzf', expect.stringMatching(/^sidekicks-payload\.[0-9a-f]+\.tar\.gz$/), '-C', expect.stringMatching(/^sidekicks\.tmp\.[0-9a-f]+$/)]);
+  });
+
+  it('skips the transfer when the host already holds this hash', async () => {
+    const pkg = makePackage({ name: 'pkg', dir });
+    const service = new SidekickSyncService(fastOpts);
+    await service.sync('myserver', makeHost(), [pkg]);
+    specs.length = 0;
+
+    await service.sync('myserver', makeHost(), [pkg]);
+
+    expect(specs).toEqual([]);
+  });
+
+  it('replaces a previous tree with the new one', async () => {
+    const service = new SidekickSyncService(fastOpts);
+    const pkg = makePackage({ name: 'pkg', dir });
+    await service.sync('myserver', makeHost(), [pkg]);
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), 'body v2');
+    fs.rmSync(path.join(dir, 'references'), { recursive: true });
+
+    await service.sync('myserver', makeHost(), [pkg]);
+
+    expect(fs.readFileSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md'), 'utf8')).toBe('body v2');
+    expect(fs.existsSync(path.join(sidekicksDir(), 'pkg', 'references'))).toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('keeps the previous tree, cleans up and says why when tar fails', async () => {
+    const service = new SidekickSyncService(fastOpts);
+    const pkg = makePackage({ name: 'pkg', dir });
+    await service.sync('myserver', makeHost(), [pkg]);
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), 'body v2');
+
+    await expect(service.sync('myserver', makeHost(() => ({ exitCode: 1, signal: null, stdout: '', stderr: 'tar: unexpected EOF' })), [pkg]))
+      .rejects.toThrow(/Sidekick sync to server "myserver" failed \(extract\): tar: unexpected EOF/);
+
+    expect(fs.readFileSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md'), 'utf8')).toBe('body');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('reports a tar that cannot be started', async () => {
+    const host = makeHost();
+    (host as { run: unknown }).run = async () => { throw new CommandSpawnError('ENOENT', 'spawn tar ENOENT'); };
+
+    await expect(new SidekickSyncService(fastOpts).sync('myserver', host, [makePackage({ name: 'pkg', dir })]))
+      .rejects.toThrow(/failed \(extract\): spawn tar ENOENT/);
+    expect(leftovers()).toEqual([]);
+  });
+
+  describe('remote lock', () => {
+    it('gives up after the configured retries without transferring while a fresh lock is held', async () => {
+      fs.mkdirSync(path.join(home, '.azito', 'sidekicks.lock'), { recursive: true });
+
+      await expect(new SidekickSyncService({ lockRetries: 2, lockRetryDelayMs: 0 }).sync('myserver', makeHost(), [makePackage({ name: 'pkg', dir })]))
+        .rejects.toThrow(/could not acquire remote lock/);
+
+      expect(specs).toEqual([]);
+      expect(fs.existsSync(path.join(home, '.azito', 'sidekicks.lock'))).toBe(true);
+    });
+
+    it('takes over a lock older than five minutes and releases it afterwards', async () => {
+      const lock = path.join(home, '.azito', 'sidekicks.lock');
+      fs.mkdirSync(lock, { recursive: true });
+      const old = (Date.now() - 6 * 60 * 1000) / 1000;
+      fs.utimesSync(lock, old, old);
+
+      await new SidekickSyncService(fastOpts).sync('myserver', makeHost(), [makePackage({ name: 'pkg', dir })]);
+
+      expect(fs.existsSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md'))).toBe(true);
+      expect(fs.existsSync(lock)).toBe(false);
     });
   });
 });

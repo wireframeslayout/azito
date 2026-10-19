@@ -63,10 +63,12 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       writeFileSync(path.join(odd, '.hidden'), '');
       const entries = (await ops.list(odd)).sort((a, b) => a.name.localeCompare(b.name));
       expect(entries).toEqual([
-        { name: '.hidden', kind: 'file', size: 0 },
-        { name: 'a.txt', kind: 'file', size: 5 },
+        { name: '.hidden', kind: 'file', size: 0, mtimeMs: expect.any(Number) },
+        { name: 'a.txt', kind: 'file', size: 5, mtimeMs: expect.any(Number) },
         { name: 'sub', kind: 'directory' },
       ]);
+      const listed = entries.find((e) => e.name === 'a.txt')!;
+      expect(Math.abs(listed.mtimeMs! - statSync(path.join(odd, 'a.txt')).mtimeMs)).toBeLessThan(1000);
       expect(existsSync(path.join(dir, 'pwned'))).toBe(false);
     });
 
@@ -112,6 +114,16 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       const binary = Buffer.from([0, 255, 10, 13, 0, 1]);
       writeFileSync(path.join(dir, 'bin'), binary);
       expect((await ops.read(path.join(dir, 'bin'))).data.equals(binary)).toBe(true);
+    });
+
+    it('reads only the first headBytes of a file when asked', async () => {
+      writeFileSync(path.join(dir, 'rollout'), 'first line\nsecond line\n');
+      const head = await ops.read(path.join(dir, 'rollout'), { headBytes: 10 });
+      expect(head.data.toString()).toBe('first line');
+      expect(head.stat.size).toBe(23);
+      expect((await ops.read(path.join(dir, 'rollout'), { headBytes: 1000 })).data.toString()).toBe('first line\nsecond line\n');
+      writeFileSync(path.join(dir, 'empty'), '');
+      expect((await ops.read(path.join(dir, 'empty'), { headBytes: 10 })).data.length).toBe(0);
     });
 
     it('refuses a missing path, a directory and a file over the limit', async () => {

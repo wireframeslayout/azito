@@ -1,75 +1,121 @@
-import { describe, it, expect } from 'vitest';
-import {
-  buildFindLatestByMtime,
-  buildListCandidatesWithMeta,
-  formatNewermt,
-  normalizePath,
-  parseCandidates,
-} from './sessionScanUtils';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+import type { DirEntry, IFileOps } from '../../shared/fs/fileOps';
+import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta } from './sessionScanUtils';
 
-describe('formatNewermt', () => {
-  it('formats a Date as epoch seconds for find -newermt', () => {
-    const timestamp = new Date('2026-07-15T12:34:56.789Z');
+let dir: string;
+let ops: LocalFileOps;
 
-    expect(formatNewermt(timestamp)).toBe('@1784118896');
-  });
+beforeEach(() => {
+  dir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-scan-')));
+  ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: dir }));
+});
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
 });
 
-describe('buildFindLatestByMtime', () => {
-  it('builds a find command ordered by mtime without a timestamp filter', () => {
-    const cmd = buildFindLatestByMtime('~/.codex/sessions/', 'rollout-*.jsonl');
+function touch(relative: string, mtimeSeconds: number): string {
+  const full = path.join(dir, relative);
+  mkdirSync(path.dirname(full), { recursive: true });
+  writeFileSync(full, 'x');
+  utimesSync(full, mtimeSeconds, mtimeSeconds);
+  return full;
+}
 
-    expect(cmd).toBe(
-      "find ~/.codex/sessions/ -name 'rollout-*.jsonl' -type f 2>/dev/null -printf '%T@ %p\\n' | sort -rn | head -1 | cut -d' ' -f2-",
-    );
-    expect(cmd).not.toContain('-newermt');
-  });
+const jsonl = (name: string): boolean => name.endsWith('.jsonl');
 
-  it('builds a find command ordered by mtime with an epoch timestamp filter', () => {
-    const timestamp = new Date('2026-07-15T12:34:56.789Z');
-    const cmd = buildFindLatestByMtime('~/.claude/projects/example/', '*.jsonl', timestamp);
+describe('findFilesByMtime', () => {
+  it('finds matching files at any depth, oldest first, and ignores other names and directories', async () => {
+    const newest = touch('2026/07/15/c.jsonl', 3000);
+    const oldest = touch('a.jsonl', 1000);
+    const middle = touch('2026/b.jsonl', 2000);
+    touch('2026/notes.txt', 2500);
+    mkdirSync(path.join(dir, 'looks-like.jsonl'));
 
-    expect(cmd).toBe(
-      "find ~/.claude/projects/example/ -name '*.jsonl' -type f 2>/dev/null -newermt '@1784118896' -printf '%T@ %p\\n' | sort -rn | head -1 | cut -d' ' -f2-",
-    );
-  });
-});
+    const found = await findFilesByMtime(ops, dir, jsonl);
 
-describe('buildListCandidatesWithMeta', () => {
-  it('builds a candidate command without a timestamp filter', () => {
-    expect(buildListCandidatesWithMeta('~/.codex/sessions/', 'rollout-*.jsonl')).toBe(
-      `find ~/.codex/sessions/ -name 'rollout-*.jsonl' -type f 2>/dev/null -printf '%T@ %p\\n' | sort -n | while read t f; do echo "FILE:$f"; head -1 "$f"; done`,
-    );
-  });
-
-  it('builds a candidate command with an epoch timestamp filter', () => {
-    const timestamp = new Date('2026-07-15T12:34:56.789Z');
-    expect(buildListCandidatesWithMeta('~/.codex/sessions/', 'rollout-*.jsonl', timestamp)).toContain(
-      "-newermt '@1784118896' 2>/dev/null",
-    );
-  });
-});
-
-describe('parseCandidates', () => {
-  it('parses session metadata and skips malformed candidates', () => {
-    const output = [
-      'FILE:/tmp/old.jsonl',
-      '{"type":"session_meta","payload":{"session_id":"old","cwd":"/work/","originator":"codex"}}',
-      'FILE:/tmp/bad.jsonl',
-      'not json',
-      'FILE:/tmp/missing.jsonl',
-      '{"type":"session_meta","payload":{"cwd":"/work"}}',
-    ].join('\n');
-
-    expect(parseCandidates(output)).toEqual([
-      { filePath: '/tmp/old.jsonl', sessionId: 'old', cwd: '/work/', originator: 'codex' },
+    expect(found).toEqual([
+      { path: oldest, mtimeMs: 1_000_000 },
+      { path: middle, mtimeMs: 2_000_000 },
+      { path: newest, mtimeMs: 3_000_000 },
     ]);
+  });
+
+  it('keeps only files strictly newer than the timestamp, which counts in whole seconds (find -newermt @N)', async () => {
+    const same = touch('same.jsonl', 2000);
+    const newer = touch('newer.jsonl', 2001);
+    touch('older.jsonl', 1999);
+
+    const found = await findFilesByMtime(ops, dir, jsonl, new Date(2_000_900));
+
+    expect(found.map((f) => f.path)).toEqual([newer]);
+    expect(found.map((f) => f.path)).not.toContain(same);
+  });
+
+  it('yields nothing for a directory that does not exist', async () => {
+    await expect(findFilesByMtime(ops, path.join(dir, 'missing'), jsonl)).resolves.toEqual([]);
+  });
+
+  it.skipIf(process.platform === 'win32')('does not follow a symbolic link to a file or a directory', async () => {
+    const real = touch('real/a.jsonl', 1000);
+    symlinkSync(real, path.join(dir, 'link.jsonl'));
+    symlinkSync(path.join(dir, 'real'), path.join(dir, 'linked-dir'));
+
+    expect((await findFilesByMtime(ops, dir, jsonl)).map((f) => f.path)).toEqual([real]);
+  });
+
+  it('fails when the host lists a file without a modification time (an outdated agent) instead of ordering it by a guess', async () => {
+    const outdated = {
+      platform: 'linux',
+      list: async (): Promise<DirEntry[]> => [{ name: 'a.jsonl', kind: 'file', size: 1 }],
+    } as unknown as IFileOps;
+
+    await expect(findFilesByMtime(outdated, '/x', jsonl)).rejects.toThrow(/modification time/);
+  });
+
+  it('lets a failure that is not a refusal of the host propagate', async () => {
+    const unreachable = {
+      platform: 'linux',
+      list: async (): Promise<DirEntry[]> => { throw new Error('agent unreachable'); },
+    } as unknown as IFileOps;
+
+    await expect(findFilesByMtime(unreachable, '/x', jsonl)).rejects.toThrow('agent unreachable');
+  });
+});
+
+describe('firstLineOf', () => {
+  it('returns the text up to the first line break, or all of it without one', () => {
+    expect(firstLineOf(Buffer.from('one\ntwo\n'))).toBe('one');
+    expect(firstLineOf(Buffer.from('only line'))).toBe('only line');
+  });
+
+  it('is null for an empty file or one that starts with a line break', () => {
+    expect(firstLineOf(Buffer.alloc(0))).toBeNull();
+    expect(firstLineOf(Buffer.from('\nsecond'))).toBeNull();
+  });
+});
+
+describe('parseRolloutMeta', () => {
+  it('parses session metadata', () => {
+    expect(parseRolloutMeta('/tmp/old.jsonl', '{"type":"session_meta","payload":{"session_id":"old","cwd":"/work/","originator":"codex"}}')).toEqual(
+      { filePath: '/tmp/old.jsonl', sessionId: 'old', cwd: '/work/', originator: 'codex' },
+    );
   });
 
   it('allows absent cwd and originator values', () => {
-    expect(parseCandidates('FILE:/tmp/session.jsonl\n{"payload":{"session_id":"session"}}')).toEqual([
+    expect(parseRolloutMeta('/tmp/session.jsonl', '{"payload":{"session_id":"session"}}')).toEqual(
       { filePath: '/tmp/session.jsonl', sessionId: 'session', cwd: null, originator: null },
-    ]);
+    );
+  });
+
+  it('is null for a line that is not JSON, has no payload, or has no session id', () => {
+    expect(parseRolloutMeta('/tmp/bad.jsonl', 'not json')).toBeNull();
+    expect(parseRolloutMeta('/tmp/bad.jsonl', '"a string"')).toBeNull();
+    expect(parseRolloutMeta('/tmp/bad.jsonl', '{"type":"x"}')).toBeNull();
+    expect(parseRolloutMeta('/tmp/missing.jsonl', '{"type":"session_meta","payload":{"cwd":"/work"}}')).toBeNull();
   });
 });
 

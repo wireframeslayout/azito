@@ -37,7 +37,7 @@ describe('agent POST /api/fileops', () => {
     writeFileSync(path.join(dir, 'a.txt'), 'hello');
     const res = await post({ op: 'list', path: dir });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ ok: true, result: [{ name: 'a.txt', kind: 'file', size: 5 }] });
+    expect(res.json()).toEqual({ ok: true, result: [{ name: 'a.txt', kind: 'file', size: 5, mtimeMs: expect.any(Number) }] });
   });
 
   it('writes a file atomically and reports the new mtime and hash', async () => {
