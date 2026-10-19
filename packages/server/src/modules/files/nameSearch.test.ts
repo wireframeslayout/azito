@@ -64,10 +64,11 @@ describe('searchFileNames', () => {
   });
 
   it('is case-insensitive unless asked otherwise', async () => {
-    tree('Test.ts', 'test.ts');
+    // in separate directories: a Windows filesystem would treat the two names as one file
+    tree('upper/Test.ts', 'lower/test.ts');
 
-    expect(await search()).toEqual(['Test.ts', 'test.ts']);
-    expect(await search({ caseSensitive: true })).toEqual(['test.ts']);
+    expect(await search()).toEqual(['lower/test.ts', 'upper/Test.ts']);
+    expect(await search({ caseSensitive: true })).toEqual(['lower/test.ts']);
   });
 
   it('reads the query as a glob, as find -iname does', async () => {
