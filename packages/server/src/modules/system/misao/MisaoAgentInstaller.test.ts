@@ -65,6 +65,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     const env = { PATH: `${path.join(tmp, 'bin')}:${process.env.PATH}`, HOME: home };
     return {
       exec: (command) => runShell(command, env),
+      hostProfile: { platform: 'linux', arch: 'x64' },
       fetchMisaoStatus: async () => {
         const res = await app.inject({ method: 'GET', url: '/api/misao/status' });
         return res.json();
@@ -499,7 +500,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
 
 describe('sanitizeServicePath', () => {
   it('keeps plain absolute directories', () => {
-    expect(sanitizeServicePath('/usr/bin:/home/u/.nvm/versions/node/v24/bin:/bin')).toBe('/usr/bin:/home/u/.nvm/versions/node/v24/bin:/bin');
+    expect(sanitizeServicePath('/usr/bin:/home/u/.nvm/versions/node/v24/bin:/bin', null)).toBe('/usr/bin:/home/u/.nvm/versions/node/v24/bin:/bin');
   });
 
   it.each([
@@ -511,10 +512,20 @@ describe('sanitizeServicePath', () => {
     ['an empty entry', ':/usr/bin'],
     ['a parent reference', '/usr/../etc:/usr/bin'],
   ])('drops %s and keeps the rest', (_label, input) => {
-    expect(sanitizeServicePath(input)).toBe('/usr/bin');
+    expect(sanitizeServicePath(input, { platform: 'linux', arch: 'x64' })).toBe('/usr/bin');
   });
 
   it('refuses a PATH none of whose entries is usable', () => {
-    expect(() => sanitizeServicePath('bin:/a b')).toThrow(MisaoServiceError);
+    expect(() => sanitizeServicePath('bin:/a b', null)).toThrow(MisaoServiceError);
+  });
+
+  it('splits on the delimiter of the agent host, not the hub: ":" for an unrecorded (Unix) agent and Unix hosts', () => {
+    expect(sanitizeServicePath('/usr/bin:/bin', null)).toBe('/usr/bin:/bin');
+    expect(sanitizeServicePath('/usr/bin:/bin', { platform: 'darwin', arch: 'arm64' })).toBe('/usr/bin:/bin');
+  });
+
+  it('splits a Windows agent PATH on ";" (a ":" inside an entry is not a separator there)', () => {
+    expect(sanitizeServicePath('/opt/a:b;/usr/bin', { platform: 'win32', arch: 'x64' })).toBe('/opt/a:b;/usr/bin');
+    expect(sanitizeServicePath('/opt/a b;/usr/bin', { platform: 'win32', arch: 'x64' })).toBe('/usr/bin');
   });
 });

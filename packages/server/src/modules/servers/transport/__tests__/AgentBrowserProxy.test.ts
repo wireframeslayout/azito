@@ -96,7 +96,7 @@ const server: ServerConfig = {
   agentToken: 'test-token',
   agentVersion: '1.0.0',
   sshHost: null,
-  sshHostFingerprint: null,
+  hostProfile: null, sshHostFingerprint: null,
   isolationIntent: false,
   isolationVerifiedAt: null,
   isolationReport: null, isolationCleanupReport: null,

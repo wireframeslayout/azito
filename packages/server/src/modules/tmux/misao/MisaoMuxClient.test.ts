@@ -11,6 +11,7 @@ import { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { WindowInputService } from '../../transcripts/WindowInputService';
 import type { IWindowRepository, Window } from '../../windows/Window';
 import type { IServerRepository } from '../../servers/Server';
+import { hubPaneShell } from './paneShell';
 
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
 const HUB_ENV = { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' };
@@ -144,7 +145,7 @@ function setup(over: { wait?: (ms: number) => Promise<void>; connectAttachClient
   const daemon = new FakeDaemon();
   const onChange = vi.fn();
   const wait = over.wait ?? vi.fn(async () => {});
-  const client = new MisaoMuxClient(daemon, { shell: '/bin/zsh', onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
+  const client = new MisaoMuxClient(daemon, { paneShell: hubPaneShell('/bin/zsh'), onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
   return { daemon, client, onChange, wait };
 }
 
@@ -295,6 +296,28 @@ describe('MisaoMuxClient reads', () => {
     expect((await client.captureScreen(server, handle(p), 1, 2)).stdout).toBe('b\nc\n');
     expect((await client.captureScreen(server, handle(p), 5)).stdout).toBe('');
     expect(await client.captureScreen(server, handle(p))).toMatchObject({ stderr: '', code: 0 });
+  });
+});
+
+describe('MisaoMuxClient pane shell (per node)', () => {
+  function clientWithShell(paneShell: () => Promise<{ shell: string; commandArgs: readonly string[] }>) {
+    const daemon = new FakeDaemon();
+    const client = new MisaoMuxClient(daemon, { paneShell, onChange: vi.fn(), log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: vi.fn(async () => { throw new Error('not expected'); }) }, vi.fn(async () => {}));
+    return { daemon, client };
+  }
+
+  it("starts panes with the node's shell and its command arguments, not a fixed -lc", async () => {
+    const { daemon, client } = clientWithShell(async () => ({ shell: '/usr/bin/fish', commandArgs: ['-c'] }));
+    await client.openWorkspace(server, 'proj', { command: 'claude', windowName: 'w', exactName: true });
+    await client.openWorkspace(server, 'proj2', { windowName: 'w2', exactName: true });
+    expect(daemon.callsTo('pane.open').map((p) => p.cmd)).toEqual([['/usr/bin/fish', '-c', 'claude'], ['/usr/bin/fish']]);
+  });
+
+  it('does not leave an empty window behind when the node has no usable shell', async () => {
+    const { daemon, client } = clientWithShell(async () => { throw new Error('agent server a1 reports no default shell'); });
+    await expect(client.openWorkspace(server, 'proj', { windowName: 'w', exactName: true })).rejects.toThrow('no default shell');
+    expect(daemon.callsTo('window.create')).toEqual([]);
+    expect(daemon.callsTo('pane.open')).toEqual([]);
   });
 });
 

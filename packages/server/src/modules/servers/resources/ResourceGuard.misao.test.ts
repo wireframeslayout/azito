@@ -15,7 +15,7 @@ describe('ResourceGuard with a misao local server', () => {
   it('measures through the shell transport through the same local transport as a tmux server', async () => {
     const exec = vi.spyOn(LocalTransport.prototype, 'exec').mockResolvedValue({ stdout: HEALTHY_STDOUT, stderr: '', code: 0 });
     const settingsRepo = { get: () => ({ enabled: true, memAvailablePercentMin: 10, loadPerCoreMax: 2 }), update: vi.fn() };
-    const guard = new ResourceGuard(new TransportFactory('http://hub:3001', os.homedir(), new TaskTempFiles('/tmp', 'linux')), settingsRepo as never);
+    const guard = new ResourceGuard(new TransportFactory('http://hub:3001', os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }), settingsRepo as never);
 
     const misao = { name: 'm', type: 'local', host: null, agentPort: null, agentToken: null, defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
     const measurement = await guard.measure(misao);

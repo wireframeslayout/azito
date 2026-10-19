@@ -18,7 +18,7 @@ function makeOpts(overrides: Partial<FileBrowseRouteOptions> = {}): FileBrowseRo
             sshHost: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, sshHostFingerprint: null,
             isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' }
         : undefined)),
-      create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(),
+      create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(), updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn(),
     } as unknown as FileBrowseRouteOptions['serverRepo'],
     projectServerRepo: { find: vi.fn(() => null), findByProject: vi.fn(() => []), findByServer: vi.fn(() => []), upsert: vi.fn(), remove: vi.fn() } as unknown as FileBrowseRouteOptions['projectServerRepo'],

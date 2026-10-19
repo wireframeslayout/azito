@@ -55,6 +55,7 @@ describe('registerMisaoDriver', () => {
     const { servers, connection } = registerMisaoDriver(registry, runtime(async () => {}), vi.fn(), { warn: vi.fn() }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, {
       target: () => ({ connect: async () => { throw new Error('no relay in this test'); } }),
       status: async () => ({ socketPresent: true }),
+      hostInfo: async () => ({ platform: 'linux', arch: 'x64', shell: '/bin/bash' }),
       latest: () => null,
     });
     const agent = { name: 'a1', type: 'agent' as const, defaultMux: 'tmux' as const, host: 'h', agentPort: 1, agentToken: 't' } as never;

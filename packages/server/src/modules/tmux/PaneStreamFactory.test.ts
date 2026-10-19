@@ -5,7 +5,7 @@ import { MisaoPaneStream } from './misao/MisaoPaneStream';
 import type { MisaoLineSource } from './misao/MisaoConnection';
 
 describe('PaneStreamFactory', () => {
-  const server = { name: 's7', type: 'agent' as const, host: 'h', agentPort: 3002, agentToken: 't', defaultMux: 'tmux' as const, muxRuntime: 'system' as const };
+  const server = { name: 's7', type: 'agent' as const, host: 'h', agentPort: 3002, agentToken: 't', hostProfile: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const };
   const fileStream = { kind: 'file' };
   const transportFactory = { getTransport: () => ({ createPaneStream: () => fileStream }) } as never;
   const factory = new PaneStreamFactory(transportFactory, () => ({} as MisaoLineSource));
@@ -15,7 +15,7 @@ describe('PaneStreamFactory', () => {
   });
 
   describe('local servers', () => {
-    const misaoServer = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, defaultMux: 'misao' as const, muxRuntime: 'system' as const };
+    const misaoServer = { name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, hostProfile: null, defaultMux: 'misao' as const, muxRuntime: 'system' as const };
     const tmuxServer = { ...misaoServer, defaultMux: 'tmux' as const, muxRuntime: 'system' as const };
     const misaoLines = {} as MisaoLineSource;
     const linesOf = vi.fn((_server: { name: string }) => misaoLines);

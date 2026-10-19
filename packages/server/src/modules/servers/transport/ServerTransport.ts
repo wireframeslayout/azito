@@ -1,6 +1,7 @@
 import type { EventEmitter } from 'events';
 import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
+import type { HostProfile } from '../../../shared/os/hostProfile';
 
 export interface ExecResult {
   stdout: string;
@@ -17,8 +18,17 @@ export interface ITerminalStream extends EventEmitter {
   close(): void;
 }
 
+/** A transport that knows the host it runs on. */
+export interface IHostBoundTransport {
+  /** The OS / architecture of that host. Null: an agent registered before the OS was recorded (a Unix one). */
+  readonly hostProfile: HostProfile | null;
+}
+
 export interface IServerTransport {
-  /** シェルコマンド実行（現行 TmuxClient.execCommand 相当） */
+  /**
+   * シェルコマンド実行（現行 TmuxClient.execCommand 相当）
+   * @deprecated POSIX-only: runs `command` with `/bin/sh -c`, so a win32 host rejects it with an `unsupported_os` HostProfileError.
+   */
   exec(command: string, timeoutMs?: number): Promise<ExecResult>;
 }
 

@@ -14,7 +14,7 @@ function makeAgentServer(): ServerConfig {
     agentVersion: '1.0.0',
     sshHost: null,
     defaultMux: 'tmux' as const, muxRuntime: 'system',
-    sshHostFingerprint: null,
+    hostProfile: null, sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,

@@ -4,6 +4,7 @@ import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
+import { hubPaneShell } from './paneShell';
 import { MisaoServers, type MisaoServersDeps } from './MisaoServers';
 import { MisaoDriverRouter } from './MisaoDriverRouter';
 import type { HubPaneEnvConfig } from '../hubPaneEnv';
@@ -95,6 +96,7 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
 export const NO_AGENT_MISAO: MisaoServersDeps['agent'] = {
   target: () => { throw new Error('this process does not open the misao relay of an agent server'); },
   status: async () => ({ socketPresent: false }),
+  hostInfo: () => { throw new Error('this process does not open the misao relay of an agent server'); },
   latest: () => null,
 };
 
@@ -112,7 +114,7 @@ export function registerMisaoDriver(
   agent: MisaoServersDeps['agent'],
 ): MisaoHandle {
   const connection = new MisaoConnection({ socketPath: runtime.socketPath, sdk: runtime.sdk, log });
-  const driver = new MisaoMuxClient(connection, { shell: runtime.shell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, { socketPath: runtime.socketPath }) });
+  const driver = new MisaoMuxClient(connection, { paneShell: hubPaneShell(runtime.shell), onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, { socketPath: runtime.socketPath }) });
   const servers = new MisaoServers({ sdk: runtime.sdk, shell: runtime.shell, hubEnv, onChange, log, local: { connection, driver }, agent });
   registry.register('misao', new MisaoDriverRouter(servers), (server) => servers.availability(server), (server) => servers.hosts(server));
   return { connection, driver, socketPath: runtime.socketPath, servers };

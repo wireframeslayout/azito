@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
 import { AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
 
 const VERSION = 'bundlehash1';
@@ -13,13 +14,13 @@ function makeBundler() {
 }
 
 /** An SSH client whose host answers the preflight and accepts every other command, recording them all. */
-function makeSsh(opts: { tmux?: string } = {}) {
+function makeSsh(opts: { tmux?: string; probe?: string } = {}) {
   const commands: string[] = [];
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
     const answers: Record<string, string> = {
       'node --version': 'v24.14.0\n',
-      'uname -m': 'x86_64\n',
+      [HOST_PROBE_COMMAND]: opts.probe ?? 'linux x64\n',
       'tmux -V': opts.tmux ?? '',
       'tailscale ip -4': '100.64.0.9\n',
     };
@@ -37,7 +38,7 @@ describe('AgentInstaller', () => {
     vi.restoreAllMocks();
   });
 
-  function make(misao?: AgentMisaoInstaller, sshOpts: { tmux?: string } = {}) {
+  function make(misao?: AgentMisaoInstaller, sshOpts: { tmux?: string; probe?: string } = {}) {
     const { ssh, commands } = makeSsh(sshOpts);
     const installer = new AgentInstaller(ssh as never, makeBundler() as never, misao);
     // The transfer is the SSH library's business (and needs a real server): everything around it is what is tested here.
@@ -152,5 +153,60 @@ describe('AgentInstaller', () => {
     expect(text).not.toMatch(/azito-misao/);
     expect(text).not.toMatch(/pkill[^\n]*misao/);
     expect(text).toContain('pkill -f azito-agent.cjs');
+  });
+
+  describe('host OS / architecture preflight', () => {
+    it('reads the host with a fixed node command, not uname', async () => {
+      const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4' });
+      await installer.install('user@host');
+      expect(HOST_PROBE_COMMAND).toBe(`node -p "process.platform+' '+process.arch"`);
+      expect(commands).toContain(HOST_PROBE_COMMAND);
+      expect(commands).not.toContain('uname -m');
+    });
+
+    it('returns the profile it read on success, and hands it to the misao installer\'s transport', async () => {
+      const misao = okMisao();
+      const { installer } = make(misao, { tmux: 'tmux 3.4' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(true);
+      expect(result.hostProfile).toEqual({ platform: 'linux', arch: 'x64' });
+      expect((misao.install.mock.calls[0][0] as { hostProfile: unknown }).hostProfile).toEqual({ platform: 'linux', arch: 'x64' });
+    });
+
+    it('still accepts only x64: darwin arm64 is a known host that is refused as before', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin arm64\n' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/x86_64 architecture required \(found: arm64\)/);
+    });
+
+    it('accepts darwin x64', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'darwin x64\n' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(true);
+      expect(result.hostProfile).toEqual({ platform: 'darwin', arch: 'x64' });
+    });
+
+    it('refuses a Windows host as unsupported_os (installing there is #369)', async () => {
+      const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'win32 x64\n' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/unsupported_os/);
+      expect(commands.some((c) => c.includes('tar') || c.includes('nohup'))).toBe(false);
+    });
+
+    it('refuses an OS AZITO does not know as unsupported_host', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: 'freebsd x64\n' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/unsupported_host/);
+    });
+
+    it('reports an unreadable answer instead of guessing a host', async () => {
+      const { installer } = make(okMisao(), { tmux: 'tmux 3.4', probe: '' });
+      const result = await installer.install('user@host');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Could not read the host OS and architecture/);
+    });
   });
 });

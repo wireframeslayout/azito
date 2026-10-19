@@ -11,7 +11,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentToken: 'tok123',
     agentVersion: 'abc1234',
     sshHost: 'user@remote',
-    sshHostFingerprint: null,
+    hostProfile: null, sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
@@ -40,7 +40,7 @@ function makeMocks(bundleHash = 'abc1234') {
     findByName: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
-    updateAgentVersion: vi.fn(),
+    updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     delete: vi.fn(),
@@ -57,7 +57,12 @@ function makeMocks(bundleHash = 'abc1234') {
     delete: vi.fn(),
   };
 
-  return { bundler, installer, serverRepo, taskRepo };
+  const hostRecorder = {
+    record: vi.fn(async () => null),
+    recordIfUnknown: vi.fn(async () => null),
+  };
+
+  return { bundler, installer, serverRepo, taskRepo, hostRecorder };
 }
 
 describe('AgentUpdater', () => {
@@ -65,7 +70,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks();
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     const result = await updater.checkAndUpdate(makeServer({ type: 'local' }));
@@ -76,7 +81,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks();
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     const result = await updater.checkAndUpdate(makeServer({ host: null }));
@@ -87,7 +92,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -106,7 +111,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks(sha);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     let callCount = 0;
@@ -133,7 +138,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -158,7 +163,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -180,7 +185,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks(sha);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -204,7 +209,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -229,7 +234,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -252,7 +257,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -271,7 +276,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -292,7 +297,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -314,7 +319,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -345,7 +350,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
     );
 
     const results = await updater.checkAllServers();
@@ -353,5 +358,54 @@ describe('AgentUpdater', () => {
     expect(results[0].name).toBe('agent-1');
 
     vi.unstubAllGlobals();
+  });
+
+  describe('recording the agent host', () => {
+    const reachable = (version: string) => vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ version }) })));
+    const build = (mocks: ReturnType<typeof makeMocks>) => new AgentUpdater(
+      mocks.bundler as any, mocks.installer as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+    );
+
+    it('asks for the host of a reached agent that has none recorded (connection)', async () => {
+      const mocks = makeMocks('abc1234');
+      reachable('abc1234');
+      const server = makeServer();
+      const result = await build(mocks).checkAndUpdate(server);
+      expect(result.status).toBe('up_to_date');
+      expect(mocks.hostRecorder.recordIfUnknown).toHaveBeenCalledWith(server);
+      expect(mocks.hostRecorder.record).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('asks again after a successful update, because the new agent may be the first to report it', async () => {
+      const mocks = makeMocks('new-sha');
+      reachable('old-sha');
+      mocks.installer.update.mockResolvedValue({ success: true, version: 'new-sha' });
+      const server = makeServer();
+      const result = await build(mocks).checkAndUpdate(server);
+      expect(result).toMatchObject({ status: 'updated', currentVersion: 'new-sha' });
+      expect(mocks.hostRecorder.record).toHaveBeenCalledWith(server);
+      vi.unstubAllGlobals();
+    });
+
+    it('does not ask when the agent could not be reached', async () => {
+      const mocks = makeMocks('abc1234');
+      vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
+      const result = await build(mocks).checkAndUpdate(makeServer({ sshHost: null }));
+      expect(result.status).toBe('error');
+      expect(mocks.hostRecorder.recordIfUnknown).not.toHaveBeenCalled();
+      vi.unstubAllGlobals();
+    });
+
+    it('reports a host that cannot be recorded as an error with the reason, instead of hiding it', async () => {
+      const mocks = makeMocks('abc1234');
+      reachable('abc1234');
+      mocks.hostRecorder.recordIfUnknown.mockRejectedValue(Object.assign(new Error('Unsupported host freebsd/x64'), { code: 'unsupported_host' }));
+      const result = await build(mocks).checkAndUpdate(makeServer());
+      expect(result.status).toBe('error');
+      expect(result.message).toContain('Unsupported host freebsd/x64');
+      vi.unstubAllGlobals();
+    });
   });
 });

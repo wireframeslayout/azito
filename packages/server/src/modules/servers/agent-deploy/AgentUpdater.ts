@@ -1,5 +1,6 @@
 import type { AgentBundler } from './AgentBundler';
 import type { AgentInstaller } from './AgentInstaller';
+import type { AgentHostRecorder } from './AgentHostRecorder';
 import type { IServerRepository } from '../Server';
 import type { SqliteTaskRepository } from '../../tasks/SqliteTaskRepository';
 import type { ServerConfig } from '../Server';
@@ -25,6 +26,7 @@ export class AgentUpdater {
     private installer: AgentInstaller,
     private serverRepo: IServerRepository,
     private taskRepo: SqliteTaskRepository,
+    private hostRecorder: AgentHostRecorder,
   ) {}
 
   async checkAndUpdate(server: ServerConfig): Promise<UpdateCheckResult> {
@@ -80,16 +82,16 @@ export class AgentUpdater {
     }
 
     if (remoteVersion === localBundleHash) {
-      return { name: server.name, status: 'up_to_date', currentVersion: remoteVersion };
+      return this.withHostRecorded(server, { name: server.name, status: 'up_to_date', currentVersion: remoteVersion }, false);
     }
 
     if (this.hasRunningTasks(server.name)) {
-      return {
+      return this.withHostRecorded(server, {
         name: server.name,
         status: 'deferred',
         currentVersion: remoteVersion,
         message: 'Update deferred: running tasks on this server',
-      };
+      }, false);
     }
 
     const sshHost = this.findSshHost(server);
@@ -100,10 +102,25 @@ export class AgentUpdater {
     const result = await this.installer.update(sshHost, server.host, server.agentToken, server.muxRuntime);
     if (result.success) {
       this.serverRepo.updateAgentVersion(server.name, result.version);
-      return { name: server.name, status: 'updated', currentVersion: result.version };
+      // The new agent may be the first to know how to report its host: ask again.
+      return this.withHostRecorded(server, { name: server.name, status: 'updated', currentVersion: result.version }, true);
     }
 
     return { name: server.name, status: 'error', currentVersion: remoteVersion, message: result.error };
+  }
+
+  /**
+   * Records the agent's host (OS / architecture) now that the agent has answered, so a server registered before it was kept
+   * gets one (every reach asks only while it is unrecorded; an update asks again). A failure turns the result into an
+   * error with the reason, whatever the version check found: it never stops an update, which has already happened.
+   */
+  private async withHostRecorded(server: ServerConfig, result: UpdateCheckResult, forceAsk: boolean): Promise<UpdateCheckResult> {
+    try {
+      await (forceAsk ? this.hostRecorder.record(server) : this.hostRecorder.recordIfUnknown(server));
+      return result;
+    } catch (err) {
+      return { ...result, status: 'error', message: `Could not record the agent's host: ${(err as Error).message}` };
+    }
   }
 
   async checkAllServers(): Promise<UpdateCheckResult[]> {

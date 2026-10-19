@@ -442,6 +442,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string, guard: Sec
         name: row.name as string,
         type: row.type as ServerConfig['type'],
         host: (row.host as string) ?? null,
+        hostProfile: null, // the doctor only probes window liveness; it never runs a command on the host
         agentPort: (row.agent_port as number) ?? null,
         agentToken,
         agentVersion: (row.agent_version as string) ?? null,

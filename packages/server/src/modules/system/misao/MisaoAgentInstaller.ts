@@ -8,10 +8,11 @@ import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MISAO_SYSTEMD_UNIT } from './misaoPaths';
+import { pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
 import { renderMisaoUnit } from './misaoUnit';
 
 /** What the installer needs of an agent: its shell, what it sees on disk, and a place to put release files. */
-export type MisaoInstallTarget = Pick<AgentTransport, 'exec' | 'fetchMisaoStatus' | 'uploadMisaoFile'>;
+export type MisaoInstallTarget = Pick<AgentTransport, 'exec' | 'fetchMisaoStatus' | 'uploadMisaoFile' | 'hostProfile'>;
 
 export type MisaoAgentStartMethod = 'systemd' | 'nohup' | 'running';
 
@@ -59,10 +60,11 @@ interface PreviousInstall {
  * The agent reports its PATH for the daemon's panes, and it lands unquoted in the unit file and in a shell command: only
  * absolute, plain directories are kept (no whitespace, control characters, quotes or `$`), the rest is dropped.
  */
-export function sanitizeServicePath(servicePath: string): string {
-  const kept = servicePath.split(':').filter((dir) => SAFE_ABSOLUTE_PATH.test(dir) && !/(?:^|\/)\.\.(?:\/|$)/.test(dir));
+export function sanitizeServicePath(servicePath: string, hostProfile: HostProfile | null): string {
+  const delimiter = pathDelimiterFor(hostProfile);
+  const kept = servicePath.split(delimiter).filter((dir) => SAFE_ABSOLUTE_PATH.test(dir) && !/(?:^|\/)\.\.(?:\/|$)/.test(dir));
   if (kept.length === 0) throw new MisaoServiceError('unsupported_host', "None of the directories in the agent's PATH can be used in a service definition.");
-  return kept.join(':');
+  return kept.join(delimiter);
 }
 
 function assertSafePath(value: string, label: string): void {
@@ -205,7 +207,7 @@ export class MisaoAgentInstaller {
     }
     const { host } = status;
     assertSafePath(host.homeDir, 'home directory');
-    return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath) } };
+    return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath, target.hostProfile) } };
   }
 
   private async run(target: MisaoInstallTarget, script: string, what: string): Promise<{ stdout: string; stderr: string; code: number }> {

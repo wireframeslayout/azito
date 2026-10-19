@@ -161,10 +161,10 @@ function makeOpts(
     })() as unknown as TasksRouteOptions['muxDriverRegistry'],
     serverRepo: {
       findAll: vi.fn(() => []),
-      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, sshHostFingerprint: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
+      findByName: vi.fn(() => ({ name: 'test-server', type: 'local' as const, host: '', agentPort: null, agentToken: null, agentVersion: null, sshHost: null, hostProfile: null, sshHostFingerprint: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '' })),
       create: vi.fn(),
       update: vi.fn(),
-      updateAgentVersion: vi.fn(),
+      updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
       findMetaByNames: vi.fn(() => []),

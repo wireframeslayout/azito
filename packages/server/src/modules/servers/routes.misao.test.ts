@@ -12,7 +12,7 @@ const TMUX_CAPS = { changeEvents: true, agentState: false, independentClients: t
 function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
     name: 'srv', type: 'local', host: null, agentPort: null, agentToken: null, agentVersion: null, sshHost: null,
-    sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
+    hostProfile: null, sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
     isolationCleanupReport: null, defaultMux: 'tmux', muxRuntime: 'system', createdAt: '2026-01-01T00:00:00Z', ...overrides,
   };
 }
@@ -20,7 +20,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
 function makeOpts(stored: ServerConfig | null, registerMisao = false): ServersRouteOptions {
   const serverRepo = {
     findAll: vi.fn(() => []), findByName: vi.fn(() => stored), create: vi.fn(), update: vi.fn(),
-    updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
+    updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
     findMetaByNames: vi.fn(() => []), updateIsolationReport: vi.fn(), updateIsolationCleanupReport: vi.fn(),
     updateIsolationVerification: vi.fn(), updateIsolationFailure: vi.fn(), delete: vi.fn(),
   } as IServerRepository;
@@ -30,8 +30,9 @@ function makeOpts(stored: ServerConfig | null, registerMisao = false): ServersRo
   return {
     serverRepo,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null) } as unknown as ServersRouteOptions['agentHostRecorder'],
     tmux: {} as ServersRouteOptions['tmux'],
-    transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    transportFactory: { invalidate: vi.fn(), hostProfileFor: (server: { hostProfile: unknown }) => server.hostProfile } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
@@ -96,11 +97,11 @@ describe('POST /api/servers with defaultMux', () => {
   });
 
   it('installs the agent of a new misao-default server (misao is installed with it by the installer)', async () => {
-    const install = vi.fn(async () => ({ success: true, host: '100.64.0.9', port: 3002, token: 'tok', version: 'v1', startMethod: 'systemd', steps: [] }));
+    const install = vi.fn(async () => ({ success: true, host: '100.64.0.9', port: 3002, token: 'tok', version: 'v1', startMethod: 'systemd', steps: [], hostProfile: { platform: 'linux', arch: 'x64' } }));
     const opts = { ...makeOpts(null), agentInstaller: { install } as unknown as ServersRouteOptions['agentInstaller'] };
     const res = await (await buildApp(opts)).inject({ method: 'POST', url: '/api/servers', payload: { name: 'm', host: 'u@h', autoInstall: true, defaultMux: 'misao' } });
     expect(res.statusCode).toBe(200);
-    expect(opts.serverRepo.create).toHaveBeenCalledWith('m', 'agent', '100.64.0.9', 3002, 'tok', 'v1', 'u@h', undefined, 'misao');
+    expect(opts.serverRepo.create).toHaveBeenCalledWith('m', 'agent', '100.64.0.9', 3002, 'tok', 'v1', 'u@h', undefined, 'misao', { platform: 'linux', arch: 'x64' });
   });
 });
 

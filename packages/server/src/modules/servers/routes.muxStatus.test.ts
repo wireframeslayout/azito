@@ -9,7 +9,7 @@ import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem } from './m
 
 const local = (defaultMux: 'tmux' | 'misao'): ServerConfig => ({
   name: 'local', type: 'local', host: null, agentPort: null, agentToken: null, agentVersion: null, sshHost: null,
-  sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
+  hostProfile: null, sshHostFingerprint: null, isolationIntent: false, isolationVerifiedAt: null, isolationReport: null,
   isolationCleanupReport: null, defaultMux, muxRuntime: 'system', createdAt: '2026-01-01T00:00:00Z',
 });
 
@@ -17,6 +17,7 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
   const opts: ServersRouteOptions = {
     serverRepo: { findByName: () => server, findAll: () => [] } as unknown as IServerRepository,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null) } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: misao,
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: { getTransport: () => ({ exec }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],

@@ -74,7 +74,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       findByName: vi.fn(() => null),
       create: vi.fn(),
       update: vi.fn(),
-      updateAgentVersion: vi.fn(),
+      updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),

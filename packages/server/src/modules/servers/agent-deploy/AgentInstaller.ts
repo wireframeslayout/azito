@@ -4,6 +4,7 @@ import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
+import { HOST_PROBE_COMMAND, HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
@@ -43,6 +44,8 @@ export interface InstallResult {
   error?: string;
   /** The host has tmux (the preflight found one). A host without it can only use misao, so the server must default to it. */
   tmuxFound?: boolean;
+  /** The host's OS / architecture as the preflight read it; set when the install succeeded, for the caller to store with the server. */
+  hostProfile?: HostProfile;
   /**
    * Why misao could not be put on the agent. The agent itself is installed and healthy (so `success` stays true): this is
    * reported beside it, because the server has no pane server until misao is installed (tmux, if the host has it, still works).
@@ -53,7 +56,7 @@ export interface InstallResult {
 interface PreflightInfo {
   tailscaleIp: string;
   nodeVersion: string;
-  arch: string;
+  hostProfile: HostProfile;
   /** Empty when the host has no tmux: not required, misao is the pane server this hub installs. */
   tmuxVersion: string;
 }
@@ -91,7 +94,7 @@ export class AgentInstaller {
     let preflight: PreflightInfo;
     try {
       preflight = await this.preflight(sshHost);
-      report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
+      report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.hostProfile.platform} ${preflight.hostProfile.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
     } catch (err) {
       const msg = (err as Error).message;
       report('preflight', 'error', msg);
@@ -136,7 +139,7 @@ export class AgentInstaller {
     }
 
     // ── misao ──
-    const misaoError = await this.installMisao(preflight.tailscaleIp, token, report);
+    const misaoError = await this.installMisao(preflight.tailscaleIp, token, preflight.hostProfile, report);
     const tmuxFound = preflight.tmuxVersion !== '';
     // A host with neither tmux nor an installed misao has no mux at all: fail as before instead of registering a server nothing can run on.
     if (!tmuxFound && (!this.misaoInstaller || misaoError)) {
@@ -145,15 +148,15 @@ export class AgentInstaller {
       return { success: false, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, error: msg };
     }
 
-    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, ...(misaoError ? { misaoError } : {}) };
+    return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, hostProfile: preflight.hostProfile, ...(misaoError ? { misaoError } : {}) };
   }
 
   /** Puts misao on the agent that just came up. A failure is reported, not thrown: the agent stays installed. */
-  private async installMisao(host: string, token: string, report: (step: InstallStep, status: InstallProgress['status'], message: string) => void): Promise<string | undefined> {
+  private async installMisao(host: string, token: string, hostProfile: HostProfile, report: (step: InstallStep, status: InstallProgress['status'], message: string) => void): Promise<string | undefined> {
     if (!this.misaoInstaller) return undefined;
     report('misao', 'running', 'Installing misao...');
     try {
-      const transport = new AgentTransport(host, AGENT_PORT, token, 'system', host);
+      const transport = new AgentTransport(host, AGENT_PORT, token, 'system', host, hostProfile);
       const result = await this.misaoInstaller.install(transport, (step) => report('misao', 'running', MISAO_STEP_MESSAGES[step]));
       report('misao', 'ok', `misao ${result.version} (${result.startMethod})`);
       return undefined;
@@ -201,11 +204,8 @@ export class AgentInstaller {
       missing.push(`Node.js v24+ required (found: ${nodeResult.stdout.trim() || 'not installed'})`);
     }
 
-    const archResult = await this.sshClient.execIsolated(sshHost, 'uname -m');
-    const arch = archResult.stdout.trim();
-    if (arch !== 'x86_64') {
-      missing.push(`x86_64 architecture required (found: ${arch || 'unknown'})`);
-    }
+    // Without node the probe cannot run; the Node requirement above already says so.
+    const hostProfile = nodeMajor >= 24 ? await this.probeHostProfile(sshHost, missing) : undefined;
 
     // tmux is optional: the pane server this hub installs is misao.
     const tmuxResult = await this.sshClient.execIsolated(sshHost, 'tmux -V');
@@ -221,7 +221,30 @@ export class AgentInstaller {
       throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
     }
 
-    return { tailscaleIp, nodeVersion: nodeVersionRaw, arch, tmuxVersion };
+    // `missing` is empty here, so the probe ran and produced a profile.
+    return { tailscaleIp, nodeVersion: nodeVersionRaw, hostProfile: hostProfile!, tmuxVersion };
+  }
+
+  /**
+   * Reads the host's OS / architecture with node itself (the same text under sh, cmd and PowerShell). The hosts this installer
+   * accepts are unchanged: x64 only. Windows is a known OS that is not installable here yet (`unsupported_os`); an OS or
+   * architecture AZITO does not know is `unsupported_host`. A reason is added to `missing` for a host that is refused.
+   */
+  private async probeHostProfile(sshHost: string, missing: string[]): Promise<HostProfile | undefined> {
+    const probe = await this.sshClient.execIsolated(sshHost, HOST_PROBE_COMMAND);
+    let profile: HostProfile;
+    try {
+      profile = parseHostProbe(probe.stdout);
+    } catch (err) {
+      missing.push(err instanceof HostProfileError ? `${err.code}: ${err.message}` : (err as Error).message);
+      return undefined;
+    }
+    if (profile.platform === 'win32') {
+      missing.push('unsupported_os: installing the agent on a Windows host is not supported yet');
+    } else if (profile.arch !== 'x64') {
+      missing.push(`x86_64 architecture required (found: ${profile.arch})`);
+    }
+    return profile;
   }
 
   private async transferAndDeploy(sshHost: string, version: string): Promise<void> {

@@ -12,7 +12,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentToken: 'tok',
     agentVersion: '1.0.0',
     sshHost: null,
-    sshHostFingerprint: null,
+    hostProfile: null, sshHostFingerprint: null,
     isolationIntent: true,
     isolationVerifiedAt: null,
     isolationReport: null,

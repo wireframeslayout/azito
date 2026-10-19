@@ -111,12 +111,13 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
     }, { timeout: 30000, interval: 200 });
 
     server = { name: 'agent1', type: 'agent', host: '127.0.0.1', agentPort: port, agentToken: token, defaultMux: 'misao', muxRuntime: 'system', isolationIntent: false } as ServerConfig;
-    transportFactory = new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'));
+    transportFactory = new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
     registry = new MuxDriverRegistry();
     const sdk = await import('@misao/sdk');
     misao = registerMisaoDriver(registry, { sdk, socketPath: path.join(dir, 'unused-local.sock'), shell: '/bin/bash' }, () => undefined, { warn }, HUB_ENV, {
       target: (srv) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(srv).connectMisaoRelay(signal) }),
       status: (srv) => transportFactory.getAgentTransport(srv).fetchMisaoStatus(),
+      hostInfo: (srv) => transportFactory.getAgentTransport(srv).fetchHostInfo(),
       latest: () => server,
     });
 

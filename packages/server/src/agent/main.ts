@@ -24,12 +24,14 @@ import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
 import { handleDevtoolsRelay } from '../modules/browser/devtools';
 import { createMisaoRelay } from './misaoRelay';
 import misaoRoutes from './misaoRoutes';
+import hostRoutes from './hostRoutes';
 import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
 import { serializeRequestForLog } from '../shared/redactUrlSecrets';
+import { toHostProfile } from '../shared/os/hostProfile';
 
 // ─── Environment validation ───
 
@@ -115,7 +117,7 @@ async function main(): Promise<void> {
   const muxKind = 'tmux';
   const hookRt = resolveTmuxRuntime(muxRuntime, hostEnv.homeDir);
 
-  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir, TaskTempFiles.fromHostEnv(hostEnv));
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir, TaskTempFiles.fromHostEnv(hostEnv), toHostProfile(hostEnv.platform, hostEnv.arch));
 
   // Files the hub has registered for tailing (`/ws?mode=file-tail` serves nothing else). The hub names them under /tmp for now.
   const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir], { logger: app.log });
@@ -133,6 +135,8 @@ async function main(): Promise<void> {
 
   // Registered after the auth hook above, so it is covered by it like every other /api route.
   await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost(hostEnv) });
+  // The host's own report (OS, architecture, default shell) for the hub, behind the same token check.
+  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: process.env.SHELL || null } });
 
   // Conversation logs (Claude Code / Codex JSONL) for the hub's chat mode. Registered after the auth hook, so it is
   // covered by it; reads only this host's own agent session directories, addressed by agent type + session id.

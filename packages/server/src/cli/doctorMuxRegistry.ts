@@ -7,6 +7,7 @@ import { TransportFactory } from '../modules/servers/transport/TransportFactory'
 import { NO_AGENT_MISAO, registerMisaoDriver, resolveMisaoRuntimeForHub } from '../modules/tmux/misao/misaoDriver';
 import type { ServerConfig } from '../modules/servers/Server';
 import type { TaskTempFiles } from '../shared/os/taskTempFiles';
+import { resolveCurrentHostEnv } from '../shared/os/hostEnv';
 
 export interface DoctorMux {
   registry: MuxDriverRegistry;
@@ -23,7 +24,7 @@ export interface DoctorMux {
  */
 export async function openDoctorMux(homeDir: string, taskTempFiles: TaskTempFiles): Promise<DoctorMux> {
   const registry = new MuxDriverRegistry();
-  registry.register('tmux', new TmuxClient(new TransportFactory('', homeDir, taskTempFiles), '', '', '', ''));
+  registry.register('tmux', new TmuxClient(new TransportFactory('', homeDir, taskTempFiles, resolveCurrentHostEnv()), '', '', '', ''));
 
   const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(resolveServerEnvPath(), 'MISAO_SOCKET');
   const runtime = await resolveMisaoRuntimeForHub(

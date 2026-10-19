@@ -186,6 +186,15 @@ packages/
 - `LocalTransport`: direct `execFile` + local tmux
 - `SshTransport`: SSH shell pool with marker-based execution
 - `AgentTransport`: HTTP/WebSocket to a lightweight agent process on the remote server
+- Host OS (`hostProfile`, #379 P5): every transport knows `HostProfile { platform: linux|darwin|win32, arch: x64|arm64 }` of the host it
+  runs on (`shared/os/hostProfile.ts`; `ServerConfig.hostProfile`, distinct from `host` = the address). A local server's is the hub's own
+  (`TransportFactory.hostProfileFor`, from its `HostEnv`, never stored). An agent's is recorded in `servers.host_platform/host_arch`
+  from its own report `GET /api/host` (`agent/hostRoutes.ts`, behind the token; never in `/health`) by `AgentHostRecorder` — after
+  install/update and when reached with none recorded — and from the SSH preflight's `node -p "process.platform+' '+process.arch"` on install.
+  NULL = an agent registered before the OS was kept = a Unix agent (existing sh paths keep working; a 404 from `/api/host` is `agent_outdated`
+  and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
+  shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported `$SHELL` for an agent's
+  (no `$SHELL` is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
 
 ### Agent Server Type
 - Lightweight Node.js agent deployed to remote servers via SSH bootstrap
@@ -321,7 +330,7 @@ packages/
 - SQLite (better-sqlite3) with WAL mode
 - Migration files in `packages/server/src/shared/db/migrations/`
 - DB path: `<project-root>/data.db`
-- Current migrations: 001-079 (023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux (servers.default_mux split from mux_runtime), 078 normalize misao window rows (mux_ref kind misao, tmux_target `<workspace>:<window id>`, duplicate rows merged), 079 merge duplicate `type=local` servers into one (rows re-pointed, `server_aliases` keeps the old names for webhooks / saved tabs for one release, #313))
+- Current migrations: 001-080 (080 server host profile `host_platform`/`host_arch`, 023 worker extra args, 024 subagent config, 025 inject prompt modules, 026 task target branch, 027 pushing target branch, 028 deduplicate project windows, 029 task summary, 030 agent session id, 031 task skip pr, 032 task working directory, 033 pushing prompt skip pr template vars, 036-038 Sidekick redesign split/rename, 039-041 Sidekick package export/phase-config/tags, 042 merge Operation+WorkerProfile into Unit, 043 agent turns, 044 agent watches, 045 server mux runtime, 046 remove orchestrator mode, 047 task current phase, 048 unit type column, 049 worker runtime, 050 window supervised, 051 resource guard settings, 052 project secrets, 053 browser tab snapshots, 054 ssh host fingerprint, 069 window mux ref, 070 supervisor launch pane ref and watch normalize, 071 agent watches window_id, 072-073 mux_ref kind fixes, 074 herdr navigation lock, 075 remove herdr remnants, 076 pending follow-up, 077 server default mux (servers.default_mux split from mux_runtime), 078 normalize misao window rows (mux_ref kind misao, tmux_target `<workspace>:<window id>`, duplicate rows merged), 079 merge duplicate `type=local` servers into one (rows re-pointed, `server_aliases` keeps the old names for webhooks / saved tabs for one release, #313))
 
 ### SSH (Tailscale)
 - Persistent shell pool with `\x02AGENTMGR_B/E` markers for command execution

@@ -12,6 +12,7 @@ import { MisaoChangeEvents } from './misaoChangeEvents';
 import { MISAO_PANE_EXITED, MISAO_PANE_NOT_FOUND, MISAO_WINDOW_NOT_FOUND, MISAO_WORKSPACE_NOT_FOUND } from './misaoErrorCodes';
 import { MisaoTerminalStream } from './MisaoTerminalStream';
 import { encodeMisaoKey } from './misaoKeys';
+import type { PaneShellResolver } from './paneShell';
 import { type MisaoPane, type MisaoWorkspace, lastOutputEpochSeconds, misaoRef, paneCommand, panesOfWindow, toMuxPaneInfos, toMuxWorkspaces } from './misaoMapping';
 
 const LONG_TEXT_BYTES = 500;
@@ -20,8 +21,8 @@ const LONG_TEXT_SUBMIT_DELAY_MS = 2000;
 const LONG_TEXT_PASTE_SETTLE_MS = 3000;
 
 export interface MisaoMuxClientOptions {
-  /** Shell panes are started with, resolved at the boundary. */
-  shell: string;
+  /** The shell panes of this node's host are started with (the hub's for its own daemon, the agent's for an agent's). */
+  paneShell: PaneShellResolver;
   /** Called (with the server name) when the daemon reports a workspace/window/pane change. */
   onChange: (serverName: string) => void;
   log: { warn(message: string): void };
@@ -221,8 +222,9 @@ export class MisaoMuxClient implements IMuxClient {
 
   async splitPaneByHandle(server: ServerConfig, handle: PaneHandle, _dir: 'h' | 'v', env?: Record<string, string>): Promise<{ handle: PaneHandle; result: ExecResult }> {
     const source = await this.rpc.request('pane.info', { paneId: handle });
+    const { shell } = await this.options.paneShell();
     const { paneId } = await this.rpc.request('pane.open', {
-      cmd: [this.options.shell],
+      cmd: [shell],
       cwd: source.cwd,
       windowId: source.window.id,
       labels: inheritedLabels(source),
@@ -237,8 +239,9 @@ export class MisaoMuxClient implements IMuxClient {
    */
   async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
     const windowName = await this.windowName(ref);
+    const { shell } = await this.options.paneShell();
     const { paneId } = await this.rpc.request('pane.open', {
-      cmd: [this.options.shell],
+      cmd: [shell],
       windowId: ref.window,
       labels: { origin: 'hub', name: windowName, ...(opts?.labels ? paneLabelsOf(opts.labels) : {}) },
       ...this.paneEnvParams(server, opts?.extraEnv),
@@ -357,10 +360,12 @@ export class MisaoMuxClient implements IMuxClient {
   }
 
   private async createWindowWithPane(server: ServerConfig, workspace: string, windowName: string, command: string | undefined, extraEnv: Record<string, string> | undefined): Promise<string> {
+    // Resolved before the window exists: a host whose shell is unknown or unsupported must not leave an empty window behind.
+    const { shell, commandArgs } = await this.options.paneShell();
     const { windowId } = await this.rpc.request('window.create', { workspace, name: windowName });
     try {
       await this.rpc.request('pane.open', {
-        cmd: command ? [this.options.shell, '-lc', command] : [this.options.shell],
+        cmd: command ? [shell, ...commandArgs, command] : [shell],
         windowId,
         labels: { origin: 'hub', name: windowName },
         ...this.paneEnvParams(server, extraEnv),
