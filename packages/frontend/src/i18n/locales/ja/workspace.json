@@ -81,6 +81,8 @@
     "windowCount_other": "{{count}}ウィンドウ",
     "detachFromProject": "プロジェクトから切り離す",
     "deleteWindow": "ウィンドウを削除",
+    "deleteEntireWindow": "ウィンドウ全体を削除",
+    "deletePane": "ペインを削除",
     "quickAddTitle": "{{label}} を追加 — {{serverName}}"
   },
   "addWindow": {

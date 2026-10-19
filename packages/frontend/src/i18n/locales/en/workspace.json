@@ -81,6 +81,8 @@
     "windowCount_other": "{{count}} windows",
     "detachFromProject": "Detach from project",
     "deleteWindow": "Delete window",
+    "deleteEntireWindow": "Delete entire window",
+    "deletePane": "Delete pane",
     "quickAddTitle": "Add {{label}} — {{serverName}}"
   },
   "addWindow": {

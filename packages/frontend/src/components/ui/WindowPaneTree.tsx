@@ -20,7 +20,7 @@ export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'labe
 export type EmptyWindowOutcome = Parameters<React.ComponentProps<typeof EmptyWindowActions>['onChanged']>[0];
 
 /** `stale`: the window's mux cannot be listed now, so mux actions in the menu are disabled. */
-type ContextMenuExtra = { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
+type ContextMenuExtra = { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string; paneOrdinal?: number; paneHandle?: string };
 
 /** A window of a session kept from an earlier listing (its mux cannot be listed now): marked like an offline row. */
 function StaleChip() {
@@ -559,7 +559,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         const active = isActive?.(w.serverName, target, 'pane', w.id) ?? false;
         const focused = !active && isFocusedPane(w.serverName, target);
         const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-        const paneCtxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel };
+        const paneCtxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel, paneOrdinal: i + 1, paneHandle: pane.handle };
         return (
           <div
             key={`${w.id}-${sw.index}-${pane.index}`}
