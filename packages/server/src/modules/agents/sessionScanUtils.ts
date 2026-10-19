@@ -1,5 +1,6 @@
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 import { pathApiFor } from '../../shared/os/hostPath';
+import { DeadlineExceededError, raceDeadline } from '../../shared/fs/deadline';
 
 /** A regular file found by {@link findFilesByMtime}. */
 export interface ScannedFile {
@@ -7,42 +8,42 @@ export interface ScannedFile {
   mtimeMs: number;
 }
 
+/** Everything one session scan does (the walk, and the reads of the candidates) has to be done in this time. */
+export const SESSION_SCAN_BUDGET_MS = 20_000;
+/** Files one scan walks at most; more is an error rather than a guess from a part of the tree. */
+const SESSION_SCAN_MAX_FILES = 200_000;
+
 /**
  * The regular files below `dir` (any depth, symbolic links not followed) whose name `matchesName` accepts and whose mtime is
- * after `afterTimestamp` (whole seconds, strictly newer), oldest first. A directory that is missing or cannot be read yields
- * nothing, as the `find ... 2>/dev/null` this replaces did. Any other failure (an unreachable agent) propagates.
+ * after `afterTimestamp` (whole seconds, strictly newer), oldest first. The tree is walked by the host in one request. A
+ * directory that is missing or cannot be read yields nothing, as the `find ... 2>/dev/null` this replaces did. A tree that was
+ * not seen whole (too many files, or past `deadlineAtMs`) is an error: the newest session could be in the part not seen.
  */
 export async function findFilesByMtime(
   files: IFileOps,
   dir: string,
   matchesName: (name: string) => boolean,
-  afterTimestamp?: Date,
+  afterTimestamp: Date | undefined,
+  deadlineAtMs: number,
 ): Promise<ScannedFile[]> {
   const api = pathApiFor(files.platform);
   const newerThanMs = afterTimestamp ? Math.floor(afterTimestamp.getTime() / 1000) * 1000 : null;
-  const found: ScannedFile[] = [];
-  const scan = async (current: string): Promise<void> => {
-    let entries;
-    try {
-      entries = await files.list(current);
-    } catch (err) {
-      if (err instanceof FileOpsError) return;
-      throw err;
-    }
-    for (const entry of entries) {
-      const full = api.join(current, entry.name);
-      if (entry.kind === 'directory') {
-        await scan(full);
-      } else if (entry.kind === 'file' && matchesName(entry.name)) {
-        if (entry.mtimeMs === undefined) {
-          throw new Error(`The host listed ${full} without a modification time (an outdated agent?)`);
-        }
-        if (newerThanMs === null || entry.mtimeMs > newerThanMs) found.push({ path: full, mtimeMs: entry.mtimeMs });
-      }
-    }
-  };
-  await scan(dir);
-  return found.sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let walked;
+  try {
+    walked = await raceDeadline(files.walk(dir, {
+      excludeNames: [],
+      maxEntries: SESSION_SCAN_MAX_FILES,
+      timeBudgetMs: Math.max(1, deadlineAtMs - Date.now()),
+    }), deadlineAtMs, `The session scan of ${dir}`);
+  } catch (err) {
+    if (err instanceof FileOpsError) return [];
+    throw err;
+  }
+  if (walked.truncated) throw new DeadlineExceededError(`The session scan of ${dir} (more than ${SESSION_SCAN_MAX_FILES} files, or too slow)`);
+  return walked.entries
+    .filter((entry) => matchesName(entry.path.slice(entry.path.lastIndexOf('/') + 1)) && (newerThanMs === null || entry.mtimeMs > newerThanMs))
+    .map((entry) => ({ path: api.join(dir, ...entry.path.split('/')), mtimeMs: entry.mtimeMs }))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
 }
 
 export interface RolloutCandidate {

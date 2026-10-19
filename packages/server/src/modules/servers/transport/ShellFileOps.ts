@@ -10,6 +10,9 @@ import {
   type FileContent,
   type FileStat,
   type IFileOps,
+  type WalkEntry,
+  type WalkOptions,
+  type WalkResult,
   type WriteOptions,
   type WriteResult,
 } from '../../../shared/fs/fileOps';
@@ -41,8 +44,8 @@ export class ShellFileOps implements IFileOps {
     return input;
   }
 
-  private async out(command: string): Promise<string> {
-    return stripTerminalArtifacts((await this.transport.exec(command)).stdout);
+  private async out(command: string, timeoutMs?: number): Promise<string> {
+    return stripTerminalArtifacts((await this.transport.exec(command, timeoutMs)).stdout);
   }
 
   async list(dir: string): Promise<DirEntry[]> {
@@ -59,12 +62,12 @@ export class ShellFileOps implements IFileOps {
     return entries;
   }
 
-  async stat(path: string, options: { followLinks?: boolean } = {}): Promise<FileStat | null> {
-    return (await this.statPrecise(path, options.followLinks !== false))?.stat ?? null;
+  async stat(path: string, options: { followLinks?: boolean; withAge?: boolean } = {}): Promise<FileStat | null> {
+    return (await this.statPrecise(path, options.followLinks !== false, options.withAge === true))?.stat ?? null;
   }
 
   /** The stat, with whether the mtime has sub-second precision (GNU `%.Y`) or is whole seconds (older / BSD `stat`). */
-  private async statPrecise(path: string, followLinks: boolean): Promise<{ stat: FileStat; precise: boolean } | null> {
+  private async statPrecise(path: string, followLinks: boolean, withAge = false): Promise<{ stat: FileStat; precise: boolean } | null> {
     const q = sq(this.checked(path));
     // Without following links, a symbolic link is reported as one before anything is looked through.
     const linkTest = followLinks ? '' : `if [ -L ${q} ]; then echo l; exit 0; fi; `;
@@ -72,13 +75,16 @@ export class ShellFileOps implements IFileOps {
     if (kindOut === 'n') return null;
     const kind: EntryKind = kindOut === 'd' ? 'directory' : kindOut === 'f' ? 'file' : kindOut === 'l' ? 'symlink' : 'other';
     const link = followLinks ? '-L ' : '';
-    const fields = (await this.out(
-      `stat ${link}-c '%s %.Y %a' ${q} 2>/dev/null || stat ${link}-c '%s %Y %a' ${q} 2>/dev/null || stat ${link}-f '%z %m %Lp' ${q} 2>/dev/null`,
-    )).trim().split(/\s+/);
+    // The age is the host's own `date` against the mtime it reported, so the host's clock is the only one involved.
+    const statLine = `stat ${link}-c '%s %.Y %a' ${q} 2>/dev/null || stat ${link}-c '%s %Y %a' ${q} 2>/dev/null || stat ${link}-f '%z %m %Lp' ${q} 2>/dev/null`;
+    const fields = (await this.out(withAge ? `{ ${statLine}; } && date +%s` : statLine)).trim().split(/\s+/);
     const size = parseInt(fields[0], 10);
     const seconds = parseFloat(fields[1]);
-    if (fields.length !== 3 || isNaN(size) || isNaN(seconds)) return null;
-    return { stat: { kind, size, mtimeMs: seconds * 1000, mode: parseInt(fields[2], 8) || 0 }, precise: fields[1].includes('.') };
+    const nowSeconds = withAge ? parseInt(fields[3], 10) : 0;
+    if (fields.length !== (withAge ? 4 : 3) || isNaN(size) || isNaN(seconds) || isNaN(nowSeconds)) return null;
+    const stat: FileStat = { kind, size, mtimeMs: seconds * 1000, mode: parseInt(fields[2], 8) || 0 };
+    if (withAge) stat.ageMs = nowSeconds * 1000 - stat.mtimeMs;
+    return { stat, precise: fields[1].includes('.') };
   }
 
   async read(path: string, options: { maxBytes?: number; headBytes?: number } = {}): Promise<FileContent> {
@@ -98,7 +104,7 @@ export class ShellFileOps implements IFileOps {
       throw new FileOpsError('FAILED', 'headBytes must be a positive integer');
     }
     const encode = options.headBytes !== undefined
-      ? `head -c ${options.headBytes} < ${q} | base64`
+      ? `[ -r ${q} ] && head -c ${options.headBytes} < ${q} | base64`
       : `(base64 -w0 < ${q} 2>/dev/null || base64 < ${q} 2>/dev/null)`;
     const stdout = await this.out(`${encode} && echo AZITO_READ_OK`);
     if (!stdout.includes('AZITO_READ_OK')) throw new FileOpsError('FAILED', 'Failed to read file');
@@ -189,6 +195,52 @@ export class ShellFileOps implements IFileOps {
     if ((await this.out(`test -e ${qTo} && echo yes || echo no`)).trim() === 'yes') throw new FileOpsError('ALREADY_EXISTS', `Already exists: ${to}`);
     await this.transport.exec(`mv -n ${qFrom} ${qTo}`);
     if ((await this.out(`test -e ${qTo} && echo ok || echo ng`)).trim() !== 'ok') throw new FileOpsError('FAILED', 'Rename failed');
+  }
+
+  /**
+   * `find` does the walk on the host, as the file-name search and the session scans always did: GNU `-printf`, the excluded names
+   * pruned, `head` cutting the output at the limit, and the time budget as the exec deadline (a walk that runs out of time has no
+   * partial output to return, so it reports `truncated` with nothing). Entries come in `find`'s order, not level by level.
+   */
+  async walk(root: string, options: WalkOptions): Promise<WalkResult> {
+    const q = sq(this.checked(root));
+    const prune = options.excludeNames.length > 0 ? `\\( ${options.excludeNames.map((glob) => `-name ${sq(glob)}`).join(' -o ')} \\) -prune -o ` : '';
+    const depth = options.maxDepth === undefined ? '' : ` -maxdepth ${options.maxDepth + 1}`;
+    const command =
+      `if [ -d ${q} ]; then LC_ALL=C command find ${q} -mindepth 1${depth} ${prune}-type f -printf '%T@ %P\\n' 2>/dev/null | head -n ${options.maxEntries + 1}; ` +
+      `else echo AZITO_NOT_A_DIRECTORY; fi`;
+    let stdout: string;
+    try {
+      stdout = await this.out(command, options.timeBudgetMs);
+    } catch (err) {
+      if (err instanceof Error && ((err as Error & { killed?: boolean }).killed === true || err.message.includes('timed out'))) return { entries: [], truncated: true };
+      throw err;
+    }
+    if (stdout.startsWith('AZITO_NOT_A_DIRECTORY')) throw new FileOpsError('NOT_FOUND', `No such directory: ${root}`);
+    const entries: WalkEntry[] = [];
+    for (const line of stdout.split('\n')) {
+      const match = line.match(/^(\d+(?:\.\d+)?) (.+)$/);
+      if (match) entries.push({ path: match[2], mtimeMs: parseFloat(match[1]) * 1000 });
+    }
+    const truncated = entries.length > options.maxEntries;
+    return { entries: truncated ? entries.slice(0, options.maxEntries) : entries, truncated };
+  }
+
+  /** One script: the old tree is moved aside, `staging` moved in, and the old tree removed only after that; if the move in fails, the old tree is moved back. */
+  async replaceDirectory(staging: string, target: string): Promise<void> {
+    const qStaging = sq(this.checked(staging));
+    const qTarget = sq(this.checked(target));
+    const qBackup = sq(`${this.checked(target)}.azito-old-${randomBytes(8).toString('hex')}`);
+    const script = [
+      `if [ ! -d ${qStaging} ]; then echo AZITO_NO_STAGING; exit 0; fi`,
+      `had=0; if [ -e ${qTarget} ] || [ -L ${qTarget} ]; then mv ${qTarget} ${qBackup} || { echo AZITO_REPLACE_FAILED; exit 0; }; had=1; fi`,
+      `if mv ${qStaging} ${qTarget}; then rm -rf ${qBackup}; echo AZITO_REPLACE_OK;`,
+      `else if [ "$had" = 1 ]; then mv ${qBackup} ${qTarget} || echo AZITO_BACKUP_KEPT; fi; echo AZITO_REPLACE_FAILED; fi`,
+    ].join('\n');
+    const stdout = await this.out(script);
+    if (stdout.includes('AZITO_NO_STAGING')) throw new FileOpsError('NOT_FOUND', `No such directory: ${staging}`);
+    if (stdout.includes('AZITO_BACKUP_KEPT')) throw new FileOpsError('FAILED', `Replace failed and the previous content could not be put back; it is at ${target}.azito-old-*`);
+    if (!stdout.includes('AZITO_REPLACE_OK')) throw new FileOpsError('FAILED', 'Replace failed; the previous content was put back');
   }
 
   /**

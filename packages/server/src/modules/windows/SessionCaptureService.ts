@@ -7,6 +7,12 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** A scan that failed (an agent that cannot be reached, a tree too large to scan in time) is logged and counts as finding nothing. */
+function warnScanFailed(serverName: string, err: unknown): null {
+  console.warn(`[SessionCapture] session scan on server "${serverName}" failed`, err);
+  return null;
+}
+
 export class SessionCaptureService {
   constructor(
     private windowRepo: IWindowRepository,
@@ -25,7 +31,7 @@ export class SessionCaptureService {
       const scanStart = new Date();
       for (let attempt = 0; attempt < 3; attempt++) {
         await sleep(10_000);
-        const sessionId = await strategy.scanSessionId(srv, workingDirectory, scanStart).catch(() => null);
+        const sessionId = await strategy.scanSessionId(srv, workingDirectory, scanStart).catch((err: unknown) => warnScanFailed(serverName, err));
         if (sessionId) {
           if (this.isAssigned(sessionId, serverName)) {
             strategy.excludeSessionId?.(sessionId);
@@ -50,7 +56,7 @@ export class SessionCaptureService {
     if (!srv) return null;
 
     const afterTimestamp = win.createdAt ? new Date(win.createdAt + 'Z') : undefined;
-    const sessionId = await strategy.scanSessionId(srv, win.workingDirectory, afterTimestamp).catch(() => null);
+    const sessionId = await strategy.scanSessionId(srv, win.workingDirectory, afterTimestamp).catch((err: unknown) => warnScanFailed(win.serverName, err));
     if (!sessionId) return null;
 
     if (this.isAssigned(sessionId, win.serverName)) {

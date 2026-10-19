@@ -480,6 +480,42 @@ describe('SidekickSyncService.sync (file operations + run)', () => {
     expect(leftovers()).toEqual([]);
   });
 
+  it('keeps the previous tree when replacing it fails, and cleans up', async () => {
+    const service = new SidekickSyncService(fastOpts);
+    const pkg = makePackage({ name: 'pkg', dir });
+    await service.sync('myserver', makeHost(), [pkg]);
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), 'body v2');
+    const host = makeHost();
+    const files = host.files();
+    (host as { files: unknown }).files = () => new Proxy(files, {
+      get: (target, key) => (key === 'replaceDirectory' ? async () => { throw new Error('connection lost'); } : Reflect.get(target, key).bind?.(target) ?? Reflect.get(target, key)),
+    });
+
+    await expect(service.sync('myserver', host, [pkg])).rejects.toThrow('connection lost');
+
+    expect(fs.readFileSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md'), 'utf8')).toBe('body');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('swaps the live tree with one replaceDirectory request (never a separate remove of the live tree)', async () => {
+    const host = makeHost();
+    const files = host.files();
+    const calls: string[] = [];
+    (host as { files: unknown }).files = () => new Proxy(files, {
+      get: (target, key) => {
+        const value = Reflect.get(target, key);
+        if (typeof value !== 'function') return value;
+        return (...args: unknown[]) => { calls.push(`${String(key)}:${typeof args[0] === 'string' ? path.basename(args[0]) : ''}`); return value.apply(target, args); };
+      },
+    });
+
+    await new SidekickSyncService(fastOpts).sync('myserver', host, [makePackage({ name: 'pkg', dir })]);
+
+    expect(calls.filter((c) => c.startsWith('replaceDirectory'))).toHaveLength(1);
+    expect(calls).not.toContain('remove:sidekicks');
+    expect(calls).not.toContain('rename:sidekicks.tmp');
+  });
+
   describe('remote lock', () => {
     it('gives up after the configured retries without transferring while a fresh lock is held', async () => {
       fs.mkdirSync(path.join(home, '.azito', 'sidekicks.lock'), { recursive: true });
@@ -489,6 +525,37 @@ describe('SidekickSyncService.sync (file operations + run)', () => {
 
       expect(specs).toEqual([]);
       expect(fs.existsSync(path.join(home, '.azito', 'sidekicks.lock'))).toBe(true);
+    });
+
+    it('judges the lock by the age the host reports, not by its mtime against the hub clock', async () => {
+      const lock = path.join(home, '.azito', 'sidekicks.lock');
+      fs.mkdirSync(lock, { recursive: true });
+      const host = makeHost();
+      const files = host.files();
+      // a host whose clock says the lock is 10 minutes old, while its mtime would look brand new to the hub
+      (host as { files: unknown }).files = () => new Proxy(files, {
+        get: (target, key) => (key === 'stat'
+          ? async (p: string, options?: object) => { const stat = await target.stat(p, options); return stat && p === lock ? { ...stat, ageMs: 10 * 60 * 1000 } : stat; }
+          : Reflect.get(target, key) instanceof Function ? (Reflect.get(target, key) as (...a: unknown[]) => unknown).bind(target) : Reflect.get(target, key)),
+      });
+
+      await new SidekickSyncService(fastOpts).sync('myserver', host, [makePackage({ name: 'pkg', dir })]);
+
+      expect(fs.existsSync(path.join(sidekicksDir(), 'pkg', 'SKILL.md'))).toBe(true);
+    });
+
+    it('fails when the host does not report the age of the lock, instead of guessing from the clocks', async () => {
+      const lock = path.join(home, '.azito', 'sidekicks.lock');
+      fs.mkdirSync(lock, { recursive: true });
+      const host = makeHost();
+      const files = host.files();
+      (host as { files: unknown }).files = () => new Proxy(files, {
+        get: (target, key) => (key === 'stat'
+          ? async (p: string) => { const stat = await target.stat(p); return stat && { ...stat, ageMs: undefined }; }
+          : Reflect.get(target, key) instanceof Function ? (Reflect.get(target, key) as (...a: unknown[]) => unknown).bind(target) : Reflect.get(target, key)),
+      });
+
+      await expect(new SidekickSyncService(fastOpts).sync('myserver', host, [makePackage({ name: 'pkg', dir })])).rejects.toThrow(/how old the sync lock is/);
     });
 
     it('takes over a lock older than five minutes and releases it afterwards', async () => {

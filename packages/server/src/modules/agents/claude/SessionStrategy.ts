@@ -1,7 +1,7 @@
 import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
-import { findFilesByMtime } from '../sessionScanUtils';
+import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildClaudeLaunchCommand } from './launchCommand';
@@ -41,7 +41,7 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     const encoded = normalized.replace(/[/.]/g, '-');
 
     const projectDir = pathApiFor(files.platform).join(await files.realpath('~'), '.claude', 'projects', encoded);
-    const candidates = await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp);
+    const candidates = await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, Date.now() + SESSION_SCAN_BUDGET_MS);
     const latest = candidates[candidates.length - 1];
     if (!latest) return null;
 

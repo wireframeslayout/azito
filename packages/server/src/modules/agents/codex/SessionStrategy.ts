@@ -2,8 +2,9 @@ import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
+import { raceDeadline } from '../../../shared/fs/deadline';
 import { pathApiFor } from '../../../shared/os/hostPath';
-import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta, ROLLOUT_HEAD_BYTES, type RolloutCandidate } from '../sessionScanUtils';
+import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta, ROLLOUT_HEAD_BYTES, SESSION_SCAN_BUDGET_MS, type RolloutCandidate } from '../sessionScanUtils';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildCodexLaunchCommand, buildCodexRespawnCommand } from './launchCommand';
 
@@ -37,10 +38,11 @@ export class CodexSessionStrategy implements ISessionStrategy {
     const files = this.transportFactory.getFileOps(server);
     const sessionsDir = pathApiFor(files.platform).join(await files.realpath('~'), '.codex', 'sessions');
 
-    // Oldest first; the first one that passes the filters is the answer, so the rest are not read.
-    const rollouts = await findFilesByMtime(files, sessionsDir, (name) => name.startsWith('rollout-') && name.endsWith('.jsonl'), afterTimestamp);
+    // Oldest first; the first one that passes the filters is the answer, so the rest are not read. The reads share the scan's time.
+    const deadline = Date.now() + SESSION_SCAN_BUDGET_MS;
+    const rollouts = await findFilesByMtime(files, sessionsDir, (name) => name.startsWith('rollout-') && name.endsWith('.jsonl'), afterTimestamp, deadline);
     for (const rollout of rollouts) {
-      const candidate = await this.readCandidate(files, rollout.path);
+      const candidate = await this.readCandidate(files, rollout.path, deadline);
       if (!candidate) continue;
       if (this.excludedIds.has(candidate.sessionId)) continue;
       if (candidate.originator === 'codex_exec') continue;
@@ -51,10 +53,10 @@ export class CodexSessionStrategy implements ISessionStrategy {
   }
 
   /** The rollout's session metadata, or null when the file vanished or its first line holds none (a missing file's `head -1` gave nothing either). */
-  private async readCandidate(files: IFileOps, filePath: string): Promise<RolloutCandidate | null> {
+  private async readCandidate(files: IFileOps, filePath: string, deadlineAtMs: number): Promise<RolloutCandidate | null> {
     let head: Buffer;
     try {
-      head = (await files.read(filePath, { headBytes: ROLLOUT_HEAD_BYTES })).data;
+      head = (await raceDeadline(files.read(filePath, { headBytes: ROLLOUT_HEAD_BYTES }), deadlineAtMs, 'The session scan')).data;
     } catch (err) {
       if (err instanceof FileOpsError) return null;
       throw err;

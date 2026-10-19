@@ -22,10 +22,8 @@ const EXEC_STRING_CALL = /(?:[tT]ransport|\btarget|getTransport\([^)]*\))\.exec\
 const REMAINING: Record<string, number> = {
   // C-1: shell file operations (find / test / wc / cat / rm / mkdir...) → IFileOps (P7, P7b). What is left:
   // - the shell implementation of IFileOps for an agent registered before its OS was recorded (a Unix one without
-  //   /api/fileops). AgentTransport.files() chooses it once; every other file operation goes through IFileOps
-  'modules/servers/transport/ShellFileOps.ts': 22,
-  // - the file-name search of such an agent (`find`); every other host searches names with IFileOps.list
-  'modules/files/FileSearchService.ts': 1,
+  //   /api/fileops); its walk (`find`, the file-name search and the session scans) and its replaceDirectory (one script) are among them. AgentTransport.files() chooses it once; every other file operation goes through IFileOps
+  'modules/servers/transport/ShellFileOps.ts': 24,
   // - the sidekick sync of such an agent (tar + base64 through exec); every other host writes the tarball with IFileOps and runs `tar`
   'modules/sidekicks/shellSidekickSync.ts': 6,
   'modules/windows/WindowRespawnService.ts': 1,

@@ -3,8 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSyn
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
-import { FileOpsError, type DirEntry, type IFileOps } from '../../shared/fs/fileOps';
-import { globToRegExp, NameSearchTimeoutError, searchFileNames, type NameSearchQuery } from './nameSearch';
+import { FileOpsError, type IFileOps, type WalkResult } from '../../shared/fs/fileOps';
+import { searchFileNames, type NameSearchQuery, type NameSearchResult } from './nameSearch';
 
 let root: string;
 let ops: LocalFileOps;
@@ -26,34 +26,20 @@ function tree(...files: string[]): void {
 }
 
 const EXCLUDED = ['node_modules', '.git', 'dist', '.worktrees'];
-const LIMITS = { maxResults: 200, deadlineMs: Date.now() + 60_000 };
+const LIMITS = { maxResults: 200, budgetMs: 30_000 };
 
-function search(overrides: Partial<NameSearchQuery> = {}, limits = LIMITS): Promise<string[]> {
-  return searchFileNames(ops, { root, query: 'test', caseSensitive: false, regex: false, include: [], excludeNames: EXCLUDED, ...overrides }, limits);
+function searchResult(overrides: Partial<NameSearchQuery> = {}, limits = LIMITS, files: IFileOps = ops): Promise<NameSearchResult> {
+  return searchFileNames(files, { root, query: 'test', caseSensitive: false, regex: false, include: [], excludeNames: EXCLUDED, ...overrides }, limits);
 }
 
-describe('globToRegExp', () => {
-  it('reads * ? and [set] as find -name does, and everything else literally', () => {
-    expect(globToRegExp('*.ts', true).test('a.b.ts')).toBe(true);
-    expect(globToRegExp('*.ts', true).test('a.tsx')).toBe(false);
-    expect(globToRegExp('a?c', true).test('abc')).toBe(true);
-    expect(globToRegExp('a?c', true).test('ac')).toBe(false);
-    expect(globToRegExp('[ab]x', true).test('bx')).toBe(true);
-    expect(globToRegExp('[!ab]x', true).test('bx')).toBe(false);
-    expect(globToRegExp('[!ab]x', true).test('cx')).toBe(true);
-    expect(globToRegExp('a.b(c)+', true).test('a.b(c)+')).toBe(true);
-    expect(globToRegExp('a.b(c)+', true).test('aXb(c)+')).toBe(false);
-    expect(globToRegExp('a\\*b', true).test('a*b')).toBe(true);
-    expect(globToRegExp('a\\*b', true).test('axb')).toBe(false);
-    expect(globToRegExp('[x', true).test('[x')).toBe(true);
-  });
+async function search(overrides: Partial<NameSearchQuery> = {}, limits = LIMITS): Promise<string[]> {
+  return (await searchResult(overrides, limits)).paths;
+}
 
-  it('lets * cross a slash (find -path) and honors case', () => {
-    expect(globToRegExp('*/src/*.ts', true).test('/p/src/a.ts')).toBe(true);
-    expect(globToRegExp('abc', true).test('ABC')).toBe(false);
-    expect(globToRegExp('abc', false).test('ABC')).toBe(true);
-  });
-});
+/** A host whose walk is `walk`: only what the search makes of it is under test. */
+function hostWalking(walk: IFileOps['walk']): IFileOps {
+  return { platform: 'linux', walk } as unknown as IFileOps;
+}
 
 describe('searchFileNames', () => {
   it('finds files whose name contains the query, at any depth, as paths relative to the root', async () => {
@@ -61,6 +47,15 @@ describe('searchFileNames', () => {
 
     // shallower first, then by name
     expect(await search()).toEqual(['src/test.ts', 'src/deep/er/my-test.spec.ts']);
+  });
+
+  it('puts a host\'s walk order (find\'s) into shallower first, then by name', async () => {
+    const found = await searchResult({}, LIMITS, hostWalking(async () => ({
+      entries: [{ path: 'b/deep/test.ts', mtimeMs: 1 }, { path: 'z/test.ts', mtimeMs: 1 }, { path: 'test.ts', mtimeMs: 1 }, { path: 'a/test.ts', mtimeMs: 1 }],
+      truncated: false,
+    })));
+
+    expect(found.paths).toEqual(['test.ts', 'a/test.ts', 'z/test.ts', 'b/deep/test.ts']);
   });
 
   it('is case-insensitive unless asked otherwise', async () => {
@@ -124,7 +119,34 @@ describe('searchFileNames', () => {
     it('finds nothing for an expression that cannot be compiled', async () => {
       tree('a.ts');
 
-      expect(await search({ regex: true, query: '(' })).toEqual([]);
+      expect(await searchResult({ regex: true, query: '(' })).toEqual({ paths: [], truncated: false });
+    });
+
+    it('is stopped by the deadline when the expression would run for ever, and says the search is truncated', async () => {
+      tree(`${'a'.repeat(40)}!.txt`, 'b.txt');
+      const started = Date.now();
+
+      const found = await searchResult({ regex: true, query: '.*(a+)+$' }, { maxResults: 200, budgetMs: 2_500 });
+
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(found.truncated).toBe(true);
+    });
+
+    it('stops at maxResults', async () => {
+      tree(...Array.from({ length: 20 }, (_, i) => `f${i}.ts`));
+
+      expect((await searchResult({ regex: true, query: '.*\\.ts' }, { maxResults: 3, budgetMs: 30_000 })).paths).toHaveLength(3);
+    });
+  });
+
+  describe('glob patterns of a user', () => {
+    it('cannot be made to run for ever: many stars against a long name finish at once', async () => {
+      tree(`${'a'.repeat(60)}.txt`);
+      const started = Date.now();
+
+      expect(await search({ query: '*a*a*a*a*a*a*a*a*a*a*b' })).toEqual([]);
+
+      expect(Date.now() - started).toBeLessThan(2_000);
     });
   });
 
@@ -135,35 +157,41 @@ describe('searchFileNames', () => {
       expect(await search({}, { ...LIMITS, maxResults: 7 })).toHaveLength(7);
     });
 
-    it('fails with NameSearchTimeoutError once the deadline has passed', async () => {
-      tree('a/test.ts');
+    it('reports a walk that reached its bound as truncated, and keeps what it found', async () => {
+      const found = await searchResult({}, LIMITS, hostWalking(async (): Promise<WalkResult> => ({ entries: [{ path: 'test.ts', mtimeMs: 1 }], truncated: true })));
 
-      await expect(search({}, { maxResults: 200, deadlineMs: Date.now() - 1 })).rejects.toBeInstanceOf(NameSearchTimeoutError);
+      expect(found).toEqual({ paths: ['test.ts'], truncated: true });
+    });
+
+    it('returns truncated with nothing instead of waiting for a host that does not answer', async () => {
+      const started = Date.now();
+
+      const found = await searchResult({}, { maxResults: 200, budgetMs: 200 }, hostWalking(() => new Promise<WalkResult>(() => undefined)));
+
+      expect(found).toEqual({ paths: [], truncated: true });
+      expect(Date.now() - started).toBeLessThan(2_000);
+    });
+
+    it('asks the host to walk within the budget, leaving room for the answer', async () => {
+      let asked: Parameters<IFileOps['walk']>[1] | undefined;
+      await searchResult({}, { maxResults: 200, budgetMs: 10_000 }, hostWalking(async (_root, options) => { asked = options; return { entries: [], truncated: false }; }));
+
+      expect(asked?.timeBudgetMs).toBeLessThan(10_000);
+      expect(asked?.excludeNames).toEqual(EXCLUDED);
     });
   });
 
   describe('failures', () => {
-    it('passes over a directory the host refuses to list, and finds nothing under a missing root', async () => {
-      const listing = (dir: string): DirEntry[] => (dir === '/r' ? [{ name: 'locked', kind: 'directory' }, { name: 'test.ts', kind: 'file', size: 1 }] : []);
-      const refusing = {
-        platform: 'linux',
-        list: async (dir: string): Promise<DirEntry[]> => {
-          if (dir === '/r/locked') throw new FileOpsError('PERMISSION_DENIED', 'no');
-          return listing(dir);
-        },
-      } as unknown as IFileOps;
-
-      expect(await searchFileNames(refusing, { root: '/r', query: 'test', caseSensitive: false, regex: false, include: [], excludeNames: [] }, LIMITS)).toEqual(['test.ts']);
+    it('finds nothing under a missing or unreadable root', async () => {
       expect(await search({ root: path.join(root, 'missing') })).toEqual([]);
+      const locked = hostWalking(async () => { throw new FileOpsError('PERMISSION_DENIED', 'no'); });
+      expect(await searchResult({}, LIMITS, locked)).toEqual({ paths: [], truncated: false });
     });
 
     it('lets a failure that is not a refusal of the host propagate', async () => {
-      const unreachable = {
-        platform: 'linux',
-        list: async (): Promise<DirEntry[]> => { throw new Error('agent unreachable'); },
-      } as unknown as IFileOps;
+      const unreachable = hostWalking(async () => { throw new Error('agent unreachable'); });
 
-      await expect(searchFileNames(unreachable, { root: '/r', query: 'a', caseSensitive: false, regex: false, include: [], excludeNames: [] }, LIMITS)).rejects.toThrow('agent unreachable');
+      await expect(searchResult({}, LIMITS, unreachable)).rejects.toThrow('agent unreachable');
     });
   });
 });

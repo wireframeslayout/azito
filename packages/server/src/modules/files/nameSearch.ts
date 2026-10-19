@@ -1,5 +1,7 @@
-import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
-import { pathApiFor } from '../../shared/os/hostPath';
+import { FileOpsError, type IFileOps, type WalkEntry } from '../../shared/fs/fileOps';
+import { compileGlob } from '../../shared/fs/glob';
+import { DeadlineExceededError, raceDeadline } from '../../shared/fs/deadline';
+import { matchWithRegex } from './regexMatchWorker';
 
 /** What a file-name search looks for. The patterns are already split (one glob per element). */
 export interface NameSearchQuery {
@@ -7,140 +9,94 @@ export interface NameSearchQuery {
   root: string;
   query: string;
   caseSensitive: boolean;
-  /** `query` is a regular expression that must match the whole path (`root` + `/` + relative path), like `find -regex`. */
+  /** `query` is a regular expression (JavaScript syntax) that must match the whole path (`root` + `/` + relative path). */
   regex: boolean;
-  /** Globs a file must match (any of them): `find -name`, or `find -path` with a leading wildcard and slash for one that has a `/`. Empty: every file. */
+  /** Globs a file must match (any of them): its name, or its whole path preceded by `*` and `/` for a glob that has a `/`. Empty: every file. */
   include: string[];
-  /** Globs of entry names that are neither listed nor entered (`find -name <glob> -prune`). */
+  /** Globs of entry names that are neither listed nor entered, at any depth. */
   excludeNames: string[];
 }
 
 export interface NameSearchLimits {
   maxResults: number;
-  /** The search ends with `NameSearchTimeoutError` once this instant has passed. */
-  deadlineMs: number;
+  /** Everything (the walk on the host and the matching) has to be done within this time. */
+  budgetMs: number;
 }
 
-export class NameSearchTimeoutError extends Error {
-  constructor() {
-    super('The file name search ran past its deadline');
-    this.name = 'NameSearchTimeoutError';
-  }
+export interface NameSearchResult {
+  /** Relative to the root, always with `/`: shallower first, by name within a level. */
+  paths: string[];
+  /** The tree was not seen whole (the walk reached its file or time bound, or the time ran out while matching). */
+  truncated: boolean;
 }
 
-/** Directories listed at once. A remote host answers each listing with a request, so one at a time would be slow on a large tree. */
-const LISTING_CONCURRENCY = 8;
+/** Files one walk returns at most. A tree with more is searched only as far as this. */
+export const NAME_SEARCH_MAX_FILES = 200_000;
+/** Kept back from the budget for the answer of the host to come back, and for the matching. */
+const WALK_RESERVE_MS = 1_500;
 
-/**
- * A glob as `find -name` / `-path` read it: `*` (any characters, `/` included), `?`, `[set]` / `[!set]` and a backslash that
- * takes the next character literally. Anything else is itself.
- */
-export function globToRegExp(glob: string, caseSensitive: boolean): RegExp {
-  let source = '';
-  for (let i = 0; i < glob.length; i++) {
-    const char = glob[i];
-    if (char === '*') {
-      source += '.*';
-    } else if (char === '?') {
-      source += '.';
-    } else if (char === '\\' && i + 1 < glob.length) {
-      source += escapeRegExp(glob[++i]);
-    } else if (char === '[') {
-      const close = glob.indexOf(']', i + 2);
-      if (close === -1) {
-        source += '\\[';
-      } else {
-        const set = glob.slice(i + 1, close);
-        const negated = set.startsWith('!') || set.startsWith('^');
-        source += `[${negated ? '^' : ''}${(negated ? set.slice(1) : set).replace(/[\\\]^]/g, '\\$&')}]`;
-        i = close;
-      }
-    } else {
-      source += escapeRegExp(char);
-    }
-  }
-  return new RegExp(`^${source}$`, caseSensitive ? 's' : 'si');
+const NOTHING_TO_SEARCH: ReadonlySet<FileOpsError['code']> = new Set(['NOT_FOUND', 'NOT_A_DIRECTORY', 'PERMISSION_DENIED']);
+
+function depthOf(path: string): number {
+  let depth = 0;
+  for (let i = 0; i < path.length; i++) if (path[i] === '/') depth++;
+  return depth;
 }
 
-function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\/-]/g, '\\$&');
-}
-
-interface Matchers {
-  isExcluded(name: string): boolean;
-  isMatch(name: string, fullPath: string): boolean;
-}
-
-/** Null when `query` is a regular expression JavaScript cannot compile: nothing can match it. */
-function buildMatchers(search: NameSearchQuery): Matchers | null {
-  const excluded = search.excludeNames.map((glob) => globToRegExp(glob, true));
-  const includes = search.include.map((glob) => (glob.includes('/')
-    ? { onPath: true, pattern: globToRegExp(`*/${glob}`, true) }
-    : { onPath: false, pattern: globToRegExp(glob, true) }));
-  let queryMatcher: (name: string, fullPath: string) => boolean;
-  if (search.regex) {
-    let whole: RegExp;
-    try {
-      whole = new RegExp(`^(?:${search.query})$`, search.caseSensitive ? 's' : 'si');
-    } catch {
-      return null;
-    }
-    queryMatcher = (_name, fullPath) => whole.test(fullPath);
-  } else {
-    const contains = globToRegExp(`*${search.query}*`, search.caseSensitive);
-    queryMatcher = (name) => contains.test(name);
-  }
-  return {
-    isExcluded: (name) => excluded.some((pattern) => pattern.test(name)),
-    isMatch: (name, fullPath) =>
-      (includes.length === 0 || includes.some((i) => i.pattern.test(i.onPath ? fullPath : name))) && queryMatcher(name, fullPath),
-  };
+/** Shallower first, then by name: the same order whether the host walked level by level or in `find`'s order. */
+function byDepthThenName(a: WalkEntry, b: WalkEntry): number {
+  return depthOf(a.path) - depthOf(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
 }
 
 /**
- * The regular files below `search.root` whose name matches, as paths relative to the root (always with `/`), shallower first and
- * by name within a level. Walks the tree
- * with `IFileOps.list`, a level at a time: symbolic links are neither followed nor listed, an excluded name is skipped
- * wherever it is, and a directory that cannot be listed is passed over (the unreadable parts of a tree are not an error of a
- * search). Stops at `maxResults`, and with `NameSearchTimeoutError` at the deadline. A failure that is not a
- * `FileOpsError` (an unreachable agent) propagates.
+ * The regular files below `search.root` whose name matches, found by one walk on the host (`IFileOps.walk`, one request however
+ * large the tree) and matched here. A search that runs out of time, or whose tree is larger than the walk allows, returns what it
+ * has with `truncated`. The patterns come from a user: globs are matched without regular expressions (`compileGlob`), and a
+ * regular expression only in a worker thread that the deadline can terminate. A root that is missing or unreadable has no files;
+ * any other failure (an unreachable agent) propagates.
  */
-export async function searchFileNames(files: IFileOps, search: NameSearchQuery, limits: NameSearchLimits): Promise<string[]> {
-  const matchers = buildMatchers(search);
-  if (!matchers) return [];
-  const api = pathApiFor(files.platform);
+export async function searchFileNames(files: IFileOps, search: NameSearchQuery, limits: NameSearchLimits): Promise<NameSearchResult> {
+  const deadline = Date.now() + limits.budgetMs;
+  let walked;
+  try {
+    walked = await raceDeadline(files.walk(search.root, {
+      excludeNames: search.excludeNames,
+      maxEntries: NAME_SEARCH_MAX_FILES,
+      timeBudgetMs: Math.max(1, limits.budgetMs - WALK_RESERVE_MS),
+    }), deadline, 'The file name walk');
+  } catch (err) {
+    if (err instanceof DeadlineExceededError) return { paths: [], truncated: true };
+    if (err instanceof FileOpsError && NOTHING_TO_SEARCH.has(err.code)) return { paths: [], truncated: false };
+    throw err;
+  }
+
   const rootPrefix = search.root.replace(/\/+$/, '');
-  const results: string[] = [];
+  const includes = search.include.map((glob) => (glob.includes('/')
+    ? { onPath: true, matches: compileGlob(`*/${glob}`, true) }
+    : { onPath: false, matches: compileGlob(glob, true) }));
+  const candidates = walked.entries.sort(byDepthThenName).filter((entry) => {
+    const fullPath = `${rootPrefix}/${entry.path}`;
+    const name = entry.path.slice(entry.path.lastIndexOf('/') + 1);
+    return includes.length === 0 || includes.some((include) => include.matches(include.onPath ? fullPath : name));
+  });
 
-  const listOrNothing = async (dir: string): Promise<{ name: string; kind: string }[]> => {
-    try {
-      return (await files.list(dir)).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
-    } catch (err) {
-      if (err instanceof FileOpsError) return [];
-      throw err;
+  if (!search.regex) {
+    const contains = compileGlob(`*${search.query}*`, search.caseSensitive);
+    const paths: string[] = [];
+    for (const entry of candidates) {
+      if (contains(entry.path.slice(entry.path.lastIndexOf('/') + 1))) paths.push(entry.path);
+      if (paths.length >= limits.maxResults) break;
     }
-  };
-
-  let level = [{ absolute: search.root, relative: '' }];
-  while (level.length > 0 && results.length < limits.maxResults) {
-    const next: typeof level = [];
-    for (let i = 0; i < level.length && results.length < limits.maxResults; i += LISTING_CONCURRENCY) {
-      if (Date.now() > limits.deadlineMs) throw new NameSearchTimeoutError();
-      const batch = level.slice(i, i + LISTING_CONCURRENCY);
-      const listings = await Promise.all(batch.map((dir) => listOrNothing(dir.absolute)));
-      batch.forEach((dir, index) => {
-        for (const entry of listings[index]) {
-          if (matchers.isExcluded(entry.name)) continue;
-          const relative = dir.relative === '' ? entry.name : `${dir.relative}/${entry.name}`;
-          if (entry.kind === 'directory') {
-            next.push({ absolute: api.join(dir.absolute, entry.name), relative });
-          } else if (entry.kind === 'file' && results.length < limits.maxResults && matchers.isMatch(entry.name, `${rootPrefix}/${relative}`)) {
-            results.push(relative);
-          }
-        }
-      });
-    }
-    level = next;
+    return { paths, truncated: walked.truncated };
   }
-  return results;
+
+  const found = await matchWithRegex({
+    pattern: `^(?:${search.query})$`,
+    flags: search.caseSensitive ? 's' : 'si',
+    texts: candidates.map((entry) => `${rootPrefix}/${entry.path}`),
+    maxMatches: limits.maxResults,
+    timeoutMs: deadline - Date.now(),
+  });
+  if (found.invalid) return { paths: [], truncated: false };
+  return { paths: found.matched.map((index) => candidates[index].path), truncated: walked.truncated || found.timedOut };
 }

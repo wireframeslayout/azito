@@ -74,8 +74,8 @@ export async function syncThroughFileOps(ctx: SidekickSyncContext): Promise<void
       await extract(ctx, layout);
       await files.write(api.join(layout.staging, HASH_FILENAME), Buffer.from(`${ctx.hash}\n`));
       await removeIfPresent(files, layout.payload);
-      await removeIfPresent(files, layout.base);
-      await files.rename(layout.staging, layout.base);
+      // One operation on the host: the live tree is set aside, replaced, and removed only after that; a failed replacement puts it back.
+      await files.replaceDirectory(layout.staging, layout.base);
     } catch (err) {
       // Best-effort cleanup of the staging artifacts; the live tree (if any) is untouched because the swap is the last step.
       await Promise.all([layout.payload, layout.staging].map((path) => removeIfPresent(files, path).catch(() => undefined)));
@@ -98,8 +98,8 @@ async function readRemoteHash(files: IFileOps, hashFile: string): Promise<string
 
 /**
  * Creating a directory is atomic, so it is the lock. A lock directory older than LOCK_STALE_MS belongs to a holder that
- * died: it is removed and taken over. The age is the directory's mtime against this clock, so a host whose clock is far off
- * sees a lock as younger or older than it is.
+ * died: it is removed and taken over. Its age is measured by the host's clock alone (`stat` with `withAge`), so a hub whose
+ * clock is off neither takes a lock that is still held nor waits on one that is not.
  */
 async function acquireLock(ctx: SidekickSyncContext, files: IFileOps, lockDir: string): Promise<void> {
   for (let attempt = 0; attempt < ctx.lockRetries; attempt++) {
@@ -118,8 +118,11 @@ async function tryCreateLock(files: IFileOps, lockDir: string): Promise<boolean>
   } catch (err) {
     if (!isCode(err, 'ALREADY_EXISTS')) throw err;
   }
-  const held = await files.stat(lockDir, { followLinks: false });
-  if (held && Date.now() - held.mtimeMs <= LOCK_STALE_MS) return false;
+  const held = await files.stat(lockDir, { followLinks: false, withAge: true });
+  if (held) {
+    if (held.ageMs === undefined) throw new Error('The host did not report how old the sync lock is (an outdated agent?)');
+    if (held.ageMs <= LOCK_STALE_MS) return false;
+  }
   await removeIfPresent(files, lockDir);
   try {
     await files.create(lockDir, 'directory');

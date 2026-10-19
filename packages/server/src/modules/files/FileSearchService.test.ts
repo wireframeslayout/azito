@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { FileSearchService, type SearchOptions } from './FileSearchService';
 import { CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandSpec } from '../../shared/exec/commandSpec';
-import { ShellFileOps } from '../servers/transport/ShellFileOps';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import type { IFileOps } from '../../shared/fs/fileOps';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
@@ -15,9 +14,7 @@ interface Answers {
   rgVersion?: RunAnswer;
   /** the content search (rg or grep) */
   content?: RunAnswer;
-  /** the name search of an agent without file operations (`find`, through exec) */
-  find?: { stdout: string; stderr: string; code: number } | Error;
-  /** the host's file operations; by default the shell ones of an agent whose OS was never recorded */
+  /** the host's file operations; by default a host with no files, where the name search finds nothing */
   files?: IFileOps;
 }
 
@@ -35,10 +32,10 @@ function createMockTransportFactory(answers: Answers = {}) {
     }),
     exec: vi.fn(async (command: string) => {
       execCommands.push(command);
-      return unwrap(answers.find ?? { stdout: '', stderr: '', code: 1 });
+      return { stdout: '', stderr: '', code: 1 };
     }),
   };
-  const files = answers.files ?? new ShellFileOps(transport);
+  const files = answers.files ?? ({ platform: 'linux', walk: async () => ({ entries: [], truncated: false }) } as unknown as IFileOps);
   return { factory: { getTransport: () => ({ ...transport, files: () => files }) } as any, runSpecs, execCommands, transport };
 }
 
@@ -58,34 +55,6 @@ const rgMatch = (path: string, line: number, text: string): string => JSON.strin
 });
 
 describe('FileSearchService', () => {
-  describe('buildFindCommand', () => {
-    it('builds case-insensitive glob command by default', () => {
-      const service = new FileSearchService(createMockTransportFactory().factory);
-      const cmd = service.buildFindCommand({ ...baseOpts, root: '/home/user/project' });
-
-      expect(cmd).toContain('-iname');
-      expect(cmd).toContain("'*test*'");
-      expect(cmd).toContain("-name 'node_modules'");
-      expect(cmd).toContain("-name '.git'");
-      expect(cmd).toContain("-name 'dist'");
-      expect(cmd).toContain("-name '.worktrees'");
-      expect(cmd).toContain('head -200');
-    });
-
-    it('uses -name for case-sensitive search', () => {
-      const service = new FileSearchService(createMockTransportFactory().factory);
-      const cmd = service.buildFindCommand({ ...baseOpts, query: 'Test', caseSensitive: true });
-      expect(cmd).toContain('-name');
-      expect(cmd).not.toContain('-iname');
-    });
-
-    it('uses -iregex for regex mode', () => {
-      const service = new FileSearchService(createMockTransportFactory().factory);
-      const cmd = service.buildFindCommand({ ...baseOpts, query: '.*\\.test\\.ts$', regex: true });
-      expect(cmd).toContain('-iregex');
-    });
-  });
-
   describe('buildRgArgs', () => {
     const service = new FileSearchService(createMockTransportFactory().factory);
 
@@ -304,24 +273,6 @@ describe('FileSearchService', () => {
       await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
     });
 
-    it('returns name matches from find output (an agent without file operations)', async () => {
-      const { factory, execCommands } = createMockTransportFactory({
-        rgVersion: NO_RG,
-        find: { stdout: '/project/src/test.ts\n/project/src/test.spec.ts\n', stderr: '', code: 0 },
-      });
-      const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, root: '/project/' });
-      expect(result.nameMatches).toEqual(['src/test.ts', 'src/test.spec.ts']);
-      expect(execCommands).toHaveLength(1);
-      expect(execCommands[0]).toContain('find');
-    });
-
-    it('sets truncated when results exceed limit', async () => {
-      const names = Array.from({ length: 200 }, (_, i) => `/project/file${i}.ts`).join('\n');
-      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, find: { stdout: names + '\n', stderr: '', code: 0 } });
-      const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, query: 'file', root: '/project/' });
-      expect(result.truncated).toBe(true);
-      expect(result.nameMatches).toHaveLength(200);
-    });
   });
 
   describe('name search with the host\'s file operations', () => {
@@ -379,8 +330,19 @@ describe('FileSearchService', () => {
       expect(result.truncated).toBe(true);
     });
 
+    it('keeps the content hits and the names found, and says truncated, when the name walk ran out of time', async () => {
+      const walkedPartly = { platform: 'linux', walk: async () => ({ entries: [{ path: 'src/test.ts', mtimeMs: 1 }], truncated: true }) } as unknown as IFileOps;
+      const { factory } = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: ok(rgMatch('/project/a.ts', 3, 'test one') + '\n'), files: walkedPartly });
+
+      const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+
+      expect(result.nameMatches).toEqual(['src/test.ts']);
+      expect(result.contentHits.map((h) => h.path)).toEqual(['a.ts']);
+      expect(result.truncated).toBe(true);
+    });
+
     it('lets a failure of the host propagate instead of answering with no names', async () => {
-      const unreachable = { platform: 'linux', list: async () => { throw new Error('agent unreachable'); } } as unknown as IFileOps;
+      const unreachable = { platform: 'linux', walk: async () => { throw new Error('agent unreachable'); } } as unknown as IFileOps;
 
       await expect(serviceOver(unreachable).service.search(baseServer, baseOpts)).rejects.toThrow('agent unreachable');
     });

@@ -435,3 +435,141 @@ describe('localFileOpsHost', () => {
     expect(localFileOpsHost({ platform: 'darwin', homeDir: '/h' }).platform).toBe('darwin');
   });
 });
+
+describe('LocalFileOps.walk', () => {
+  const options = { excludeNames: [] as string[], maxEntries: 1000, timeBudgetMs: 10_000 };
+
+  function files(...names: string[]): void {
+    for (const name of names) {
+      mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+      writeFileSync(path.join(dir, name), 'x');
+    }
+  }
+
+  it('returns the regular files at any depth, level by level and by name, with their mtime', async () => {
+    files('b.txt', 'a.txt', 'sub/z.txt', 'sub/deep/y.txt');
+
+    const { entries, truncated } = await ops.walk(dir, options);
+
+    expect(entries.map((e) => e.path)).toEqual(['a.txt', 'b.txt', 'sub/z.txt', 'sub/deep/y.txt']);
+    expect(entries[0].mtimeMs).toBe(statSync(path.join(dir, 'a.txt')).mtimeMs);
+    expect(truncated).toBe(false);
+  });
+
+  it('skips excluded names (globs, files and directories) at any depth, without entering them', async () => {
+    files('keep.ts', 'node_modules/p/a.js', 'a/node_modules/b.js', 'a/skip.log', 'a/ok.ts');
+
+    const { entries } = await ops.walk(dir, { ...options, excludeNames: ['node_modules', '*.log', 'home'] });
+
+    expect(entries.map((e) => e.path)).toEqual(['keep.ts', 'a/ok.ts']);
+  });
+
+  it.skipIf(isWindows)('neither follows nor lists symbolic links', async () => {
+    files('real/a.txt');
+    symlinkSync(path.join(dir, 'real'), path.join(dir, 'dirlink'));
+    symlinkSync(path.join(dir, 'real', 'a.txt'), path.join(dir, 'filelink'));
+
+    expect((await ops.walk(dir, { ...options, excludeNames: ['home'] })).entries.map((e) => e.path)).toEqual(['real/a.txt']);
+  });
+
+  it('stops at maxEntries and says so, and honors maxDepth', async () => {
+    files('a.txt', 'b.txt', 'c.txt', 'd/e.txt');
+
+    const limited = await ops.walk(dir, { ...options, maxEntries: 2 });
+    expect(limited.entries).toHaveLength(2);
+    expect(limited.truncated).toBe(true);
+
+    const shallow = await ops.walk(dir, { ...options, maxDepth: 0 });
+    expect(shallow.entries.map((e) => e.path)).toEqual(['a.txt', 'b.txt', 'c.txt']);
+    expect(shallow.truncated).toBe(false);
+  });
+
+  it('stops when the time budget is used up', async () => {
+    files('a.txt', 'sub/b.txt');
+
+    const late = await ops.walk(dir, { ...options, timeBudgetMs: -1 });
+
+    expect(late.truncated).toBe(true);
+    expect(late.entries).toEqual([]);
+  });
+
+  it('is NOT_FOUND for a missing root and NOT_A_DIRECTORY for a file', async () => {
+    files('f.txt');
+    expect(await codeOf(ops.walk(path.join(dir, 'missing'), options))).toBe('NOT_FOUND');
+    expect(await codeOf(ops.walk(path.join(dir, 'f.txt'), options))).toBe('NOT_A_DIRECTORY');
+  });
+});
+
+describe('LocalFileOps.replaceDirectory', () => {
+  function tree(name: string, content: string): string {
+    const full = path.join(dir, name);
+    mkdirSync(full, { recursive: true });
+    writeFileSync(path.join(full, 'f.txt'), content);
+    return full;
+  }
+  const leftovers = (): string[] => readdirSync(dir).filter((n) => n.includes('azito-old'));
+
+  it('puts the staging directory where the target was, and removes the old tree', async () => {
+    const target = tree('target', 'old');
+    const staging = tree('staging', 'new');
+
+    await ops.replaceDirectory(staging, target);
+
+    expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('new');
+    expect(existsSync(staging)).toBe(false);
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('moves into a target that does not exist', async () => {
+    const staging = tree('staging', 'new');
+
+    await ops.replaceDirectory(staging, path.join(dir, 'target'));
+
+    expect(readFileSync(path.join(dir, 'target', 'f.txt'), 'utf8')).toBe('new');
+  });
+
+  it('keeps the old tree when the staging directory is missing, or is not a directory', async () => {
+    const target = tree('target', 'old');
+
+    expect(await codeOf(ops.replaceDirectory(path.join(dir, 'missing'), target))).toBe('NOT_FOUND');
+    writeFileSync(path.join(dir, 'file'), '');
+    expect(await codeOf(ops.replaceDirectory(path.join(dir, 'file'), target))).toBe('NOT_A_DIRECTORY');
+
+    expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('old');
+    expect(leftovers()).toEqual([]);
+  });
+
+  it('puts the old tree back when the staging directory cannot be moved in', async () => {
+    const target = tree('target', 'old');
+    const staging = tree('staging', 'new');
+    const realRename = fs.promises.rename;
+    const spy = vi.spyOn(fs.promises, 'rename').mockImplementation(async (from, to) => {
+      if (String(from) === staging) throw Object.assign(new Error('EXDEV'), { code: 'EXDEV' });
+      return realRename(from, to);
+    });
+
+    try {
+      await expect(ops.replaceDirectory(staging, target)).rejects.toThrow('EXDEV');
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('old');
+    expect(readFileSync(path.join(staging, 'f.txt'), 'utf8')).toBe('new');
+    expect(leftovers()).toEqual([]);
+  });
+});
+
+describe('LocalFileOps.stat withAge', () => {
+  it('reports how long ago the entry was modified, by this host\'s clock, only when asked', async () => {
+    writeFileSync(path.join(dir, 'f'), 'x');
+    const old = (Date.now() - 10 * 60 * 1000) / 1000;
+    utimesSync(path.join(dir, 'f'), old, old);
+
+    const aged = await ops.stat(path.join(dir, 'f'), { withAge: true });
+
+    expect(aged?.ageMs).toBeGreaterThan(9.9 * 60 * 1000);
+    expect(aged?.ageMs).toBeLessThan(10.5 * 60 * 1000);
+    expect((await ops.stat(path.join(dir, 'f')))?.ageMs).toBeUndefined();
+  });
+});

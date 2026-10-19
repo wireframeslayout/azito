@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError } from './fileOps';
-import { executeFileOp, fileOpRequestSchema, MAX_FILE_OPS_BYTES, RemoteFileOps, type FileOpRequest } from './fileOpsWire';
+import { executeFileOp, fileOpRequestSchema, MAX_FILE_OPS_BYTES, MAX_WALK_ENTRIES, MAX_WALK_TIME_BUDGET_MS, RemoteFileOps, type FileOpRequest } from './fileOpsWire';
 import { LocalFileOps, localFileOpsHost } from './LocalFileOps';
 
 let dir: string;
@@ -57,6 +57,22 @@ describe('RemoteFileOps over executeFileOp', () => {
     expect(sent.at(-1)).toMatchObject({ op: 'read', headBytes: 9 });
   });
 
+  it('carries a walk, a directory replacement and the age of an entry in one request each', async () => {
+    mkdirSync(path.join(dir, 'staging'));
+    writeFileSync(path.join(dir, 'staging', 'new.txt'), 'n');
+    mkdirSync(path.join(dir, 'target'));
+    writeFileSync(path.join(dir, 'target', 'old.txt'), 'o');
+
+    await remote.replaceDirectory(path.join(dir, 'staging'), path.join(dir, 'target'));
+    const walked = await remote.walk(dir, { excludeNames: ['x'], maxEntries: 10, maxDepth: 3, timeBudgetMs: 5_000 });
+
+    expect(walked.truncated).toBe(false);
+    expect(walked.entries.map((e) => e.path)).toEqual(['target/new.txt']);
+    expect((await remote.stat(path.join(dir, 'target'), { withAge: true }))?.ageMs).toBeGreaterThanOrEqual(0);
+    expect((await remote.stat(path.join(dir, 'target')))?.ageMs).toBeUndefined();
+    expect(sent.filter((r) => r.op === 'walk' || r.op === 'replaceDirectory')).toHaveLength(2);
+  });
+
   it('rethrows a refusal of the host as the same error with its details', async () => {
     const file = path.join(dir, 'a.txt');
     writeFileSync(file, 'v1');
@@ -102,6 +118,15 @@ describe('fileOpRequestSchema', () => {
     expect(fileOpRequestSchema.safeParse({ op: 'rename', from: '/a' }).success).toBe(false);
     expect(fileOpRequestSchema.safeParse({ op: 'create', path: '/a', kind: 'symlink' }).success).toBe(false);
     expect(fileOpRequestSchema.safeParse({ op: 'write', path: '/a', dataBase64: 5 }).success).toBe(false);
+  });
+
+  it('bounds a walk', () => {
+    const walk = { op: 'walk', path: '/a', excludeNames: [], maxEntries: 10, timeBudgetMs: 1000 };
+    expect(fileOpRequestSchema.safeParse(walk).success).toBe(true);
+    expect(fileOpRequestSchema.safeParse({ ...walk, maxEntries: 0 }).success).toBe(false);
+    expect(fileOpRequestSchema.safeParse({ ...walk, maxEntries: MAX_WALK_ENTRIES + 1 }).success).toBe(false);
+    expect(fileOpRequestSchema.safeParse({ ...walk, timeBudgetMs: MAX_WALK_TIME_BUDGET_MS + 1 }).success).toBe(false);
+    expect(fileOpRequestSchema.safeParse({ ...walk, excludeNames: undefined }).success).toBe(false);
   });
 
   it('bounds a read and refuses a malformed hash', () => {

@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, utimesSync, 
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
-import type { DirEntry, IFileOps } from '../../shared/fs/fileOps';
+import type { IFileOps } from '../../shared/fs/fileOps';
+import { DeadlineExceededError } from '../../shared/fs/deadline';
 import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta } from './sessionScanUtils';
 
 let dir: string;
@@ -26,6 +27,7 @@ function touch(relative: string, mtimeSeconds: number): string {
 }
 
 const jsonl = (name: string): boolean => name.endsWith('.jsonl');
+const soon = (): number => Date.now() + 30_000;
 
 describe('findFilesByMtime', () => {
   it('finds matching files at any depth, oldest first, and ignores other names and directories', async () => {
@@ -35,7 +37,7 @@ describe('findFilesByMtime', () => {
     touch('2026/notes.txt', 2500);
     mkdirSync(path.join(dir, 'looks-like.jsonl'));
 
-    const found = await findFilesByMtime(ops, dir, jsonl);
+    const found = await findFilesByMtime(ops, dir, jsonl, undefined, soon());
 
     expect(found).toEqual([
       { path: oldest, mtimeMs: 1_000_000 },
@@ -49,14 +51,14 @@ describe('findFilesByMtime', () => {
     const newer = touch('newer.jsonl', 2001);
     touch('older.jsonl', 1999);
 
-    const found = await findFilesByMtime(ops, dir, jsonl, new Date(2_000_900));
+    const found = await findFilesByMtime(ops, dir, jsonl, new Date(2_000_900), soon());
 
     expect(found.map((f) => f.path)).toEqual([newer]);
     expect(found.map((f) => f.path)).not.toContain(same);
   });
 
   it('yields nothing for a directory that does not exist', async () => {
-    await expect(findFilesByMtime(ops, path.join(dir, 'missing'), jsonl)).resolves.toEqual([]);
+    await expect(findFilesByMtime(ops, path.join(dir, 'missing'), jsonl, undefined, soon())).resolves.toEqual([]);
   });
 
   it.skipIf(process.platform === 'win32')('does not follow a symbolic link to a file or a directory', async () => {
@@ -64,25 +66,35 @@ describe('findFilesByMtime', () => {
     symlinkSync(real, path.join(dir, 'link.jsonl'));
     symlinkSync(path.join(dir, 'real'), path.join(dir, 'linked-dir'));
 
-    expect((await findFilesByMtime(ops, dir, jsonl)).map((f) => f.path)).toEqual([real]);
+    expect((await findFilesByMtime(ops, dir, jsonl, undefined, soon())).map((f) => f.path)).toEqual([real]);
   });
 
-  it('fails when the host lists a file without a modification time (an outdated agent) instead of ordering it by a guess', async () => {
-    const outdated = {
-      platform: 'linux',
-      list: async (): Promise<DirEntry[]> => [{ name: 'a.jsonl', kind: 'file', size: 1 }],
-    } as unknown as IFileOps;
+  it('is an error, not a guess from part of the tree, when the walk did not see all of it', async () => {
+    const partial = { platform: 'linux', walk: async () => ({ entries: [{ path: 'a.jsonl', mtimeMs: 1 }], truncated: true }) } as unknown as IFileOps;
 
-    await expect(findFilesByMtime(outdated, '/x', jsonl)).rejects.toThrow(/modification time/);
+    await expect(findFilesByMtime(partial, '/x', jsonl, undefined, soon())).rejects.toBeInstanceOf(DeadlineExceededError);
+  });
+
+  it('is an error when the host does not answer before the deadline', async () => {
+    const silent = { platform: 'linux', walk: () => new Promise(() => undefined) } as unknown as IFileOps;
+
+    await expect(findFilesByMtime(silent, '/x', jsonl, undefined, Date.now() + 50)).rejects.toBeInstanceOf(DeadlineExceededError);
+  });
+
+  it('asks the host to walk within the time that is left', async () => {
+    let asked: { timeBudgetMs: number } | undefined;
+    const host = { platform: 'linux', walk: async (_root: string, options: { timeBudgetMs: number }) => { asked = options; return { entries: [], truncated: false }; } } as unknown as IFileOps;
+
+    await findFilesByMtime(host, '/x', jsonl, undefined, Date.now() + 5_000);
+
+    expect(asked!.timeBudgetMs).toBeLessThanOrEqual(5_000);
+    expect(asked!.timeBudgetMs).toBeGreaterThan(0);
   });
 
   it('lets a failure that is not a refusal of the host propagate', async () => {
-    const unreachable = {
-      platform: 'linux',
-      list: async (): Promise<DirEntry[]> => { throw new Error('agent unreachable'); },
-    } as unknown as IFileOps;
+    const unreachable = { platform: 'linux', walk: async () => { throw new Error('agent unreachable'); } } as unknown as IFileOps;
 
-    await expect(findFilesByMtime(unreachable, '/x', jsonl)).rejects.toThrow('agent unreachable');
+    await expect(findFilesByMtime(unreachable, '/x', jsonl, undefined, soon())).rejects.toThrow('agent unreachable');
   });
 });
 

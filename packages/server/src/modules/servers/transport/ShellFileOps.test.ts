@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -99,6 +99,106 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
     });
   });
 
+  describe('walk', () => {
+    const options = { excludeNames: [] as string[], maxEntries: 1000, timeBudgetMs: 10_000 };
+    const files = (...names: string[]): void => {
+      for (const name of names) {
+        mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+        writeFileSync(path.join(dir, name), 'x');
+      }
+    };
+
+    it('lists the regular files at any depth with their mtime, in one command', async () => {
+      files('b.txt', 'sub/deep/y.txt', 'a.txt');
+      sh.commands.length = 0;
+
+      const { entries, truncated } = await ops.walk(dir, options);
+
+      expect(entries.map((e) => e.path).sort()).toEqual(['a.txt', 'b.txt', 'sub/deep/y.txt']);
+      expect(Math.abs(entries.find((e) => e.path === 'a.txt')!.mtimeMs - statSync(path.join(dir, 'a.txt')).mtimeMs)).toBeLessThan(1000);
+      expect(truncated).toBe(false);
+      expect(sh.commands).toHaveLength(1);
+    });
+
+    it('prunes excluded names and honors maxDepth', async () => {
+      files('keep.ts', 'node_modules/p/a.js', 'a/node_modules/b.js', 'a/skip.log', 'a/ok.ts', 'a/b/deep.ts');
+
+      expect((await ops.walk(dir, { ...options, excludeNames: ['node_modules', '*.log'] })).entries.map((e) => e.path).sort()).toEqual(['a/b/deep.ts', 'a/ok.ts', 'keep.ts']);
+      expect((await ops.walk(dir, { ...options, maxDepth: 0 })).entries.map((e) => e.path)).toEqual(['keep.ts']);
+      expect((await ops.walk(dir, { ...options, maxDepth: 1 })).entries.map((e) => e.path).sort()).toEqual(['a/ok.ts', 'a/skip.log', 'keep.ts']);
+    });
+
+    it('stops at maxEntries and says so', async () => {
+      files('a.txt', 'b.txt', 'c.txt');
+
+      const result = await ops.walk(dir, { ...options, maxEntries: 2 });
+
+      expect(result.entries).toHaveLength(2);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('quotes a root that is hostile to a shell, and is NOT_FOUND for one that is not a directory', async () => {
+      const odd = path.join(dir, "it's $(touch pwned)");
+      mkdirSync(odd);
+      writeFileSync(path.join(odd, 'a.txt'), '');
+
+      expect((await ops.walk(odd, options)).entries.map((e) => e.path)).toEqual(['a.txt']);
+      expect(existsSync(path.join(dir, 'pwned'))).toBe(false);
+      expect(await codeOf(ops.walk(path.join(dir, 'missing'), options))).toBe('NOT_FOUND');
+    });
+
+    it('reports an exec that ran out of time as truncated, with nothing', async () => {
+      const slow = new ShellFileOps({ exec: async () => { throw Object.assign(new Error('timed out'), { killed: true }); } });
+
+      expect(await slow.walk(dir, options)).toEqual({ entries: [], truncated: true });
+    });
+  });
+
+  describe('replaceDirectory', () => {
+    const tree = (name: string, content: string): string => {
+      const full = path.join(dir, name);
+      mkdirSync(full, { recursive: true });
+      writeFileSync(path.join(full, 'f.txt'), content);
+      return full;
+    };
+
+    it('replaces the target with the staging directory in one command and leaves no backup', async () => {
+      const target = tree('target', 'old');
+      const staging = tree('staging', 'new');
+      sh.commands.length = 0;
+
+      await ops.replaceDirectory(staging, target);
+
+      expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('new');
+      expect(existsSync(staging)).toBe(false);
+      expect(readdirSync(dir).filter((n) => n.includes('azito-old'))).toEqual([]);
+      expect(sh.commands).toHaveLength(1);
+    });
+
+    it('moves into a missing target, and keeps the old tree when the staging directory is missing', async () => {
+      await ops.replaceDirectory(tree('s1', 'new'), path.join(dir, 'fresh'));
+      expect(readFileSync(path.join(dir, 'fresh', 'f.txt'), 'utf8')).toBe('new');
+
+      const target = tree('target', 'old');
+      expect(await codeOf(ops.replaceDirectory(path.join(dir, 'missing'), target))).toBe('NOT_FOUND');
+      expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('old');
+    });
+  });
+
+  describe('stat withAge', () => {
+    it('reports the age by the host\'s own clock, only when asked', async () => {
+      writeFileSync(path.join(dir, 'f'), 'x');
+      const old = (Date.now() - 10 * 60 * 1000) / 1000;
+      utimesSync(path.join(dir, 'f'), old, old);
+
+      const aged = await ops.stat(path.join(dir, 'f'), { withAge: true });
+
+      expect(aged?.ageMs).toBeGreaterThan(9.9 * 60 * 1000);
+      expect(aged?.ageMs).toBeLessThan(10.5 * 60 * 1000);
+      expect((await ops.stat(path.join(dir, 'f')))?.ageMs).toBeUndefined();
+    });
+  });
+
   describe('read', () => {
     it('returns the exact bytes, a trailing newline included', async () => {
       const bytes = Buffer.from('line one\nline two\n');
@@ -124,6 +224,14 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       expect((await ops.read(path.join(dir, 'rollout'), { headBytes: 1000 })).data.toString()).toBe('first line\nsecond line\n');
       writeFileSync(path.join(dir, 'empty'), '');
       expect((await ops.read(path.join(dir, 'empty'), { headBytes: 10 })).data.length).toBe(0);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('fails on a file it cannot read instead of returning it as empty', async () => {
+      const locked = path.join(dir, 'locked');
+      writeFileSync(locked, 'secret');
+      chmodSync(locked, 0o000);
+
+      expect(await codeOf(ops.read(locked, { headBytes: 10 }))).toBe('FAILED');
     });
 
     it('refuses a missing path, a directory and a file over the limit', async () => {

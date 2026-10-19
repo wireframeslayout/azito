@@ -391,7 +391,7 @@ describe('FileBrowseService with a host whose operations refuse', () => {
   /** File operations that all fail the same way: what the service makes of each refusal is what is under test. */
   function refusing(error: FileOpsError): IFileOps {
     const fail = async (): Promise<never> => { throw error; };
-    return { platform: 'linux', list: fail, stat: fail, read: fail, write: fail, create: fail, remove: fail, rename: fail, realpath: fail };
+    return { platform: 'linux', list: fail, stat: fail, read: fail, write: fail, create: fail, remove: fail, rename: fail, replaceDirectory: fail, walk: fail, realpath: fail };
   }
   const srv = { type: 'agent', name: 'a' } as unknown as ServerConfig;
 
@@ -436,6 +436,8 @@ describe('FileBrowseService on a host with Windows path rules', () => {
       create: async () => ({ created: true }),
       remove: async (p) => { seen.push(p); },
       rename: async (from, to) => { seen.push(from, to); },
+      replaceDirectory: async () => undefined,
+      walk: async () => ({ entries: [], truncated: false }),
       realpath: async (p) => p,
     };
     return { ops, seen };
