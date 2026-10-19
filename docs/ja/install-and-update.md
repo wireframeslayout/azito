@@ -65,7 +65,7 @@ bash "$TMP/install.sh"; rm -rf "$TMP"
 | git | **必須** | タスクごとの worktree 作成。`install.sh` は有無を検出して導入を促す（バージョン検証はしない） |
 | tmux | 任意 | tmux のウィンドウを使う場合だけ。AZITO のペインは**同梱の misao** が動かすので、無くてもインストール・利用できる（`install.sh` は無ければ注記を出すだけ）。推奨 3.4 以上 |
 | Node.js v24+ | 機能により必要 | ブラウザランタイム導入（`npx` を使う）、supervised ウィンドウ（`azs` が `node` で supervisor を起動）。**ハブの起動自体には不要** |
-| Tailscale | 任意 | 他端末からのアクセス、HTTPS 経由のプッシュ通知 |
+| Tailscale | 任意 | 他端末からのアクセス、HTTPS 経由のプッシュ通知。macOS では、SSH セッションの `PATH` に無くても Homebrew の場所（`/opt/homebrew/bin`、`/usr/local/bin`）を探します |
 | claude / codex CLI | 任意 | 対応するワーカーを使う場合のみ |
 
 misao（ヘッドレスのペインサーバー）はリリースに同梱されています。ホストへのインストールは不要で、`install.sh` が[ハブとは別のサービス](#misao-サービス)として設置します。
@@ -129,7 +129,7 @@ rm -f azito-hub-${VERSION}-${PLATFORM}-${ARCH}.tar.gz SHA256SUMS
 |---|---|---|
 | 設定ファイル | `~/.azito/hub/.env` | `packages/server/.env` |
 | データ | `~/.azito/data/` | `<repo>/data.db`, `<repo>/data/` |
-| 反映方法 | `systemctl --user restart azito`（macOS は `launchctl kickstart -k gui/$UID/com.azito.hub`） | `touch packages/server/src/main.ts`（`tsx watch` が再読込） |
+| 反映方法 | `systemctl --user restart azito`（macOS は `azito service restart`） | `touch packages/server/src/main.ts`（`tsx watch` が再読込） |
 
 `~/.azito/hub/.env` は**バージョンディレクトリの外**にあります（`~/.azito/hub/<version>/` ではない）。したがって更新で `current` が切り替わっても設定は失われません。データディレクトリ `~/.azito/data/` は DB・鍵・トークンの保管場所で、設定を書く場所ではありません。
 
@@ -201,8 +201,31 @@ cp ~/.azito/hub/current/deploy/com.azito.hub.plist ~/Library/LaunchAgents/
 # __AZITO_PREFIX__ を実際のパスに置換
 sed -i '' "s|__AZITO_PREFIX__|$HOME/.azito|g" ~/Library/LaunchAgents/com.azito.hub.plist
 
-launchctl load ~/Library/LaunchAgents/com.azito.hub.plist
+azito service start    # gui/<uid>、画面に誰もログインしていなければ user/<uid> に bootstrap する
 ```
+
+### macOS: 画面に誰もログインしていない Mac に SSH からインストールするとき
+
+launchd にはユーザーごとのドメインが 2 つあります。`gui/<uid>` はそのユーザーが Mac の画面にログインしている間だけ存在し、
+`user/<uid>` はそのユーザーのセッションが（SSH でも）あれば存在します。`~/Library/LaunchAgents` の LaunchAgent は、画面へのログイン時に
+macOS 自身が `gui/<uid>` に読み込みます。
+
+- **画面に誰もログインしていない Mac に SSH でインストールしたとき**: `launchctl print gui/<uid>` が失敗する（終了コード 125）ので、
+  ハブ（`com.azito.hub`）と misao（`com.azito.misao`）は `user/<uid>` に bootstrap され、すぐ起動します。`gui/<uid>` があるときは従来どおり `gui/<uid>` に入ります
+- **どちらのドメインで動いているか**は `azito service status`（ハブ）、`azito misao status`、`GET /api/system/misao`（`serviceDomain`: `gui` または `user`）に出ます
+- **二重に読み込まない**: すでにどちらかのドメインに読み込まれているサービスは、そのドメインのまま扱います。`azito service start|stop|restart`、
+  `azito misao start|update`、画面からの更新はどれも、読み込まれているドメインを使い（`kickstart`・`bootout`・`print` も同じ）、もう一方には読み込みません。
+  `azito service stop` と `reload` は、読み込まれているすべてのドメインから外します。`install.sh` は、読み込み済みのハブを一度 bootout してから読み込み直すので、書いたばかりの plist が使われます
+- **読み込みの失敗はエラー**: `install.sh` は `launchctl` のメッセージを表示して非ゼロで終わります。ファイルは入った状態なので、原因を直してから `azito service start` で再試行できます
+- **後から画面にログインしたとき**: 1 つのサービスが 1 つのドメインにだけ読み込まれていることを確かめます
+
+  ```bash
+  launchctl print gui/$UID/com.azito.hub  >/dev/null 2>&1 && echo "hub: gui"
+  launchctl print user/$UID/com.azito.hub >/dev/null 2>&1 && echo "hub: user"
+  ```
+
+  両方に出たら、`azito service stop`（両方から外す）→ `azito service start` を実行します。misao も `com.azito.misao` で同様に確かめます
+  （misao のコピーを外すと、そのコピーが持つペインは終了します。意図して行ってください）
 
 ### misao サービス
 
@@ -225,7 +248,8 @@ azito misao start     # 設置済みで止まっているときに起動する
 
 systemctl --user status azito-misao       # Linux
 journalctl --user -u azito-misao -f
-launchctl print gui/$UID/com.azito.misao  # macOS
+azito misao status                        # macOS（状態に launchd のドメインが出る）
+launchctl print gui/$UID/com.azito.misao  # macOS（ドメインが user のときは user/$UID）
 ```
 
 - **新規インストール**: `install.sh` が設置・起動し、`.env` に `MISAO_SOCKET` を書きます（`--no-service` のときは設置せず、後で `azito misao install`）。
@@ -312,8 +336,7 @@ ln -sfn ~/.azito/hub/v0.3.0 ~/.azito/hub/current
 # サービス再起動
 systemctl --user restart azito  # Linux
 # or
-launchctl unload ~/Library/LaunchAgents/com.azito.hub.plist && \
-launchctl load ~/Library/LaunchAgents/com.azito.hub.plist    # macOS
+launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"    # macOS
 ```
 
 ## CLI コマンド
@@ -327,6 +350,7 @@ azito status         # サービス状態確認
 azito token show     # UI トークン表示
 azito token rotate   # UI トークン再生成
 azito misao status   # misao サービスの状態（install / update / start も同じ形）
+azito service status # ハブ自身のサービス（start / stop / restart / reload も同じ形。macOS は launchd のドメインも表示）
 azito version        # バージョン表示
 ```
 
@@ -355,7 +379,7 @@ AZITO_RELEASE_REPO=wireframeslayout/azito npm run build:hub
 
 ## macOS の手動更新（フォールバック）
 
-macOS（launchd）環境でも Settings → System から画面上で更新できます（`launchctl kickstart` で自動再起動）。画面更新が使えない場合のフォールバック手順として以下を残します。
+macOS（launchd）環境でも Settings → System から画面上で更新できます（読み込まれているドメインで `launchctl kickstart` して自動再起動）。画面更新が使えない場合のフォールバック手順として以下を残します。
 
 ```bash
 # 1. 最新バージョンを確認
@@ -386,7 +410,7 @@ tar xzf "$TARBALL" -C ~/.azito/hub/"$LATEST" --no-same-owner --no-same-permissio
 ln -sfn ~/.azito/hub/"$LATEST" ~/.azito/hub/current
 
 # 7. サービスを再起動
-launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
+launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"
 
 # 8. 健全性確認
 sleep 3 && curl -s http://localhost:3001/api/health | grep version
@@ -401,7 +425,7 @@ rm -f "$TARBALL" SHA256SUMS
 # 旧バージョンの symlink を復元
 ls ~/.azito/hub/  # 既存バージョンを確認
 ln -sfn ~/.azito/hub/<旧バージョン> ~/.azito/hub/current
-launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
+launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"
 ```
 
 ## トラブルシューティング
@@ -416,7 +440,7 @@ launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
 
 ```bash
 azito misao status                    # サービスが動いているか、同梱版との差
-systemctl --user status azito-misao   # Linux（macOS は launchctl print gui/$UID/com.azito.misao）
+systemctl --user status azito-misao   # Linux（macOS は `azito misao status` でドメインを確認し、`launchctl print <gui|user>/$UID/com.azito.misao`）
 ```
 
 停止していれば `azito misao start`、未設置なら `azito misao install` です。`azito misao status` に「restart the hub」と出ているときは、

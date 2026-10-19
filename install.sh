@@ -76,6 +76,19 @@ install_template() {
   echo "Installed $(basename "$dest") from bundled template."
 }
 
+# find_tailscale — prints the tailscale CLI to use, or fails when there is none. A Mac reached over SSH has a minimal
+# PATH that lacks Homebrew's bin directories, so the known locations are tried in turn (PATH is not rewritten).
+find_tailscale() {
+  local candidate
+  for candidate in tailscale /opt/homebrew/bin/tailscale /usr/local/bin/tailscale; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+      echo "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 # Refuse root
 if [ "$(id -u)" -eq 0 ]; then
   echo "ERROR: Do not run this installer as root." >&2
@@ -183,14 +196,16 @@ if ! command -v tmux >/dev/null 2>&1; then
   echo "  Install tmux later if you want to use tmux windows."
 fi
 
-if ! command -v tailscale >/dev/null 2>&1; then
+TAILSCALE_BIN="$(find_tailscale || true)"
+if [ -z "$TAILSCALE_BIN" ]; then
   echo ""
   echo "Tailscale is not installed (optional)."
   echo "  It is what lets you reach AZITO from other devices and enables push"
   echo "  notifications over HTTPS. Without it AZITO only serves 127.0.0.1."
   if [ "$PLATFORM" = "linux" ] && confirm "Install Tailscale now (runs the official installer with sudo)?" n; then
     curl -fsSL https://tailscale.com/install.sh | sh
-    if command -v tailscale >/dev/null 2>&1; then
+    TAILSCALE_BIN="$(find_tailscale || true)"
+    if [ -n "$TAILSCALE_BIN" ]; then
       echo "Tailscale installed. Run 'sudo tailscale up --ssh' afterwards to join your tailnet."
     else
       echo "WARNING: Tailscale install did not complete; continuing without it." >&2
@@ -289,8 +304,8 @@ if [ ! -f "$ENV_FILE" ]; then
   TS_DNS=""
   BIND_LINE="#AZITO_BIND=127.0.0.1"
   PUBLIC_URL_LINE="# AZITO_PUBLIC_URL=https://your-host.ts.net"
-  if command -v tailscale >/dev/null 2>&1; then
-    TS_DNS=$(tailscale status --self --json 2>/dev/null \
+  if [ -n "$TAILSCALE_BIN" ]; then
+    TS_DNS=$("$TAILSCALE_BIN" status --self --json 2>/dev/null \
       | grep -o '"DNSName"[[:space:]]*:[[:space:]]*"[^"]*"' \
       | head -1 | sed 's/.*"\([^"]*\)"$/\1/' | sed 's/\.$//')
   fi
@@ -304,7 +319,7 @@ if [ ! -f "$ENV_FILE" ]; then
     echo "Tailscale detected (${TS_DNS})."
     echo "  Set AZITO_PUBLIC_URL=https://${TS_DNS}"
     echo "  For remote access, run: tailscale serve --bg 3001"
-  elif command -v tailscale >/dev/null 2>&1; then
+  elif [ -n "$TAILSCALE_BIN" ]; then
     echo ""
     echo "Tailscale detected, but no MagicDNS name was found."
     echo "  To use AZITO remotely, enable MagicDNS and HTTPS certificates in Tailscale,"
@@ -372,14 +387,15 @@ case "${1:-}" in
     if [ "$(uname -s)" = "Linux" ]; then
       systemctl --user stop azito 2>/dev/null || echo "Service not running or not installed"
     elif [ "$(uname -s)" = "Darwin" ]; then
-      launchctl unload ~/Library/LaunchAgents/com.azito.hub.plist 2>/dev/null || echo "Service not running or not installed"
+      # The bundled CLI picks the launchd domain (gui/<uid>, or user/<uid> when nobody is logged in on the screen).
+      exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" service stop
     fi
     ;;
   status)
     if [ "$(uname -s)" = "Linux" ]; then
       systemctl --user status azito --no-pager 2>/dev/null || echo "Service not installed"
     elif [ "$(uname -s)" = "Darwin" ]; then
-      launchctl list | grep com.azito.hub || echo "Service not installed"
+      exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" service status
     fi
     ;;
   token)
@@ -390,6 +406,10 @@ case "${1:-}" in
     shift
     exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" misao "$@"
     ;;
+  service)
+    shift
+    exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" service "$@"
+    ;;
   version)
     if [ -f "${CURRENT}/version.txt" ]; then
       head -1 "${CURRENT}/version.txt"
@@ -398,7 +418,7 @@ case "${1:-}" in
     fi
     ;;
   *)
-    echo "Usage: azito {start|stop|status|token show|token rotate|misao status|misao install|misao update|misao start|version}"
+    echo "Usage: azito {start|stop|status|token show|token rotate|misao status|misao install|misao update|misao start|service status|service reload|version}"
     ;;
 esac
 WRAPPER
@@ -437,6 +457,19 @@ else
   fi
 fi
 
+# register_hub_service_launchd — loads the hub's LaunchAgent through the bundled CLI, which bootstraps it into gui/<uid>
+# when that domain exists and into user/<uid> when nobody is logged in on the screen (a Mac installed over SSH, #366).
+# `service reload` boots out a job that is already loaded and bootstraps it again, so the plist just written is the one
+# that runs (and a job macOS loaded by itself is never loaded twice). A failure is reported and fails the install.
+register_hub_service_launchd() {
+  if ! "${INSTALL_DIR}/node" "${INSTALL_DIR}/azito-hub.cjs" service reload; then
+    echo "" >&2
+    echo "ERROR: the AZITO launchd service could not be loaded (see the error above)." >&2
+    echo "  The files are installed. Fix the problem and run: azito service start" >&2
+    return 1
+  fi
+}
+
 # Service setup
 if [ "$NO_SERVICE" = true ]; then
   echo "Skipping service setup (--no-service)."
@@ -463,7 +496,7 @@ elif [ "$PLATFORM" = "darwin" ]; then
   mkdir -p "$PLIST_DIR"
   install_template "${INSTALL_DIR}/deploy/com.azito.hub.plist" "${PLIST_DIR}/com.azito.hub.plist"
 
-  launchctl load "${PLIST_DIR}/com.azito.hub.plist"
+  register_hub_service_launchd || exit 1
   echo "AZITO launchd service loaded."
   echo "Logs: ${PREFIX}/hub/azito.log"
 fi

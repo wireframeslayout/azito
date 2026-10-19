@@ -8,7 +8,7 @@ import { misaoTargetFor, readMisaoBundle, type MisaoBundle } from './MisaoBundle
 import { fakeBinaryFor, writeHubBundle as writeBundle } from './misaoBundleFixture';
 import { MisaoServiceService } from './MisaoServiceService';
 import { MisaoServiceError } from './MisaoServiceError';
-import type { MisaoServiceController } from './MisaoServiceController';
+import type { ServiceManager } from '../serviceManager';
 import { resolveMisaoPaths, type MisaoPaths } from './misaoPaths';
 import { readEnvValue } from '../../../shared/envFile';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
@@ -21,8 +21,8 @@ const HOST_TARGET = misaoTargetFor(process.platform, process.arch);
 const LEGACY_UNIT = '[Service]\nExecStart=/old/node /old/misao/current/misao.mjs serve\n';
 
 /** A service manager that records what it was asked, and opens the daemon's socket on start like the real daemon. */
-class FakeController implements MisaoServiceController {
-  readonly manager = 'systemd' as const;
+class FakeController implements ServiceManager {
+  readonly kind = 'systemd' as const;
   readonly templateName = 'azito-misao.service';
   readonly calls: string[] = [];
   installed = false;
@@ -45,7 +45,9 @@ class FakeController implements MisaoServiceController {
     this.current = 'inactive';
     await this.close();
   }
+  async restart(): Promise<void> { throw new Error('the misao service is never restarted'); }
   async state(): Promise<MisaoServiceState> { return this.current; }
+  async loadedDomain(): Promise<undefined> { return undefined; }
 
   private listen(): Promise<void> {
     fs.rmSync(this.socketPath, { force: true });

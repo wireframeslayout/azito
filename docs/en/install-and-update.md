@@ -65,7 +65,7 @@ The release bundle ships Node.js, but only to run **the hub process itself** (ju
 | git | **Yes** | Per-task worktrees. `install.sh` checks whether it is present and offers to install it (no version verification) |
 | tmux | Optional | Only for tmux windows. AZITO's panes run on the **bundled misao**, so you can install and use AZITO without it (`install.sh` just prints a note when it is missing). 3.4+ recommended |
 | Node.js v24+ | Feature-dependent | Browser runtime install (uses `npx`), supervised windows (`azs` starts the supervisor with `node`). **Not needed for the hub to boot** |
-| Tailscale | Optional | Access from other devices, push notifications over HTTPS |
+| Tailscale | Optional | Access from other devices, push notifications over HTTPS. On macOS the Homebrew locations (`/opt/homebrew/bin`, `/usr/local/bin`) are checked even when the SSH session's `PATH` lacks them |
 | claude / codex CLI | Optional | Only for the corresponding workers |
 
 misao (the headless pane server) ships inside the release. It needs no host install; `install.sh` sets it up as [a service separate from the hub](#misao-service).
@@ -129,7 +129,7 @@ rm -f azito-hub-${VERSION}-${PLATFORM}-${ARCH}.tar.gz SHA256SUMS
 |---|---|---|
 | Config file | `~/.azito/hub/.env` | `packages/server/.env` |
 | Data | `~/.azito/data/` | `<repo>/data.db`, `<repo>/data/` |
-| Applying changes | `systemctl --user restart azito` (macOS: `launchctl kickstart -k gui/$UID/com.azito.hub`) | `touch packages/server/src/main.ts` (`tsx watch` reloads) |
+| Applying changes | `systemctl --user restart azito` (macOS: `azito service restart`) | `touch packages/server/src/main.ts` (`tsx watch` reloads) |
 
 `~/.azito/hub/.env` sits **outside** the versioned directory (not `~/.azito/hub/<version>/`), so switching `current` during an update never loses your settings. The data directory `~/.azito/data/` holds the DB, keys and token — it is not where configuration goes.
 
@@ -199,8 +199,35 @@ journalctl --user -u azito -f
 cp ~/.azito/hub/current/deploy/com.azito.hub.plist ~/Library/LaunchAgents/
 sed -i '' "s|__AZITO_PREFIX__|$HOME/.azito|g" ~/Library/LaunchAgents/com.azito.hub.plist
 
-launchctl load ~/Library/LaunchAgents/com.azito.hub.plist
+azito service start    # bootstraps into gui/<uid>, or user/<uid> when nobody is logged in on the screen
 ```
+
+### macOS: installing over SSH while nobody is logged in on the screen
+
+launchd keeps two per-user domains. `gui/<uid>` exists only while that user is logged in on the Mac's screen; `user/<uid>`
+exists as soon as the user has any session (an SSH login is enough). A LaunchAgent in `~/Library/LaunchAgents` is loaded by
+macOS itself into `gui/<uid>` when the user logs in on the screen.
+
+- **Installing over SSH on a Mac with nobody logged in on the screen**: `launchctl print gui/<uid>` fails (exit 125), so the
+  hub (`com.azito.hub`) and misao (`com.azito.misao`) are bootstrapped into `user/<uid>` and start right away. Where
+  `gui/<uid>` exists they go into `gui/<uid>` as before.
+- **Which domain a service runs in** is shown by `azito service status` (hub), `azito misao status` and
+  `GET /api/system/misao` (`serviceDomain`: `gui` or `user`).
+- **No second copy**: a service that is already loaded into either domain stays there. `azito service start|stop|restart`,
+  `azito misao start|update` and the in-app update all use the domain it is loaded into (`kickstart`, `bootout` and `print` too),
+  and none of them loads it into the other one. `azito service stop` and `reload` boot it out of *every* domain it is
+  loaded into. `install.sh` boots out a hub job that is already loaded and loads it again, so the plist it just wrote is the one that runs.
+- **A failed load is an error**: `install.sh` prints `launchctl`'s message and exits non-zero; the files stay installed, and
+  `azito service start` retries after the cause is fixed.
+- **After someone logs in on the screen later**: check that only one copy is loaded, one domain per service:
+
+  ```bash
+  launchctl print gui/$UID/com.azito.hub  >/dev/null 2>&1 && echo "hub: gui"
+  launchctl print user/$UID/com.azito.hub >/dev/null 2>&1 && echo "hub: user"
+  ```
+
+  If both print, run `azito service stop` (boots it out of both) and then `azito service start`. Check misao the same way with
+  `com.azito.misao`; booting a misao copy out closes the panes it hosts, so do that deliberately.
 
 ### misao service
 
@@ -223,7 +250,8 @@ azito misao start     # start an installed service that is stopped
 
 systemctl --user status azito-misao       # Linux
 journalctl --user -u azito-misao -f
-launchctl print gui/$UID/com.azito.misao  # macOS
+azito misao status                        # macOS (the status line shows the launchd domain)
+launchctl print gui/$UID/com.azito.misao  # macOS (user/$UID when the domain shown is user)
 ```
 
 - **Fresh install**: `install.sh` sets it up, starts it and writes `MISAO_SOCKET` to `.env` (with `--no-service` it installs nothing; run `azito misao install` later).
@@ -310,8 +338,7 @@ ln -sfn ~/.azito/hub/v0.3.0 ~/.azito/hub/current
 # Restart the service
 systemctl --user restart azito  # Linux
 # or
-launchctl unload ~/Library/LaunchAgents/com.azito.hub.plist && \
-launchctl load ~/Library/LaunchAgents/com.azito.hub.plist    # macOS
+launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"    # macOS
 ```
 
 ## CLI Commands
@@ -325,6 +352,7 @@ azito status         # Check service status
 azito token show     # Show UI token
 azito token rotate   # Regenerate UI token
 azito misao status   # misao service state (install / update / start take the same form)
+azito service status # the hub's own service (start / stop / restart / reload take the same form; macOS also shows the launchd domain)
 azito version        # Show version
 ```
 
@@ -353,7 +381,7 @@ AZITO_RELEASE_REPO=wireframeslayout/azito npm run build:hub
 
 ## Manual Update on macOS (Fallback)
 
-macOS (launchd) supports in-app updates from Settings → System (restarts via `launchctl kickstart`). The steps below serve as a fallback when the in-app updater is not available.
+macOS (launchd) supports in-app updates from Settings → System (restarts via `launchctl kickstart`, in the domain the service is loaded into). The steps below serve as a fallback when the in-app updater is not available.
 
 ```bash
 # 1. Check the latest version
@@ -384,7 +412,7 @@ tar xzf "$TARBALL" -C ~/.azito/hub/"$LATEST" --no-same-owner --no-same-permissio
 ln -sfn ~/.azito/hub/"$LATEST" ~/.azito/hub/current
 
 # 7. Restart the service
-launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
+launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"
 
 # 8. Health check
 sleep 3 && curl -s http://localhost:3001/api/health | grep version
@@ -399,7 +427,7 @@ If the update fails, revert to the previous version:
 # Restore the old version symlink
 ls ~/.azito/hub/  # list existing versions
 ln -sfn ~/.azito/hub/<old-version> ~/.azito/hub/current
-launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
+launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "user/$(id -u)/com.azito.hub"
 ```
 
 ## Troubleshooting
@@ -414,7 +442,7 @@ launchctl kickstart -k "gui/$(id -u)/com.azito.hub"
 
 ```bash
 azito misao status                    # is the service running, and how it differs from the bundled version
-systemctl --user status azito-misao   # Linux (macOS: launchctl print gui/$UID/com.azito.misao)
+systemctl --user status azito-misao   # Linux (macOS: `azito misao status` shows the domain; `launchctl print <gui|user>/$UID/com.azito.misao`)
 ```
 
 If it is stopped run `azito misao start`; if it is not installed run `azito misao install`. When `azito misao status` says to restart the hub,

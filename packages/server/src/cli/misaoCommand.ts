@@ -3,10 +3,11 @@ import readline from 'readline';
 import type { MisaoServiceStatus } from '@azito/shared';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
-import { createMisaoServiceController, runCommand } from '../modules/system/misao/MisaoServiceController';
+import type { HostEnv } from '../shared/os/hostEnv';
+import { createServiceManager, runCommand } from '../modules/system/serviceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoServiceError } from '../modules/system/misao/MisaoServiceError';
-import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { MISAO_SERVICE, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 
 const USAGE = `Usage: azito misao <command> [options]
 
@@ -67,6 +68,7 @@ function ask(question: string): Promise<boolean> {
 function printStatus(status: MisaoServiceStatus): void {
   const lines = [
     `service:   ${status.serviceInstalled ? `${status.serviceManager} (${status.serviceState ?? 'unknown'})` : 'not installed'}`,
+    ...(status.serviceDomain ? [`domain:    ${status.serviceDomain}`] : []),
     `bundled:   ${status.bundledVersion ?? '-'}`,
     `installed: ${status.installedVersion ?? '-'}`,
     `daemon:    ${status.daemon.reachable ? 'reachable' : 'not reachable'}${status.daemon.version ? ` (misao ${status.daemon.version})` : ''}`,
@@ -79,7 +81,7 @@ function printStatus(status: MisaoServiceStatus): void {
 }
 
 /** `azito misao ...`: install, update, start and inspect the AZITO-managed misao service from the bundled hub. */
-export async function misaoCommand(argv: string[], platform: NodeJS.Platform, secretFileGuard: SecretFileGuard): Promise<void> {
+export async function misaoCommand(argv: string[], host: Pick<HostEnv, 'platform' | 'homeDir'>, secretFileGuard: SecretFileGuard): Promise<void> {
   try {
     const args = parseArgs(argv);
     if (!args.command || !['status', 'install', 'update', 'start'].includes(args.command)) {
@@ -90,11 +92,14 @@ export async function misaoCommand(argv: string[], platform: NodeJS.Platform, se
 
     const bundleRoot = getBundleRoot();
     const prefix = args.prefix ?? resolveInstallPrefix(bundleRoot);
+    const serviceManager = createServiceManager(host, MISAO_SERVICE, runCommand);
     const service = new MisaoServiceService({
       paths: prefix ? pathsOrUsageError(prefix) : null,
       bundle: readMisaoBundle(bundleRoot),
-      controller: createMisaoServiceController(platform, runCommand),
+      controller: 'manager' in serviceManager ? serviceManager.manager : null,
+      ...('error' in serviceManager ? { controllerError: serviceManager.error.message } : {}),
       env: process.env,
+      homeDir: host.homeDir,
       secretFileGuard,
     });
 

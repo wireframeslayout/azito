@@ -34,6 +34,16 @@ describe('resolvePublicUrl', () => {
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
+  it("finds Homebrew's tailscale when the hub's PATH (a launchd service on a Mac) does not have it", async () => {
+    execFileMock.mockImplementation((cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout?: string) => void) => {
+      if (cmd === '/opt/homebrew/bin/tailscale') return cb(null, '100.64.1.42\n');
+      cb(Object.assign(new Error('spawn tailscale ENOENT'), { code: 'ENOENT' }));
+    });
+    const url = await resolvePublicUrl(3001, '100.64.1.42');
+    expect(url).toBe('http://100.64.1.42:3001');
+    expect(execFileMock.mock.calls.map((c) => c[0])).toEqual(['tailscale', '/opt/homebrew/bin/tailscale']);
+  });
+
   it('falls back to localhost when tailscale is not available', async () => {
     execFileMock.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null) => void) => {
       cb(new Error('command not found'));

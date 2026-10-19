@@ -8,7 +8,7 @@ import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { bundleFilesFor, sha256File, type MisaoBundle, type MisaoTargetFiles } from './MisaoBundle';
 import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
-import type { MisaoServiceController } from './MisaoServiceController';
+import type { ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 
@@ -19,8 +19,10 @@ export interface MisaoServiceDeps {
   pathsError?: string;
   /** Null for a hub that carries no misao (source checkout, or a release without one). */
   bundle: MisaoBundle | null;
-  /** Null on a host without systemd / launchd. */
-  controller: MisaoServiceController | null;
+  /** Null on a host without systemd / launchd; `controllerError` then says why. */
+  controller: ServiceManager | null;
+  /** Why `controller` is null (Windows is not supported yet, an unknown OS): shown instead of a bare "unsupported platform". */
+  controllerError?: string;
   env: NodeJS.ProcessEnv;
   /** Restricts the hub's `.env` (it holds tokens) when MISAO_SOCKET is written into it. */
   secretFileGuard: SecretFileGuard;
@@ -73,13 +75,13 @@ export class MisaoServiceService {
     return undefined;
   }
 
-  private requireManaged(): { bundle: MisaoBundle; controller: MisaoServiceController } {
+  private requireManaged(): { bundle: MisaoBundle; controller: ServiceManager } {
     const { bundle, controller } = this.deps;
     const reason = this.unmanagedReason();
     if (reason === 'invalid_prefix') throw new MisaoServiceError('not_managed', this.deps.pathsError!);
     if (reason === 'source_install') throw new MisaoServiceError('not_managed', 'This hub runs from a source checkout. It connects to MISAO_SOCKET (or the default socket) and does not install a service.');
     if (!bundle) throw new MisaoServiceError('not_managed', 'This hub carries no bundled misao, so it cannot install the service.');
-    if (!controller) throw new MisaoServiceError('not_managed', 'This host has neither systemd nor launchd, so the misao service cannot be managed.');
+    if (!controller) throw new MisaoServiceError('not_managed', this.deps.controllerError ?? 'This host has neither systemd nor launchd, so the misao service cannot be managed.');
     return { bundle, controller };
   }
 
@@ -106,6 +108,8 @@ export class MisaoServiceService {
       ? await hub.probeDaemon()
       : { reachable: this.deps.paths ? await isSocketListening(this.deps.paths.socket) : false };
     const serviceInstalled = controller?.isInstalled() ?? false;
+    const unmanagedDetail = this.deps.pathsError ?? (reason === 'unsupported_platform' ? this.deps.controllerError : undefined);
+    const domain = controller && serviceInstalled ? await controller.loadedDomain() : undefined;
     const installedVersion = this.installedVersion();
     const socketSetting = this.socketSetting();
     const updateAvailable = !!bundle && serviceInstalled && (
@@ -116,10 +120,11 @@ export class MisaoServiceService {
     return {
       managed: reason === undefined,
       ...(reason ? { unmanagedReason: reason } : {}),
-      ...(this.deps.pathsError ? { unmanagedDetail: this.deps.pathsError } : {}),
-      ...(controller ? { serviceManager: controller.manager } : {}),
+      ...(unmanagedDetail ? { unmanagedDetail } : {}),
+      ...(controller ? { serviceManager: controller.kind } : {}),
       serviceInstalled,
       ...(controller && serviceInstalled ? { serviceState: await controller.state() } : {}),
+      ...(domain ? { serviceDomain: domain } : {}),
       ...(bundle ? { bundledVersion: bundle.version } : {}),
       ...(installedVersion ? { installedVersion } : {}),
       daemon,
@@ -171,7 +176,7 @@ export class MisaoServiceService {
   }
 
   /** Writes MISAO_SOCKET into the hub's `.env`, and starts the service when it is not running (never restarts a running one). */
-  private async pointHubAndStart(controller: MisaoServiceController): Promise<void> {
+  private async pointHubAndStart(controller: ServiceManager): Promise<void> {
     upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket, this.deps.secretFileGuard);
     if ((await controller.state()) !== 'active') {
       await controller.start();
@@ -180,7 +185,7 @@ export class MisaoServiceService {
   }
 
   /** Points `current` at the bundled version and writes its unit, with nothing running. A launchd job is booted out first: it keeps the definition of a loaded job. */
-  private async registerBundled(bundle: MisaoBundle, controller: MisaoServiceController, installed: string | undefined): Promise<void> {
+  private async registerBundled(bundle: MisaoBundle, controller: ServiceManager, installed: string | undefined): Promise<void> {
     if (installed !== bundle.version) this.switchCurrent(bundle.version);
     await controller.install(this.renderUnit(bundle, controller));
   }
@@ -191,7 +196,7 @@ export class MisaoServiceService {
    * stopped and the previous link, unit file and `.env` are put back: the old unit may run `node current/misao.mjs`, which
    * the new layout no longer provides. The old release is NOT started: it was not running.
    */
-  private async moveStoppedInstall(bundle: MisaoBundle, controller: MisaoServiceController, installed: string): Promise<void> {
+  private async moveStoppedInstall(bundle: MisaoBundle, controller: ServiceManager, installed: string): Promise<void> {
     const previousDefinition = controller.readDefinition();
     const envFile = this.paths.hubEnvFile;
     const previousEnv = fs.existsSync(envFile) ? fs.readFileSync(envFile) : undefined;
@@ -277,7 +282,7 @@ export class MisaoServiceService {
    * only slow to open its socket, it is left alone (restoring would kill a daemon that is about to be ready). If the restore
    * fails too, both errors are reported with the manual steps.
    */
-  private async recoverFromFailedUpdate(cause: unknown, previous: string, previousDefinition: string, bundledVersion: string, controller: MisaoServiceController): Promise<never> {
+  private async recoverFromFailedUpdate(cause: unknown, previous: string, previousDefinition: string, bundledVersion: string, controller: ServiceManager): Promise<never> {
     const causeText = cause instanceof Error ? cause.message : String(cause);
     const manual = `To restore the previous version by hand: ln -sfn ${previous} ${this.paths.current} && azito misao start`;
     if (cause instanceof MisaoServiceError && cause.code === 'daemon_not_ready' && (await controller.state()) === 'active') {
@@ -347,10 +352,10 @@ export class MisaoServiceService {
     fs.renameSync(tmp, this.paths.current);
   }
 
-  private renderUnit(bundle: MisaoBundle, controller: MisaoServiceController): string {
+  private renderUnit(bundle: MisaoBundle, controller: ServiceManager): string {
     return renderMisaoUnit({
       template: fs.readFileSync(path.join(bundle.templatesDir, controller.templateName), 'utf-8'),
-      manager: controller.manager,
+      manager: controller.kind,
       prefix: this.paths.prefix,
       servicePath: buildServicePath(this.deps.env, this.deps.homeDir ?? os.homedir(), fs.existsSync),
     });

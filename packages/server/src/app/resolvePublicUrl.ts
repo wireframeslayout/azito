@@ -1,14 +1,9 @@
-import { execFile } from 'child_process';
+import { runTailscale } from '../shared/os/tailscale';
 
 export async function resolvePublicUrl(port: number, bind: string): Promise<string> {
   if (process.env.AZITO_PUBLIC_URL) return process.env.AZITO_PUBLIC_URL;
   try {
-    const ip = await new Promise<string>((resolve, reject) => {
-      execFile('tailscale', ['ip', '-4'], { timeout: 3000 }, (err, stdout) => {
-        if (err) return reject(err);
-        resolve(stdout.trim().split('\n')[0]);
-      });
-    });
+    const ip = (await runTailscale(['ip', '-4'], 3000)).trim().split('\n')[0];
     if (/^\d+\.\d+\.\d+\.\d+$/.test(ip)) {
       if (bind === '127.0.0.1') {
         console.warn(

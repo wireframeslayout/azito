@@ -30,10 +30,10 @@ import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { probeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
-import { createMisaoServiceController, runCommand } from '../modules/system/misao/MisaoServiceController';
+import { createServiceManager, runCommand } from '../modules/system/serviceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
-import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { MISAO_SERVICE, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
@@ -551,7 +551,7 @@ function buildExecuteTaskUseCase(
   );
 }
 
-function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform, secretFileGuard: SecretFileGuard): MisaoServiceService {
+function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): MisaoServiceService {
   const bundleRoot = getBundleRoot();
   const prefix = resolveInstallPrefix(bundleRoot);
   let paths: MisaoPaths | null = null;
@@ -563,12 +563,15 @@ function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform, secret
     pathsError = err instanceof Error ? err.message : String(err);
     console.warn(`[misao] the managed misao service is unavailable: ${pathsError}`);
   }
+  const serviceManager = createServiceManager(hostEnv, MISAO_SERVICE, runCommand);
   return new MisaoServiceService({
     paths,
     ...(pathsError ? { pathsError } : {}),
     bundle: readMisaoBundle(bundleRoot),
-    controller: createMisaoServiceController(platform, runCommand),
+    controller: 'manager' in serviceManager ? serviceManager.manager : null,
+    ...('error' in serviceManager ? { controllerError: serviceManager.error.message } : {}),
     env: process.env,
+    homeDir: hostEnv.homeDir,
     secretFileGuard,
     hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
   });
@@ -579,7 +582,7 @@ function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misa
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
   const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
-  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv.platform, secretFileGuard) };
+  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv, secretFileGuard) };
 }
 
 function buildAgentActivityMonitor(

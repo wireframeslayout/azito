@@ -36,6 +36,11 @@ export interface MisaoServiceStatus {
   /** The unit / plist file exists. */
   serviceInstalled: boolean;
   serviceState?: MisaoServiceState;
+  /**
+   * launchd only: the domain the job is loaded into. `gui` = the logged-in screen session, `user` = the background
+   * domain a Mac uses when nobody is logged in on the screen (installed over SSH). Absent when the job is not loaded.
+   */
+  serviceDomain?: 'gui' | 'user';
   /** The misao release bundled with this hub. */
   bundledVersion?: string;
   /** The version `misao/current` points at; absent when nothing is installed. */

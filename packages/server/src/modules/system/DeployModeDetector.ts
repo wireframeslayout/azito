@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { isReleaseMode } from '../../shared/releaseInfo';
-import type { ServiceManagerKind } from './serviceControl';
+import type { ServiceManagerKind } from './serviceManager';
 
 export type DeployMode = 'systemd' | 'launchd' | 'source';
 
