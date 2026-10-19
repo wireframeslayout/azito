@@ -7,7 +7,7 @@ import * as path from 'path';
  * code runs programs with `transport.run(<CommandSpec>)` (no shell), or the file operations of IFileOps (P7). This test
  * counts the calls that remain, per file, and fails when a count differs from the table below:
  *
- * - a file that gained a call: use `run`, or `IFileOps` once it exists; do not add the call here;
+ * - a file that gained a call: use `run`, or `transport.files()` (IFileOps); do not add the call here;
  * - a file that lost a call: lower its number (delete the line at zero), so the ratchet only ever tightens.
  *
  * What it counts, in non-test code, on lines that are not comments: a call on a receiver that is a transport —
@@ -20,17 +20,16 @@ const EXEC_STRING_CALL = /(?:[tT]ransport|\btarget|getTransport\([^)]*\))\.exec\
 
 /** Remaining calls by file, relative to src/, grouped by what is to replace them. */
 const REMAINING: Record<string, number> = {
-  // C-1: shell file operations (find / test / wc / cat / rm / mkdir...) → IFileOps (P7)
-  'modules/files/FileBrowseService.ts': 37,
-  'modules/files/FileSearchService.ts': 1, // the name search: `find | head`
-  'modules/git/GitDiffService.ts': 3, // an untracked file's size / binary check / content: wc, head | tr, cat
-  'modules/git/PathContainment.ts': 1,
-  'modules/git/RemoteWorktreeService.ts': 5, // mkdir -p, test -d (x2), rm -rf, and the private wrapper
-  'modules/git/RepoDiscoveryService.ts': 2, // `find` for .git, and the path check
+  // C-1: shell file operations (find / test / wc / cat / rm / mkdir...) → IFileOps (P7). What is left:
+  // - the shell implementation of IFileOps for an agent registered before its OS was recorded (a Unix one without
+  //   /api/fileops). AgentTransport.files() chooses it once; every other file operation goes through IFileOps
+  'modules/servers/transport/ShellFileOps.ts': 9,
+  // - not yet moved: the file-name search (`find -printf | sort` with find's own -regex / -path dialect), the sync of the
+  //   sidekick tree (tar + base64 on the target) and the session scans (`find -newermt`, `head -1` of each rollout)
+  'modules/files/FileSearchService.ts': 1,
   'modules/sidekicks/SidekickSyncService.ts': 6,
   'modules/agents/claude/SessionStrategy.ts': 1,
   'modules/agents/codex/SessionStrategy.ts': 1,
-  'modules/agents/claude/ensureClaudeTrust.ts': 1,
   'modules/windows/WindowRespawnService.ts': 1,
   'modules/transcripts/WindowSessionResolver.ts': 2,
   'modules/tasks/execution/WorkerWaiter.ts': 2,

@@ -2,1097 +2,497 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { createHash } from 'crypto';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { FileBrowseService, FileBrowseError } from './FileBrowseService';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { FileBrowseService, FileBrowseError, MAX_FILE_SIZE } from './FileBrowseService';
 import type { ServerConfig } from '../servers/Server';
-import { shellQuote as sq } from '../../shared/shellQuote';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
+import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
 
-function createLocalServer(dir: string): ServerConfig {
-  return {
-    name: 'test-local',
-    type: 'local',
-    directory: dir,
-  } as unknown as ServerConfig;
+const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
+const localSrv = { type: 'local', name: 'local' } as unknown as ServerConfig;
+
+function localFileOps(dir: string): LocalFileOps {
+  return new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env));
 }
 
-// Minimal mock of TransportFactory for testing shell command construction
-function createMockTransport(responses?: Record<string, string>) {
-  const commands: string[] = [];
-  return {
-    commands,
-    getTransport: () => ({
-      exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (responses) {
-          for (const [pattern, stdout] of Object.entries(responses)) {
-            if (cmd.includes(pattern)) return { stdout, stderr: '', code: 0 };
-          }
-        }
-        return { stdout: '100', stderr: '', code: 0 };
-      },
-    }),
-  };
+/** A service over the files of this machine: the real file operations behind the factory. */
+function serviceFor(ops: IFileOps): FileBrowseService {
+  return new FileBrowseService({ getFileOps: () => ops });
 }
 
-describe('FileBrowseService shell quoting', () => {
-  it('quotes filePath with single quotes in remote stat commands', async () => {
-    const mock = createMockTransport();
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    try {
-      await svc.getFileContent(srv as any, '/tmp/test$(id).txt');
-    } catch {}
-
-    const statCmd = mock.commands[0];
-    expect(statCmd).toContain("'/tmp/test$(id).txt'");
-    expect(statCmd).not.toContain('"');
-  });
-
-  it('escapes single quotes in filePath for remote commands', async () => {
-    const mock = createMockTransport();
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    try {
-      await svc.getFileContent(srv as any, "/tmp/test'file.txt");
-    } catch {}
-
-    const statCmd = mock.commands[0];
-    expect(statCmd).toContain("'/tmp/test'\\''file.txt'");
-  });
-
-  // Windows では動かない: POSIX 前提（FIFO 等の特殊ファイルを作る）
-  it.skipIf(process.platform === 'win32')('rejects non-regular files on local server', async () => {
-    const svc = new FileBrowseService({} as any);
-    const srv = { type: 'local', name: 'local' };
-
-    await expect(
-      svc.getFileContent(srv as any, '/dev/zero'),
-    ).rejects.toThrow('Not a regular file');
-  });
-
-  // `base64 -- <file>` (argument form) is GNU-only for the `--` marker in front of a filename — BSD/macOS
-  // `base64` rejects it outright, so the read command uses `< file` redirection instead, which both
-  // implementations accept identically.
-  it('uses redirection (not -- argument form) in the remote base64 read command', async () => {
-    const mock = createMockTransport({ 'test -f': 'ok' });
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    try {
-      await svc.getFileContent(srv as any, '/tmp/normal.txt');
-    } catch {}
-
-    const base64Cmd = mock.commands.find(c => c.includes('base64'));
-    expect(base64Cmd).toBeDefined();
-    expect(base64Cmd).toContain('base64 -w0 <');
-    expect(base64Cmd).toContain('base64 <');
-    expect(base64Cmd).not.toContain('base64 --');
-    expect(base64Cmd).toContain('AZITO_READ_OK');
-  });
-
-  // Issue #27 review Critical 1: the mtime lookup at the end of the remote
-  // getFileContent() path used to interpolate filePath inside bare double
-  // quotes (`stat -c%Y "${filePath}"`), which lets a path containing
-  // `$(...)` execute as a subshell. Drives a full success path (typeCheck ->
-  // sizeResult -> base64 read -> mtime) so the mtime command itself is inspected,
-  // not just the first (already-quoted) typeCheck command the two tests
-  // above cover.
-  it('quotes filePath in the mtime lookup command, not raw double-quote interpolation', async () => {
-    const commands: string[] = [];
-    const injectionPath = '/tmp/test$(touch /tmp/pwned).txt';
-    const mock = {
-      commands,
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
-        if (cmd.includes('base64')) {
-          return { stdout: `${Buffer.from('hello', 'utf-8').toString('base64')}\nAZITO_READ_OK\n`, stderr: '', code: 0 };
-        }
-        // mtime lookup (stat -c%.Y / -c%Y / -f%m chain)
-        return { stdout: '1750000000\n', stderr: '', code: 0 };
-      } }),
-    };
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    const result = await svc.getFileContent(srv as any, injectionPath);
-    expect('mtime' in result && result.mtime).toBe(1750000000 * 1000);
-
-    const mtimeCmd = commands[commands.length - 1];
-    expect(mtimeCmd).toContain("'" + injectionPath.replace(/'/g, "'\\''") + "'");
-    // The raw path must never appear inside a bare double-quoted segment —
-    // that is exactly the shape ("${filePath}") that let $(...) expand.
-    expect(mtimeCmd).not.toContain(`"${injectionPath}"`);
-    expect(mtimeCmd).not.toContain('"');
-  });
-});
-
-// Review Important 1 (remote read): the old `cat -- <file>` read went through the persistent SSH
-// shell's marker-delimited output pipeline (SshClient.drainBuffer), which strips exactly one leading
-// and one trailing newline from every command's stdout to remove the shell's own newlines around the
-// `\x02AGENTMGR_B/E` markers. For `cat` output that boundary trim is indistinguishable from "the
-// file's own trailing newline" — a normal text file ending in `\n` had it silently stripped, so the
-// hash the client fetched (from the newline-stripped content) could never match the real on-disk bytes
-// `sha256sum` sees at save time, and every such save 409'd (or, with `force`, truncated the newline for
-// real). These tests model that same boundary-stripping behavior on the mocked stdout to prove the
-// base64-based read is immune to it: base64's alphabet contains no `\r`/`\n`, so a boundary trim can
-// only ever eat wrapping whitespace `base64` itself added, never a content byte.
-describe('FileBrowseService.getFileContent (remote) — lossless base64 read', () => {
-  // Mirrors SshClient.drainBuffer's exact boundary-trim (see SshClient.ts): strip one leading
-  // `\r?\n`, one trailing `\r?\n` or `\r`, then normalize any remaining `\r\n` to `\n`.
-  function simulateSshBoundaryTrim(output: string): string {
-    return output.replace(/^\r?\n/, '').replace(/\r?\n$/, '').replace(/\r$/, '').replace(/\r\n/g, '\n');
+async function statusOf(run: Promise<unknown>): Promise<number | string> {
+  try {
+    await run;
+  } catch (err) {
+    return err instanceof FileBrowseError ? err.status : `unexpected: ${(err as Error).message}`;
   }
+  return 'resolved';
+}
 
-  it('reads a file ending in a newline and produces a hash matching the exact original bytes', async () => {
-    const originalContent = 'line one\nline two\n'; // trailing newline — the corruption-prone case
-    const b64 = Buffer.from(originalContent, 'utf-8').toString('base64');
-    const expectedHash = createHash('sha256').update(originalContent, 'utf-8').digest('hex');
-
-    const mock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
-          return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
-        }
-        if (cmd.includes('base64')) {
-          // Simulate the persistent-shell boundary trim landing on the base64 payload + success marker,
-          // exactly as it would on real stdout — base64 has no \r/\n of its own here (single line, no
-          // wrapping), so trimming a "leading/trailing newline" only ever eats the marker's own newlines.
-          return { stdout: simulateSshBoundaryTrim(`${b64}\nAZITO_READ_OK`), stderr: '', code: 0 };
-        }
-        // mtime lookup
-        return { stdout: '1750000000\n', stderr: '', code: 0 };
-      } }),
-    };
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    const result = await svc.getFileContent(srv as any, '/tmp/trailing-newline.txt');
-    expect('content' in result).toBe(true);
-    if ('content' in result) {
-      expect(result.content).toBe(originalContent);
-      expect(result.hash).toBe(expectedHash);
-    }
-  });
-
-  it('recovers the exact bytes even when the shell boundary-trim eats a synthetic wrap newline', async () => {
-    // Simulate a non-GNU `base64` build that wraps output at 76 chars (the `-w0` fallback branch),
-    // where the SSH shell's boundary trim removes a leading/trailing newline that is pure formatting,
-    // not file content. Whitespace-stripping the whole payload in Node must still recover byte-exact
-    // content regardless of exactly where that formatting newline landed.
-    const originalContent = 'x'.repeat(120) + '\n';
-    const rawB64 = Buffer.from(originalContent, 'utf-8').toString('base64');
-    const wrapped = rawB64.replace(/(.{76})/g, '$1\n'); // simulate non -w0 base64 wrapping
-    const expectedHash = createHash('sha256').update(originalContent, 'utf-8').digest('hex');
-
-    const mock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) {
-          return { stdout: `${Buffer.byteLength(originalContent, 'utf-8')}\n`, stderr: '', code: 0 };
-        }
-        if (cmd.includes('base64')) {
-          return { stdout: simulateSshBoundaryTrim(`${wrapped}\nAZITO_READ_OK`), stderr: '', code: 0 };
-        }
-        return { stdout: '1750000000\n', stderr: '', code: 0 };
-      } }),
-    };
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    const result = await svc.getFileContent(srv as any, '/tmp/wrapped.txt');
-    expect('content' in result).toBe(true);
-    if ('content' in result) {
-      expect(result.content).toBe(originalContent);
-      expect(result.hash).toBe(expectedHash);
-    }
-  });
-
-  // Review Important 2: both base64 invocations failing (missing binary, transient error) or the file
-  // vanishing between `stat` and the read used to leave stdout empty, which was silently decoded as "an
-  // empty file" and returned as a new, incorrectly-hashed empty document. The AZITO_READ_OK success
-  // marker distinguishes that from a genuinely empty file.
-  it('rejects the read when the base64 command produces no success marker (empty output)', async () => {
-    const mock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
-        if (cmd.includes('base64')) return { stdout: '', stderr: '', code: 0 };
-        return { stdout: '1750000000\n', stderr: '', code: 0 };
-      } }),
-    };
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    await expect(svc.getFileContent(srv as any, '/tmp/vanished.txt')).rejects.toThrow('Failed to read file');
-  });
-
-  // Review Important 2 (size cross-check): a transport hiccup that silently truncates the base64 payload
-  // but still reports the success marker must not be accepted as a shorter-but-valid document — the
-  // decoded byte count is compared against the `stat` size fetched moments earlier.
-  it('rejects the read when the decoded byte count does not match the stat size', async () => {
-    const truncatedB64 = Buffer.from('hel', 'utf-8').toString('base64'); // 3 bytes, but stat says 5
-    const mock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('test -f')) return { stdout: 'ok\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%s') || cmd.includes('stat -f%z')) return { stdout: '5\n', stderr: '', code: 0 };
-        if (cmd.includes('base64')) return { stdout: `${truncatedB64}\nAZITO_READ_OK\n`, stderr: '', code: 0 };
-        return { stdout: '1750000000\n', stderr: '', code: 0 };
-      } }),
-    };
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' };
-
-    await expect(svc.getFileContent(srv as any, '/tmp/truncated.txt')).rejects.toThrow('content size mismatch');
-  });
-});
-
-describe('FileBrowseService.writeFileContent', () => {
+describe('FileBrowseService on a real directory', () => {
   let tmpDir: string;
-  let service: FileBrowseService;
+  let svc: FileBrowseService;
 
   beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
-    service = new FileBrowseService({} as any);
+    tmpDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-')));
+    svc = serviceFor(localFileOps(tmpDir));
   });
-
   afterEach(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it('writes file and returns mtime', async () => {
-    const filePath = path.join(tmpDir, 'test.txt');
-    fs.writeFileSync(filePath, 'original');
-    const srv = createLocalServer(tmpDir);
-    const result = await service.writeFileContent(srv, filePath, 'updated');
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('updated');
-    expect(result.mtime).toBeGreaterThan(0);
+  describe('listFiles', () => {
+    it('lists directories first, then files by name, with sizes only on files', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'zdir'));
+      fs.writeFileSync(path.join(tmpDir, 'b.txt'), 'hello');
+      fs.writeFileSync(path.join(tmpDir, 'a.txt'), '');
+      expect(await svc.listFiles(localSrv, tmpDir, false)).toEqual([
+        { name: 'zdir', type: 'directory', path: path.join(tmpDir, 'zdir') },
+        { name: 'a.txt', type: 'file', path: path.join(tmpDir, 'a.txt'), size: 0 },
+        { name: 'b.txt', type: 'file', path: path.join(tmpDir, 'b.txt'), size: 5 },
+      ]);
+    });
+
+    it('hides dotfiles unless asked', async () => {
+      fs.writeFileSync(path.join(tmpDir, '.env'), 'x');
+      fs.writeFileSync(path.join(tmpDir, 'a'), 'x');
+      expect((await svc.listFiles(localSrv, tmpDir, false)).map((e) => e.name)).toEqual(['a']);
+      expect((await svc.listFiles(localSrv, tmpDir, true)).map((e) => e.name)).toEqual(['.env', 'a']);
+    });
+
+    it('does not double the separator for a directory given with a trailing one', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'a'), '');
+      expect((await svc.listFiles(localSrv, tmpDir + path.sep, false))[0].path).toBe(tmpDir + path.sep + 'a');
+    });
+
+    it('lets the reason a directory cannot be listed through', async () => {
+      await expect(svc.listFiles(localSrv, path.join(tmpDir, 'missing'), false)).rejects.toThrow(/ENOENT/);
+    });
   });
 
-  it('rejects content exceeding MAX_FILE_SIZE', async () => {
-    const filePath = path.join(tmpDir, 'large.txt');
-    fs.writeFileSync(filePath, 'x');
-    const srv = createLocalServer(tmpDir);
-    const bigContent = 'x'.repeat(501 * 1024);
-    await expect(service.writeFileContent(srv, filePath, bigContent))
-      .rejects.toThrow(FileBrowseError);
+  describe('listDirectories', () => {
+    it('completes a partial name case-insensitively, skipping files and hidden directories', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'Project-A'));
+      fs.mkdirSync(path.join(tmpDir, 'project-b'));
+      fs.mkdirSync(path.join(tmpDir, '.project-hidden'));
+      fs.mkdirSync(path.join(tmpDir, 'other'));
+      fs.writeFileSync(path.join(tmpDir, 'project-file'), '');
+      const found = await svc.listDirectories(localSrv, path.join(tmpDir, 'PROJ'));
+      expect(found.sort()).toEqual([path.join(tmpDir, 'Project-A'), path.join(tmpDir, 'project-b')]);
+    });
+
+    it('lists every visible directory when the input ends with a separator', async () => {
+      fs.mkdirSync(path.join(tmpDir, 'a'));
+      fs.mkdirSync(path.join(tmpDir, 'b'));
+      expect((await svc.listDirectories(localSrv, tmpDir + path.sep)).sort()).toEqual([path.join(tmpDir, 'a'), path.join(tmpDir, 'b')]);
+    });
+
+    it('has no candidates for a directory that does not exist', async () => {
+      expect(await svc.listDirectories(localSrv, path.join(tmpDir, 'nope') + path.sep)).toEqual([]);
+    });
   });
 
-  it('returns 409 on mtime conflict', async () => {
-    const filePath = path.join(tmpDir, 'conflict.txt');
-    fs.writeFileSync(filePath, 'original');
-    const srv = createLocalServer(tmpDir);
-    const staleTime = Date.now() - 60000;
-    try {
-      await service.writeFileContent(srv, filePath, 'new content', staleTime);
-      expect.unreachable('should have thrown');
-    } catch (err) {
-      expect(err).toBeInstanceOf(FileBrowseError);
-      expect((err as FileBrowseError).status).toBe(409);
-    }
+  describe('getFileContent', () => {
+    it('returns text with language, size, mtime and a hash of its bytes', async () => {
+      const file = path.join(tmpDir, 'a.ts');
+      fs.writeFileSync(file, 'export const a = 1;\n');
+      const result = await svc.getFileContent(localSrv, file);
+      expect(result).toEqual({
+        content: 'export const a = 1;\n',
+        path: file,
+        size: 20,
+        language: 'typescript',
+        mtime: fs.statSync(file).mtimeMs,
+        hash: sha256('export const a = 1;\n'),
+      });
+    });
+
+    it('hashes the bytes of the file, so the hash a save sends back is the one the host computes (even for bytes that are not valid UTF-8)', async () => {
+      const file = path.join(tmpDir, 'latin1.txt');
+      const bytes = Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a]);
+      fs.writeFileSync(file, bytes);
+      const read = await svc.getFileContent(localSrv, file);
+      expect('hash' in read && read.hash).toBe(sha256(bytes));
+      await expect(svc.writeFileContent(localSrv, file, 'replaced', ('mtime' in read ? read.mtime : 0), ('hash' in read ? read.hash : ''))).resolves.toBeTruthy();
+    });
+
+    it('returns an image and a PDF as base64', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'p.png'), Buffer.from([1, 2, 3]));
+      fs.writeFileSync(path.join(tmpDir, 'd.pdf'), Buffer.from('%PDF'));
+      expect(await svc.getFileContent(localSrv, path.join(tmpDir, 'p.png'))).toMatchObject({ type: 'image', mimeType: 'image/png', base64: 'AQID', size: 3 });
+      expect(await svc.getFileContent(localSrv, path.join(tmpDir, 'd.pdf'))).toMatchObject({ type: 'pdf', mimeType: 'application/pdf', base64: Buffer.from('%PDF').toString('base64') });
+    });
+
+    it('answers 400 for a binary extension and for a NUL byte in a text file', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'a.zip'), 'x');
+      fs.writeFileSync(path.join(tmpDir, 'nul.txt'), Buffer.from([0x61, 0, 0x62]));
+      expect(await statusOf(svc.getFileContent(localSrv, path.join(tmpDir, 'a.zip')))).toBe(400);
+      await expect(svc.getFileContent(localSrv, path.join(tmpDir, 'nul.txt'))).rejects.toThrow('Binary file cannot be displayed');
+    });
+
+    it('answers 400 with the limit in the message for a file that is too large', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'big.txt'), 'x'.repeat(MAX_FILE_SIZE + 1));
+      await expect(svc.getFileContent(localSrv, path.join(tmpDir, 'big.txt'))).rejects.toThrow(/File too large \(\d+KB\)\. Maximum is 500KB\./);
+      fs.writeFileSync(path.join(tmpDir, 'big.png'), Buffer.alloc(5 * 1024 * 1024 + 1));
+      await expect(svc.getFileContent(localSrv, path.join(tmpDir, 'big.png'))).rejects.toThrow(/Image too large .* Maximum is 5MB\./);
+      fs.writeFileSync(path.join(tmpDir, 'big.pdf'), Buffer.alloc(5 * 1024 * 1024 + 1));
+      await expect(svc.getFileContent(localSrv, path.join(tmpDir, 'big.pdf'))).rejects.toThrow(/PDF too large .* Maximum is 5MB\./);
+    });
+
+    it('answers 400 for a directory and 404 for a path that is not there', async () => {
+      expect(await statusOf(svc.getFileContent(localSrv, tmpDir))).toBe(400);
+      expect(await statusOf(svc.getFileContent(localSrv, path.join(tmpDir, 'missing.txt')))).toBe(404);
+    });
   });
 
-  it('writes successfully when mtime matches', async () => {
-    const filePath = path.join(tmpDir, 'match.txt');
-    fs.writeFileSync(filePath, 'original');
-    const stat = fs.statSync(filePath);
-    const srv = createLocalServer(tmpDir);
-    const result = await service.writeFileContent(srv, filePath, 'new content', stat.mtimeMs);
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
-    expect(result.mtime).toBeGreaterThanOrEqual(stat.mtimeMs);
+  describe('downloadFile', () => {
+    it('returns the bytes with a content type and the base name', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'data.json'), '{"a":1}');
+      const result = await svc.downloadFile(localSrv, path.join(tmpDir, 'data.json'));
+      expect(result.buffer.toString()).toBe('{"a":1}');
+      expect(result.contentType).toBe('application/json');
+      expect(result.basename).toBe('data.json');
+    });
+
+    it('falls back to octet-stream and refuses a directory', async () => {
+      fs.writeFileSync(path.join(tmpDir, 'blob.xyz'), 'x');
+      expect((await svc.downloadFile(localSrv, path.join(tmpDir, 'blob.xyz'))).contentType).toBe('application/octet-stream');
+      expect(await statusOf(svc.downloadFile(localSrv, tmpDir))).toBe(400);
+    });
   });
 
-  // Issue #27 review Important 3: `Math.abs(stat.mtimeMs - baseMtime) > 1000`
-  // let an external edit that landed within the same second slip through
-  // silently. baseMtime round-trips the exact mtimeMs this service returned
-  // earlier, so the comparison can (and now does) be an exact equality.
-  it('rejects a conflicting edit that landed within the same second (millisecond precision)', async () => {
-    const filePath = path.join(tmpDir, 'same-second.txt');
-    fs.writeFileSync(filePath, 'original');
-    // Pin both mtimes to the same wall-clock second, 800ms apart, so the old
-    // `Math.abs(...) > 1000` tolerance would have let this race through as
-    // "no conflict" — deterministic via utimesSync rather than relying on
-    // two real writeFileSync calls happening to land in different ticks.
-    const baseDate = new Date(2026, 0, 1, 12, 0, 0, 100);
-    fs.utimesSync(filePath, baseDate, baseDate);
-    const staleBaseMtime = fs.statSync(filePath).mtimeMs;
+  describe('writeFileContent', () => {
+    it('writes file and returns mtime and the hash of the new content', async () => {
+      const filePath = path.join(tmpDir, 'test.txt');
+      fs.writeFileSync(filePath, 'original');
+      const result = await svc.writeFileContent(localSrv, filePath, 'updated');
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('updated');
+      expect(result).toEqual({ mtime: fs.statSync(filePath).mtimeMs, hash: sha256('updated') });
+    });
 
-    fs.writeFileSync(filePath, 'raced edit');
-    const racedDate = new Date(2026, 0, 1, 12, 0, 0, 900);
-    fs.utimesSync(filePath, racedDate, racedDate);
+    it('rejects content exceeding MAX_FILE_SIZE', async () => {
+      const filePath = path.join(tmpDir, 'large.txt');
+      fs.writeFileSync(filePath, 'x');
+      await expect(svc.writeFileContent(localSrv, filePath, 'x'.repeat(501 * 1024))).rejects.toThrow(FileBrowseError);
+    });
 
-    const srv = createLocalServer(tmpDir);
-    await expect(
-      service.writeFileContent(srv, filePath, 'my edit', staleBaseMtime),
-    ).rejects.toMatchObject({ status: 409 });
+    it('returns 409 on mtime conflict, carrying the current mtime', async () => {
+      const filePath = path.join(tmpDir, 'conflict.txt');
+      fs.writeFileSync(filePath, 'original');
+      try {
+        await svc.writeFileContent(localSrv, filePath, 'new content', Date.now() - 60000);
+        expect.unreachable('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(FileBrowseError);
+        expect((err as FileBrowseError).status).toBe(409);
+        expect(JSON.parse((err as FileBrowseError).message)).toEqual({ conflict: true, currentMtime: fs.statSync(filePath).mtimeMs });
+      }
+    });
+
+    it('writes successfully when mtime matches', async () => {
+      const filePath = path.join(tmpDir, 'match.txt');
+      fs.writeFileSync(filePath, 'original');
+      const stat = fs.statSync(filePath);
+      const result = await svc.writeFileContent(localSrv, filePath, 'new content', stat.mtimeMs);
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
+      expect(result.mtime).toBeGreaterThanOrEqual(stat.mtimeMs);
+    });
+
+    // Issue #27 review Important 3: `Math.abs(stat.mtimeMs - baseMtime) > 1000` let an external edit that landed within
+    // the same second slip through silently. baseMtime round-trips the exact mtimeMs this service returned earlier.
+    it('rejects a conflicting edit that landed within the same second (millisecond precision)', async () => {
+      const filePath = path.join(tmpDir, 'same-second.txt');
+      fs.writeFileSync(filePath, 'original');
+      const baseDate = new Date(2026, 0, 1, 12, 0, 0, 100);
+      fs.utimesSync(filePath, baseDate, baseDate);
+      const staleBaseMtime = fs.statSync(filePath).mtimeMs;
+
+      fs.writeFileSync(filePath, 'raced edit');
+      const racedDate = new Date(2026, 0, 1, 12, 0, 0, 900);
+      fs.utimesSync(filePath, racedDate, racedDate);
+
+      await expect(svc.writeFileContent(localSrv, filePath, 'my edit', staleBaseMtime)).rejects.toMatchObject({ status: 409 });
+    });
+
+    // The content-hash lock catches an external edit by its bytes whatever the timing of the mtime.
+    it('returns 409 on hash conflict even when mtime matches', async () => {
+      const filePath = path.join(tmpDir, 'hash-conflict.txt');
+      fs.writeFileSync(filePath, 'original');
+      const stat = fs.statSync(filePath);
+      await expect(svc.writeFileContent(localSrv, filePath, 'my edit', stat.mtimeMs, sha256('stale content the reader actually saw'))).rejects.toMatchObject({ status: 409 });
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('original');
+    });
+
+    it('writes successfully when the content hash matches', async () => {
+      const filePath = path.join(tmpDir, 'hash-match.txt');
+      fs.writeFileSync(filePath, 'original');
+      const result = await svc.writeFileContent(localSrv, filePath, 'new content', undefined, sha256('original'));
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
+      expect(result.hash).toBe(sha256('new content'));
+    });
+
+    it('force (no lock sent) bypasses both the mtime and hash conflict checks', async () => {
+      const filePath = path.join(tmpDir, 'force.txt');
+      fs.writeFileSync(filePath, 'original');
+      const result = await svc.writeFileContent(localSrv, filePath, 'forced edit');
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('forced edit');
+      expect(result.hash).toBe(sha256('forced edit'));
+    });
+
+    // Issue #27 review Critical 2 (the write half): a symlink swapped in at the save target between the route's
+    // containment check and the write must not redirect the write to wherever it points.
+    // Windows では動かない: シンボリックリンク作成に権限が要る（junction は IFileOps のテストで扱う）
+    it.skipIf(process.platform === 'win32')('refuses to write through a symlink and leaves its target alone', async () => {
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
+      const outsideFile = path.join(outsideDir, 'secret.txt');
+      fs.writeFileSync(outsideFile, 'original outside content');
+      const linkPath = path.join(tmpDir, 'escape-link.txt');
+      fs.symlinkSync(outsideFile, linkPath);
+
+      await expect(svc.writeFileContent(localSrv, linkPath, 'attacker-controlled content')).rejects.toMatchObject({ status: 400 });
+      expect(fs.readFileSync(outsideFile, 'utf-8')).toBe('original outside content');
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    });
+
+    it('creates a file that does not exist yet', async () => {
+      const filePath = path.join(tmpDir, 'brand-new.txt');
+      await svc.writeFileContent(localSrv, filePath, 'hi');
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('hi');
+    });
+
+    it('does not let one save request block unrelated files from saving concurrently', async () => {
+      const fileA = path.join(tmpDir, 'a.txt');
+      const fileB = path.join(tmpDir, 'b.txt');
+      fs.writeFileSync(fileA, 'a');
+      fs.writeFileSync(fileB, 'b');
+      const [resA, resB] = await Promise.all([
+        svc.writeFileContent(localSrv, fileA, 'new a'),
+        svc.writeFileContent(localSrv, fileB, 'new b'),
+      ]);
+      expect(resA.mtime).toBeGreaterThan(0);
+      expect(resB.mtime).toBeGreaterThan(0);
+      expect(fs.readFileSync(fileA, 'utf-8')).toBe('new a');
+      expect(fs.readFileSync(fileB, 'utf-8')).toBe('new b');
+    });
   });
 
-  // Issue #27 review Important 3: content-hash optimistic lock. On environments with only
-  // second-precision mtime the mtime check alone cannot detect an external edit that landed within
-  // the same second; a sha256 comparison of the actual bytes catches it regardless of timing.
-  it('returns 409 on hash conflict even when mtime matches', async () => {
-    const filePath = path.join(tmpDir, 'hash-conflict.txt');
-    fs.writeFileSync(filePath, 'original');
-    const stat = fs.statSync(filePath);
-    const srv = createLocalServer(tmpDir);
-    const staleHash = createHash('sha256').update('stale content the reader actually saw', 'utf-8').digest('hex');
-    await expect(
-      service.writeFileContent(srv, filePath, 'my edit', stat.mtimeMs, staleHash),
-    ).rejects.toMatchObject({ status: 409 });
-    // Must not have been overwritten.
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('original');
+  describe('resolveExistingTargetRealPath', () => {
+    // Issue #27 review Critical 2: the containment check the PUT route runs on the parent directory alone can't see that
+    // the save target itself is a symlink pointing outside workingDirectory. This resolves the target's real path so the
+    // route can re-verify containment on it.
+    // Windows では動かない: シンボリックリンク作成に権限が要る（junction は PathContainment のテストで扱う）
+    it.skipIf(process.platform === 'win32')('resolves a symlinked target to its real (outside) path', async () => {
+      const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
+      const outsideFile = path.join(outsideDir, 'secret.txt');
+      fs.writeFileSync(outsideFile, 'secret');
+      const linkPath = path.join(tmpDir, 'link.txt');
+      fs.symlinkSync(outsideFile, linkPath);
+
+      expect(await svc.resolveExistingTargetRealPath(localSrv, linkPath)).toBe(fs.realpathSync(outsideFile));
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    });
+
+    it('returns null when the target does not exist yet', async () => {
+      expect(await svc.resolveExistingTargetRealPath(localSrv, path.join(tmpDir, 'nope.txt'))).toBeNull();
+    });
   });
 
-  it('writes successfully when the content hash matches', async () => {
-    const filePath = path.join(tmpDir, 'hash-match.txt');
-    fs.writeFileSync(filePath, 'original');
-    const srv = createLocalServer(tmpDir);
-    const currentHash = createHash('sha256').update('original', 'utf-8').digest('hex');
-    const result = await service.writeFileContent(srv, filePath, 'new content', undefined, currentHash);
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('new content');
-    expect(result.hash).toBe(createHash('sha256').update('new content', 'utf-8').digest('hex'));
+  describe('createEntry', () => {
+    it('creates a file', async () => {
+      const filePath = path.join(tmpDir, 'newfile.txt');
+      await svc.createEntry(localSrv, filePath, 'file');
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('');
+    });
+
+    it('creates a directory', async () => {
+      const dirPath = path.join(tmpDir, 'newdir');
+      await svc.createEntry(localSrv, dirPath, 'directory');
+      expect(fs.statSync(dirPath).isDirectory()).toBe(true);
+    });
+
+    it('throws 409 if already exists', async () => {
+      const filePath = path.join(tmpDir, 'existing.txt');
+      fs.writeFileSync(filePath, 'hello');
+      await expect(svc.createEntry(localSrv, filePath, 'file')).rejects.toThrow('Already exists');
+      expect(await statusOf(svc.createEntry(localSrv, filePath, 'file'))).toBe(409);
+      expect(fs.readFileSync(filePath, 'utf-8')).toBe('hello');
+    });
   });
 
-  it('force bypasses both the mtime and hash conflict checks', async () => {
-    const filePath = path.join(tmpDir, 'force.txt');
-    fs.writeFileSync(filePath, 'original');
-    const srv = createLocalServer(tmpDir);
-    // Stale on both counts, but writeFileContent is called the way routes.ts calls it under
-    // `force: true` — baseMtime/baseHash simply omitted rather than passed-and-ignored.
-    const result = await service.writeFileContent(srv, filePath, 'forced edit');
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('forced edit');
-    expect(result.hash).toBe(createHash('sha256').update('forced edit', 'utf-8').digest('hex'));
+  describe('ensureDirectory', () => {
+    it('creates a nested directory that does not exist yet (mkdir -p semantics)', async () => {
+      const target = path.join(tmpDir, 'a', 'b', 'c');
+      expect(await svc.ensureDirectory(localSrv, target)).toEqual({ created: true });
+      expect(fs.statSync(target).isDirectory()).toBe(true);
+    });
+
+    it('is a no-op when the directory already exists', async () => {
+      const target = path.join(tmpDir, 'already');
+      fs.mkdirSync(target);
+      expect(await svc.ensureDirectory(localSrv, target)).toEqual({ created: false });
+    });
+
+    it('throws 409 when the path exists but is not a directory', async () => {
+      const target = path.join(tmpDir, 'file.txt');
+      fs.writeFileSync(target, 'hello');
+      await expect(svc.ensureDirectory(localSrv, target)).rejects.toThrow('not a directory');
+      expect(await statusOf(svc.ensureDirectory(localSrv, target))).toBe(409);
+    });
   });
 
-  // Issue #27 review Critical 2 (local half): writeFileContent opens with
-  // O_NOFOLLOW so a symlink swapped in at the save target between the
-  // route's containment check and this write cannot redirect the write to
-  // wherever the symlink points.
-  // Windows では動かない: O_NOFOLLOW / シンボリックリンク前提（P7 の封じ込めで扱う）
-  it.skipIf(process.platform === 'win32')('refuses to write through a symlink (O_NOFOLLOW)', async () => {
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
-    const outsideFile = path.join(outsideDir, 'secret.txt');
-    fs.writeFileSync(outsideFile, 'original outside content');
-    const linkPath = path.join(tmpDir, 'escape-link.txt');
-    fs.symlinkSync(outsideFile, linkPath);
-    const srv = createLocalServer(tmpDir);
+  describe('deleteEntry', () => {
+    it('deletes a file', async () => {
+      const filePath = path.join(tmpDir, 'to-delete.txt');
+      fs.writeFileSync(filePath, 'content');
+      await svc.deleteEntry(localSrv, filePath);
+      expect(fs.existsSync(filePath)).toBe(false);
+    });
 
-    await expect(
-      service.writeFileContent(srv, linkPath, 'attacker-controlled content'),
-    ).rejects.toMatchObject({ status: 400 });
-    // The symlink target must be untouched.
-    expect(fs.readFileSync(outsideFile, 'utf-8')).toBe('original outside content');
+    it('deletes a directory recursively', async () => {
+      const dirPath = path.join(tmpDir, 'to-delete-dir');
+      fs.mkdirSync(dirPath);
+      fs.writeFileSync(path.join(dirPath, 'child.txt'), 'x');
+      await svc.deleteEntry(localSrv, dirPath);
+      expect(fs.existsSync(dirPath)).toBe(false);
+    });
 
-    fs.rmSync(outsideDir, { recursive: true, force: true });
+    it('throws 404 if not found', async () => {
+      await expect(svc.deleteEntry(localSrv, path.join(tmpDir, 'nope'))).rejects.toThrow('Not found');
+      expect(await statusOf(svc.deleteEntry(localSrv, path.join(tmpDir, 'nope')))).toBe(404);
+    });
+  });
+
+  describe('renameEntry', () => {
+    it('renames a file', async () => {
+      const oldPath = path.join(tmpDir, 'old.txt');
+      fs.writeFileSync(oldPath, 'content');
+      await svc.renameEntry(localSrv, oldPath, 'new.txt');
+      expect(fs.existsSync(oldPath)).toBe(false);
+      expect(fs.readFileSync(path.join(tmpDir, 'new.txt'), 'utf-8')).toBe('content');
+    });
+
+    it('throws 409 if target already exists', async () => {
+      const oldPath = path.join(tmpDir, 'a.txt');
+      fs.writeFileSync(oldPath, 'a');
+      fs.writeFileSync(path.join(tmpDir, 'b.txt'), 'b');
+      await expect(svc.renameEntry(localSrv, oldPath, 'b.txt')).rejects.toThrow('Already exists');
+      expect(fs.readFileSync(path.join(tmpDir, 'b.txt'), 'utf-8')).toBe('b');
+    });
+
+    it('throws 404 if source not found', async () => {
+      await expect(svc.renameEntry(localSrv, path.join(tmpDir, 'nope'), 'new')).rejects.toThrow('Not found');
+    });
   });
 });
 
-describe('FileBrowseService.resolveExistingTargetRealPath', () => {
-  let tmpDir: string;
-  const svc = new FileBrowseService({} as any);
+describe('FileBrowseService with a host whose operations refuse', () => {
+  /** File operations that all fail the same way: what the service makes of each refusal is what is under test. */
+  function refusing(error: FileOpsError): IFileOps {
+    const fail = async (): Promise<never> => { throw error; };
+    return { platform: 'linux', list: fail, stat: fail, read: fail, write: fail, create: fail, remove: fail, rename: fail, realpath: fail, which: fail, tmpPath: fail };
+  }
+  const srv = { type: 'agent', name: 'a' } as unknown as ServerConfig;
 
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
+  it('turns a CONFLICT into a 409 whose body carries the current mtime and whether the hash could be checked', async () => {
+    const lock = refusing(new FileOpsError('CONFLICT', 'changed', { currentMtimeMs: 42 }));
+    await expect(serviceFor(lock).writeFileContent(srv, '/w/a.txt', 'x', 1)).rejects.toMatchObject({ status: 409, message: JSON.stringify({ conflict: true, currentMtime: 42 }) });
+
+    const noHashTool = refusing(new FileOpsError('CONFLICT', 'no hash', { currentMtimeMs: null, hashUnavailable: true }));
+    await expect(serviceFor(noHashTool).writeFileContent(srv, '/w/a.txt', 'x', 1, sha256('x'))).rejects.toMatchObject({
+      status: 409,
+      message: JSON.stringify({ conflict: true, currentMtime: null, hashUnavailable: true }),
+    });
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  it('answers what each refusal has always meant to the file APIs', async () => {
+    const answer = (code: FileOpsError['code']) => statusOf(serviceFor(refusing(new FileOpsError(code, 'x'))).getFileContent(srv, '/w/a.txt'));
+    expect(await answer('NOT_FOUND')).toBe(404);
+    expect(await answer('NOT_A_FILE')).toBe(400);
+    expect(await answer('INVALID_PATH')).toBe(400);
+    expect(await answer('FAILED')).toBe(500);
+    // Anything else is not translated: the route answers it as a 500 with its message.
+    expect(await answer('PERMISSION_DENIED')).toBe('unexpected: x');
   });
 
-  // Issue #27 review Critical 2: the containment check the PUT route runs on
-  // the parent directory alone can't see that the save target itself is a
-  // symlink pointing outside workingDirectory. This resolves the target's
-  // real path so the route can re-verify containment on it (see
-  // PathContainment.isPathContained usage in routes.ts).
-  // Windows では動かない: シンボリックリンク作成に権限が要る（P7 の封じ込めで扱う）
-  it.skipIf(process.platform === 'win32')('resolves a symlinked target to its real (outside) path', async () => {
-    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
-    const outsideFile = path.join(outsideDir, 'secret.txt');
-    fs.writeFileSync(outsideFile, 'secret');
-    const linkPath = path.join(tmpDir, 'link.txt');
-    fs.symlinkSync(outsideFile, linkPath);
-    const srv = { type: 'local', name: 'local' } as any;
-
-    const resolved = await svc.resolveExistingTargetRealPath(srv, linkPath);
-    expect(resolved).toBe(fs.realpathSync(outsideFile));
-
-    fs.rmSync(outsideDir, { recursive: true, force: true });
-  });
-
-  it('returns null when the target does not exist yet', async () => {
-    const srv = { type: 'local', name: 'local' } as any;
-    const resolved = await svc.resolveExistingTargetRealPath(srv, path.join(tmpDir, 'nope.txt'));
-    expect(resolved).toBeNull();
+  it('does not hide an unexpected error as "not found"', async () => {
+    const boom = refusing(new FileOpsError('PERMISSION_DENIED', 'EACCES: permission denied'));
+    await expect(serviceFor(boom).resolveExistingTargetRealPath(srv, '/w/a.txt')).rejects.toThrow('EACCES');
   });
 });
 
-describe('FileBrowseService.writeFileContent (remote)', () => {
-  it('splits base64 into chunks so every exec command stays under MAX_ARG_STRLEN', async () => {
-    const MAX_ARG_STRLEN = 131072;
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        // デコード+置換コマンドは成功マーカーを返す（Issue #27 review Important 1）
-        if (cmd.includes('base64 -d <') && cmd.includes('AZITO_WRITE_OK')) {
-          return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        }
-        // 書き込み後の stat 検証には epoch 秒を返す（%.Y が最初に試される）
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
+describe('FileBrowseService on a host with Windows path rules', () => {
+  /** A host that records the paths it is asked for: only the service's path handling is under test. */
+  function recording(): { ops: IFileOps; seen: string[] } {
+    const seen: string[] = [];
+    const ops: IFileOps = {
+      platform: 'win32',
+      list: async (dir) => { seen.push(dir); return [{ name: 'a.txt', kind: 'file', size: 1 }, { name: 'Sub', kind: 'directory' }]; },
+      stat: async () => null,
+      read: async (p) => { seen.push(p); return { data: Buffer.from('x'), stat: { kind: 'file', size: 1, mtimeMs: 1, mode: 0o644 } }; },
+      write: async () => ({ mtimeMs: 1, sha256: sha256('x') }),
+      create: async () => ({ created: true }),
+      remove: async (p) => { seen.push(p); },
+      rename: async (from, to) => { seen.push(from, to); },
+      realpath: async (p) => p,
+      which: async () => null,
+      tmpPath: async () => 'C:\\tmp\\x',
     };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
+    return { ops, seen };
+  }
+  const srv = { type: 'agent', name: 'win' } as unknown as ServerConfig;
 
-    const content = 'x'.repeat(300 * 1024); // 300KB → base64 400KB
-    const result = await service.writeFileContent(srv, '/tmp/big.txt', content);
-
-    expect(result.mtime).toBe(1750000000 * 1000);
-    for (const cmd of commands) {
-      expect(cmd.length).toBeLessThan(MAX_ARG_STRLEN);
-    }
-    const chunkCmds = commands.filter((c) => c.startsWith("printf '%s' "));
-    expect(chunkCmds.length).toBeGreaterThan(1);
-    // チャンクを連結すると元の base64 と一致する
-    const joined = chunkCmds
-      .map((c) => c.slice("printf '%s' '".length, c.indexOf("' >> ")))
-      .join('');
-    expect(joined).toBe(Buffer.from(content, 'utf-8').toString('base64'));
-    // 最後にデコード + mv + 成功マーカー + 一時ファイル削除コマンドが実行される
-    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('mv -f') && c.includes('AZITO_WRITE_OK') && c.includes('rm -f'))).toBe(true);
-    // 一時ファイル名にはリクエストごとの乱数サフィックスが入り、固定名を使わない
-    // （並行保存で互いの一時ファイルを踏みつけないため。Issue #27 review Important 2）
-    expect(commands.some((c) => /\.azito-upload-[0-9a-f]{16}/.test(c))).toBe(true);
+  it('joins entries with a backslash, and reads the extension of a Windows path', async () => {
+    const { ops } = recording();
+    const svc = serviceFor(ops);
+    expect((await svc.listFiles(srv, 'C:\\work', false)).map((e) => e.path)).toEqual(['C:\\work\\Sub', 'C:\\work\\a.txt']);
+    expect((await svc.listFiles(srv, 'C:\\work\\', false)).map((e) => e.path)).toEqual(['C:\\work\\Sub', 'C:\\work\\a.txt']);
+    expect(await svc.getFileContent(srv, 'C:\\work\\main.ts')).toMatchObject({ language: 'typescript' });
+    expect((await svc.downloadFile(srv, 'C:\\work\\data.json')).basename).toBe('data.json');
   });
 
-  // Issue #27 review Important 1: the decode command's result used to be
-  // ignored entirely — a failed `base64 -d` could leave the destination
-  // untouched, and the immediately-following stat would still report the
-  // *old* file's mtime as a success. SSH transports always return exit code
-  // 0 (RemoteWorktreeService.hasGitError's documented reason for using a
-  // stdout marker instead), so this asserts the write is judged by the
-  // explicit `AZITO_WRITE_OK` marker in stdout, not by exit code or by the
-  // later stat call succeeding.
-  it('throws when the remote write command reports no success marker', async () => {
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        // The decode/mv step "fails" silently (as a real base64/mv error
-        // would under `code: 0` from an SSH transport) — no marker in stdout.
-        if (cmd.includes('base64 -d <')) return { stdout: '', stderr: 'base64: invalid input\n', code: 0 };
-        // The post-write stat would still report the pre-existing file's
-        // mtime as if nothing had gone wrong — this must not be reached as
-        // a source of truth for success.
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await expect(
-      service.writeFileContent(srv, '/tmp/quiet-failure.txt', 'content'),
-    ).rejects.toMatchObject({ status: 500 });
+  it('renames within the directory of the Windows path', async () => {
+    const { ops, seen } = recording();
+    await serviceFor(ops).renameEntry(srv, 'C:\\work\\old.txt', 'new.txt');
+    expect(seen).toEqual(['C:\\work\\old.txt', 'C:\\work\\new.txt']);
   });
 
-  // Review Important 2 (remote half): a transient `stat` failure or the file
-  // disappearing must not be read as "no conflict" — the old code only
-  // compared mtimes `if (current != null && ...)`, so a null `current` (stat
-  // returned nothing) skipped the check entirely and wrote unconditionally.
-  it('fails closed with 409 when the remote mtime cannot be fetched but baseMtime was supplied', async () => {
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        // Every stat variant (mtime chain and mode chain) returns nothing,
-        // simulating a transient stat failure / vanished file.
-        if (cmd.startsWith('stat')) return { stdout: '', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await expect(
-      service.writeFileContent(srv, '/tmp/vanished.txt', 'content', Date.now()),
-    ).rejects.toMatchObject({ status: 409 });
-  });
-
-  // Review followup (macOS/BSD remote hosts): GNU coreutils `base64` decodes with `-d`, but BSD/macOS
-  // `base64` has no `-d` flag at all — it uses `-D` — so a save against a macOS remote host previously
-  // failed outright (or, if $qDecoded happened to already exist, could replace the target with empty
-  // content) once the decode step's own success marker was verified (Issue #27 review Important 1).
-  // The write command must retry with `base64 -D` when `-d` fails, after truncating the decode
-  // destination back to empty so the retry doesn't build on a partial `-d` attempt.
-  it('falls back to base64 -D when base64 -d fails (BSD/macOS remote)', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote-macos', type: 'ssh' } as any;
-
-    await service.writeFileContent(srv, '/tmp/macos-target.txt', 'content');
-
-    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
-    expect(writeCmd).toBeDefined();
-    // The -d attempt is tried first, silenced, then the -D fallback runs against a truncated decode
-    // destination if -d failed.
-    expect(writeCmd).toMatch(/base64 -d < .+? > .+? 2>\/dev\/null \|\| \{ : > .+?; base64 -D < .+? > .+?; \}/);
-  });
-
-  // Review Important 3: replacing an existing remote file via decode-to-tempfile
-  // + `mv -f` used to drop the original file's permission bits (e.g. 0755 ->
-  // the tempfile's default 0644 from the shell redirection). The write command
-  // must chmod the tempfile to the existing target's mode before the mv.
-  it('preserves the existing remote file mode across the mv replace', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%a')) return { stdout: '755\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await service.writeFileContent(srv, '/tmp/executable.sh', '#!/bin/sh\necho hi\n');
-
-    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
-    expect(writeCmd).toBeDefined();
-    expect(writeCmd).toContain("chmod '755'");
-    // chmod must run on the decoded tempfile before the mv, not after
-    expect(writeCmd!.indexOf('chmod')).toBeLessThan(writeCmd!.indexOf('mv -f'));
-  });
-
-  it('does not attempt chmod when the file is newly created (no existing mode)', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat -c%a')) return { stdout: '', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await service.writeFileContent(srv, '/tmp/new-file.txt', 'content');
-
-    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
-    expect(writeCmd).toBeDefined();
-    expect(writeCmd).not.toContain('chmod');
-  });
-
-  // Issue #27 review Important 3 (remote content-hash lock): on hosts whose `stat` only reports
-  // whole-second mtime, a baseHash mismatch must still be caught via sha256sum/shasum even when the
-  // mtime check would pass (same-second race).
-  it('returns 409 on remote hash conflict, without performing the write', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
-          return { stdout: `${'a'.repeat(64)}  /tmp/hash-conflict.txt\n`, stderr: '', code: 0 };
-        }
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        // A real base64 -d / mv should never be reached — fail loudly if it is.
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-    const staleHash = 'b'.repeat(64); // does not match the 'a'.repeat(64) the mock reports as current
-
-    await expect(
-      service.writeFileContent(srv, '/tmp/hash-conflict.txt', 'new content', undefined, staleHash),
-    ).rejects.toMatchObject({ status: 409 });
-    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('mv -f'))).toBe(false);
-  });
-
-  it('writes successfully when the remote content hash matches', async () => {
-    const currentHash = createHash('sha256').update('original', 'utf-8').digest('hex');
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
-          return { stdout: `${currentHash}  /tmp/hash-match.txt\n`, stderr: '', code: 0 };
-        }
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    const result = await service.writeFileContent(srv, '/tmp/hash-match.txt', 'new content', undefined, currentHash);
-    expect(result.hash).toBe(createHash('sha256').update('new content', 'utf-8').digest('hex'));
-  });
-
-  // Issue #27 review followup (Important 1): when neither sha256sum nor shasum is available on the
-  // remote host (or the file disappeared), hash verification is "unavailable", not "matches" — a caller
-  // that supplied baseHash asked for hash-backed conflict detection, so silently downgrading to
-  // mtime-only would accept a save past a same-second external edit undetected. Fail closed instead: the
-  // save is rejected with a 409, and no write command ever runs. The only bypass is `force: true`
-  // (routes.ts omits baseHash/baseMtime in that case, so this branch is never reached).
-  it('rejects the save (fail closed) when no remote hash tool is available', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        // Both sha256sum and shasum fail/are absent — empty stdout, as `2>/dev/null || ...` yields
-        // when neither tool exists.
-        if (cmd.startsWith('sha256sum') || cmd.includes('shasum -a 256')) {
-          return { stdout: '', stderr: '', code: 0 };
-        }
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await expect(
-      service.writeFileContent(srv, '/tmp/no-hash-tool.txt', 'new content', undefined, 'c'.repeat(64)),
-    ).rejects.toMatchObject({ status: 409 });
-    expect(commands.some((c) => c.includes('base64 -d <') && c.includes('mv -f'))).toBe(false);
-  });
-
-  // Critical fix (nested single-quote breakage in the trap): the trap command must be built by
-  // shellQuote()-ing the fully-assembled `rm -f <upload> <decoded>` string as one unit, not by
-  // interpolating already-quoted (single-quoted) upload/decoded tokens inside a hand-written outer
-  // single-quoted literal — POSIX single quotes do not nest, so the outer quote would close at the
-  // first `'` inside a path, letting trailing bytes of a containment-passing path (e.g. containing
-  // `;`, `'`, or `#`) execute as shell syntax when the trap fires.
-  it('quotes the trap cleanup command as a single unit even when the path contains shell metacharacters', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-    // A path with a single quote, a semicolon, a space and a `#` — all legal path bytes on POSIX,
-    // and none of them rejected by containment validation (which only cares about `..`/symlink escape,
-    // not shell metacharacters — the shell-safety burden falls entirely on shellQuote()).
-    const trickyPath = "/tmp/it's a; dangerous #path/file.txt";
-
-    await service.writeFileContent(srv, trickyPath, 'content');
-
-    const writeCmd = commands.find((c) => c.includes('base64 -d <') && c.includes('mv -f'));
-    expect(writeCmd).toBeDefined();
-
-    // Recover the exact (already shellQuote()-wrapped) upload/decoded tokens the command used for the
-    // `wc -c` / `base64 -d` steps, then assert the trap argument is exactly `sq(cleanup)` built from
-    // those same tokens — i.e. the cleanup string is quoted as one unit, not assembled by nesting two
-    // pre-quoted tokens inside a hand-written outer pair of single quotes.
-    const uploadToken = writeCmd!.match(/wc -c < (.+?) \| tr -d/)?.[1];
-    const decodedToken = writeCmd!.match(/base64 -d < .+? > (.+?) 2>\/dev\/null/)?.[1];
-    expect(uploadToken).toBeDefined();
-    expect(decodedToken).toBeDefined();
-    const expectedCleanup = `rm -f ${uploadToken} ${decodedToken}`;
-    expect(writeCmd).toContain(`trap ${sq(expectedCleanup)} EXIT`);
-
-    // Guard against the specific regression: the buggy version produced
-    // `trap 'rm -f '\''...it'\''s a...'\'' '\''...'\''' EXIT` where an *unescaped* `'` from the tricky
-    // path terminates the trap's quoting early, right after `it`. That unescaped-quote-followed-by-plain-text
-    // pattern must not appear.
-    expect(writeCmd).not.toMatch(/trap 'rm -f '\\''\/tmp\/it' /);
-  });
-
-  // Review follow-up (chunk verification): a chunk append that silently drops or truncates bytes must
-  // not be decoded/moved into place just because what landed still happens to be valid base64. The
-  // write command verifies the staged file's byte count against the expected base64 length via `wc -c`
-  // before decoding.
-  it('rejects the write when the staged base64 byte count does not match what was sent', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('wc -c')) {
-          // Simulate a truncated staging file (e.g. a dropped chunk) reported as size mismatch.
-          return { stdout: 'AZITO_WRITE_SIZE_MISMATCH\n', stderr: '', code: 0 };
-        }
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await expect(
-      service.writeFileContent(srv, '/tmp/truncated.txt', 'hello world'),
-    ).rejects.toMatchObject({ status: 500 });
-
-    const writeCmd = commands.find((c) => c.includes('wc -c'));
-    expect(writeCmd).toBeDefined();
-    expect(writeCmd).toContain('AZITO_WRITE_SIZE_MISMATCH');
-    // The verification command still ends with a cleanup for the staging files.
-    expect(writeCmd).toContain('rm -f');
-  });
-
-  it('creates the upload staging file under umask 077', async () => {
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('base64 -d <')) return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        if (cmd.startsWith('stat ')) return { stdout: '1750000000\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    await service.writeFileContent(srv, '/tmp/private.txt', 'secret content');
-
-    const createCmd = commands.find((c) => c.includes(': >') && c.includes('.azito-upload-'));
-    expect(createCmd).toBeDefined();
-    expect(createCmd).toContain('umask 077');
-    const writeCmd = commands.find((c) => c.includes('base64 -d <'));
-    expect(writeCmd).toContain('umask 077');
-    expect(writeCmd).toContain("trap 'rm -f");
-  });
-
-  // Review follow-up (cleanup): if a chunk append fails partway through the upload loop, the staging
-  // file created just before it must still be cleaned up rather than left behind on the remote host.
-  it('cleans up the staging files when a chunk append fails mid-upload', async () => {
-    const commands: string[] = [];
-    let chunkCalls = 0;
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.startsWith("printf '%s'")) {
-          chunkCalls++;
-          if (chunkCalls === 2) throw new Error('transport dropped mid-upload');
-        }
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote', type: 'ssh' } as any;
-
-    const bigContent = 'x'.repeat(200 * 1024); // forces multiple chunks
-
-    await expect(
-      service.writeFileContent(srv, '/tmp/interrupted.txt', bigContent),
-    ).rejects.toThrow('transport dropped mid-upload');
-
-    const cleanupCmd = commands[commands.length - 1];
-    expect(cleanupCmd).toContain('rm -f');
-    expect(cleanupCmd).toContain('.azito-upload-');
-    expect(cleanupCmd).toContain('.azito-decoded-');
+  it('completes a directory name from a partial Windows path', async () => {
+    const { ops } = recording();
+    expect(await serviceFor(ops).listDirectories(srv, 'C:\\work\\su')).toEqual(['C:\\work\\Sub']);
   });
 });
 
 describe('FileBrowseService.writeFileContent concurrency', () => {
-  // Review follow-up (per-path serialization): the mtime check and the actual replace are separate
-  // operations with an await gap between them. Without in-process serialization, two concurrent saves
-  // against the same file with the same (now-stale-by-the-time-either-finishes) baseMtime could both
-  // pass the conflict check and the second write would silently clobber the first. This drives two
-  // concurrent local writes against the same path and asserts the second sees a 409, not a silent
-  // overwrite — proving the writes were serialized rather than interleaved.
+  // The lock check and the replace are separate steps on the host, with an await gap between them. Without per-path
+  // serialization in the hub, two saves of the same stale snapshot could both pass the check and the second would
+  // silently clobber the first. The host here is a controlled stand-in whose mtime advances only when a write lands.
   it('serializes concurrent saves to the same path so the second sees a conflict, not a silent overwrite', async () => {
-    // Uses the remote path with a mock clock instead of real local `fs` timestamps: local mtimeMs
-    // granularity on some filesystems (notably under WSL2, which this repo targets — see the existing
-    // "rejects a conflicting edit that landed within the same second" test's own comment on the same
-    // issue) is coarse enough that two real writes issued microseconds apart can land on the identical
-    // mtimeMs, which would make this test flaky for a reason unrelated to what it's actually verifying.
-    // `remoteMtimeSeconds` here is an explicit, fully-controlled stand-in for "the file's mtime on disk"
-    // that only advances when a write's decode/mv step actually runs, so the assertion is about call
-    // ordering (serialized vs. interleaved), not about real clock resolution.
-    let remoteMtimeSeconds = 100;
-    const baseMtime = remoteMtimeSeconds * 1000;
-    const commands: string[] = [];
-    const tmuxMock = {
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.includes('%.Y')) return { stdout: `${remoteMtimeSeconds}.000000\n`, stderr: '', code: 0 };
-        if (cmd.includes('%a')) return { stdout: '', stderr: '', code: 0 };
-        if (cmd.includes('base64 -d <')) {
-          // Simulates the remote write actually landing: mtime only advances here, once the decode/mv
-          // step for that particular request runs — never on the initial conflict-check read.
-          remoteMtimeSeconds += 1;
-          return { stdout: 'AZITO_WRITE_OK\n', stderr: '', code: 0 };
-        }
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const service = new FileBrowseService(tmuxMock as any);
-    const srv = { name: 'remote-shared', type: 'ssh' } as any;
+    let mtimeMs = 100_000;
+    const baseMtime = mtimeMs;
+    const writes: string[] = [];
+    const ops = {
+      platform: 'linux',
+      write: async (_path: string, data: Buffer, options?: { expect?: { mtimeMs?: number } }) => {
+        const expected = options?.expect?.mtimeMs;
+        if (expected !== undefined && expected !== mtimeMs) throw new FileOpsError('CONFLICT', 'changed', { currentMtimeMs: mtimeMs });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        mtimeMs += 1000;
+        writes.push(data.toString());
+        return { mtimeMs, sha256: sha256(data) };
+      },
+    } as unknown as IFileOps;
+    const service = serviceFor(ops);
+    const srv = { name: 'shared', type: 'agent' } as unknown as ServerConfig;
 
-    // Both requests read the same baseMtime (as two browser tabs saving the same stale snapshot would).
-    const [first, second] = await Promise.allSettled([
+    const results = await Promise.allSettled([
       service.writeFileContent(srv, '/tmp/shared.txt', 'edit A', baseMtime),
       service.writeFileContent(srv, '/tmp/shared.txt', 'edit B', baseMtime),
     ]);
 
-    const results = [first, second];
-    const fulfilled = results.filter((r) => r.status === 'fulfilled');
-    const rejected = results.filter((r) => r.status === 'rejected');
-    expect(fulfilled).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
     expect(rejected).toHaveLength(1);
-    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({ status: 409 });
-    // Exactly one decode/mv actually ran — the second request was rejected at the conflict check, before
-    // ever staging or writing, not raced through to a second (corrupting) write.
-    expect(commands.filter((c) => c.includes('base64 -d <')).length).toBe(1);
-  });
-
-  it('does not let one save request block unrelated files from saving concurrently', async () => {
-    const fs = await import('fs');
-    const os = await import('os');
-    const path = await import('path');
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-concurrency-'));
-    const fileA = path.join(tmpDir, 'a.txt');
-    const fileB = path.join(tmpDir, 'b.txt');
-    fs.writeFileSync(fileA, 'a');
-    fs.writeFileSync(fileB, 'b');
-    const srv = { name: 'test-local', type: 'local', directory: tmpDir } as any;
-    const service = new FileBrowseService({} as any);
-
-    const [resA, resB] = await Promise.all([
-      service.writeFileContent(srv, fileA, 'new a'),
-      service.writeFileContent(srv, fileB, 'new b'),
-    ]);
-
-    expect(resA.mtime).toBeGreaterThan(0);
-    expect(resB.mtime).toBeGreaterThan(0);
-    expect(fs.readFileSync(fileA, 'utf-8')).toBe('new a');
-    expect(fs.readFileSync(fileB, 'utf-8')).toBe('new b');
-
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-});
-
-describe('FileBrowseService.createEntry (local)', () => {
-  let tmpDir: string;
-  const svc = new FileBrowseService({} as any);
-  const localSrv = { type: 'local', name: 'local' } as any;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('creates a file', async () => {
-    const filePath = path.join(tmpDir, 'newfile.txt');
-    await svc.createEntry(localSrv, filePath, 'file');
-    expect(fs.existsSync(filePath)).toBe(true);
-    expect(fs.readFileSync(filePath, 'utf-8')).toBe('');
-  });
-
-  it('creates a directory', async () => {
-    const dirPath = path.join(tmpDir, 'newdir');
-    await svc.createEntry(localSrv, dirPath, 'directory');
-    expect(fs.statSync(dirPath).isDirectory()).toBe(true);
-  });
-
-  it('throws 409 if already exists', async () => {
-    const filePath = path.join(tmpDir, 'existing.txt');
-    fs.writeFileSync(filePath, 'hello');
-    await expect(svc.createEntry(localSrv, filePath, 'file')).rejects.toThrow('Already exists');
-    try {
-      await svc.createEntry(localSrv, filePath, 'file');
-    } catch (err) {
-      expect(err).toBeInstanceOf(FileBrowseError);
-      expect((err as FileBrowseError).status).toBe(409);
-    }
-  });
-});
-
-describe('FileBrowseService.createEntry (remote)', () => {
-  it('sends correct commands for file creation', async () => {
-    let callCount = 0;
-    const mock = {
-      commands: [] as string[],
-      getTransport: () => ({ exec: async (cmd: string) => {
-        mock.commands.push(cmd);
-        callCount++;
-        if (callCount === 1) return { stdout: 'no\n', stderr: '', code: 0 };
-        if (callCount === 3) return { stdout: 'ok\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    };
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
-    await svc.createEntry(srv, '/workspace/new.txt', 'file');
-    expect(mock.commands[0]).toContain('test -e');
-    expect(mock.commands[1]).toContain('set -C');
-  });
-
-  it('throws 409 if remote path exists', async () => {
-    const mock = createMockTransport({ 'test -e': 'yes\n' });
-    const svc = new FileBrowseService(mock as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
-    await expect(svc.createEntry(srv, '/workspace/existing', 'file')).rejects.toThrow('Already exists');
-  });
-});
-
-describe('FileBrowseService.ensureDirectory (local)', () => {
-  let tmpDir: string;
-  const svc = new FileBrowseService({} as any);
-  const localSrv = { type: 'local', name: 'local' } as any;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('creates a nested directory that does not exist yet (mkdir -p semantics)', async () => {
-    const target = path.join(tmpDir, 'a', 'b', 'c');
-    const result = await svc.ensureDirectory(localSrv, target);
-    expect(result.created).toBe(true);
-    expect(fs.statSync(target).isDirectory()).toBe(true);
-  });
-
-  it('is a no-op when the directory already exists', async () => {
-    const target = path.join(tmpDir, 'already');
-    fs.mkdirSync(target);
-    const result = await svc.ensureDirectory(localSrv, target);
-    expect(result.created).toBe(false);
-  });
-
-  it('throws 409 when the path exists but is not a directory', async () => {
-    const target = path.join(tmpDir, 'file.txt');
-    fs.writeFileSync(target, 'hello');
-    await expect(svc.ensureDirectory(localSrv, target)).rejects.toThrow('not a directory');
-    try {
-      await svc.ensureDirectory(localSrv, target);
-    } catch (err) {
-      expect(err).toBeInstanceOf(FileBrowseError);
-      expect((err as FileBrowseError).status).toBe(409);
-    }
-  });
-});
-
-describe('FileBrowseService.ensureDirectory (remote)', () => {
-  it('creates the directory when it does not exist', async () => {
-    const commands: string[] = [];
-    const svc = new FileBrowseService({
-      getTransport: () => ({ exec: async (cmd: string) => {
-        commands.push(cmd);
-        if (cmd.startsWith('if [ -d')) return { stdout: 'none\n', stderr: '', code: 0 };
-        if (cmd.startsWith('mkdir -p')) return { stdout: '', stderr: '', code: 0 };
-        if (cmd.startsWith('test -d')) return { stdout: 'ok\n', stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
-      } }),
-    } as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
-    const result = await svc.ensureDirectory(srv, '/workspace/new/nested');
-    expect(result.created).toBe(true);
-    expect(commands.some((c) => c.startsWith('mkdir -p'))).toBe(true);
-  });
-
-  it('is a no-op when the remote path is already a directory', async () => {
-    const svc = new FileBrowseService({
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('if [ -d')) return { stdout: 'dir\n', stderr: '', code: 0 };
-        throw new Error(`unexpected command: ${cmd}`);
-      } }),
-    } as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
-    const result = await svc.ensureDirectory(srv, '/workspace/existing');
-    expect(result.created).toBe(false);
-  });
-
-  it('throws 409 when the remote path exists but is not a directory', async () => {
-    const svc = new FileBrowseService({
-      getTransport: () => ({ exec: async (cmd: string) => {
-        if (cmd.startsWith('if [ -d')) return { stdout: 'other\n', stderr: '', code: 0 };
-        throw new Error(`unexpected command: ${cmd}`);
-      } }),
-    } as any);
-    const srv = { type: 'agent', name: 'test', host: 'user@host' } as any;
-    await expect(svc.ensureDirectory(srv, '/workspace/afile')).rejects.toThrow('not a directory');
-  });
-});
-
-describe('FileBrowseService.deleteEntry (local)', () => {
-  let tmpDir: string;
-  const svc = new FileBrowseService({} as any);
-  const localSrv = { type: 'local', name: 'local' } as any;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('deletes a file', async () => {
-    const filePath = path.join(tmpDir, 'to-delete.txt');
-    fs.writeFileSync(filePath, 'content');
-    await svc.deleteEntry(localSrv, filePath);
-    expect(fs.existsSync(filePath)).toBe(false);
-  });
-
-  it('deletes a directory recursively', async () => {
-    const dirPath = path.join(tmpDir, 'to-delete-dir');
-    fs.mkdirSync(dirPath);
-    fs.writeFileSync(path.join(dirPath, 'child.txt'), 'x');
-    await svc.deleteEntry(localSrv, dirPath);
-    expect(fs.existsSync(dirPath)).toBe(false);
-  });
-
-  it('throws 404 if not found', async () => {
-    await expect(svc.deleteEntry(localSrv, path.join(tmpDir, 'nope'))).rejects.toThrow('Not found');
-  });
-});
-
-describe('FileBrowseService.renameEntry (local)', () => {
-  let tmpDir: string;
-  const svc = new FileBrowseService({} as any);
-  const localSrv = { type: 'local', name: 'local' } as any;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-test-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('renames a file', async () => {
-    const oldPath = path.join(tmpDir, 'old.txt');
-    fs.writeFileSync(oldPath, 'content');
-    await svc.renameEntry(localSrv, oldPath, 'new.txt');
-    expect(fs.existsSync(oldPath)).toBe(false);
-    expect(fs.readFileSync(path.join(tmpDir, 'new.txt'), 'utf-8')).toBe('content');
-  });
-
-  it('throws 409 if target already exists', async () => {
-    const oldPath = path.join(tmpDir, 'a.txt');
-    const newName = 'b.txt';
-    fs.writeFileSync(oldPath, 'a');
-    fs.writeFileSync(path.join(tmpDir, newName), 'b');
-    await expect(svc.renameEntry(localSrv, oldPath, newName)).rejects.toThrow('Already exists');
-  });
-
-  it('throws 404 if source not found', async () => {
-    await expect(svc.renameEntry(localSrv, path.join(tmpDir, 'nope'), 'new')).rejects.toThrow('Not found');
+    expect(rejected[0].reason).toMatchObject({ status: 409 });
+    expect(writes).toEqual(['edit A']);
   });
 });
