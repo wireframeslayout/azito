@@ -3,6 +3,7 @@ import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/sha
 import type { IPaneStream } from '../../tmux/PaneStream';
 import type { HostProfile } from '../../../shared/os/hostProfile';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
+import type { IFileOps } from '../../../shared/fs/fileOps';
 
 export interface ExecResult {
   stdout: string;
@@ -32,6 +33,12 @@ export interface IServerTransport {
    * and an unreachable agent with `AgentUnreachableError`.
    */
   run(spec: CommandSpec): Promise<CommandResult>;
+
+  /**
+   * The file operations of the server's host (Node `fs` there, no shell; see `IFileOps`). The route is chosen here, once, from
+   * what is known of the host: never retried through another when it fails.
+   */
+  files(): IFileOps;
 
   /**
    * シェルコマンド実行（現行 TmuxClient.execCommand 相当）

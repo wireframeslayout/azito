@@ -23,7 +23,7 @@ const SHELL_SAFE_PATH = /^[A-Za-z0-9_./@:+,=%~-]+$/;
  * 作ったパスは execution_log に記録され、復旧・片付けは記録されたパスを優先する。
  */
 export class TaskTempFiles {
-  constructor(private readonly hubTmpDir: string, readonly hubPlatform: NodeJS.Platform) {
+  constructor(readonly hubTmpDir: string, readonly hubPlatform: NodeJS.Platform) {
     if (hubTmpDir === '') throw new Error('TaskTempFiles: hubTmpDir must not be empty');
   }
 

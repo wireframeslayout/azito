@@ -160,6 +160,7 @@ packages/
                                   #         updateScript (out-of-process self-update), serviceControl
         health/                   # [upper] GET /api/health (hub-wide flags: scopedAuthEnabled)
       shared/
+        fs/                       # IFileOps, LocalFileOps (Node fs on the host), fileOpsWire (agent /api/fileops request/response)
         db/                       # Database.ts (SQLite/WAL) + migrations/ (001-079)
   frontend/                        # React 19 + Vite + TypeScript
     src/
@@ -195,6 +196,16 @@ packages/
   and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
   (neither is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
+
+### File operations (IFileOps, #379 P7)
+- `IServerTransport.files()` returns the host's `IFileOps` (list / stat / read / write / create / remove / rename / realpath / which / tmpPath): Node `fs` on the machine that owns the files, no shell,
+  the same code on every OS. `LocalFileOps` (`shared/fs/`) is the hub's own and what the agent runs for each request; an agent server gets `RemoteFileOps` over `POST /api/fileops`
+  (`shared/fs/fileOpsWire.ts`: Zod-validated request, the refusal in the 200 body as a `FileOpsError`). An agent registered before its OS was recorded (`hostProfile` NULL) has no such endpoint and gets
+  `ShellFileOps` (the old sh commands); `AgentTransport.files()` chooses once, and a failing route is never retried through the other.
+- Paths of another host are plain strings handled with `pathApiFor(platform)`; `invalidHostPathReason` refuses a Windows device path, a drive-relative path and an alternate data stream before the host is touched.
+- Containment (`modules/git/PathContainment.ts`) resolves both sides on the host with `fs.realpath.native` and compares with `isHostPathContained` (the host's `relative()`, plus exact case on win32);
+  `assertNewPathContained` resolves the nearest existing ancestor for a path that does not exist yet. A race with an ancestor swapped after the check remains (Node has no `openat2(RESOLVE_BENEATH)`).
+- New code that touches files on a server uses `transport.files()`, not `transport.exec(<sh string>)` (`execStringRatchet.test.ts` counts what is left).
 
 ### Agent Server Type
 - Lightweight Node.js agent deployed to remote servers via SSH bootstrap

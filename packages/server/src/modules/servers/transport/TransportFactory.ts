@@ -4,6 +4,7 @@ import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import type { IFileOps } from '../../../shared/fs/fileOps';
 import { HostProfileError, type HostProfile, type HubHostProfile } from '../../../shared/os/hostProfile';
 
 type TransportServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime' | 'hostProfile'>;
@@ -50,6 +51,11 @@ export class TransportFactory {
     }
     this.cache.set(key, transport);
     return transport;
+  }
+
+  /** The file operations of a server's host (see `IServerTransport.files`). */
+  getFileOps(server: TransportServer): IFileOps {
+    return this.getTransport(server).files();
   }
 
   /** The cached AgentTransport of an agent server, for health/breaker access. */
