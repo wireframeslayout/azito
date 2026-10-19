@@ -78,7 +78,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'update-run') {
-    await runUpdate(process.argv.slice(3), hostEnv.homeDir, secretFileGuard);
+    await runUpdate(process.argv.slice(3), hostEnv, secretFileGuard);
     return;
   }
 

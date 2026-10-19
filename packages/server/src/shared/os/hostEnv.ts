@@ -16,6 +16,8 @@ export interface HostEnv {
   /** このホストの一時フォルダ（`os.tmpdir()`）。ハブ自身のサーバーの signal / output / rules / pipe ファイルを置く。 */
   tmpDir: string;
   execPath: string;
+  /** このプロセスのユーザー ID（launchd のドメイン `gui/<uid>` / `user/<uid>` に使う）。Windows には無く、Node は -1 を返す。 */
+  uid: number;
 }
 
 /** 純粋関数。homeDir / tmpDir が空のときだけ投げる（フォールバックしない）。 */
@@ -26,7 +28,7 @@ export function resolveHostEnv(input: HostEnv): HostEnv {
   if (input.tmpDir === '') {
     throw new Error('Cannot resolve the temp directory: os.tmpdir() returned an empty string');
   }
-  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath };
+  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath, uid: input.uid };
 }
 
 /** 実プロセスから読む。`process.platform` を読んでよいのはここだけ。各プロセスの入口で 1 回呼ぶ。 */
@@ -37,5 +39,6 @@ export function resolveCurrentHostEnv(): HostEnv {
     homeDir: os.homedir(),
     tmpDir: os.tmpdir(),
     execPath: process.execPath,
+    uid: os.userInfo().uid,
   });
 }

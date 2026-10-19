@@ -6,6 +6,7 @@ export const MISAO_ERROR_STATUS: Record<MisaoServiceErrorCode, number> = {
   usage: 400,
   not_managed: 409,
   custom_socket: 409,
+  duplicate_load: 409,
   not_installed: 409,
   busy: 409,
   daemon_not_ready: 502,

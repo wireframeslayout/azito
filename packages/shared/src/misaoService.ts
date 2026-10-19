@@ -41,6 +41,8 @@ export interface MisaoServiceStatus {
    * domain a Mac uses when nobody is logged in on the screen (installed over SSH). Absent when the job is not loaded.
    */
   serviceDomain?: 'gui' | 'user';
+  /** launchd only: the job is loaded into BOTH domains (two copies). start / restart / update refuse until one is booted out. */
+  serviceDuplicateLoad?: boolean;
   /** The misao release bundled with this hub. */
   bundledVersion?: string;
   /** The version `misao/current` points at; absent when nothing is installed. */

@@ -3,6 +3,8 @@ export type MisaoServiceErrorCode =
   | 'busy'
   | 'not_managed'
   | 'custom_socket'
+  /** launchd has the misao job loaded into both gui/<uid> and user/<uid>: which copy is meant is not guessed. */
+  | 'duplicate_load'
   | 'not_installed'
   | 'daemon_not_ready'
   | 'update_failed'

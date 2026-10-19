@@ -69,6 +69,7 @@ function printStatus(status: MisaoServiceStatus): void {
   const lines = [
     `service:   ${status.serviceInstalled ? `${status.serviceManager} (${status.serviceState ?? 'unknown'})` : 'not installed'}`,
     ...(status.serviceDomain ? [`domain:    ${status.serviceDomain}`] : []),
+    ...(status.serviceDuplicateLoad ? ['warning:   loaded into both gui and user (two copies). start / update refuse until one is booted out; see docs install-and-update.md'] : []),
     `bundled:   ${status.bundledVersion ?? '-'}`,
     `installed: ${status.installedVersion ?? '-'}`,
     `daemon:    ${status.daemon.reachable ? 'reachable' : 'not reachable'}${status.daemon.version ? ` (misao ${status.daemon.version})` : ''}`,
@@ -81,7 +82,7 @@ function printStatus(status: MisaoServiceStatus): void {
 }
 
 /** `azito misao ...`: install, update, start and inspect the AZITO-managed misao service from the bundled hub. */
-export async function misaoCommand(argv: string[], host: Pick<HostEnv, 'platform' | 'homeDir'>, secretFileGuard: SecretFileGuard): Promise<void> {
+export async function misaoCommand(argv: string[], host: Pick<HostEnv, 'platform' | 'homeDir' | 'uid'>, secretFileGuard: SecretFileGuard): Promise<void> {
   try {
     const args = parseArgs(argv);
     if (!args.command || !['status', 'install', 'update', 'start'].includes(args.command)) {

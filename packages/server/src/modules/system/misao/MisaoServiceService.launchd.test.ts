@@ -85,7 +85,7 @@ class LaunchdEmulator {
   }
 }
 
-describe.each([['a logged-in screen session (gui/501)', true, 'gui'], ['no screen session (user/501)', false, 'user']] as const)('MisaoServiceService with launchd, which keeps the definition of a loaded job: %s', (_name, guiExists, domain) => {
+describe.each([['a logged-in screen session (gui/501)', true, 'gui', 'gui'], ['no screen session (user/501)', false, 'user', 'user'], ['a job running in user/501 while gui/501 exists (a later login)', true, 'gui', 'user']] as const)('MisaoServiceService with launchd, which keeps the definition of a loaded job: %s', (_name, guiExists, domain, jobDomain) => {
   let prefix: string;
   let paths: MisaoPaths;
   let emulator: LaunchdEmulator;
@@ -110,7 +110,7 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui'], ['no scree
     fs.mkdirSync(path.dirname(plistPath), { recursive: true });
     fs.writeFileSync(plistPath, LEGACY_PLIST);
     emulator.loaded = LEGACY_PLIST;
-    emulator.loadedDomain = domain;
+    emulator.loadedDomain = jobDomain;
     if (running) await emulator.run('launchctl', ['kickstart', 'x']);
   }
 
@@ -138,7 +138,7 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui'], ['no scree
     expect(emulator.loaded).toContain(`${prefix}/misao/current/misao`);
     expect(emulator.loaded).not.toContain('misao.mjs');
     expect(emulator.running).toBe(true);
-    expect(emulator.loadedDomain).toBe(domain);
+    expect(emulator.loadedDomain).toBe(jobDomain);
   });
 
   it('a fresh install loads the job into the domain that exists and reports it in the status', async () => {
@@ -158,6 +158,7 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui'], ['no scree
     expect(fs.readFileSync(plistPath, 'utf-8')).toBe(LEGACY_PLIST);
     expect(fs.readlinkSync(paths.current)).toBe('0.2.0');
     expect(emulator.running).toBe(true);
+    expect(emulator.loadedDomain).toBe(jobDomain);
   });
 
   it('a successful update loads the new definition', async () => {
@@ -168,6 +169,7 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui'], ['no scree
     expect(emulator.loaded).toContain(`${prefix}/misao/current/misao`);
     expect(emulator.loaded).not.toContain('misao.mjs');
     expect(fs.readlinkSync(paths.current)).toBe('0.3.0');
+    expect(emulator.loadedDomain).toBe(jobDomain);
   });
 
   it('an install does not boot out a running daemon of the same version (it only rewrites the file)', async () => {

@@ -117,6 +117,18 @@ describe('install.sh', () => {
       ]);
     });
 
+    it('starts through the service on macOS (no second hub in the foreground beside it), and keeps run.sh in the foreground on Linux', () => {
+      fs.mkdirSync(path.join(dir, 'prefix', 'hub', 'current'), { recursive: true });
+      stub(path.join(dir, 'prefix', 'hub', 'current', 'run.sh'));
+      expect(runWrapper('Darwin', 'start').status).toBe(0);
+      expect(calls()).toEqual([`node ${dir}/prefix/hub/current/azito-hub.cjs service start`]);
+
+      fs.rmSync(log);
+      stub(path.join(dir, 'prefix', 'hub', 'current', 'run.sh'));
+      expect(runWrapper('Linux', 'start').status).toBe(0);
+      expect(calls()).toEqual(['run.sh ']);
+    });
+
     it('keeps using systemctl on Linux', () => {
       runWrapper('Linux', 'stop');
       runWrapper('Linux', 'status');

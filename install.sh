@@ -381,6 +381,10 @@ fi
 
 case "${1:-}" in
   start)
+    if [ "$(uname -s)" = "Darwin" ]; then
+      # Through the service (the bundled CLI picks the launchd domain), not a second hub in the foreground beside it.
+      exec "${CURRENT}/node" "${CURRENT}/azito-hub.cjs" service start
+    fi
     exec "${CURRENT}/run.sh"
     ;;
   stop)

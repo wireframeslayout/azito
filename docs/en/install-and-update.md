@@ -226,8 +226,26 @@ macOS itself into `gui/<uid>` when the user logs in on the screen.
   launchctl print user/$UID/com.azito.hub >/dev/null 2>&1 && echo "hub: user"
   ```
 
-  If both print, run `azito service stop` (boots it out of both) and then `azito service start`. Check misao the same way with
+  If both print, status shows `gui + user` with a warning, and `start` / `restart` / `reload` / `azito misao update` refuse to pick one (`duplicate_load` from the API). Run `azito service stop` (boots it out of both) and then `azito service start`. Check misao the same way with
   `com.azito.misao`; booting a misao copy out closes the panes it hosts, so do that deliberately.
+
+### `azito service` on an existing install
+
+`azito service ...` (and `azito start` / `stop` / `status` going through it on macOS) needs the `~/.local/bin/azito` wrapper that this
+version's `install.sh` writes. A wrapper written by an older `install.sh` is not updated by a hub update, so on an existing
+install call the bundled CLI directly:
+
+```bash
+~/.azito/hub/current/node ~/.azito/hub/current/azito-hub.cjs service status    # or start | stop | restart | reload
+```
+
+To update the wrapper itself, take it from the current release's `install.sh` (the installer never overwrites an installed hub, so this only replaces the wrapper):
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/azito-install.sh https://github.com/wireframeslayout/azito/releases/latest/download/install.sh
+sed -n "/<<'WRAPPER'/,/^WRAPPER$/p" /tmp/azito-install.sh | sed '1d;$d' > ~/.local/bin/azito && chmod +x ~/.local/bin/azito
+rm /tmp/azito-install.sh
+```
 
 ### misao service
 
@@ -346,7 +364,7 @@ launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "u
 `install.sh` places a CLI wrapper at `~/.local/bin/azito`.
 
 ```bash
-azito start          # Start (foreground)
+azito start          # Start (Linux: foreground. macOS: starts the launchd service, in the domain it belongs to)
 azito stop           # Stop the service
 azito status         # Check service status
 azito token show     # Show UI token

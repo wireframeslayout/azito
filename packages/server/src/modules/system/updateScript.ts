@@ -6,6 +6,7 @@ import { finished } from 'stream/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
+import type { HostEnv } from '../../shared/os/hostEnv';
 import { UpdateStateManager, type UpdateState, type UpdateStep } from './UpdateStateManager';
 import { computeLocalSha256, assertNoTraversal, readSha256FromSumsFile } from '../servers/agent-deploy/integrityVerifier';
 import { HUB_SERVICE, isServiceManagerKind, runCommand, serviceManagerOfKind, type ServiceManager, type ServiceManagerKind } from './serviceManager';
@@ -67,9 +68,9 @@ async function downloadFile(url: string, destPath: string, token?: string): Prom
  * persisted via UpdateStateManager so GET /api/system/update/progress can report
  * on it even across the restart.
  */
-export async function runUpdate(argv: string[], homeDir: string, secretFileGuard: SecretFileGuard): Promise<void> {
+export async function runUpdate(argv: string[], host: Pick<HostEnv, 'homeDir' | 'uid'>, secretFileGuard: SecretFileGuard): Promise<void> {
   const args = parseArgs(argv);
-  const service = serviceManagerOfKind(args.serviceManager, HUB_SERVICE, runCommand, homeDir);
+  const service = serviceManagerOfKind(args.serviceManager, HUB_SERVICE, runCommand, host);
   // Under systemd the transient unit does not inherit the launching process's
   // environment, so the caller (SystemUpdateService) passes this via --setenv
   // rather than an argv flag — see launchUpdateScript for why. Under launchd

@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  DuplicateLoadError,
   HUB_SERVICE,
   LaunchdServiceManager,
   SystemdServiceManager,
@@ -37,17 +38,17 @@ describe('createServiceManager', () => {
   const run = recorder().run;
 
   it('picks systemd on Linux and launchd on macOS', () => {
-    expect(createServiceManager({ platform: 'linux', homeDir: '/h' }, HUB_SERVICE, run)).toMatchObject({ manager: { kind: 'systemd' } });
-    expect(createServiceManager({ platform: 'darwin', homeDir: '/h' }, HUB_SERVICE, run)).toMatchObject({ manager: { kind: 'launchd' } });
+    expect(createServiceManager({ platform: 'linux', homeDir: '/h', uid: 501 }, HUB_SERVICE, run)).toMatchObject({ manager: { kind: 'systemd' } });
+    expect(createServiceManager({ platform: 'darwin', homeDir: '/h', uid: 501 }, HUB_SERVICE, run)).toMatchObject({ manager: { kind: 'launchd' } });
   });
 
   it('refuses Windows with unsupported_os and says why, instead of falling back to another manager', () => {
-    const result = createServiceManager({ platform: 'win32', homeDir: 'C:\\Users\\u' }, HUB_SERVICE, run);
+    const result = createServiceManager({ platform: 'win32', homeDir: 'C:\\Users\\u', uid: -1 }, HUB_SERVICE, run);
     expect(result).toMatchObject({ error: { code: 'unsupported_os', message: expect.stringContaining('Windows') } });
   });
 
   it('refuses an OS AZITO does not know with unsupported_host', () => {
-    expect(createServiceManager({ platform: 'freebsd', homeDir: '/h' }, HUB_SERVICE, run)).toMatchObject({ error: { code: 'unsupported_host' } });
+    expect(createServiceManager({ platform: 'freebsd', homeDir: '/h', uid: 501 }, HUB_SERVICE, run)).toMatchObject({ error: { code: 'unsupported_host' } });
   });
 });
 
@@ -79,15 +80,28 @@ describe('SystemdServiceManager', () => {
     expect(manager.readDefinition()).toBe('[Service]\nExecStart=/old\n');
   });
 
-  it('runs the same systemctl commands for the hub as for misao, with the hub unit', async () => {
+  it('runs the same systemctl commands for the hub as for misao, with the hub unit; reload is daemon-reload then restart', async () => {
     const { run, calls } = recorder();
     const manager = new SystemdServiceManager(run, HUB_SERVICE, home);
     await manager.start();
     await manager.stop();
     await manager.restart();
-    expect(calls).toEqual(['systemctl --user start azito', 'systemctl --user stop azito', 'systemctl --user restart azito']);
+    await manager.reload();
+    expect(calls).toEqual([
+      'systemctl --user start azito',
+      'systemctl --user stop azito',
+      'systemctl --user restart azito',
+      'systemctl --user daemon-reload',
+      'systemctl --user restart azito',
+    ]);
     expect(manager.templateName).toBe('azito-release.service');
     expect(await manager.loadedDomain()).toBeUndefined();
+  });
+
+  it('does not restart when daemon-reload fails', async () => {
+    const { run, calls } = recorder({ 'systemctl --user daemon-reload': { code: 1, stderr: 'Failed to connect to bus' } });
+    await expect(new SystemdServiceManager(run, HUB_SERVICE, home).reload()).rejects.toThrow(/systemctl daemon-reload failed \(exit 1\)/);
+    expect(calls).toEqual(['systemctl --user daemon-reload']);
   });
 
   it('reports a failing systemctl with its output instead of carrying on', async () => {
@@ -109,12 +123,16 @@ describe('LaunchdServiceManager', () => {
   const plist = (label: string): string => path.join(home, 'Library', 'LaunchAgents', `${label}.plist`);
   const gui = 'gui/501/com.azito.hub';
   const user = 'user/501/com.azito.hub';
+  const printGui = `launchctl print ${gui}`;
+  const printUser = `launchctl print ${user}`;
   /** What launchctl does on a Mac where nobody is logged in on the screen: the gui domain is not there. */
   const noGui = {
     'launchctl print gui/501': { code: 125, stderr: 'Domain does not support specified action' },
-    [`launchctl print ${gui}`]: { code: 125, stderr: 'Domain does not support specified action' },
+    [printGui]: { code: 125, stderr: 'Domain does not support specified action' },
   };
-  const notLoaded = { [`launchctl print ${gui}`]: { code: 113 }, [`launchctl print ${user}`]: { code: 113 } };
+  const notLoaded = { [printGui]: { code: 113 }, [printUser]: { code: 113 } };
+  /** Loaded into one domain only. */
+  const onlyIn = (domain: 'gui' | 'user'): Record<string, Partial<CommandResult>> => ({ [domain === 'gui' ? printUser : printGui]: { code: 113 } });
   const manager = (run: CommandRunner): LaunchdServiceManager => new LaunchdServiceManager(run, HUB_SERVICE, home, 501);
 
   it('writes the plist and starts nothing on install', async () => {
@@ -128,13 +146,13 @@ describe('LaunchdServiceManager', () => {
     it('bootstraps an unloaded job into the gui domain when it exists', async () => {
       const { run, calls } = recorder(notLoaded);
       await manager(run).start();
-      expect(calls).toEqual([`launchctl print ${gui}`, `launchctl print ${user}`, 'launchctl print gui/501', `launchctl bootstrap gui/501 ${plist('com.azito.hub')}`]);
+      expect(calls).toEqual([printGui, printUser, 'launchctl print gui/501', `launchctl bootstrap gui/501 ${plist('com.azito.hub')}`]);
     });
 
     it('bootstraps into the user domain when there is no gui domain (nobody is logged in on the screen)', async () => {
-      const { run, calls } = recorder({ ...noGui, [`launchctl print ${user}`]: { code: 113 } });
+      const { run, calls } = recorder({ ...noGui, [printUser]: { code: 113 } });
       await manager(run).start();
-      expect(calls).toEqual([`launchctl print ${gui}`, `launchctl print ${user}`, 'launchctl print gui/501', `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
+      expect(calls).toEqual([printGui, printUser, 'launchctl print gui/501', `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
     });
 
     it('also reads "could not find domain" (113) as no gui domain', async () => {
@@ -143,25 +161,32 @@ describe('LaunchdServiceManager', () => {
       expect(calls.at(-1)).toBe(`launchctl bootstrap user/501 ${plist('com.azito.hub')}`);
     });
 
-    it('only kickstarts a job that is already loaded, in the domain it is loaded into, and never bootstraps a second copy', async () => {
-      const inGui = recorder();
-      await manager(inGui.run).start();
-      expect(inGui.calls).toEqual([`launchctl print ${gui}`, `launchctl kickstart ${gui}`]);
-
-      const inUser = recorder({ [`launchctl print ${gui}`]: { code: 125 } });
-      await manager(inUser.run).start();
-      expect(inUser.calls).toEqual([`launchctl print ${gui}`, `launchctl print ${user}`, `launchctl kickstart ${user}`]);
+    it('bootstraps into the domain it is told to, even when the gui domain exists (putting a job back where it was)', async () => {
+      const { run, calls } = recorder(notLoaded);
+      await manager(run).start('user');
+      expect(calls).toEqual([printGui, printUser, `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
     });
 
-    it('keeps a job loaded into user/ there even when the gui domain appears later (a later login)', async () => {
-      const { run, calls } = recorder({ [`launchctl print ${gui}`]: { code: 113 } });
-      await manager(run).start();
-      expect(calls).not.toContainEqual(expect.stringContaining('bootstrap'));
-      expect(calls.at(-1)).toBe(`launchctl kickstart ${user}`);
+    it('only kickstarts a job that is already loaded, in the domain it is loaded into, and never bootstraps a second copy', async () => {
+      const inGui = recorder(onlyIn('gui'));
+      await manager(inGui.run).start();
+      expect(inGui.calls).toEqual([printGui, printUser, `launchctl kickstart ${gui}`]);
+
+      // Loaded into user/ while gui/ exists (someone logged in later): it stays in user/.
+      const inUser = recorder(onlyIn('user'));
+      await manager(inUser.run).start('gui');
+      expect(inUser.calls).toEqual([printGui, printUser, `launchctl kickstart ${user}`]);
+    });
+
+    it('refuses a job loaded into both domains instead of picking one', async () => {
+      const { run, calls } = recorder();
+      await expect(manager(run).start()).rejects.toThrow(DuplicateLoadError);
+      await expect(manager(run).start()).rejects.toThrow(/both gui\/501 and user\/501.*azito service stop/);
+      expect(calls.some((c) => /kickstart|bootstrap|bootout/.test(c))).toBe(false);
     });
 
     it('fails with launchctl output when bootstrap fails, naming the domain', async () => {
-      const { run } = recorder({ ...noGui, [`launchctl print ${user}`]: { code: 113 }, [`launchctl bootstrap user/501 ${plist('com.azito.hub')}`]: { code: 125, stderr: 'Bootstrap failed: 125: Domain does not support specified action' } });
+      const { run } = recorder({ ...noGui, [printUser]: { code: 113 }, [`launchctl bootstrap user/501 ${plist('com.azito.hub')}`]: { code: 125, stderr: 'Bootstrap failed: 125: Domain does not support specified action' } });
       await expect(manager(run).start()).rejects.toThrow(/launchctl bootstrap user\/501 failed \(exit 125\): Bootstrap failed: 125/);
     });
 
@@ -174,17 +199,17 @@ describe('LaunchdServiceManager', () => {
 
   describe('stop', () => {
     it('boots a loaded job out of the domain it is loaded into, and does nothing for an unloaded one', async () => {
-      const inUser = recorder({ [`launchctl print ${gui}`]: { code: 113 } });
+      const inUser = recorder(onlyIn('user'));
       await manager(inUser.run).stop();
-      expect(inUser.calls).toEqual([`launchctl print ${gui}`, `launchctl print ${user}`, `launchctl bootout ${user}`]);
+      expect(inUser.calls).toEqual([printGui, printUser, `launchctl bootout ${user}`]);
 
-      const inGui = recorder({ [`launchctl print ${user}`]: { code: 113 } });
+      const inGui = recorder(onlyIn('gui'));
       await manager(inGui.run).stop();
-      expect(inGui.calls).toEqual([`launchctl print ${gui}`, `launchctl bootout ${gui}`, `launchctl print ${user}`]);
+      expect(inGui.calls).toEqual([printGui, printUser, `launchctl bootout ${gui}`]);
 
       const unloaded = recorder(notLoaded);
       await manager(unloaded.run).stop();
-      expect(unloaded.calls).toEqual([`launchctl print ${gui}`, `launchctl print ${user}`]);
+      expect(unloaded.calls).toEqual([printGui, printUser]);
     });
 
     it('boots out both copies when the job ended up loaded into both domains', async () => {
@@ -196,11 +221,11 @@ describe('LaunchdServiceManager', () => {
 
   describe('restart', () => {
     it('kickstarts -k a loaded job in its own domain', async () => {
-      const inGui = recorder();
+      const inGui = recorder(onlyIn('gui'));
       await manager(inGui.run).restart();
-      expect(inGui.calls).toEqual([`launchctl print ${gui}`, `launchctl kickstart -k ${gui}`]);
+      expect(inGui.calls).toEqual([printGui, printUser, `launchctl kickstart -k ${gui}`]);
 
-      const inUser = recorder({ [`launchctl print ${gui}`]: { code: 113 } });
+      const inUser = recorder(onlyIn('user'));
       await manager(inUser.run).restart();
       expect(inUser.calls.at(-1)).toBe(`launchctl kickstart -k ${user}`);
     });
@@ -210,27 +235,53 @@ describe('LaunchdServiceManager', () => {
       await manager(run).restart();
       expect(calls.at(-1)).toBe(`launchctl bootstrap gui/501 ${plist('com.azito.hub')}`);
     });
+
+    it('refuses a job loaded into both domains', async () => {
+      await expect(manager(recorder().run).restart()).rejects.toThrow(DuplicateLoadError);
+    });
   });
 
-  describe('state and domain', () => {
-    it('reads the job state and the domain from launchctl print', async () => {
-      const running = recorder({ [`launchctl print ${gui}`]: { stdout: `${gui} = {\n\tstate = running\n}` } });
-      expect(await manager(running.run).state()).toBe('active');
-      expect(await manager(running.run).loadedDomain()).toBe('gui');
+  describe('reload', () => {
+    it('boots the job out and bootstraps it again into the domain it was in, even when the gui domain exists', async () => {
+      const { run, calls } = recorder(onlyIn('user'));
+      await manager(run).reload();
+      expect(calls).toEqual([printGui, printUser, `launchctl bootout ${user}`, `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
+    });
 
-      const waiting = recorder({ [`launchctl print ${gui}`]: { code: 113 }, [`launchctl print ${user}`]: { stdout: '\tstate = waiting\n' } });
-      expect(await manager(waiting.run).state()).toBe('inactive');
-      expect(await manager(waiting.run).loadedDomain()).toBe('user');
+    it('starts a job that is not loaded, and refuses one loaded into both domains', async () => {
+      const unloaded = recorder(notLoaded);
+      await manager(unloaded.run).reload();
+      expect(unloaded.calls.at(-1)).toBe(`launchctl bootstrap gui/501 ${plist('com.azito.hub')}`);
+      await expect(manager(recorder().run).reload()).rejects.toThrow(DuplicateLoadError);
+    });
+  });
+
+  describe('inspect', () => {
+    it('returns the state and the domains from one pair of launchctl print calls', async () => {
+      const running = recorder({ ...onlyIn('gui'), [printGui]: { stdout: `${gui} = {\n\tstate = running\n}` } });
+      expect(await manager(running.run).inspect()).toEqual({ state: 'active', domains: ['gui'] });
+      expect(running.calls).toEqual([printGui, printUser]);
+
+      const waiting = recorder({ ...onlyIn('user'), [printUser]: { stdout: '\tstate = waiting\n' } });
+      expect(await manager(waiting.run).inspect()).toEqual({ state: 'inactive', domains: ['user'] });
 
       const absent = recorder(notLoaded);
-      expect(await manager(absent.run).state()).toBe('inactive');
-      expect(await manager(absent.run).loadedDomain()).toBeUndefined();
+      expect(await manager(absent.run).inspect()).toEqual({ state: 'inactive', domains: [] });
+
+      const both = recorder({ [printGui]: { stdout: '\tstate = waiting\n' }, [printUser]: { stdout: '\tstate = running\n' } });
+      expect(await manager(both.run).inspect()).toEqual({ state: 'active', domains: ['gui', 'user'] });
+    });
+
+    it('loadedDomain gives the one domain, none, or refuses a double load', async () => {
+      expect(await manager(recorder(onlyIn('user')).run).loadedDomain()).toBe('user');
+      expect(await manager(recorder(notLoaded).run).loadedDomain()).toBeUndefined();
+      await expect(manager(recorder().run).loadedDomain()).rejects.toThrow(DuplicateLoadError);
     });
   });
 
   it('serviceManagerOfKind builds the launchd manager with the given uid', async () => {
-    const { run, calls } = recorder();
-    await serviceManagerOfKind('launchd', HUB_SERVICE, run, home, () => 777).restart();
-    expect(calls).toEqual(['launchctl print gui/777/com.azito.hub', 'launchctl kickstart -k gui/777/com.azito.hub']);
+    const { run, calls } = recorder({ 'launchctl print gui/777/com.azito.hub': { code: 113 } });
+    await serviceManagerOfKind('launchd', HUB_SERVICE, run, { homeDir: home, uid: 777 }).restart();
+    expect(calls).toEqual(['launchctl print gui/777/com.azito.hub', 'launchctl print user/777/com.azito.hub', 'launchctl kickstart -k user/777/com.azito.hub']);
   });
 });

@@ -8,7 +8,7 @@ import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { bundleFilesFor, sha256File, type MisaoBundle, type MisaoTargetFiles } from './MisaoBundle';
 import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
-import type { ServiceManager } from '../serviceManager';
+import { DuplicateLoadError, type LaunchdDomain, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 
@@ -109,7 +109,7 @@ export class MisaoServiceService {
       : { reachable: this.deps.paths ? await isSocketListening(this.deps.paths.socket) : false };
     const serviceInstalled = controller?.isInstalled() ?? false;
     const unmanagedDetail = this.deps.pathsError ?? (reason === 'unsupported_platform' ? this.deps.controllerError : undefined);
-    const domain = controller && serviceInstalled ? await controller.loadedDomain() : undefined;
+    const inspection = controller && serviceInstalled ? await controller.inspect() : undefined;
     const installedVersion = this.installedVersion();
     const socketSetting = this.socketSetting();
     const updateAvailable = !!bundle && serviceInstalled && (
@@ -123,8 +123,9 @@ export class MisaoServiceService {
       ...(unmanagedDetail ? { unmanagedDetail } : {}),
       ...(controller ? { serviceManager: controller.kind } : {}),
       serviceInstalled,
-      ...(controller && serviceInstalled ? { serviceState: await controller.state() } : {}),
-      ...(domain ? { serviceDomain: domain } : {}),
+      ...(inspection ? { serviceState: inspection.state } : {}),
+      ...(inspection?.domains.length === 1 ? { serviceDomain: inspection.domains[0] } : {}),
+      ...(inspection && inspection.domains.length > 1 ? { serviceDuplicateLoad: true } : {}),
       ...(bundle ? { bundledVersion: bundle.version } : {}),
       ...(installedVersion ? { installedVersion } : {}),
       daemon,
@@ -176,10 +177,10 @@ export class MisaoServiceService {
   }
 
   /** Writes MISAO_SOCKET into the hub's `.env`, and starts the service when it is not running (never restarts a running one). */
-  private async pointHubAndStart(controller: ServiceManager): Promise<void> {
+  private async pointHubAndStart(controller: ServiceManager, domain?: LaunchdDomain): Promise<void> {
     upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket, this.deps.secretFileGuard);
     if ((await controller.state()) !== 'active') {
-      await controller.start();
+      await controller.start(domain);
       await this.waitUntilListening();
     }
   }
@@ -200,10 +201,12 @@ export class MisaoServiceService {
     const previousDefinition = controller.readDefinition();
     const envFile = this.paths.hubEnvFile;
     const previousEnv = fs.existsSync(envFile) ? fs.readFileSync(envFile) : undefined;
+    // launchd: the job goes back into the domain it was in, whatever domains exist by the time it is started again.
+    const domain = await controller.loadedDomain();
     try {
       await controller.stop();
       await this.registerBundled(bundle, controller, installed);
-      await this.pointHubAndStart(controller);
+      await this.pointHubAndStart(controller, domain);
     } catch (err) {
       const failed: string[] = [];
       const attempt = async (what: string, step: () => void | Promise<void>): Promise<void> => {
@@ -264,14 +267,16 @@ export class MisaoServiceService {
       throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     }
     this.extractVersion(bundle.version, bundleFilesFor(bundle, process.platform, process.arch));
+    // launchd: the job is restarted, and a failed update restored, in the domain it was in (not whichever exists later).
+    const domain = await controller.loadedDomain();
     await controller.stop();
     try {
       this.switchCurrent(bundle.version);
       await controller.install(this.renderUnit(bundle, controller));
-      await controller.start();
+      await controller.start(domain);
       await this.waitUntilListening();
     } catch (err) {
-      return this.recoverFromFailedUpdate(err, previous, previousDefinition, bundle.version, controller);
+      return this.recoverFromFailedUpdate(err, previous, previousDefinition, bundle.version, controller, domain);
     }
     return this.status();
   }
@@ -282,7 +287,7 @@ export class MisaoServiceService {
    * only slow to open its socket, it is left alone (restoring would kill a daemon that is about to be ready). If the restore
    * fails too, both errors are reported with the manual steps.
    */
-  private async recoverFromFailedUpdate(cause: unknown, previous: string, previousDefinition: string, bundledVersion: string, controller: ServiceManager): Promise<never> {
+  private async recoverFromFailedUpdate(cause: unknown, previous: string, previousDefinition: string, bundledVersion: string, controller: ServiceManager, domain: LaunchdDomain | undefined): Promise<never> {
     const causeText = cause instanceof Error ? cause.message : String(cause);
     const manual = `To restore the previous version by hand: ln -sfn ${previous} ${this.paths.current} && azito misao start`;
     if (cause instanceof MisaoServiceError && cause.code === 'daemon_not_ready' && (await controller.state()) === 'active') {
@@ -293,7 +298,7 @@ export class MisaoServiceService {
       await controller.stop();
       this.switchCurrent(previous);
       await controller.install(previousDefinition);
-      await controller.start();
+      await controller.start(domain);
       await this.waitUntilListening();
     } catch (restoreErr) {
       const restoreText = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);
@@ -308,6 +313,9 @@ export class MisaoServiceService {
     this.busy = true;
     try {
       return await operation();
+    } catch (err) {
+      if (err instanceof DuplicateLoadError) throw new MisaoServiceError('duplicate_load', err.message);
+      throw err;
     } finally {
       this.busy = false;
     }

@@ -224,8 +224,25 @@ macOS 自身が `gui/<uid>` に読み込みます。
   launchctl print user/$UID/com.azito.hub >/dev/null 2>&1 && echo "hub: user"
   ```
 
-  両方に出たら、`azito service stop`（両方から外す）→ `azito service start` を実行します。misao も `com.azito.misao` で同様に確かめます
+  両方に出たら、status は警告付きで `gui + user` を示し、`start` / `restart` / `reload` / `azito misao update` はどちらかを推測せずに拒否します（API では `duplicate_load`）。`azito service stop`（両方から外す）→ `azito service start` を実行します。misao も `com.azito.misao` で同様に確かめます
   （misao のコピーを外すと、そのコピーが持つペインは終了します。意図して行ってください）
+
+### 既存のインストールでの `azito service`
+
+`azito service ...`（macOS では `azito start` / `stop` / `status` もこれを通ります）には、この版の `install.sh` が書く `~/.local/bin/azito` ラッパーが必要です。
+古い `install.sh` が書いたラッパーはハブの更新では更新されないので、既存のインストールでは同梱の CLI を直接呼びます:
+
+```bash
+~/.azito/hub/current/node ~/.azito/hub/current/azito-hub.cjs service status    # start | stop | restart | reload も同じ
+```
+
+ラッパー自体を更新するには、現在のリリースの `install.sh` から取り出します（インストール済みのハブには何もしないので、置き換わるのはラッパーだけです）:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/azito-install.sh https://github.com/wireframeslayout/azito/releases/latest/download/install.sh
+sed -n "/<<'WRAPPER'/,/^WRAPPER$/p" /tmp/azito-install.sh | sed '1d;$d' > ~/.local/bin/azito && chmod +x ~/.local/bin/azito
+rm /tmp/azito-install.sh
+```
 
 ### misao サービス
 
@@ -344,7 +361,7 @@ launchctl kickstart -k "gui/$(id -u)/com.azito.hub" || launchctl kickstart -k "u
 `install.sh` は `~/.local/bin/azito` に CLI ラッパーを配置します。
 
 ```bash
-azito start          # 起動（フォアグラウンド）
+azito start          # 起動（Linux: フォアグラウンド。macOS: 属するドメインで launchd のサービスを起動）
 azito stop           # サービス停止
 azito status         # サービス状態確認
 azito token show     # UI トークン表示

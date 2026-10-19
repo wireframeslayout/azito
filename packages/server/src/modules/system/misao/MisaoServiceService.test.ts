@@ -8,7 +8,7 @@ import { misaoTargetFor, readMisaoBundle, type MisaoBundle } from './MisaoBundle
 import { fakeBinaryFor, writeHubBundle as writeBundle } from './misaoBundleFixture';
 import { MisaoServiceService } from './MisaoServiceService';
 import { MisaoServiceError } from './MisaoServiceError';
-import type { ServiceManager } from '../serviceManager';
+import { DuplicateLoadError, type LaunchdDomain, type ServiceInspection, type ServiceManager } from '../serviceManager';
 import { resolveMisaoPaths, type MisaoPaths } from './misaoPaths';
 import { readEnvValue } from '../../../shared/envFile';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
@@ -27,6 +27,7 @@ class FakeController implements ServiceManager {
   readonly calls: string[] = [];
   installed = false;
   current: MisaoServiceState = 'inactive';
+  domains: LaunchdDomain[] = [];
   unit = '';
   private server: net.Server | undefined;
 
@@ -46,8 +47,13 @@ class FakeController implements ServiceManager {
     await this.close();
   }
   async restart(): Promise<void> { throw new Error('the misao service is never restarted'); }
+  async reload(): Promise<void> { throw new Error('the misao service is never reloaded'); }
+  async inspect(): Promise<ServiceInspection> { return { state: this.current, domains: this.domains }; }
   async state(): Promise<MisaoServiceState> { return this.current; }
-  async loadedDomain(): Promise<undefined> { return undefined; }
+  async loadedDomain(): Promise<LaunchdDomain | undefined> {
+    if (this.domains.length > 1) throw new DuplicateLoadError('com.azito.misao', 501, 'Boot one out.');
+    return this.domains[0];
+  }
 
   private listen(): Promise<void> {
     fs.rmSync(this.socketPath, { force: true });
@@ -312,6 +318,14 @@ describe('MisaoServiceService', () => {
       expect(fs.existsSync(path.join(paths.root, BUNDLED_VERSION, 'misao'))).toBe(true);
     });
 
+    it('refuses to update when the job is loaded into both domains, and stops nothing', async () => {
+      await installOld();
+      controller.domains = ['gui', 'user'];
+      controller.calls.length = 0;
+      await expect(newService().update()).rejects.toMatchObject({ code: 'duplicate_load', message: expect.stringContaining('two copies') });
+      expect(controller.calls).toEqual([]);
+    });
+
     it('stops nothing when the bundled files cannot be unpacked (the daemon keeps running)', async () => {
       await installOld();
       // A directory where the binary should be copied from makes the unpack fail before anything is stopped.
@@ -431,6 +445,18 @@ describe('MisaoServiceService', () => {
     it('reports a source checkout as unmanaged', async () => {
       const status = await newService({ paths: null }).status();
       expect(status).toMatchObject({ managed: false, unmanagedReason: 'source_install', serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
+    });
+
+    it('reports the launchd domain, and a job loaded into both domains as a duplicate instead of picking one', async () => {
+      await newService().install();
+      controller.domains = ['user'];
+      expect(await newService().status()).toMatchObject({ serviceDomain: 'user' });
+      expect(await newService().status()).not.toHaveProperty('serviceDuplicateLoad');
+
+      controller.domains = ['gui', 'user'];
+      const status = await newService().status();
+      expect(status).toMatchObject({ serviceDuplicateLoad: true });
+      expect(status).not.toHaveProperty('serviceDomain');
     });
 
     it('offers an update when the running daemon is not the bundled release, using the hub-side probe', async () => {
