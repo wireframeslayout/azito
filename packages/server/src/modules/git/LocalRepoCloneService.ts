@@ -1,12 +1,11 @@
 import { execFile } from 'child_process';
-import * as crypto from 'crypto';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
 import { promisify } from 'util';
 import type { CanonicalRepositoryIdentity } from './resolveCanonicalRepositoryIdentity';
 import { redactGitUrlCredentials } from './redactGitUrlCredentials';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { ASKPASS_USERNAME, type HubGitSupport } from './HubGitSupport';
 
 const execFileAsync = promisify(execFile);
 
@@ -28,10 +27,10 @@ export class LocalCloneTargetNotEmptyError extends Error {
  * servers before ever reaching this service.
  *
  * Credential handling mirrors `HubRepoCache`'s existing `GIT_ASKPASS`
- * pattern: the token is written to a mode-0700 temp script that just echoes
- * it back, never passed as a literal CLI argument or embedded in the clone
- * URL (only the non-secret `x-access-token` username goes in the URL), and
- * the script is removed in a `finally` block. Any error is stripped of
+ * pattern: the token reaches git only through the environment of the
+ * `GIT_ASKPASS` launcher (`HubGitSupport.askPassEnv`), never as a literal CLI
+ * argument, in a file, or embedded in the clone URL (only the non-secret
+ * `x-access-token` username goes in the URL). Any error is stripped of
  * embedded URL credentials before it is thrown (Issue #87 review, "クローン
  * が壊れた設定を作る" finding 4) — this codebase's `redactGitUrlCredentials`.
  *
@@ -59,6 +58,8 @@ export class LocalCloneTargetNotEmptyError extends Error {
 export class LocalRepoCloneService {
   private readonly mutex = new KeyedMutex();
 
+  constructor(private readonly hubGit: HubGitSupport) {}
+
   async clone(identity: CanonicalRepositoryIdentity, token: string | null, branch: string, targetDir: string): Promise<void> {
     return this.mutex.withLock(this.lockKey(targetDir), () => this.cloneUnlocked(identity, token, branch, targetDir));
   }
@@ -68,24 +69,21 @@ export class LocalRepoCloneService {
     fs.mkdirSync(targetDir, { recursive: true });
 
     const cloneUrl = token ? this.embedAskPassUsername(identity.httpsUrl) : identity.httpsUrl;
-    const askPassPath = token ? this.writeAskPassScript(token) : null;
     try {
       await execFileAsync('git', [
-        '-c', 'core.hooksPath=/dev/null',
+        ...this.hubGit.hooksPathArgs(),
         'clone', '--branch', branch, '--single-branch', cloneUrl, targetDir,
       ], {
         encoding: 'utf-8',
         timeout: 300_000,
         env: {
           ...this.cleanEnv(),
-          ...(askPassPath ? { GIT_ASKPASS: askPassPath } : {}),
+          ...(token ? this.hubGit.askPassEnv(token) : {}),
         },
       });
     } catch (err) {
       const rawMessage = err instanceof Error ? err.message : String(err);
       throw new Error(`git clone failed: ${this.redactMessage(rawMessage, [identity.httpsUrl, cloneUrl])}`);
-    } finally {
-      if (askPassPath) { try { fs.unlinkSync(askPassPath); } catch { /* best-effort cleanup */ } }
     }
   }
 
@@ -106,18 +104,11 @@ export class LocalRepoCloneService {
   private embedAskPassUsername(httpsUrl: string): string {
     try {
       const url = new URL(httpsUrl);
-      url.username = 'x-access-token';
+      url.username = ASKPASS_USERNAME;
       return url.toString();
     } catch {
       return httpsUrl;
     }
-  }
-
-  private writeAskPassScript(token: string): string {
-    const nonce = crypto.randomBytes(8).toString('hex');
-    const scriptPath = path.join(os.tmpdir(), `azito-clone-askpass-${nonce}.sh`);
-    fs.writeFileSync(scriptPath, `#!/bin/sh\necho '${token.replace(/'/g, "'\\''")}'`, { mode: 0o700 });
-    return scriptPath;
   }
 
   /** Replaces every URL this call could have embedded a credential in with its redacted form, so a raw git error can never leak the token even indirectly (e.g. an `x-access-token@host` echoed back by git). */

@@ -5,6 +5,7 @@ import * as path from 'path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { LocalRepoCloneService, LocalCloneTargetNotEmptyError } from './LocalRepoCloneService';
 import type { CanonicalRepositoryIdentity } from './resolveCanonicalRepositoryIdentity';
+import { testHubGitSupport } from './testHubGitSupport';
 
 // Never hits a real remote (github.com/gitlab.com etc.) — every fixture repo
 // here is a throwaway local git repository under the OS tmp dir, matching
@@ -50,7 +51,7 @@ describe('LocalRepoCloneService', () => {
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'nested', 'project');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await service.clone(makeIdentity(origin), null, 'main', targetDir);
 
     expect(fs.existsSync(path.join(targetDir, 'file.txt'))).toBe(true);
@@ -63,7 +64,7 @@ describe('LocalRepoCloneService', () => {
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'a', 'b', 'c');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).resolves.not.toThrow();
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
@@ -74,7 +75,7 @@ describe('LocalRepoCloneService', () => {
     const targetDir = makeTmpDir('azito-clone-target-');
     fs.writeFileSync(path.join(targetDir, 'preexisting.txt'), 'do not touch\n');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).rejects.toThrow(LocalCloneTargetNotEmptyError);
 
     // The pre-existing content must survive untouched.
@@ -87,7 +88,7 @@ describe('LocalRepoCloneService', () => {
     createOriginRepo(origin, 'main');
     const targetDir = makeTmpDir('azito-clone-target-');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).resolves.not.toThrow();
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
@@ -99,7 +100,7 @@ describe('LocalRepoCloneService', () => {
     const targetDir = path.join(targetRoot, 'project');
     const token = 'super-secret-token-value';
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await service.clone(makeIdentity(origin), token, 'main', targetDir);
 
     // The askpass script (mode 0700, holds the token) must be cleaned up —
@@ -110,7 +111,7 @@ describe('LocalRepoCloneService', () => {
   });
 
   it('never leaks the token into a thrown error, and cleans up the askpass script on failure too (no real remote touched)', async () => {
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
     const token = 'super-secret-token-value';
@@ -138,7 +139,7 @@ describe('LocalRepoCloneService', () => {
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     const result = service.clone(makeIdentity(origin), null, 'main', targetDir);
 
     // A synchronous (execFileSync-based) implementation would have already

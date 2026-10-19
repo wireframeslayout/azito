@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import { SAFE_BRANCH } from '../../git/GitDiffService';
@@ -33,7 +33,7 @@ export class GitInfoCollector {
     const opts = { cwd: workingDir, encoding: 'utf-8' as const, timeout: 5000 };
 
     try {
-      result.branch = execSync('git branch --show-current', opts).trim() || null;
+      result.branch = execFileSync('git', ['branch', '--show-current'], opts).trim() || null;
     } catch {}
 
     // Distinguish command failure from an empty diff: a successful base...HEAD
@@ -41,13 +41,13 @@ export class GitInfoCollector {
     let baseDiffSucceeded = false;
     if (baseBranch && SAFE_BRANCH.test(baseBranch)) {
       try {
-        result.changedFiles = parseNameStatus(execSync(`git -c core.quotepath=false diff --name-status ${baseBranch}...HEAD`, opts).trim());
+        result.changedFiles = parseNameStatus(execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-status', `${baseBranch}...HEAD`], opts).trim());
         baseDiffSucceeded = true;
       } catch {}
     }
     if (!baseDiffSucceeded) {
       try {
-        result.changedFiles = parseNameStatus(execSync('git -c core.quotepath=false diff --name-status HEAD~1', opts).trim());
+        result.changedFiles = parseNameStatus(execFileSync('git', ['-c', 'core.quotepath=false', 'diff', '--name-status', 'HEAD~1'], opts).trim());
       } catch {}
     }
 

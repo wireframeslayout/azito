@@ -5,11 +5,12 @@ import * as os from 'os';
 import * as path from 'path';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 import { computeRepoHash } from './repoHash';
+import { ASKPASS_USERNAME, type HubGitSupport } from '../HubGitSupport';
 
 export class HubRepoCache {
   private readonly cacheRoot: string;
 
-  constructor(dataDir: string) {
+  constructor(dataDir: string, private readonly hubGit: HubGitSupport) {
     this.cacheRoot = path.join(dataDir, 'repo-cache');
     fs.mkdirSync(this.cacheRoot, { recursive: true });
   }
@@ -91,7 +92,7 @@ export class HubRepoCache {
   private embedUsername(httpsUrl: string): string {
     try {
       const url = new URL(httpsUrl);
-      url.username = 'x-access-token';
+      url.username = ASKPASS_USERNAME;
       return url.toString();
     } catch {
       return httpsUrl;
@@ -99,34 +100,22 @@ export class HubRepoCache {
   }
 
   private fetchWithAskPass(repoDir: string, token: string, branch: string): void {
-    const askPassPath = this.writeAskPassScript(token);
-    try {
-      execFileSync('git', [
-        '-C', repoDir,
-        '-c', 'core.hooksPath=/dev/null',
-        'fetch', 'origin',
-        '--prune',
-        '--atomic',
-        `+refs/heads/${branch}:refs/heads/${branch}`,
-      ], {
-        encoding: 'utf-8',
-        timeout: 120_000,
-        env: {
-          ...this.cleanEnv(),
-          GIT_ASKPASS: askPassPath,
-          GIT_TERMINAL_PROMPT: '0',
-        },
-      });
-    } finally {
-      try { fs.unlinkSync(askPassPath); } catch {}
-    }
-  }
-
-  private writeAskPassScript(token: string): string {
-    const nonce = crypto.randomBytes(8).toString('hex');
-    const scriptPath = path.join(os.tmpdir(), `azito-askpass-${nonce}.sh`);
-    fs.writeFileSync(scriptPath, `#!/bin/sh\necho '${token.replace(/'/g, "'\\''")}'`, { mode: 0o700 });
-    return scriptPath;
+    execFileSync('git', [
+      '-C', repoDir,
+      ...this.hubGit.hooksPathArgs(),
+      'fetch', 'origin',
+      '--prune',
+      '--atomic',
+      `+refs/heads/${branch}:refs/heads/${branch}`,
+    ], {
+      encoding: 'utf-8',
+      timeout: 120_000,
+      env: {
+        ...this.cleanEnv(),
+        ...this.hubGit.askPassEnv(token),
+        GIT_TERMINAL_PROMPT: '0',
+      },
+    });
   }
 
   private resolveRef(repoDir: string, branch: string): string {
