@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildHeadlessLaunchCommand, buildWorkerLaunchCommand, buildInteractiveLaunchCommand } from './LaunchCommand';
+import { buildHeadlessLaunchCommand, buildWorkerLaunchCommand } from './LaunchCommand';
 
 describe('buildWorkerLaunchCommand', () => {
   it('builds claude command with no model or extra args', () => {
@@ -65,40 +65,6 @@ describe('buildWorkerLaunchCommand', () => {
 
   it('returns null for unknown type with empty extraArgs', () => {
     expect(buildWorkerLaunchCommand('unknown-tool', null, '   ')).toBeNull();
-  });
-});
-
-describe('buildInteractiveLaunchCommand (Issue #471: MCP unblocked)', () => {
-  it('builds claude command without --strict-mcp-config', () => {
-    expect(buildInteractiveLaunchCommand('claude', null, null)).toBe(
-      'claude --dangerously-skip-permissions',
-    );
-  });
-
-  it('builds claude command with model, no MCP flag', () => {
-    expect(buildInteractiveLaunchCommand('claude', 'claude-opus-4-6', null)).toBe(
-      "claude --dangerously-skip-permissions --model 'claude-opus-4-6'",
-    );
-  });
-
-  it('builds codex command without -c mcp_servers flag', () => {
-    expect(buildInteractiveLaunchCommand('codex', null, null)).toBe(
-      'codex --dangerously-bypass-approvals-and-sandbox',
-    );
-  });
-
-  it('builds codex command with model, no MCP flag', () => {
-    expect(buildInteractiveLaunchCommand('codex', 'gpt-5.6-sol', null)).toBe(
-      "codex --dangerously-bypass-approvals-and-sandbox --model 'gpt-5.6-sol'",
-    );
-  });
-
-  it('returns extraArgs as-is for generic type', () => {
-    expect(buildInteractiveLaunchCommand('generic', null, 'my-tool')).toBe('my-tool');
-  });
-
-  it('returns null for null type with no extraArgs', () => {
-    expect(buildInteractiveLaunchCommand(null, null, null)).toBeNull();
   });
 });
 

@@ -35,7 +35,7 @@ const CODEX_MCP_DISABLE_FLAG = ` -c mcp_servers.azt-mcp.enabled=false`;
  * scoping. Both paths now go through this one function so the flag can't
  * drift out of sync again.
  */
-function buildCodexCommand(agentSessionId: string | null, { model, extraArgs }: LaunchOptions, blockMcp = true): string {
+function buildCodexCommand(agentSessionId: string | null, { model, extraArgs, blockMcp = true }: LaunchOptions): string {
   const resumePrefix = agentSessionId ? `resume ${agentSessionId} ` : '';
   const mcpFlag = blockMcp ? CODEX_MCP_DISABLE_FLAG : '';
   const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
@@ -46,11 +46,11 @@ function buildCodexCommand(agentSessionId: string | null, { model, extraArgs }: 
 }
 
 export function buildCodexLaunchCommand(opts: LaunchOptions): string {
-  return buildCodexCommand(null, opts, opts.blockMcp);
+  return buildCodexCommand(null, opts);
 }
 
 export function buildCodexRespawnCommand(agentSessionId: string, opts: LaunchOptions): string {
-  return buildCodexCommand(agentSessionId, opts, opts.blockMcp);
+  return buildCodexCommand(agentSessionId, opts);
 }
 
 /**

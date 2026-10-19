@@ -23,6 +23,7 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
+import { shouldBlockMcp } from '../agents/shouldBlockMcp';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch } from '../tasks/execution/TaskExecutionEnv';
 import {
@@ -251,6 +252,18 @@ export class WindowRespawnService {
     // window-row check: a window whose owning task was deleted (task is
     // null) has nothing to rotate either.
     const isPrimary = task !== null && isPrimaryTaskWindow(win);
+
+    // Issue #471: resolve MCP blocking for this window. isPrimary windows
+    // always block. Non-primary windows attached to untrusted tasks check
+    // the execution gate (defense-in-depth: enforceExecutionGate above
+    // already rejects unapproved respawns, but this guards against
+    // gateAlreadyEnforced callers and keeps the decision explicit).
+    const linkedTask = task === null
+      ? null
+      : task.inputTrust !== 'untrusted'
+        ? { executionAllowed: true }
+        : (() => { try { return { executionAllowed: this.isTaskExecutionAllowed(task, server.name) }; } catch { return 'unknown' as const; } })();
+    const blockMcp = shouldBlockMcp({ isPrimary, linkedTask });
 
     // Resolve and verify every working directory this respawn will `cd`
     // into before touching tmux or the DB at all. Containment verification
@@ -527,13 +540,10 @@ export class WindowRespawnService {
             await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
           }
         } else if (win.paneLayout) {
-          // Issue #471: MCP blocking is only for task worker (primary) windows.
-          // By this point the execution gate has already passed for task
-          // windows, so `isPrimary` alone decides.
-          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, isPrimary);
+          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, blockMcp);
         } else {
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, isPrimary);
+          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp);
         }
       } catch (err) {
         try {

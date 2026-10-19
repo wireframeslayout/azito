@@ -28,18 +28,4 @@ export function buildWorkerLaunchCommand(
   return extraArgs?.trim() || null;
 }
 
-/**
- * tmux ペインでの対話起動コマンドを組み立てる（ユーザー窓用: MCP 遮断なし）。
- * Issue #471: ユーザーが追加した窓ではエージェントの MCP アクセスを遮断しない。
- */
-export function buildInteractiveLaunchCommand(
-  workerType: string | null,
-  workerModel: string | null,
-  extraArgs: string | null,
-): string | null {
-  const provider = workerType ? defaultRegistry.tryGet(workerType) : null;
-  if (provider) {
-    return provider.buildLaunchCommand({ model: workerModel, extraArgs, blockMcp: false });
-  }
-  return extraArgs?.trim() || null;
-}
+
