@@ -168,3 +168,46 @@ describe('DELETE /api/windows/:id/panes/:ordinal', () => {
     expect(closePane).toHaveBeenCalledWith(server, 'p_ordinal');
   });
 });
+
+describe('windows change notification', () => {
+  const server = { name: 'misao1', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
+  const driver = {
+    closePane: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+    resolvePane: vi.fn(async () => 'p_1'),
+    splitPaneByHandle: vi.fn(async () => ({ handle: 'p_2', result: { stdout: '', stderr: '', code: 0 } })),
+  };
+  let app: FastifyInstance;
+  const calls: string[] = [];
+
+  beforeEach(async () => {
+    calls.length = 0;
+    app = Fastify();
+    await app.register(windowsRoutes, {
+      windowRepo: { findById: (id: number) => (id === 5 ? makeWindow() : undefined) } as unknown as IWindowRepository,
+      projectRepo: {} as IProjectRepository, taskRepo: {} as ITaskRepository, tmux: {} as TmuxClient,
+      muxDriverRegistry: { resolve: () => driver } as never,
+      serverRepo: { findByName: () => server } as unknown as IServerRepository,
+      respawnService: {} as WindowRespawnService, sleepService: {} as WindowSleepService,
+      sessionStrategyFactory: {} as ISessionStrategyFactory, sessionCaptureService: {} as SessionCaptureService,
+      supervisorRegistry: {} as SupervisorRegistry, windowActivityStatusService: {} as WindowActivityStatusService,
+      uiToken: 'test-token', serverIsolationMutex: new KeyedMutex(), buildSecondaryWindowEnv: () => ({}),
+      invalidateSessionCache: (name: string) => { calls.push(`invalidate:${name}`); },
+      notificationBus: { emit: (e: { type: string }) => { calls.push(e.type); } } as never,
+    });
+    await app.ready();
+  });
+
+  afterEach(async () => { await app.close(); });
+
+  it('drops the session cache before announcing a deleted pane', async () => {
+    const res = await app.inject({ method: 'DELETE', url: '/api/windows/5/panes/1' });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual(['invalidate:misao1', 'sessions:updated']);
+  });
+
+  it('drops the session cache before announcing a split pane', async () => {
+    const res = await app.inject({ method: 'POST', url: '/api/windows/5/panes', payload: { direction: 'h' } });
+    expect(res.statusCode).toBe(200);
+    expect(calls).toEqual(['invalidate:misao1', 'sessions:updated']);
+  });
+});

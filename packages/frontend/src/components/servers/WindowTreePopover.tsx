@@ -12,6 +12,7 @@ function disabledStyle(enabled: boolean): React.CSSProperties {
 import { terminalRefFromWindow, terminalTabId, type TerminalRef } from '../../lib/terminalRef';
 import { resolveWindowDisplay, formatWindowDisplayLabel, sessionWindowLabel, type WindowIndexEntry } from '../../lib/windowDisplay';
 import { isPaneLive, preferredPaneOrdinal } from '../../lib/paneState';
+import { paneRowBadge } from '../../lib/paneRowBadge';
 import { Icon } from '../ui/Icon';
 import { IconButton } from '../ui/IconButton';
 import { Button } from '../ui/Button';
@@ -170,7 +171,7 @@ export default function WindowTreePopover({
                         onClick={() => onSelect(paneRef)}
                         selected={selectedId === terminalTabId(paneRef)}
                       >
-                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>.{pane.index}</span>
+                        <span style={{ fontFamily: 'var(--mono)', color: 'var(--text-dim)' }}>{paneRowBadge(pane)}</span>
                         <span style={{ fontFamily: 'var(--mono)', opacity: isPaneLive(pane) ? undefined : DIMMED_PANE_OPACITY }}>{pane.title || pane.command}</span>
                         <PaneStateChip pane={pane} />
                         {!isPaneLive(pane) && (
