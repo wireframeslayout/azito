@@ -141,7 +141,7 @@ export default function WindowTreePopover({
                     <span style={{ marginLeft: 'auto', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>
                       {isEmptyWindow ? t('windows.noPanes') : `${win.panes.length} pane${win.panes.length > 1 ? 's' : ''}`}
                     </span>
-                    {!isEmptyWindow && (
+                    {!isEmptyWindow && sessionKindOf(sess) !== 'misao' && (
                       <span
                         aria-disabled={splittingPane || !actionable}
                         style={{ display: 'inline-flex', alignItems: 'center', gap: 3, fontSize: 'var(--font-xs)', color: 'var(--text-dim)', marginLeft: 10, ...disabledStyle(!splittingPane && actionable) }}

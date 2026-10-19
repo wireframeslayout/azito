@@ -28,6 +28,7 @@ import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
 import { missingPaneOutcome, resumableWindowId, type PaneUnavailableReason } from '../lib/paneState';
 import { refKindOf } from '../lib/sessionKind';
+import { shouldShowSplitButton } from '../lib/shouldShowSplitButton';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -278,6 +279,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   // The mux the shown window lives in (a server can host tmux and misao windows side by side): its ref's kind. The
   // server's default mux stands in only while the window's ref is not known yet (a bare target is read in the default).
   const windowKind = refKindOf(windowMuxRef) ?? muxKind;
+  const showSplit = shouldShowSplitButton({ windowKind, isMobile });
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
@@ -411,8 +413,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             onOpenTask={onOpenTask}
             onChanged={onWindowChanged}
           />
-          {!isMobile && onSplitPane && <IconButton title={t('terminal.splitHorizontal')} onClick={() => onSplitPane('h')} size="sm"><Icon name="split-h" size={14} /></IconButton>}
-          {!isMobile && onSplitPane && <IconButton title={t('terminal.splitVertical')} onClick={() => onSplitPane('v')} size="sm"><Icon name="split-v" size={14} /></IconButton>}
+          {showSplit && onSplitPane && <IconButton title={t('terminal.splitHorizontal')} onClick={() => onSplitPane('h')} size="sm"><Icon name="split-h" size={14} /></IconButton>}
+          {showSplit && onSplitPane && <IconButton title={t('terminal.splitVertical')} onClick={() => onSplitPane('v')} size="sm"><Icon name="split-v" size={14} /></IconButton>}
           {isMobile && trailing}
         </div>
       </div>

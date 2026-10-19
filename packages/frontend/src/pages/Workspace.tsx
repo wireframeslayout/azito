@@ -654,12 +654,12 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [setSelectedRepoId, project, openIssueListRaw, currentProjectId, mobile, setSidebarOpen]);
 
-  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => {
+  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string, ordinal?: number) => {
     try {
       if (windowId != null) {
-        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction, ordinal }) });
       } else if (ref) {
-        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction, ordinal }) });
       } else {
         const colonIdx = target.indexOf(':');
         if (colonIdx < 0) {
