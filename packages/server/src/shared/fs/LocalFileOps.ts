@@ -140,7 +140,7 @@ export class LocalFileOps implements IFileOps {
   async write(path: string, data: Buffer, options: WriteOptions = {}): Promise<WriteResult> {
     const target = this.checked(path);
     // The check of the lock and the replace are one step as far as other callers of this process are concerned.
-    return pathLocks.withLock(`write:${target}`, () => guarded(async () => {
+    return this.withPathLocks([target], () => guarded(async () => {
       const existing = await statOrNull(target, false);
       if (existing?.isSymbolicLink()) throw new FileOpsError('SYMLINK_REFUSED', 'Refusing to write through a symlink');
       if (existing && !existing.isFile()) throw new FileOpsError('NOT_A_FILE', `Not a regular file: ${target}`);
@@ -248,30 +248,68 @@ export class LocalFileOps implements IFileOps {
 
   /**
    * Moves without overwriting. Callers of this process are serialized per destination, so the second of two moves to the same
-   * name is `ALREADY_EXISTS`. Against another process: a non-directory on Unix is moved with `link` then `unlink`, and `link`
-   * refuses an existing name atomically; a directory, and anything on Windows (whose rename replaces a file), are checked and
+   * name is `ALREADY_EXISTS`. Against another process: a regular file on Unix is moved with `link` then `unlink`, and `link`
+   * refuses an existing name atomically; a directory, a link, and anything on Windows (whose rename replaces a file), are checked and
    * then renamed, so another process creating the destination in between can still be overwritten there.
    */
   async rename(from: string, to: string): Promise<void> {
     const source = this.checked(from);
     const destination = this.checked(to);
-    return pathLocks.withLock(`rename:${destination}`, () => guarded(async () => {
+    return this.withPathLocks([source, destination], () => guarded(async () => {
       const moving = await fs.promises.lstat(source);
       if (await statOrNull(destination, false)) throw new FileOpsError('ALREADY_EXISTS', `Already exists: ${destination}`);
-      if (this.host.platform !== 'win32' && !moving.isDirectory()) {
-        try {
-          await fs.promises.link(source, destination);
-          await fs.promises.unlink(source);
-          return;
-        } catch (err) {
-          const code = (err as NodeJS.ErrnoException).code;
-          if (code === 'EEXIST') throw new FileOpsError('ALREADY_EXISTS', `Already exists: ${destination}`);
-          // A filesystem without hard links (or a move across filesystems) is left to the plain rename, which reports its own error.
-          if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EXDEV' && code !== 'EMLINK' && code !== 'ENOSYS') throw err;
-        }
+      // Only a regular file takes the link route: on macOS `link` follows a symbolic link and would link what it points at.
+      if (this.host.platform !== 'win32' && moving.isFile()) {
+        if (await this.moveByLink(source, destination)) return;
       }
       await fs.promises.rename(source, destination);
     }));
+  }
+
+  /**
+   * `link` then `unlink`: `link` refuses an existing name atomically. Returns false when `link` itself cannot be used here (no
+   * hard links on the filesystem, another filesystem), so the caller renames instead; only `link` failing decides that. If the
+   * source cannot be unlinked after the link was made, the destination is removed again and the original error is thrown
+   * (with the failure of that undo, if any): a rename that leaves both names is never reported as done.
+   */
+  private async moveByLink(source: string, destination: string): Promise<boolean> {
+    try {
+      await fs.promises.link(source, destination);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'EEXIST') throw new FileOpsError('ALREADY_EXISTS', `Already exists: ${destination}`);
+      if (code === 'EPERM' || code === 'ENOTSUP' || code === 'EXDEV' || code === 'EMLINK' || code === 'ENOSYS') return false;
+      throw err;
+    }
+    try {
+      await fs.promises.unlink(source);
+    } catch (unlinkError) {
+      try {
+        await fs.promises.unlink(destination);
+      } catch (undoError) {
+        throw new AggregateError([unlinkError, undoError], `Could not remove ${source} after linking it to ${destination}, and could not undo the link; both names now exist`);
+      }
+      throw unlinkError;
+    }
+    return true;
+  }
+
+  /**
+   * Runs `fn` while holding a lock for each path (taken in sorted order, so two callers cannot wait on each other). A lock is
+   * named by the parent directory's real path and the name, folded to lower case where the filesystem usually ignores case
+   * (win32, darwin): the same file spelled differently is one lock, and folding too much only serializes more.
+   */
+  private async withPathLocks<T>(paths: string[], fn: () => Promise<T>): Promise<T> {
+    const foldCase = this.host.platform !== 'linux';
+    const keys = await Promise.all(paths.map(async (p) => {
+      const parent = this.api.dirname(p);
+      const realParent = await realpathNative(parent).catch(() => parent);
+      const key = this.api.join(realParent, this.api.basename(p));
+      return foldCase ? key.toLowerCase() : key;
+    }));
+    const sorted = [...new Set(keys)].sort();
+    const run = (i: number): Promise<T> => (i === sorted.length ? fn() : pathLocks.withLock(sorted[i], () => run(i + 1)));
+    return run(0);
   }
 
   async realpath(path: string): Promise<string> {

@@ -1,6 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'crypto';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
+import * as fs from 'fs';
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError, type FileOpsErrorCode } from './fileOps';
@@ -327,6 +328,55 @@ describe('LocalFileOps.rename races', () => {
     expect(loser.reason).toMatchObject({ code: 'ALREADY_EXISTS' });
     const winnerContent = readFileSync(path.join(dir, 'c'), 'utf8');
     expect(readdirSync(dir).sort()).toEqual(winnerContent === 'A' ? ['b', 'c', 'home'] : ['a', 'c', 'home']);
+  });
+
+  it.skipIf(isWindows)('moves a link as a link (not what it points at), a dangling one included', async () => {
+    writeFileSync(path.join(dir, 'target.txt'), 'T');
+    symlinkSync('target.txt', path.join(dir, 'l1'));
+    symlinkSync('missing', path.join(dir, 'dangling'));
+    await ops.rename(path.join(dir, 'l1'), path.join(dir, 'l2'));
+    await ops.rename(path.join(dir, 'dangling'), path.join(dir, 'dangling2'));
+    expect(lstatSync(path.join(dir, 'l2')).isSymbolicLink()).toBe(true);
+    expect(readlinkSync(path.join(dir, 'l2'))).toBe('target.txt');
+    expect(lstatSync(path.join(dir, 'dangling2')).isSymbolicLink()).toBe(true);
+    expect(existsSync(path.join(dir, 'l1'))).toBe(false);
+    expect(readFileSync(path.join(dir, 'target.txt'), 'utf8')).toBe('T');
+  });
+
+  describe.skipIf(isWindows)('when the source cannot be unlinked after the link was made', () => {
+    afterEach(() => { vi.restoreAllMocks(); });
+
+    it('removes the new name again and reports the failure, instead of reporting a move that left both names', async () => {
+      writeFileSync(path.join(dir, 'a'), 'A');
+      const real = fs.promises.unlink.bind(fs.promises);
+      vi.spyOn(fs.promises, 'unlink').mockImplementation(async (p) => {
+        if (String(p) === path.join(dir, 'a')) throw Object.assign(new Error('EPERM: operation not permitted'), { code: 'EPERM' });
+        return real(p);
+      });
+      await expect(ops.rename(path.join(dir, 'a'), path.join(dir, 'b'))).rejects.toThrow(/EPERM/);
+      expect(readdirSync(dir).sort()).toEqual(['a', 'home']);
+      expect(readFileSync(path.join(dir, 'a'), 'utf8')).toBe('A');
+    });
+
+    it('carries both failures when the undo fails too', async () => {
+      writeFileSync(path.join(dir, 'a'), 'A');
+      vi.spyOn(fs.promises, 'unlink').mockRejectedValue(Object.assign(new Error('EIO'), { code: 'EIO' }));
+      const err = await ops.rename(path.join(dir, 'a'), path.join(dir, 'b')).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AggregateError);
+      expect((err as AggregateError).errors).toHaveLength(2);
+    });
+  });
+
+  it.skipIf(isWindows)('treats a destination reached through another spelling of its directory as the same lock', async () => {
+    mkdirSync(path.join(dir, 'real'));
+    symlinkSync('real', path.join(dir, 'alias'));
+    writeFileSync(path.join(dir, 'real', 'f.txt'), 'v1');
+    const expectV1 = { sha256: sha256('v1') };
+    const results = await Promise.allSettled([
+      ops.write(path.join(dir, 'real', 'f.txt'), Buffer.from('A'), { expect: expectV1 }),
+      ops.write(path.join(dir, 'alias', 'f.txt'), Buffer.from('B'), { expect: expectV1 }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   });
 
   it.skipIf(isWindows)('moves a directory, and refuses to move onto an existing name', async () => {

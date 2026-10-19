@@ -104,6 +104,7 @@ function toBrowseError(err: unknown, messages: BrowseMessages = {}): unknown {
     case 'NOT_A_FILE': return new FileBrowseError('Not a regular file', 400);
     case 'NOT_A_DIRECTORY': return new FileBrowseError('Not a directory', 400);
     case 'TOO_LARGE': return new FileBrowseError(messages.tooLarge?.(err.details.size ?? 0) ?? err.message, 400);
+    case 'PERMISSION_DENIED': return new FileBrowseError(err.message, 403);
     case 'INVALID_PATH': return new FileBrowseError('Invalid path', 400);
     case 'SYMLINK_REFUSED': return new FileBrowseError('Refusing to write through a symlink', 400);
     case 'FAILED': return new FileBrowseError(err.message, 500);

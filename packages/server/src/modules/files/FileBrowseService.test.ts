@@ -412,8 +412,9 @@ describe('FileBrowseService with a host whose operations refuse', () => {
     expect(await answer('NOT_A_FILE')).toBe(400);
     expect(await answer('INVALID_PATH')).toBe(400);
     expect(await answer('FAILED')).toBe(500);
+    expect(await answer('PERMISSION_DENIED')).toBe(403);
     // Anything else is not translated: the route answers it as a 500 with its message.
-    expect(await answer('PERMISSION_DENIED')).toBe('unexpected: x');
+    expect(await answer('ALREADY_EXISTS')).toBe('unexpected: x');
   });
 
   it('does not hide an unexpected error as "not found"', async () => {

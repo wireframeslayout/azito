@@ -481,7 +481,10 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
         if (!isHostPathContained(fileOps.platform, { target: resolvedTarget, allowedRoot: resolvedRoot })) {
           return reply.status(400).send({ error: 'target path escapes the allowed directory' });
         }
-        if (isGitDirectoryName(fileOps.platform, api.basename(resolvedTarget))) return reply.status(400).send({ error: 'Cannot delete .git directory' });
+        // On Windows a short name (GIT~1) is `.git` too: when the target is not a link, the name the host resolves it to counts.
+        const targetStat = await fileOps.stat(resolvedTarget, { followLinks: false });
+        const hostName = targetStat && targetStat.kind !== 'symlink' ? api.basename(await fileOps.realpath(resolvedTarget)) : api.basename(resolvedTarget);
+        if (isGitDirectoryName(fileOps.platform, api.basename(resolvedTarget)) || isGitDirectoryName(fileOps.platform, hostName)) return reply.status(400).send({ error: 'Cannot delete .git directory' });
 
         await fileBrowseService.deleteEntry(srv, resolvedTarget);
         return { ok: true };
