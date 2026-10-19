@@ -1133,6 +1133,24 @@ describe('mux creation routes hand the new pane its env inside the per-server lo
     expect(heldAtCall).toEqual([true]);
   });
 
+  it('POST /mux/windows/:ref/panes (split) splits the pane the request names by ordinal', async () => {
+    await build(normal, { windowRepo: makeWindowRepo() });
+    const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: { direction: 'h', ordinal: 2 } });
+    expect(res.statusCode).toBe(200);
+    expect(driver.resolvePane).toHaveBeenCalledWith(normal, expect.anything(), 2);
+  });
+
+  it.each([
+    ['pane not found', 404],
+    ['spawn failed', 500],
+  ])('POST /mux/windows/:ref/panes (split) answers a failed split (%s) with %i', async (stderr, status) => {
+    await build(normal, { windowRepo: makeWindowRepo() });
+    vi.mocked(splitPaneByHandle).mockResolvedValueOnce({ handle: 'p_0123456789ABCDEFGHJKMNPQRT', result: { stdout: '', stderr, code: 1 } });
+    const res = await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: { direction: 'h' } });
+    expect(res.statusCode).toBe(status);
+    expect(res.json().error).toBe(stderr);
+  });
+
   it('POST /mux/windows/:ref/panes (split) passes the mask env to an isolated server', async () => {
     await build(isolated, { windowRepo: makeWindowRepo() });
     await app.inject({ method: 'POST', url: `/api/servers/misao1/mux/windows/${refParam}/panes`, payload: {} });
