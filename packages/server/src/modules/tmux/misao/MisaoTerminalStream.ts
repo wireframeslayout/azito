@@ -4,6 +4,7 @@ import { TERMINAL_CLOSE } from '@azito/shared';
 import type { ITerminalStream } from '../../servers/transport/ServerTransport';
 import type { MisaoAttachClient } from './MisaoConnection';
 import { MISAO_PANE_EXITED } from './misaoErrorCodes';
+import { isTerminalReport } from './terminalReports';
 
 export interface MisaoTerminalStreamOptions {
   client: MisaoAttachClient;
@@ -67,7 +68,11 @@ export class MisaoTerminalStream extends EventEmitter implements ITerminalStream
   write(data: string): void {
     if (this.finished) return;
     const { paneId, clientId } = this.options;
-    void this.send(() => this.options.client.request('pane.write', { paneId, data, clientId, source: 'terminal' }));
+    // A write with a clientId makes that client's size the pane's size. The xterm's own replies (focus, device
+    // attributes, ...) are not the user operating that terminal: with two browsers attached at different sizes, each
+    // reply flipped the size, the app redrew and asked again, and the pane flickered between the two sizes.
+    const params = isTerminalReport(data) ? { paneId, data, source: 'terminal' as const } : { paneId, data, clientId, source: 'terminal' as const };
+    void this.send(() => this.options.client.request('pane.write', params));
   }
 
   resize(cols: number, rows: number): void {
