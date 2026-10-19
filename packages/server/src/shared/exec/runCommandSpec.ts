@@ -52,9 +52,10 @@ class Capture {
     return false;
   }
 
-  text(): string {
+  /** `cutShort`: the command was stopped, so the output may end in the middle of a character. */
+  text(cutShort: boolean): string {
     const all = Buffer.concat(this.chunks);
-    return (this.exceeded ? trimIncompleteUtf8(all) : all).toString('utf-8');
+    return (cutShort ? trimIncompleteUtf8(all) : all).toString('utf-8');
   }
 }
 
@@ -67,17 +68,56 @@ function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   }
 }
 
+/** How often the process group left behind is looked at while it is given time to stop. */
+const GROUP_POLL_MS = 100;
+
+/**
+ * The group's cleanup, apart from the call's own outcome: whatever the leader did, a member that outlives the polite stop
+ * is killed when the grace period ends. The group id is the leader's pid. Unix never hands a pid out again while a process
+ * is still in a group of that id, so `kill(-pgid)` reaches only our descendants as long as the group has members — which
+ * is checked (signal 0) every {@link GROUP_POLL_MS} up to the moment of the kill; an empty group ends the watch.
+ * Timers are unref'd: they never keep the process alive.
+ */
+function reapGroup(child: ChildProcess, graceMs: number): void {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  const killAt = Date.now() + graceMs;
+  const timer = setInterval(() => {
+    try {
+      process.kill(-pid, 0);
+    } catch {
+      clearInterval(timer); // no member left: nothing to kill, and the id may be reused from now on
+      return;
+    }
+    if (Date.now() >= killAt) {
+      clearInterval(timer);
+      signalGroup(child, 'SIGKILL');
+    }
+  }, GROUP_POLL_MS);
+  timer.unref();
+}
+
+/**
+ * Ends the tree of a Windows command with the system's own `taskkill` (by absolute path: a PATH lookup could find another
+ * program of that name). Not when the direct child has already exited — its pid may belong to another process by now — and
+ * a failed taskkill falls back to killing the direct child; both are reported.
+ */
 function killWindowsTree(child: ChildProcess): void {
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   const systemRoot = process.env.SystemRoot;
-  if (child.pid === undefined) return;
   if (!systemRoot) {
+    console.warn('[exec] SystemRoot is not set; killing only the direct child of a stopped command');
     child.kill();
     return;
   }
-  // The system's own taskkill by absolute path: a PATH lookup could find another program of that name.
   const taskkill = path.win32.join(systemRoot, 'System32', 'taskkill.exe');
   const killer = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
-  killer.on('error', () => child.kill());
+  const fallBack = (why: string): void => {
+    console.warn(`[exec] taskkill did not stop pid ${child.pid} (${why}); killing the direct child`);
+    child.kill();
+  };
+  killer.on('error', (err) => fallBack(err.message));
+  killer.on('exit', (code) => { if (code !== 0) fallBack(`exit ${code}`); });
 }
 
 /**
@@ -124,8 +164,9 @@ export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): P
     };
     const failureOrResult = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
       settle(() => {
-        const out = stdout.text();
-        const err = stderr.text();
+        const cutShort = stopReason !== null;
+        const out = stdout.text(cutShort);
+        const err = stderr.text(cutShort);
         if (stopReason === 'timeout') reject(new CommandTimeoutError(spec.timeoutMs, out, err));
         else if (stopReason === 'output_limit') reject(new CommandOutputLimitError(spec.maxOutputBytes, out, err));
         else if (exitCode !== null) resolve({ exitCode, signal: null, stdout: out, stderr: err });
@@ -140,7 +181,8 @@ export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): P
         killWindowsTree(child);
       } else {
         signalGroup(child, 'SIGTERM');
-        timers.push(setTimeout(() => signalGroup(child, 'SIGKILL'), killGraceMs));
+        // Not one of `timers`: the call may settle (the leader closes) while members of the group are still running.
+        reapGroup(child, killGraceMs);
       }
       // A descendant that kept the pipes open must not hold the call forever.
       timers.push(setTimeout(() => {
@@ -157,7 +199,7 @@ export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): P
     child.on('error', (err: NodeJS.ErrnoException) => {
       // Only a failure to start ends the call here; the process is gone before it ever ran.
       if (child.pid !== undefined) return;
-      settle(() => reject(new CommandSpawnError(err.code ?? 'UNKNOWN', err.message, stdout.text(), stderr.text())));
+      settle(() => reject(new CommandSpawnError(err.code ?? 'UNKNOWN', err.message, stdout.text(false), stderr.text(false))));
     });
     child.on('close', (exitCode, signal) => failureOrResult(exitCode, signal));
 

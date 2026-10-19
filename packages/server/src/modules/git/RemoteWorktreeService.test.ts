@@ -344,6 +344,18 @@ describe('RemoteWorktreeService', () => {
       expect(gitCalls.slice(0, 2).every((c) => c.cwd === REAL_DIR)).toBe(true);
     });
 
+    it('still prunes when a stored ~ worktree path cannot be resolved because the directory is already gone', async () => {
+      const gone: ExecResponder = (command) => (command.includes('.worktrees')
+        ? { stdout: '', stderr: 'cd: no such file or directory', code: 1 }
+        : resolverExec()(command));
+      const { svc, gitCalls } = setup(() => failed(128, 'fatal: not a working tree'), gone);
+      await svc.remove(TILDE_DIR, '~/ws/repo/.worktrees/task-9');
+      expect(gitCalls.map((c) => [c.args, c.cwd])).toEqual([
+        [['worktree', 'remove', `${REAL_DIR}/.worktrees/task-9`, '--force'], REAL_DIR],
+        [['worktree', 'prune'], REAL_DIR],
+      ]);
+    });
+
     it('fails, rather than running git in a directory named "~", when the host cannot resolve it', async () => {
       const { svc, gitCalls } = setup(() => ok(), (command) => (command.startsWith('cd -- "$HOME"') ? { stdout: '', stderr: 'no such directory', code: 1 } : execOk()));
       await expect(svc.list(TILDE_DIR)).rejects.toThrow(/realpath failed/);

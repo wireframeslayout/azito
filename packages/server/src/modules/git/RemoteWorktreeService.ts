@@ -105,7 +105,9 @@ export class RemoteWorktreeService implements IWorktreeService {
     assertSafePath(worktreePath, 'worktreePath');
     assertNotOptionLike(worktreePath, 'worktreePath');
     const dir = await this.absolute(workingDir);
-    const target = await this.absolute(worktreePath);
+    // A worktree under the working directory keeps that prefix as resolved: a stored `~/...` path whose directory is already
+    // gone cannot be resolved by the host, and `prune` below is what settles such a registration.
+    const target = worktreePath.startsWith(`${workingDir}/`) ? `${dir}${worktreePath.slice(workingDir.length)}` : await this.absolute(worktreePath);
     // Both are best-effort cleanup: `remove` fails for a worktree that is already gone, and `prune` then settles the registry.
     await runGit(this.transport, dir, ['worktree', 'remove', target, '--force']);
     await runGit(this.transport, dir, ['worktree', 'prune']);

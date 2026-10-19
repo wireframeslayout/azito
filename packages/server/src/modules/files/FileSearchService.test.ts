@@ -269,6 +269,20 @@ describe('FileSearchService', () => {
       expect(result.truncated).toBe(true);
     });
 
+    it('answers 504 when the deadline ended an rg search that had only written `begin` records (no hit yet)', async () => {
+      const beginOnly = JSON.stringify({ type: 'begin', data: { path: { text: '/project/a.ts' } } }) + '\n' + '{"type":"match","data":{"pa';
+      const { factory } = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: new CommandTimeoutError(10_000, beginOnly, '') });
+      await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
+    });
+
+    it('returns a partial rg result when the deadline ended a search whose whole lines hold a hit', async () => {
+      const partial = JSON.stringify({ type: 'begin', data: { path: { text: '/project/a.ts' } } }) + '\n' + rgMatch('/project/a.ts', 3, 'test one') + '\n{"type":"match","data":{"pa';
+      const { factory } = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: new CommandTimeoutError(10_000, partial, '') });
+      const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+      expect(result.contentHits.map((h) => h.path)).toEqual(['a.ts']);
+      expect(result.truncated).toBe(true);
+    });
+
     it('stops rg and grep at an output size that fits the 200 hits, not megabytes', async () => {
       const { factory, runSpecs } = createMockTransportFactory({ rgVersion: NO_RG });
       await new FileSearchService(factory).search(baseServer, baseOpts);

@@ -136,6 +136,35 @@ describe('runCommandSpec: stopping a command', () => {
     expect(await timeoutOf(script)).toBeInstanceOf(CommandTimeoutError);
   });
 
+  // The leader ends on SIGTERM, which settles the call; the member that ignores SIGTERM and shares no pipe with us must still be killed.
+  it.skipIf(isWindows)('still kills a grandchild that shares no pipe with us and ignores SIGTERM, after its parent has exited', async () => {
+    const script = `
+      const { spawn } = require("child_process");
+      const grandchild = spawn(process.execPath, ["-e", "process.on('SIGTERM', () => {}); setInterval(()=>{}, 1000)"], { stdio: "ignore" });
+      process.stdout.write(String(grandchild.pid) + "\\n");
+      process.on("SIGTERM", () => process.exit(0));
+      setInterval(()=>{}, 1000);
+    `;
+    const err = await timeoutOf(script, 500);
+    expect(err).toBeInstanceOf(CommandTimeoutError);
+    const pid = Number((err as CommandTimeoutError).stdout.trim());
+    expect(pid).toBeGreaterThan(0);
+
+    const alive = (): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const deadline = Date.now() + 4000;
+    while (alive() && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
+    const stillAlive = alive();
+    if (stillAlive) process.kill(pid, 'SIGKILL'); // do not leave it behind if the assertion below fails
+    expect(stillAlive).toBe(false);
+  });
+
+  it('drops a half-written character from the output kept when the deadline stops the command', async () => {
+    // 0xE3 is the first byte of a 3-byte character such as 'あ'.
+    const err = await timeoutOf('process.stdout.write(Buffer.from([0x61, 0xe3])); setInterval(()=>{}, 1000)');
+    expect(err).toBeInstanceOf(CommandTimeoutError);
+    expect((err as CommandTimeoutError).stdout).toBe('a');
+  });
+
   it('still returns a normal non-zero exit as a result when no limit was hit', async () => {
     expect(await within(8000, run(node('process.exit(7)')))).toMatchObject({ exitCode: 7 });
   });

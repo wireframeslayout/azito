@@ -68,7 +68,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
   constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile | null) {}
 
   run(spec: CommandSpec): Promise<CommandResult> {
-    return runCommandSpec(spec, { windows: this.hostProfile?.platform === 'win32' });
+    return runCommandSpec(spec, { windows: this.taskTempFiles.hubPlatform === 'win32' });
   }
 
   /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */

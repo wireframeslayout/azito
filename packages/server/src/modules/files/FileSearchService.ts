@@ -128,27 +128,11 @@ export class FileSearchService {
     const transport = this.transportFactory.getTransport(server);
     try {
       // rg and grep exit 1 for "no match" and 2 for an error that may still have produced hits: the output decides.
-      const { stdout, cut } = await this.readSearchOutput(transport.run(spec));
-      if (!stdout.trim()) return { hits: [], truncated: cut };
-
-      const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
-
-      if (engine === 'rg') {
-        const matches = parseRipgrepJson(stdout);
-        return {
-          hits: matches.slice(0, MAX_RESULTS).map(m => ({
-            path: m.path.startsWith(root) ? m.path.slice(root.length) : m.path,
-            line: m.line,
-            column: m.column,
-            text: m.text,
-            matchStart: m.matchStart,
-            matchEnd: m.matchEnd,
-          })),
-          truncated: cut,
-        };
-      }
-
-      return { hits: this.parseGrepOutput(stdout, root, opts).slice(0, MAX_RESULTS), truncated: cut };
+      const { stdout, cut, timedOut } = await this.readSearchOutput(transport.run(spec));
+      const hits = stdout.trim() ? this.parseHits(stdout, opts, engine) : [];
+      // A deadline is a partial success only when the whole lines read hold a usable hit (rg's `begin` records alone are not one).
+      if (timedOut && hits.length === 0) throw new FileBrowseError('Search timed out', 504);
+      return { hits, truncated: cut };
     } catch (err: unknown) {
       if (isTimeoutError(err)) {
         throw new FileBrowseError('Search timed out', 504);
@@ -181,17 +165,32 @@ export class FileSearchService {
     return `LC_ALL=C command find ${root} \\( ${pruneExprs} \\) -prune -o -type f${includeExpr} ${nameFlag} ${sq(pattern)} -print | head -${MAX_RESULTS}`;
   }
 
+  private parseHits(stdout: string, opts: SearchOptions, engine: 'rg' | 'grep'): SearchHit[] {
+    const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
+    if (engine === 'rg') {
+      return parseRipgrepJson(stdout).slice(0, MAX_RESULTS).map(m => ({
+        path: m.path.startsWith(root) ? m.path.slice(root.length) : m.path,
+        line: m.line,
+        column: m.column,
+        text: m.text,
+        matchStart: m.matchStart,
+        matchEnd: m.matchEnd,
+      }));
+    }
+    return this.parseGrepOutput(stdout, root, opts).slice(0, MAX_RESULTS);
+  }
+
   /**
-   * The stdout of a search. One the output cap cut, or the deadline ended with hits already read, is returned as the whole
-   * lines read so far with `cut` set (the caller reports `truncated`); a deadline with nothing read is the timeout.
+   * The stdout of a search. One the output cap cut, or the deadline ended, is returned as the whole lines read so far with
+   * `cut` set (the caller reports `truncated`) and `timedOut` for a deadline; with not even one whole line the error stands.
    */
-  private async readSearchOutput(running: Promise<CommandResult>): Promise<{ stdout: string; cut: boolean }> {
+  private async readSearchOutput(running: Promise<CommandResult>): Promise<{ stdout: string; cut: boolean; timedOut: boolean }> {
     try {
-      return { stdout: (await running).stdout, cut: false };
+      return { stdout: (await running).stdout, cut: false, timedOut: false };
     } catch (err) {
       const partial = err instanceof CommandOutputLimitError || err instanceof CommandTimeoutError ? err : null;
       if (partial && partial.stdout.includes('\n')) {
-        return { stdout: partial.stdout.slice(0, partial.stdout.lastIndexOf('\n') + 1), cut: true };
+        return { stdout: partial.stdout.slice(0, partial.stdout.lastIndexOf('\n') + 1), cut: true, timedOut: err instanceof CommandTimeoutError };
       }
       throw err;
     }
