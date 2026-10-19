@@ -23,6 +23,7 @@ import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Windo
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
 import { taskWindowRef } from '../../tmux/windowIdentity';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import { recordedSignalFilePath } from '../recordedTempFiles';
 import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../../tmux/storedWindowKind';
 
 export interface RecoveryLogger {
@@ -452,8 +453,8 @@ export class RecoverStuckTasksUseCase {
 
     // The path the phase recorded when it started wins; the folders the hub places signal files in (including the legacy
     // Unix /tmp) cover phases started before the path was recorded.
-    const recorded = lastPrompt.parsed.signalFilePath;
-    const candidates = typeof recorded === 'string' ? [recorded] : [];
+    const recorded = recordedSignalFilePath(lastPrompt.parsed.signalFilePath, task.id);
+    const candidates = recorded ? [recorded] : [];
     const sigPrefix = TaskTempFiles.signalPrefixForTask(task.id);
     for (const dir of this.taskTempFiles.hubScanDirs()) {
       try {

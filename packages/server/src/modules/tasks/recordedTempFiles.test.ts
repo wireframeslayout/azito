@@ -1,6 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import type { ExecutionLog } from './ExecutionLog';
-import { recordedTempFilePaths } from './recordedTempFiles';
+import { recordedTempFilePaths, recordedSignalFilePath } from './recordedTempFiles';
+
+describe('recordedSignalFilePath', () => {
+  it('accepts an absolute path with the task\'s signal prefix and nothing else', () => {
+    expect(recordedSignalFilePath('/t/azito-pipe-7-sig-1.log', 7)).toBe('/t/azito-pipe-7-sig-1.log');
+    expect(recordedSignalFilePath('/t/azito-pipe-7-1.log', 7)).toBeNull();
+    expect(recordedSignalFilePath('/t/azito-pipe-70-sig-1.log', 7)).toBeNull();
+    expect(recordedSignalFilePath('azito-pipe-7-sig-1.log', 7)).toBeNull();
+    expect(recordedSignalFilePath('/etc/passwd', 7)).toBeNull();
+    expect(recordedSignalFilePath(undefined, 7)).toBeNull();
+  });
+});
 
 function log(type: ExecutionLog['type'], content: unknown, id = 1): ExecutionLog {
   return { id, taskId: 7, unitId: 1, type, content: typeof content === 'string' ? content : JSON.stringify(content), createdAt: '' };

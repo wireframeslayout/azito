@@ -24,11 +24,20 @@ export function recordedTempFilePaths(logs: readonly ExecutionLog[], taskId: num
     if (!record || !keys) continue;
     for (const key of keys) {
       const value = record[key];
-      if (typeof value !== 'string' || !path.isAbsolute(value)) continue;
-      if (prefixes.some((p) => path.basename(value).startsWith(p))) found.add(value);
+      if (typeof value === 'string' && isTaskTempFilePath(value, prefixes)) found.add(value);
     }
   }
   return [...found];
+}
+
+/** 記録された値を信用してよい基準（絶対パスで、ファイル名がタスクの接頭辞で始まる）。片付けと復旧で共通。 */
+export function isTaskTempFilePath(value: string, prefixes: readonly string[]): boolean {
+  return path.isAbsolute(value) && prefixes.some((p) => path.basename(value).startsWith(p));
+}
+
+/** phase_prompt のログに記録された signal ファイルのパス。基準に合わない値は無いものとして扱う。 */
+export function recordedSignalFilePath(recorded: unknown, taskId: number): string | null {
+  return typeof recorded === 'string' && isTaskTempFilePath(recorded, [TaskTempFiles.signalPrefixForTask(taskId)]) ? recorded : null;
 }
 
 function parseRecord(content: string): Record<string, unknown> | null {

@@ -11,6 +11,7 @@ import { resolveUiToken, resolveWebhookToken } from './shared/uiToken';
 import { buildWiring } from './app/wiring';
 import { buildServer } from './app/buildServer';
 import { resolvePublicUrl } from './app/resolvePublicUrl';
+import { TaskTempFiles } from './shared/os/taskTempFiles';
 import { RecoverStuckTasksUseCase } from './modules/tasks/recovery/RecoverStuckTasksUseCase';
 import { scheduleStartupRecovery } from './modules/tasks/recovery/scheduleStartupRecovery';
 import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInterruptedIsolationCleanup';
@@ -60,7 +61,7 @@ async function main(): Promise<void> {
     const doctorPaths = resolveDataDir(secretFileGuard);
     migrateDataIfNeeded(doctorPaths, getLegacyPaths(), secretFileGuard);
     initSecretBox(doctorPaths.masterKey, secretFileGuard);
-    await authDoctorCommand(hostEnv.homeDir, secretFileGuard);
+    await authDoctorCommand(hostEnv.homeDir, secretFileGuard, TaskTempFiles.fromHostEnv(hostEnv));
     return;
   }
 

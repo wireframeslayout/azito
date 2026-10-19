@@ -14,6 +14,7 @@ export function handleFileTail(ws: WebSocket, filePath: string, managed: Managed
     return;
   }
 
+  const detach = managed.attach(filePath);
   const follower = new FileFollower(filePath, {
     onData: (text) => {
       if (ws.readyState === ws.OPEN) ws.send(text);
@@ -26,11 +27,15 @@ export function handleFileTail(ws: WebSocket, filePath: string, managed: Managed
     },
   });
 
-  ws.on('close', () => follower.stop());
+  ws.on('close', () => {
+    follower.stop();
+    detach();
+  });
 
   try {
     follower.start();
   } catch (err) {
+    detach();
     ws.send(JSON.stringify({ error: (err as Error).message }));
     ws.close();
   }

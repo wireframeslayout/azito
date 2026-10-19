@@ -64,8 +64,35 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
     expect(managed.isManaged(file)).toBe(false);
   });
 
-  it('fails the registration on an agent without the endpoint (an older agent)', async () => {
+  it('fails the registration on an agent without the endpoint (an older agent) as agent_outdated', async () => {
     const { transport } = await startAgent(false);
-    await expect(transport.registerPaneStreamFile('/tmp/azito-pipe-p-2-1.log')).rejects.toThrow(/404/);
+    await expect(transport.registerPaneStreamFile('/tmp/azito-pipe-p-2-1.log')).rejects.toThrow(/agent_outdated/);
+  });
+
+  it('reports an outdated agent once as stream_failed, without retrying, an error event or an unhandled rejection', async () => {
+    const { transport } = await startAgent(false);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      stream = transport.createPaneStream('p-3' as never) as AgentPaneStream;
+      const failures: Error[] = [];
+      let errorEvents = 0;
+      stream.on('stream_failed', (err: Error) => failures.push(err));
+      stream.on('error', () => { errorEvents++; });
+      let registrations = 0;
+      const original = transport.registerPaneStreamFile.bind(transport);
+      transport.registerPaneStreamFile = async (p: string) => { registrations++; return original(p); };
+      stream.start();
+      await waitFor(() => failures.length === 1);
+      await new Promise((r) => setTimeout(r, 1500));
+      expect(failures[0].message).toMatch(/agent_outdated/);
+      expect(registrations).toBe(1);
+      expect(failures).toHaveLength(1);
+      expect(errorEvents).toBe(0);
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
   });
 });

@@ -123,3 +123,30 @@ describe('WorkerWaiter.extractPlanWithFallback', () => {
     expect(result).toContain('## 実装計画');
   });
 });
+
+describe('WorkerWaiter stream_failed', () => {
+  it('ends the wait as a stopped worker when a stream fails during it, and releases the stream', async () => {
+    const { waiter, stream, appendLog } = setup('/tmp/azito-pipe-1.log');
+    waiter.startPaneStream(server, handle, 1, 2);
+    const waiting = waiter.waitForWorker(server, handle, 1, 2, new AbortController().signal, stream as unknown as IPaneStream);
+    stream.emit('stream_failed', new Error('agent_outdated: x'));
+    await expect(waiting).resolves.toMatchObject({ classification: { status: 'stopped' } });
+    expect(stream.stop).toHaveBeenCalled();
+    expect(appendLog).toHaveBeenCalledWith(1, 2, 'command', { type: 'pane_stream_failed', message: 'agent_outdated: x' });
+  });
+
+  it('also ends it when the stream failed before the wait began', async () => {
+    const { waiter, stream } = setup('/tmp/azito-pipe-1.log');
+    waiter.startPaneStream(server, handle, 1, 2);
+    stream.emit('stream_failed', new Error('early'));
+    const waiting = waiter.waitForWorker(server, handle, 1, 2, new AbortController().signal, stream as unknown as IPaneStream);
+    await expect(waiting).resolves.toMatchObject({ classification: { status: 'stopped' } });
+    expect(stream.stop).toHaveBeenCalled();
+  });
+
+  it('does not throw for a failure nobody is waiting on (no error event)', () => {
+    const { waiter, stream } = setup('');
+    waiter.startPaneStream(server, handle, 1, 2);
+    expect(() => stream.emit('stream_failed', new Error('late'))).not.toThrow();
+  });
+});

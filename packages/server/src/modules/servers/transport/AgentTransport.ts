@@ -9,7 +9,7 @@ import type {
 } from './ServerTransport';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import { AgentPaneStream } from './AgentPaneStream';
-import { AGENT_PANE_STREAMS_PATH } from './agentPaneStreamProtocol';
+import { AGENT_PANE_STREAMS_PATH, AgentOutdatedError } from './agentPaneStreamProtocol';
 import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
 import type { MuxRuntime } from '../Server';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
@@ -181,10 +181,18 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   /**
    * Has the agent create and manage a pane-stream file (`POST /api/pane-streams`); `/ws?mode=file-tail` serves only managed
    * files. Safe to repeat (the file is not truncated), which is how a reconnect re-registers after an agent restart.
-   * Rejects when the agent does not have the endpoint (an older agent: `404`) or refuses the path.
+   * Rejects with AgentOutdatedError when the agent does not have the endpoint (an older agent: `404`), and with a plain
+   * Error when the agent refuses the path or cannot be reached.
    */
   async registerPaneStreamFile(filePath: string): Promise<void> {
-    await this.post(AGENT_PANE_STREAMS_PATH, { path: filePath });
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(AGENT_PANE_STREAMS_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: this.authHeader },
+      body: JSON.stringify({ path: filePath }),
+    }, DEFAULT_EXEC_TIMEOUT_MS + HTTP_SLACK_MS);
+    if (status === 404) throw new AgentOutdatedError(this.serverName);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_PANE_STREAMS_PATH} failed (${status}): ${text}`);
   }
 
   /** Releases a registered pane-stream file and removes it on the agent. Unknown paths are ignored by the agent. */

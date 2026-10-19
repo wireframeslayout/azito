@@ -3,6 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { createSecretFileGuard } from '../shared/os/secretFileGuard';
+import { TaskTempFiles } from '../shared/os/taskTempFiles';
+const doctorTaskTempFiles = new TaskTempFiles('/tmp', 'linux');
 
 const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
@@ -148,7 +150,7 @@ describe('authDoctorCommand', () => {
   // checks passed" that couldn't be told apart from a genuinely clean run.
   it('reports unverifiable (not a pass) when nothing is set up yet', { timeout: 20000 }, async () => {
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
     expect(process.exitCode).toBe(3);
     expect(allLogLines()).toContain('確認できなかった項目があります');
   });
@@ -159,7 +161,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_UI_TOKEN=leftover\n');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('azitoctl.env');
@@ -171,7 +173,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(path.join(azitoDir, 'azitoctl.env'), 'AZITO_URL=http://x\nAZITO_WEBHOOK_TOKEN=y\n');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(allLogLines()).toContain('[OK ] azitoctl*.env');
     // Overall exit reflects the OTHER checks' unverifiable state (no hub DB,
@@ -192,7 +194,7 @@ describe('authDoctorCommand', () => {
     fs.symlinkSync(path.join(azitoDir, 'does-not-exist-target'), path.join(azitoDir, 'azitoctl.env'));
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('読み取りに失敗しました');
@@ -208,7 +210,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(operatorEnvPath, 'AZITO_UI_TOKEN=x\n', { mode: 0o644 });
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('operator.env');
@@ -221,7 +223,7 @@ describe('authDoctorCommand', () => {
     secretFileGuard.writeSecretFile(operatorEnvPath, 'AZITO_UI_TOKEN=x\n');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(allLogLines()).toContain('[OK ] operator.env');
     expect(process.exitCode).toBe(3);
@@ -237,7 +239,7 @@ describe('authDoctorCommand', () => {
     );
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('MCP settings');
@@ -253,7 +255,7 @@ describe('authDoctorCommand', () => {
     );
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(allLogLines()).toContain('[OK ] MCP settings');
     expect(process.exitCode).toBe(3);
@@ -270,7 +272,7 @@ describe('authDoctorCommand', () => {
     fs.writeFileSync(path.join(claudeDir, 'settings.json'), '{ this is not valid json');
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBe(1);
     expect(allLogLines()).toContain('読み取りまたは JSON パースに失敗');
@@ -279,7 +281,7 @@ describe('authDoctorCommand', () => {
   it('reports AZITO_SCOPED_AUTH current value', async () => {
     process.env.AZITO_SCOPED_AUTH = '1';
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
     expect(allLogLines()).toContain('scoped 認可: 有効');
   });
 
@@ -311,7 +313,7 @@ describe('authDoctorCommand', () => {
     );
 
     const { authDoctorCommand } = await import('./authDoctorCommand.js');
-    await authDoctorCommand(fakeHome, secretFileGuard);
+    await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
     expect(process.exitCode).toBeUndefined();
     expect(allLogLines()).toContain('すべての検査に合格しました');
@@ -341,7 +343,7 @@ describe('authDoctorCommand', () => {
 
     it('reports a notice (not a failure) when the DB has not been created on this machine yet — this host is not the hub', async () => {
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       // Phase C round-4 review: unverifiable (`notice`) is no longer folded
       // into exit 0 — it now gets its own non-zero code (3), distinct from
@@ -356,7 +358,7 @@ describe('authDoctorCommand', () => {
       openDatabase(path.join(tmpDir, 'data.db'), { secretFileGuard }).close(); // just runs migrations, seeds 'local' server
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('タスク所有ウィンドウの登録がありません');
@@ -367,7 +369,7 @@ describe('authDoctorCommand', () => {
       // default execFileMock behavior is "pane gone"
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('生存中のペインはありません');
@@ -378,7 +380,7 @@ describe('authDoctorCommand', () => {
       execFileMock.mockImplementation((_cmd, _args, _opts, callback) => callback(null, '', ''));
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       // warning (exit 2) takes precedence over the codex-CLI notice also
       // present in this test env — see authDoctorCommand()'s severity order.
@@ -408,7 +410,7 @@ describe('authDoctorCommand', () => {
       execFileMock.mockClear();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('到達不能');
@@ -430,7 +432,7 @@ describe('authDoctorCommand', () => {
       db.close();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('[-- ] scoped 認可 有効化前の生存タスクウィンドウ');
@@ -454,7 +456,7 @@ describe('authDoctorCommand', () => {
       db.close();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       // warning (exit 2) takes precedence over the codex-CLI notice also
       // present in this test env.
@@ -492,7 +494,7 @@ describe('authDoctorCommand', () => {
       db.close();
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       // The whole command must have completed (not thrown) and every other
       // check must still have run — proof the decrypt failure was contained
@@ -509,7 +511,7 @@ describe('authDoctorCommand', () => {
       process.env.AZITO_SCOPED_AUTH = '1';
 
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       // Drain check itself is a clean skip (no notice/warning); the codex-CLI
       // notice still present in this test env is what drives the overall
@@ -524,7 +526,7 @@ describe('authDoctorCommand', () => {
     it('reports a notice (not a failure) when the codex CLI is not installed', async () => {
       // default mock already throws ENOENT
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       // Two independent notices here (codex CLI + no hub DB in this test
       // env) both map to the same exit 3 ("unverifiable"), never exit 0.
@@ -542,7 +544,7 @@ describe('authDoctorCommand', () => {
         throw err;
       });
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('Codex に azt-mcp が登録されていません');
@@ -563,7 +565,7 @@ describe('authDoctorCommand', () => {
         throw err;
       });
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
       expect(allLogLines()).toContain('登録状況を確認できませんでした');
@@ -577,7 +579,7 @@ describe('authDoctorCommand', () => {
         () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'stale-codex-token' } } }),
       );
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(1);
       expect(allLogLines()).toContain('Codex 側の azt-mcp トークンとハブの現在値');
@@ -589,7 +591,7 @@ describe('authDoctorCommand', () => {
         () => JSON.stringify({ transport: { env: { AZITO_UI_TOKEN: 'hub-token' } } }),
       );
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(3);
     });
@@ -597,7 +599,7 @@ describe('authDoctorCommand', () => {
     it('fails independently when the codex JSON output cannot be parsed', async () => {
       execFileSyncMock.mockImplementation(() => 'not json');
       const { authDoctorCommand } = await import('./authDoctorCommand.js');
-      await authDoctorCommand(fakeHome, secretFileGuard);
+      await authDoctorCommand(fakeHome, secretFileGuard, doctorTaskTempFiles);
 
       expect(process.exitCode).toBe(1);
       expect(allLogLines()).toContain('JSON パースに失敗しました');

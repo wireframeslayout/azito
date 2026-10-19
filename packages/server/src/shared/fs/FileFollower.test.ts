@@ -136,6 +136,23 @@ describe('FileFollower', () => {
     expect(seen).toEqual(['a\n']);
   });
 
+  it('stops and reports an onData that throws, instead of letting it escape from a timer', async () => {
+    fs.writeFileSync(file, '');
+    let calls = 0;
+    follower = new FileFollower(file, {
+      onData: () => { calls++; throw new Error('boom'); },
+      onError: (e) => errors.push(e),
+      pollIntervalMs: POLL_MS,
+    });
+    follower.start();
+    fs.appendFileSync(file, 'a\n');
+    await waitFor(() => errors.length === 1);
+    fs.appendFileSync(file, 'b\n');
+    await new Promise((r) => setTimeout(r, POLL_MS * 4));
+    expect(errors[0].message).toBe('boom');
+    expect(calls).toBe(1);
+  });
+
   it('cannot be started twice', () => {
     fs.writeFileSync(file, '');
     const f = follow();

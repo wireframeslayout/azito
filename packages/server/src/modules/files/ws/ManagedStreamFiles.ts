@@ -3,43 +3,137 @@ import * as path from 'path';
 
 /** ハブが pane の出力を追跡させるために作らせるファイル名（`azito-pipe-<paneId>-<stamp>.log`）。 */
 const STREAM_FILE_NAME = /^azito-pipe-[A-Za-z0-9_-]+\.log$/;
-const MAX_MANAGED_FILES = 1024;
+const DEFAULT_MAX_FILES = 1024;
+/** WS の接続が無い状態がこの時間続いた登録は、所有者（ハブ）がいなくなったとみなして外す。再接続の間隔（最大 30 秒）より十分長い。 */
+const DEFAULT_LEASE_MS = 5 * 60_000;
 
 /** ハブが登録を要求したパスが、管理対象にできない形だった。 */
 export class InvalidStreamFileError extends Error {}
+
+interface Entry {
+  /** 登録または最後の WS 切断の時刻。接続が無いまま leaseMs を過ぎると回収される。 */
+  idleSince: number;
+  connections: number;
+}
+
+export interface ManagedStreamFilesOptions {
+  logger?: { warn(msg: string): void };
+  maxFiles?: number;
+  leaseMs?: number;
+  now?: () => number;
+}
+
+const flag = (name: 'O_NOFOLLOW' | 'O_NONBLOCK'): number => fs.constants[name] ?? 0;
 
 /**
  * このプロセスが管理しているストリームファイル。`fileTailHandler`（`/ws?mode=file-tail`）は、ここに登録されたファイルしか
  * 追跡しない（接頭辞だけで通すと、同じ一時フォルダにある同名規則の他者のファイルも読めてしまう）。
  * 登録はハブ（`AgentPaneStream`）が `POST /api/pane-streams` で行い、解除（`DELETE`）でファイルも消す。
  * 登録はメモリ上だけなので、エージェントが再起動すると消える。ハブは再接続のたびに登録し直す。
+ *
+ * 解除が届かなかった登録（ハブのクラッシュなど）は、リースで回収する: WS の接続が無い状態が `leaseMs` 続いたら、
+ * 次の登録のときにファイルごと外す。上限に達したら、期限切れ、ファイルが消えたもの、最も古い接続の無いもの、の順に外す。
  */
 export class ManagedStreamFiles {
-  private readonly files = new Set<string>();
+  private readonly files = new Map<string, Entry>();
+  private readonly maxFiles: number;
+  private readonly leaseMs: number;
+  private readonly now: () => number;
 
   /** `allowedDirs` は、管理対象のファイルを置いてよい一時フォルダ（絶対パス）。 */
-  constructor(private readonly allowedDirs: readonly string[]) {}
+  constructor(private readonly allowedDirs: readonly string[], private readonly options: ManagedStreamFilesOptions = {}) {
+    this.maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
+    this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
+    this.now = options.now ?? Date.now;
+  }
 
-  /** 検証してファイルを作り（既存なら中身は触らない）、管理対象に加える。何度呼んでも同じ。 */
+  /** 検証してファイルを作り（既存の通常ファイルなら中身は触らない）、管理対象に加える。何度呼んでも同じ。 */
   register(filePath: string): void {
     this.assertManageable(filePath);
-    if (!this.files.has(filePath) && this.files.size >= MAX_MANAGED_FILES) {
-      throw new InvalidStreamFileError('Too many managed stream files');
-    }
-    // 追記モードで開く（truncate しない）。symlink は辿らない（共有の一時フォルダに置かれた別物を読み書きしないため）。
-    const flags = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_APPEND | (fs.constants.O_NOFOLLOW ?? 0);
-    fs.closeSync(fs.openSync(filePath, flags, 0o600));
-    this.files.add(filePath);
+    const known = this.files.get(filePath);
+    if (!known) this.makeRoom();
+    this.ensureRegularFile(filePath);
+    if (known) known.idleSince = this.now();
+    else this.files.set(filePath, { idleSince: this.now(), connections: 0 });
   }
 
   isManaged(filePath: string): boolean {
     return this.files.has(filePath);
   }
 
+  /** WS の接続が始まった。返す関数を切断時に呼ぶと、リースの時計が再び動く。 */
+  attach(filePath: string): () => void {
+    const entry = this.files.get(filePath);
+    if (!entry) return () => {};
+    entry.connections++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      entry.connections--;
+      entry.idleSince = this.now();
+    };
+  }
+
   /** 管理対象から外し、ファイルを消す。登録されていないパスは何もしない（他のファイルを消さない）。 */
   unregister(filePath: string): void {
     if (!this.files.delete(filePath)) return;
     try { fs.unlinkSync(filePath); } catch { /* already gone */ }
+  }
+
+  /** 新しい登録のために空きを作る。 */
+  private makeRoom(): void {
+    const now = this.now();
+    for (const [file, entry] of this.files) {
+      if (entry.connections === 0 && now - entry.idleSince > this.leaseMs) this.unregister(file);
+    }
+    if (this.files.size < this.maxFiles) return;
+
+    for (const file of [...this.files.keys()]) {
+      if (!fs.existsSync(file)) this.files.delete(file);
+    }
+    if (this.files.size < this.maxFiles) return;
+
+    // Map は挿入順なので、先に見つかる接続の無い登録が最も古い。
+    for (const [file, entry] of this.files) {
+      if (entry.connections === 0) {
+        this.options.logger?.warn(`[pane-streams] ${this.files.size} registrations: evicting the oldest idle one (${file})`);
+        this.unregister(file);
+        return;
+      }
+    }
+    this.options.logger?.warn(`[pane-streams] refusing a registration: ${this.files.size} files are all in use`);
+    throw new InvalidStreamFileError('Too many managed stream files');
+  }
+
+  /**
+   * 通常ファイルが無ければ排他的に作る。あれば（再登録）中身を触らずに開き、通常ファイルで自分のものであることを確かめる。
+   * FIFO で open が止まらないよう O_NONBLOCK で開き、symlink は辿らない。
+   */
+  private ensureRegularFile(filePath: string): void {
+    let fd: number;
+    try {
+      fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | flag('O_NOFOLLOW'), 0o600);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw this.refuse(err);
+      try {
+        fd = fs.openSync(filePath, fs.constants.O_RDONLY | flag('O_NONBLOCK') | flag('O_NOFOLLOW'));
+      } catch (openErr) {
+        throw this.refuse(openErr);
+      }
+    }
+    try {
+      const stat = fs.fstatSync(fd);
+      if (!stat.isFile()) throw new InvalidStreamFileError('Stream file path exists and is not a regular file');
+      const uid = process.getuid?.();
+      if (uid !== undefined && stat.uid !== uid) throw new InvalidStreamFileError('Stream file path exists and belongs to another user');
+    } finally {
+      fs.closeSync(fd);
+    }
+  }
+
+  private refuse(err: unknown): InvalidStreamFileError {
+    return new InvalidStreamFileError(`Stream file cannot be opened: ${(err as NodeJS.ErrnoException).code ?? (err as Error).message}`);
   }
 
   private assertManageable(filePath: string): void {

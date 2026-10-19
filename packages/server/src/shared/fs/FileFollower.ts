@@ -80,10 +80,21 @@ export class FileFollower {
       if (n === 0) return;
       remaining -= n;
       const text = this.decoder.write(buf.subarray(0, n));
-      // onData の例外は読み取りエラーとして握りつぶさず、そのまま呼び出し元に伝える。
-      if (text !== '') this.options.onData(text);
+      if (text !== '' && !this.deliver(text)) return;
     }
     if (!this.stopped) setImmediate(() => this.poll());
+  }
+
+  /** onData の例外は、タイマーや watch の中では処理されない例外になるので、ここで捕まえて追跡を止め onError に渡す。 */
+  private deliver(text: string): boolean {
+    try {
+      this.options.onData(text);
+      return true;
+    } catch (err) {
+      this.stop();
+      this.options.onError?.(err as Error);
+      return false;
+    }
   }
 
   /** 読めたバイト数。EOF なら 0。読み取りに失敗したら追跡を止めて onError に渡し、0 を返す。 */

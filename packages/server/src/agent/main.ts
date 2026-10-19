@@ -118,7 +118,7 @@ async function main(): Promise<void> {
   const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir, TaskTempFiles.fromHostEnv(hostEnv));
 
   // Files the hub has registered for tailing (`/ws?mode=file-tail` serves nothing else). The hub names them under /tmp for now.
-  const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir]);
+  const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir], { logger: app.log });
   await app.register(paneStreamRoutes, { managed: managedStreamFiles });
 
   // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
