@@ -96,6 +96,14 @@ describe('MisaoTerminalStream', () => {
     expect(fake.request).toHaveBeenCalledWith('pane.resize', { paneId: 'p_1', cols: 90, rows: 20, clientId: 'azito-term-1' });
   });
 
+  it('writes the terminal\'s own replies without its client id, so they do not take over the pane size', async () => {
+    const { fake, stream } = await open();
+    stream.write('\x1b[I');
+    stream.write('\x1b[?1;2c');
+    expect(fake.request).toHaveBeenCalledWith('pane.write', { paneId: 'p_1', data: '\x1b[I', source: 'terminal' });
+    expect(fake.request).toHaveBeenCalledWith('pane.write', { paneId: 'p_1', data: '\x1b[?1;2c', source: 'terminal' });
+  });
+
   it('closes when its pane is closed, ignoring other panes and exits', async () => {
     const { fake, stream, closed } = await open();
     fake.event({ type: 'pane.closed', paneId: 'p_other' });
