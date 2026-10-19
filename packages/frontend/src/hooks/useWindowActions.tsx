@@ -228,7 +228,7 @@ export function useWindowActions(
           void refreshSessions?.();
         } catch (e) {
           setConfirmDialog(null);
-          showToast(t('windows.deleteFailed', { error: (e as Error).message }));
+          showToast(t('windows.deletePaneFailed', { error: (e as Error).message }));
         } finally {
           setWindowActionLoading(false);
         }
