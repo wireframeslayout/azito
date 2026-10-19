@@ -229,6 +229,17 @@ export default function SetupSection({ server, installStatus, installStatusError
   const agentItem = installStatus.agent ?? { installed: false, detail: 'Agent not installed' };
   const agentUpdateAvailable = agentItem.installed && installStatus.agent?.versionMatch === false;
 
+  const harnessItem = installStatus.aztHarness;
+  const harnessOutdated = harnessItem.installed && harnessItem.outdated;
+  const harnessAutoStatus = harnessItem.autoUpdate?.status;
+  const harnessStateOverride = harnessOutdated
+    ? harnessAutoStatus === 'error'
+      ? { label: t('setup.harnessAutoUpdateError'), tone: 'red' as const }
+      : harnessAutoStatus === 'skipped'
+        ? { label: t('setup.harnessAutoUpdateSkipped'), tone: 'orange' as const }
+        : { label: t('setup.updateAvailable'), tone: 'orange' as const }
+    : undefined;
+
   return (
     <div>
       <style>{`
@@ -317,11 +328,13 @@ export default function SetupSection({ server, installStatus, installStatusError
 
       <StepRow
         label="AZITO Harness"
-        item={installStatus.aztHarness}
+        item={harnessItem}
         running={installingHarness}
+        stateOverride={harnessStateOverride}
+        description={harnessItem.autoUpdate?.message}
         action={
           <InstallActionButton
-            installed={installStatus.aztHarness.installed}
+            installed={harnessItem.installed}
             installing={installingHarness}
             onInstall={isRemote ? openUrlDialog : () => handleInstallHarness(window.location.origin)}
           />

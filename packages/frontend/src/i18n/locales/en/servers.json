@@ -168,6 +168,8 @@
     "selfInstall": "Install manually",
     "selfInstallDesc": "Install tmux using your OS package manager.",
     "updateAvailable": "update available",
+    "harnessAutoUpdateError": "auto-update failed",
+    "harnessAutoUpdateSkipped": "update available (manual)",
     "browserRuntimeDesc": "Required for browser features (CDP)",
     "urlDialogTitle": "Select AZITO URL",
     "urlDialogDesc": "Select the URL for the remote server to connect to the hub.",

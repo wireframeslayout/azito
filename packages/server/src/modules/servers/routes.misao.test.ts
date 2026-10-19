@@ -36,6 +36,8 @@ function makeOpts(stored: ServerConfig | null, registerMisao = false): ServersRo
     webhookToken: 'wh',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
+    harnessHash: 'testhash',
+    harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     scopedAuthEnabled: true,
     muxDriverRegistry,
     misaoDaemonStatus: vi.fn(async () => ({ installed: false, detail: 'daemon_unreachable' })),

@@ -168,6 +168,8 @@
     "selfInstall": "自分でインストールする",
     "selfInstallDesc": "OS のパッケージマネージャーで tmux を導入します。",
     "updateAvailable": "更新あり",
+    "harnessAutoUpdateError": "自動更新失敗",
+    "harnessAutoUpdateSkipped": "更新あり（要手動）",
     "browserRuntimeDesc": "ブラウザ機能（CDP）を使う場合に必要です",
     "urlDialogTitle": "AZITO URL の選択",
     "urlDialogDesc": "リモートサーバーから hub に接続するための URL を選択してください。",

@@ -24,6 +24,8 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
     webhookToken: 'wh',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
+    harnessHash: 'testhash',
+    harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     scopedAuthEnabled: true,
     muxDriverRegistry: new MuxDriverRegistry(),
   };
