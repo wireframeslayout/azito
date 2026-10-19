@@ -1,4 +1,4 @@
-import type { HostArch, HostPlatform } from './hostEnv';
+import type { HostArch, HostEnv, HostPlatform } from './hostEnv';
 
 /** The OS and CPU architecture of a server's host (the hub itself for a local server, the agent's host for an agent server). */
 export interface HostProfile {
@@ -30,6 +30,28 @@ export function toHostProfile(platform: string, arch: string): HostProfile {
     throw new HostProfileError('unsupported_host', `Unsupported host ${platform}/${arch} (supported: ${HOST_PLATFORMS.join(', ')} on ${HOST_ARCHS.join(', ')}).`);
   }
   return { platform: knownPlatform, arch: knownArch };
+}
+
+/**
+ * The hub's own host, resolved once at the entry point. A hub on an OS / architecture AZITO does not know is not a
+ * startup failure (the process still runs: P1's rule); it is carried as the error, and what needs the host (a local
+ * transport, the hub's misao panes) refuses with that reason.
+ */
+export type HubHostProfile = HostProfile | HostProfileError;
+
+export function resolveHubHostProfile(env: Pick<HostEnv, 'platform' | 'arch'>): HubHostProfile {
+  try {
+    return toHostProfile(env.platform, env.arch);
+  } catch (err) {
+    if (err instanceof HostProfileError) return err;
+    throw err;
+  }
+}
+
+/** The hub's profile, or throws the reason the hub's host is unsupported. */
+export function requireHubHostProfile(hub: HubHostProfile): HostProfile {
+  if (hub instanceof HostProfileError) throw hub;
+  return hub;
 }
 
 /** The command that prints a host's profile, the same text under sh, cmd and PowerShell. Its output is read by {@link parseHostProbe}. */

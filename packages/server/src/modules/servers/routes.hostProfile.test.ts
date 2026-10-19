@@ -31,7 +31,7 @@ function makeOpts(servers: ServerConfig[]): ServersRouteOptions {
   return {
     serverRepo,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
-    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null) } as unknown as ServersRouteOptions['agentHostRecorder'],
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     tmux: {} as ServersRouteOptions['tmux'],
     // A local server's host is the hub's own (here macOS arm64); an agent server's is what is recorded for it.
     transportFactory: {
@@ -85,6 +85,8 @@ describe('PUT /api/servers/:name and the recorded host', () => {
     const res = await (await buildApp(opts)).inject({ method: 'PUT', url: '/api/servers/mac', payload: { host: '100.64.0.99' } });
     expect(res.statusCode).toBe(200);
     expect(opts.serverRepo.updateHostProfile).toHaveBeenCalledWith('mac', null);
+    // What the recorder remembered about the old address (a 404, a retry pause, a read in flight) goes with it.
+    expect(opts.agentHostRecorder.forget).toHaveBeenCalledWith('mac');
   });
 
   it('forgets it when the port or the type changes', async () => {
@@ -104,6 +106,14 @@ describe('PUT /api/servers/:name and the recorded host', () => {
     await app.inject({ method: 'PUT', url: '/api/servers/mac', payload: { muxRuntime: 'managed' } });
     await app.inject({ method: 'PUT', url: '/api/servers/mac', payload: { host: '100.64.0.7' } });
     expect(opts.serverRepo.updateHostProfile).not.toHaveBeenCalled();
+    expect(opts.agentHostRecorder.forget).not.toHaveBeenCalled();
+  });
+
+  it('forgets what the recorder knew about a server that is deleted', async () => {
+    const opts = makeOpts([recorded]);
+    await (await buildApp(opts)).inject({ method: 'DELETE', url: '/api/servers/mac' });
+    expect(opts.serverRepo.delete).toHaveBeenCalledWith('mac');
+    expect(opts.agentHostRecorder.forget).toHaveBeenCalledWith('mac');
   });
 });
 

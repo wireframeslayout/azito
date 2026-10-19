@@ -24,7 +24,7 @@ async function buildApp(transport: AgentTransport, recordIfUnknown: () => Promis
   const opts: ServersRouteOptions = {
     serverRepo,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
-    agentHostRecorder: { recordIfUnknown: vi.fn(recordIfUnknown), record: vi.fn(async () => null) } as unknown as ServersRouteOptions['agentHostRecorder'],
+    agentHostRecorder: { recordIfUnknown: vi.fn(recordIfUnknown), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: {
@@ -65,14 +65,15 @@ describe('agent server health routes (circuit breaker)', () => {
     expect(res.json()).toMatchObject({ status: 'online', mux: { tmux: { available: true, version: 'tmux 3.4' } }, agentVersion: 'abc' });
   });
 
-  it('GET /status asks for an unrecorded host once the agent has answered, and a host that cannot be recorded does not make the agent offline', async () => {
+  it('GET /status asks for an unrecorded host once the agent has answered', async () => {
     fetchMock.mockImplementation(async (url: string) => (
       String(url).endsWith('/health') ? json({ version: 'abc', pid: 1, uptime: 2 }) : json({ stdout: 'tmux 3.4', stderr: '', code: 0 })
     ));
-    const recordIfUnknown = vi.fn(async () => { throw new Error('Unsupported host freebsd/x64'); });
+    const recordIfUnknown = vi.fn(async () => null);
     const res = await (await buildApp(transport, recordIfUnknown)).inject({ method: 'GET', url: '/api/servers/srv7/status' });
     expect(recordIfUnknown).toHaveBeenCalledTimes(1);
-    expect(res.json()).toMatchObject({ status: 'online', agentVersion: 'abc', hostError: 'Unsupported host freebsd/x64' });
+    expect(res.json()).toMatchObject({ status: 'online', agentVersion: 'abc' });
+    expect(res.json()).not.toHaveProperty('hostError');
   });
 
   it('GET /status does not ask for the host of an agent it cannot reach', async () => {

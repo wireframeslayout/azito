@@ -24,6 +24,7 @@ vi.mock('./MisaoMuxClient', () => ({
 }));
 
 import { MisaoServers } from './MisaoServers';
+import { hubPaneShell } from './paneShell';
 
 const agent = (name: string, hostProfile: ServerConfig['hostProfile'] = null): ServerConfig => (
   { name, type: 'agent', host: 'h', hostProfile, agentPort: 3002, agentToken: 't', defaultMux: 'tmux', isolationIntent: false } as unknown as ServerConfig
@@ -33,7 +34,7 @@ function build(hostInfo: (server: ServerConfig) => Promise<{ platform: string; a
   const log = { warn: vi.fn() };
   const servers = new MisaoServers({
     sdk: {} as never,
-    shell: '/bin/hubsh',
+    hubPaneShell: hubPaneShell('/bin/hubsh', { platform: 'linux', arch: 'x64' }),
     hubEnv: { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' },
     onChange: vi.fn(),
     log,

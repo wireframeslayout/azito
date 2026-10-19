@@ -61,7 +61,7 @@ async function main(): Promise<void> {
     const doctorPaths = resolveDataDir(secretFileGuard);
     migrateDataIfNeeded(doctorPaths, getLegacyPaths(), secretFileGuard);
     initSecretBox(doctorPaths.masterKey, secretFileGuard);
-    await authDoctorCommand(hostEnv.homeDir, secretFileGuard, TaskTempFiles.fromHostEnv(hostEnv));
+    await authDoctorCommand(hostEnv, secretFileGuard, TaskTempFiles.fromHostEnv(hostEnv));
     return;
   }
 
@@ -263,6 +263,7 @@ async function main(): Promise<void> {
       if (r.status === 'updated') app.log.info(`Agent updated on ${r.name} → ${r.currentVersion}`);
       else if (r.status === 'deferred') app.log.info(`Agent update deferred on ${r.name}: ${r.message}`);
       else if (r.status === 'error') app.log.warn(`Agent update error on ${r.name}: ${r.message}`);
+      if (r.hostError) app.log.warn(`Could not record the host of agent server ${r.name}: ${r.hostError}`);
     }
   }).catch(() => {});
 

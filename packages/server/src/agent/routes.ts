@@ -6,6 +6,7 @@ import * as path from 'path';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
 import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
+import { HostProfileError, assertPosixHost, type HostProfile } from '../shared/os/hostProfile';
 const EXT_LANG: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescript',
   '.js': 'javascript', '.jsx': 'javascript',
@@ -52,6 +53,8 @@ export interface AgentRoutesOptions {
   bindAddress: string;
   /** The agent's home directory, resolved once at startup (HostEnv). */
   homeDir: string;
+  /** The OS / architecture of this agent's host, resolved once at startup. */
+  hostProfile: HostProfile;
 }
 
 function execCommand(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -96,7 +99,7 @@ function execMuxCommand(req: { kind: string; args?: string[]; method?: string; p
 const VALID_HOOK_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
-  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress, homeDir } = opts;
+  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress, homeDir, hostProfile } = opts;
 
   // ── GET /health (no auth required — registered before auth hook) ──
   fastify.get('/health', async () => {
@@ -105,8 +108,15 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
 
   // ── POST /api/exec ──
   // Arbitrary command execution endpoint — secured by token + Tailscale bind
-  fastify.post('/api/exec', async (request) => {
+  fastify.post('/api/exec', async (request, reply) => {
     const { command, timeoutMs } = request.body as { command: string; timeoutMs?: number };
+    // The command is run with /bin/sh: a Windows agent has none, so it says so instead of failing to spawn.
+    try {
+      assertPosixHost(hostProfile, 'this agent');
+    } catch (err) {
+      if (err instanceof HostProfileError) return reply.status(501).send({ error: err.code, message: err.message });
+      throw err;
+    }
     return execCommand(command, timeoutMs ?? 15000);
   });
 

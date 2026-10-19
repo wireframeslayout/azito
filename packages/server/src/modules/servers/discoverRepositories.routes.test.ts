@@ -55,7 +55,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
   return {
     serverRepo,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
-    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null) } as unknown as ServersRouteOptions['agentHostRecorder'],
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],

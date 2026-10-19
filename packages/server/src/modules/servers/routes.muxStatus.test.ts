@@ -17,7 +17,7 @@ async function statusOf(server: ServerConfig, exec: () => Promise<{ stdout: stri
   const opts: ServersRouteOptions = {
     serverRepo: { findByName: () => server, findAll: () => [] } as unknown as IServerRepository,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
-    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null) } as unknown as ServersRouteOptions['agentHostRecorder'],
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: misao,
     tmux: {} as ServersRouteOptions['tmux'],
     transportFactory: { getTransport: () => ({ exec }), invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],

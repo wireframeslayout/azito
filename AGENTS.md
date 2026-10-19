@@ -193,8 +193,8 @@ packages/
   install/update and when reached with none recorded — and from the SSH preflight's `node -p "process.platform+' '+process.arch"` on install.
   NULL = an agent registered before the OS was kept = a Unix agent (existing sh paths keep working; a 404 from `/api/host` is `agent_outdated`
   and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
-  shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported `$SHELL` for an agent's
-  (no `$SHELL` is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
+  shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
+  (neither is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
 
 ### Agent Server Type
 - Lightweight Node.js agent deployed to remote servers via SSH bootstrap

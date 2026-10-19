@@ -6,6 +6,7 @@ vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 import { TransportFactory } from './TransportFactory';
 import { AgentTransport } from './AgentTransport';
 import { LocalTransport } from './LocalTransport';
+import { resolveHubHostProfile } from '../../../shared/os/hostProfile';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 describe('TransportFactory', () => {
@@ -80,8 +81,10 @@ describe('TransportFactory', () => {
   });
 
   it('refuses a local transport on a hub whose OS is not supported', () => {
-    const factory = new TransportFactory('http://hub:3001', os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'freebsd', arch: 'x64' });
+    const factory = new TransportFactory('http://hub:3001', os.homedir(), new TaskTempFiles('/tmp', 'linux'), resolveHubHostProfile({ platform: 'freebsd', arch: 'x64' }));
     const local = { name: 'local', type: 'local' as const, host: null, hostProfile: null, agentPort: null, agentToken: null, muxRuntime: 'system' as const };
     expect(() => factory.getTransport(local)).toThrowError(expect.objectContaining({ code: 'unsupported_host' }));
+    // Listing servers must not fail because of it: the hub's host is just unknown.
+    expect(factory.hostProfileFor(local)).toBeNull();
   });
 });

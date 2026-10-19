@@ -14,6 +14,7 @@ import { NO_AGENT_MISAO, registerMisaoDriver } from '../misao/misaoDriver';
 import type { MisaoMuxClient } from '../misao/MisaoMuxClient';
 import { handleTerminalConnection } from './terminalHandler';
 import { MISAO_CLI } from '../../../shared/misaoTestBinary';
+import { hubPaneShell } from '../misao/paneShell';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
@@ -86,7 +87,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('browser terminal against a real misa
 
     const sdk = await import('@misao/sdk');
     registry = new MuxDriverRegistry();
-    const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
+    const handle = registerMisaoDriver(registry, { sdk, socketPath, paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
     connection = handle.connection;
     driver = handle.driver;
     await connection.start();

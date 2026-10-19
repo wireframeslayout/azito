@@ -398,13 +398,22 @@ describe('AgentUpdater', () => {
       vi.unstubAllGlobals();
     });
 
-    it('reports a host that cannot be recorded as an error with the reason, instead of hiding it', async () => {
+    it('keeps the update status when the host cannot be recorded afterwards, and reports the reason beside it', async () => {
+      const mocks = makeMocks('new-sha');
+      reachable('old-sha');
+      mocks.installer.update.mockResolvedValue({ success: true, version: 'new-sha' });
+      mocks.hostRecorder.record.mockRejectedValue(Object.assign(new Error('Unsupported host freebsd/x64'), { code: 'unsupported_host' }));
+      const result = await build(mocks).checkAndUpdate(makeServer());
+      expect(result).toMatchObject({ status: 'updated', currentVersion: 'new-sha', hostError: 'Unsupported host freebsd/x64' });
+      vi.unstubAllGlobals();
+    });
+
+    it('keeps up_to_date when the read of an unrecorded host throws', async () => {
       const mocks = makeMocks('abc1234');
       reachable('abc1234');
-      mocks.hostRecorder.recordIfUnknown.mockRejectedValue(Object.assign(new Error('Unsupported host freebsd/x64'), { code: 'unsupported_host' }));
+      mocks.hostRecorder.recordIfUnknown.mockRejectedValue(new Error('boom'));
       const result = await build(mocks).checkAndUpdate(makeServer());
-      expect(result.status).toBe('error');
-      expect(result.message).toContain('Unsupported host freebsd/x64');
+      expect(result).toMatchObject({ status: 'up_to_date', hostError: 'boom' });
       vi.unstubAllGlobals();
     });
   });

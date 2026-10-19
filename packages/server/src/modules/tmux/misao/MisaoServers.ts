@@ -5,7 +5,7 @@ import type { HubPaneEnvConfig } from '../hubPaneEnv';
 import type { MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk, type MisaoTarget } from './MisaoConnection';
 import { MisaoMuxClient } from './MisaoMuxClient';
-import { agentPaneShell } from './paneShell';
+import { agentPaneShell, type PaneShellResolver } from './paneShell';
 import type { AgentHostInfo } from '../../servers/transport/agentHostProtocol';
 
 /** One misao daemon as the hub talks to it: its connection and the driver on top of it. */
@@ -22,8 +22,8 @@ export interface MisaoNodeObserver {
 
 export interface MisaoServersDeps {
   sdk: MisaoSdk;
-  /** The hub's own shell: the local daemon's panes use it, and so does an agent too old to report its own. */
-  shell: string;
+  /** The hub's own pane shell: an agent too old to report its own keeps using it. */
+  hubPaneShell: PaneShellResolver;
   hubEnv: HubPaneEnvConfig;
   onChange: (serverName: string) => void;
   log: { warn(message: string): void };
@@ -104,10 +104,10 @@ export class MisaoServers {
   ensureAgentNode(server: ServerConfig): MisaoNode {
     const existing = this.agentNodes.get(server.name);
     if (existing) return existing;
-    const { sdk, shell, hubEnv, onChange, log } = this.deps;
+    const { sdk, hubPaneShell, hubEnv, onChange, log } = this.deps;
     const target = this.deps.agent.target(server);
     const connection = new MisaoConnection({ ...target, sdk, log, logTag: `misao:${server.name}` });
-    const paneShell = agentPaneShell(server, () => this.deps.agent.hostInfo(this.deps.agent.latest(server.name) ?? server), shell, log);
+    const paneShell = agentPaneShell(server, () => this.deps.agent.hostInfo(this.deps.agent.latest(server.name) ?? server), hubPaneShell, log);
     const driver = new MisaoMuxClient(connection, { paneShell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(sdk, target) });
     const node: AgentNode = { connection, driver, server, observer: undefined };
     this.agentNodes.set(server.name, node);

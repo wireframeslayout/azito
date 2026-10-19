@@ -18,6 +18,8 @@ export interface UpdateCheckResult {
   status: 'up_to_date' | 'updated' | 'deferred' | 'error';
   currentVersion?: string;
   message?: string;
+  /** The agent's host (OS / architecture) could not be recorded after an update; the status above is unaffected. */
+  hostError?: string;
 }
 
 export class AgentUpdater {
@@ -111,15 +113,16 @@ export class AgentUpdater {
 
   /**
    * Records the agent's host (OS / architecture) now that the agent has answered, so a server registered before it was kept
-   * gets one (every reach asks only while it is unrecorded; an update asks again). A failure turns the result into an
-   * error with the reason, whatever the version check found: it never stops an update, which has already happened.
+   * gets one (every reach asks only while it is unrecorded; an update asks again). The version check's status is kept as it
+   * is: a failure to record is reported beside it in `hostError` (the unrecorded-host read logs its own failures), and it never
+   * stops an update, which has already happened.
    */
   private async withHostRecorded(server: ServerConfig, result: UpdateCheckResult, forceAsk: boolean): Promise<UpdateCheckResult> {
     try {
       await (forceAsk ? this.hostRecorder.record(server) : this.hostRecorder.recordIfUnknown(server));
       return result;
     } catch (err) {
-      return { ...result, status: 'error', message: `Could not record the agent's host: ${(err as Error).message}` };
+      return { ...result, hostError: (err as Error).message };
     }
   }
 

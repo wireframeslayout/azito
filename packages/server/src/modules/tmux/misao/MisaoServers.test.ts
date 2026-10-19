@@ -44,10 +44,10 @@ function setup(status: () => Promise<{ socketPresent: boolean }> = async () => (
   const log = { warn: vi.fn() };
   const hubEnv = { publicUrl: 'http://hub', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' };
   const localConnection = new MisaoConnection({ socketPath: '/local.sock', sdk, log });
-  const localDriver = new MisaoMuxClient(localConnection, { paneShell: hubPaneShell('/bin/bash'), onChange: vi.fn(), log, hubEnv, connectAttachClient: async () => { throw new Error('unused'); } });
+  const localDriver = new MisaoMuxClient(localConnection, { paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), onChange: vi.fn(), log, hubEnv, connectAttachClient: async () => { throw new Error('unused'); } });
   const connect = vi.fn(async () => { throw new Error('unused'); });
   const servers = new MisaoServers({
-    sdk, shell: '/bin/bash', hubEnv, onChange: vi.fn(), log,
+    sdk, hubPaneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), hubEnv, onChange: vi.fn(), log,
     local: { connection: localConnection, driver: localDriver },
     agent: { target: (srv) => { targetsSeen.push(srv); return { connect }; }, status, hostInfo: async () => ({ platform: 'linux', arch: 'x64', shell: '/bin/zsh' }), latest: (name) => latestOf(name) },
   });

@@ -145,7 +145,7 @@ function setup(over: { wait?: (ms: number) => Promise<void>; connectAttachClient
   const daemon = new FakeDaemon();
   const onChange = vi.fn();
   const wait = over.wait ?? vi.fn(async () => {});
-  const client = new MisaoMuxClient(daemon, { paneShell: hubPaneShell('/bin/zsh'), onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
+  const client = new MisaoMuxClient(daemon, { paneShell: hubPaneShell('/bin/zsh', { platform: 'linux', arch: 'x64' }), onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
   return { daemon, client, onChange, wait };
 }
 

@@ -4,29 +4,24 @@ import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
-import type { HostEnv } from '../../../shared/os/hostEnv';
-import { toHostProfile, type HostProfile } from '../../../shared/os/hostProfile';
+import { requireHubHostProfile, HostProfileError, type HostProfile, type HubHostProfile } from '../../../shared/os/hostProfile';
 
 type TransportServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime' | 'hostProfile'>;
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport & IHostBoundTransport>();
-  private hubProfile: HostProfile | undefined;
 
-  constructor(private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, private hubHost: Pick<HostEnv, 'platform' | 'arch'>) {}
+  /** `hubHost`: the hub's own host, resolved once at the entry point (see `resolveHubHostProfile`). */
+  constructor(private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, private hubHost: HubHostProfile) {}
 
   /**
    * The OS / architecture of a server's host. A local server is the hub itself: it comes from the hub's HostEnv and is
    * never stored. An agent server's is the one recorded for it (null until recorded: a Unix agent from before the OS was kept).
-   * Throws `unsupported_host` for a hub on an OS / architecture AZITO does not know.
+   * A hub on an OS / architecture AZITO does not know has none (null: shown as unknown); only a local transport is refused, with the reason.
    */
   hostProfileFor(server: Pick<ServerConfig, 'type' | 'hostProfile'>): HostProfile | null {
-    return server.type === 'local' ? this.hubHostProfile() : server.hostProfile;
-  }
-
-  private hubHostProfile(): HostProfile {
-    this.hubProfile ??= toHostProfile(this.hubHost.platform, this.hubHost.arch);
-    return this.hubProfile;
+    if (server.type === 'local') return this.hubHost instanceof HostProfileError ? null : this.hubHost;
+    return server.hostProfile;
   }
 
   /** The shell/tmux transport of a server. It does not depend on the server's mux kinds: a misao window is reached through its driver. */
@@ -46,7 +41,7 @@ export class TransportFactory {
 
     let transport: IServerTransport & IMuxTransport & IHostBoundTransport;
     if (server.type === 'local') {
-      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir, this.taskTempFiles, this.hubHostProfile());
+      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir, this.taskTempFiles, requireHubHostProfile(this.hubHost));
     } else if (server.type === 'agent') {
       transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name, server.hostProfile);
     } else {

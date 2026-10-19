@@ -705,6 +705,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         // Another type, address or port can be another machine: its OS is read again (from the agent, when it is next reached).
         if ((type !== undefined && effectiveType !== srv.type) || (host !== undefined && host !== srv.host) || (agentPort !== undefined && agentPort !== srv.agentPort)) {
           serverRepo.updateHostProfile(request.params.name, null);
+          agentHostRecorder.forget(request.params.name);
         }
         if (effectiveDefaultMux !== srv.defaultMux || effectiveMuxRuntime !== srv.muxRuntime) {
           onMuxChanged?.({ previous: srv, next: { ...srv, type: effectiveType, muxRuntime: effectiveMuxRuntime, defaultMux: effectiveDefaultMux } });
@@ -1095,6 +1096,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       try {
         serverRepo.delete(request.params.name);
+        agentHostRecorder.forget(request.params.name);
         transportFactory.invalidate(request.params.name);
         onServerChanged?.({ previous: srv, next: null });
         return { ok: true };
@@ -1134,10 +1136,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
           try {
             const health = await transportFactory.getAgentTransport(srv).fetchHealth() as { version: string; pid: number; uptime: number };
             // Reached with no host recorded (a server registered before it was kept, or pointed at another machine): ask the agent once.
-            const hostError = await agentHostRecorder.recordIfUnknown(srv).then(() => undefined, (err: unknown) => {
-              fastify.log.warn(`Could not record the host of agent server ${srv.name}: ${(err as Error).message}`);
-              return (err as Error).message;
-            });
+            await agentHostRecorder.recordIfUnknown(srv);
             const versionMatch = hubBundleHash ? health.version === hubBundleHash : true;
             const mux = await checkMuxes();
             return {
@@ -1147,7 +1146,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
               hubVersion: hubBundleHash,
               versionMatch,
               message: describeDefaultMuxProblem(srv, mux),
-              ...(hostError ? { hostError } : {}),
             };
           } catch (err: unknown) {
             if (!(err instanceof AgentUnreachableError)) return { status: 'offline' as const, mux: {}, message: `Agent returned an error: ${(err as Error).message}` };
