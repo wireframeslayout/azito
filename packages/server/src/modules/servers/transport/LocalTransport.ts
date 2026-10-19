@@ -16,7 +16,8 @@ import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
-import { runCommandSpec } from '../../../shared/exec/runCommandSpec';
+import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
+import type { LocalHost } from '../../../shared/os/hostEnv';
 import type { IFileOps } from '../../../shared/fs/fileOps';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 
@@ -68,16 +69,16 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
   private fileOps: IFileOps | null = null;
 
   /** `hostProfile`: the host this transport runs commands on (the hub's own, from its HostEnv). Null when the hub's OS / architecture is not one AZITO knows: unknown, treated as POSIX like an unrecorded agent. */
-  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile | null) {}
+  constructor(private rt: TmuxRuntime, private publicUrl: string, private host: LocalHost, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile | null) {}
 
   /** Node `fs` on the hub itself (the same code an agent runs for its own files). */
   files(): IFileOps {
-    this.fileOps ??= new LocalFileOps(localFileOpsHost({ platform: this.taskTempFiles.hubPlatform, homeDir: this.homeDir }));
+    this.fileOps ??= new LocalFileOps(localFileOpsHost({ platform: this.host.platform, homeDir: this.host.homeDir }));
     return this.fileOps;
   }
 
   run(spec: CommandSpec): Promise<CommandResult> {
-    return runCommandSpec(spec, { windows: this.taskTempFiles.hubPlatform === 'win32' });
+    return runCommandSpec(spec, runHostOf(this.host));
   }
 
   /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */
@@ -147,7 +148,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: this.homeDir,
+        cwd: this.host.homeDir,
         env: env ?? (process.env as Record<string, string>),
       });
       return new LocalTerminalStream(ptyProcess, cleanup ?? null);

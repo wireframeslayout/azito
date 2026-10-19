@@ -58,14 +58,14 @@ describe('openDoctorMux in a release layout', () => {
 
   it('uses MISAO_SOCKET from the bundle .env when there is no parent .env', async () => {
     fs.writeFileSync(path.join(bundleDir, '.env'), 'MISAO_SOCKET=/run/bundle.sock\n');
-    await openDoctorMux({ platform: 'linux', arch: 'x64', homeDir: os.homedir(), tmpDir: '/tmp', execPath: process.execPath, uid: 1000 }, new TaskTempFiles('/tmp', 'linux'));
+    await openDoctorMux({ platform: 'linux', arch: 'x64', homeDir: os.homedir(), tmpDir: '/tmp', execPath: process.execPath, uid: 1000, systemRoot: undefined }, new TaskTempFiles('/tmp', 'linux'));
     expect(socketSeenByResolver()).toBe('/run/bundle.sock');
   });
 
   it('prefers the parent .env over the bundle .env', async () => {
     fs.writeFileSync(path.join(hubDir, '.env'), 'MISAO_SOCKET=/run/parent.sock\n');
     fs.writeFileSync(path.join(bundleDir, '.env'), 'MISAO_SOCKET=/run/bundle.sock\n');
-    await openDoctorMux({ platform: 'linux', arch: 'x64', homeDir: os.homedir(), tmpDir: '/tmp', execPath: process.execPath, uid: 1000 }, new TaskTempFiles('/tmp', 'linux'));
+    await openDoctorMux({ platform: 'linux', arch: 'x64', homeDir: os.homedir(), tmpDir: '/tmp', execPath: process.execPath, uid: 1000, systemRoot: undefined }, new TaskTempFiles('/tmp', 'linux'));
     expect(socketSeenByResolver()).toBe('/run/parent.sock');
   });
 });

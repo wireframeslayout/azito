@@ -5,6 +5,7 @@ import { TmuxClient } from './TmuxClient';
 import { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import { TaskTempFiles } from '../../shared/os/taskTempFiles';
+import { testLocalHost } from '../../shared/os/testing/testLocalHost';
 
 // Issue #28 review (Critical finding): WindowRespawnService.restorePaneLayout()
 // restores a multi-pane task window by calling TmuxClient.splitPane() for
@@ -54,7 +55,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     const target = `${SESSION}:w1`;
     await waitForPane(target, (text) => text.trim().length > 0);
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1', os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     await tmuxClient.splitPane(LOCAL_SERVER, target, 'v');
 
@@ -73,7 +74,7 @@ describe('TmuxClient.splitPane x real tmux: session-env inheritance', () => {
     const target = `${SESSION}:w1`;
     await waitForPane(target, (text) => text.trim().length > 0);
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1', os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     // Same masking env TaskPaneEnvironmentService.buildEnvForNewWindow emits
     // in scoped-auth mode: an explicit empty override plus the task token.

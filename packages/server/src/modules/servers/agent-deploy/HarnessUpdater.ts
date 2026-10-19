@@ -122,7 +122,7 @@ export class HarnessUpdater {
         return r;
       }
 
-      const installOptions = buildHarnessInstallOptions(srv, this.options, {
+      const installOptions = buildHarnessInstallOptions(srv, srv.hostProfile, this.options, {
         azitoUrl,
         version: localHash,
       });

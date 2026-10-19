@@ -1,4 +1,5 @@
 import type { ServerConfig } from '../servers/Server';
+import type { ShellDialect } from '../../shared/os/shellDialect';
 
 export interface ISessionStrategy {
   readonly supportsSession: boolean;
@@ -6,7 +7,8 @@ export interface ISessionStrategy {
   readonly needsPostLaunchScan: boolean;
   buildNewSessionFlags(sessionId: string): string;
   buildResumeFlags(sessionId: string): string;
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp?: boolean): string | null;
+  /** `dialect`: the shell of the pane the line is typed into (the target host's). */
+  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, dialect: ShellDialect, blockMcp?: boolean): string | null;
   scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null>;
   excludeSessionId?(id: string): void;
 }

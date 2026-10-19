@@ -42,6 +42,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
     vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
 
     await installer.install('test-host', {
+      hostProfile: null,
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-agent',
@@ -61,6 +62,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
     vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
 
     await installer.install('test-host', {
+      hostProfile: null,
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-agent',
@@ -86,6 +88,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
     vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
 
     await installer.install('test-host', {
+      hostProfile: null,
       webhookToken: 'wh-token',
       serverName: 'srv-agent',
       isolationIntent: true,
@@ -101,6 +104,7 @@ describe('HarnessInstaller.install — --ui-token withholding for isolation_inte
     vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
 
     await installer.install('test-host', {
+      hostProfile: null,
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-agent',
@@ -148,6 +152,7 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
     const installer = new HarnessInstaller({} as SshClient);
 
     const result = await installer.installLocal({
+      hostProfile: null,
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-local',
@@ -167,6 +172,7 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
     const installer = new HarnessInstaller({} as SshClient);
 
     const result = await installer.installLocal({
+      hostProfile: null,
       webhookToken: 'wh-token',
       uiToken: 'ui-token-secret',
       serverName: 'srv-local',
@@ -181,5 +187,30 @@ describe('HarnessInstaller.installLocal — isolationIntent handling (local setu
     expect(args).toContain('--purge-operator-token');
     expect(args).toContain('--webhook-token');
     expect(args).toContain('wh-token');
+  });
+});
+
+describe('HarnessInstaller — Windows targets', () => {
+  it('refuses a win32 server with unsupported_os before transferring anything', async () => {
+    const sshClient = makeSshClient();
+    const installer = new HarnessInstaller(sshClient);
+    const transfer = vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
+
+    await expect(installer.install('test-host', { hostProfile: { platform: 'win32', arch: 'x64' } })).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('setup.sh') });
+    expect(transfer).not.toHaveBeenCalled();
+    expect(sshClient.execIsolated).not.toHaveBeenCalled();
+  });
+
+  it('refuses a win32 hub for the local install', async () => {
+    const installer = new HarnessInstaller({} as SshClient);
+    await expect(installer.installLocal({ hostProfile: { platform: 'win32', arch: 'x64' } })).rejects.toMatchObject({ code: 'unsupported_os' });
+  });
+
+  it('treats a server with no recorded profile as a Unix one', async () => {
+    const sshClient = makeSshClient();
+    const installer = new HarnessInstaller(sshClient);
+    vi.spyOn(installer as unknown as { transferHarness: () => Promise<void> }, 'transferHarness').mockResolvedValue(undefined);
+    const result = await installer.install('test-host', { hostProfile: null });
+    expect(result.success).toBe(true);
   });
 });

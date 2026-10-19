@@ -3,6 +3,7 @@ import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
+import type { LocalHost } from '../../../shared/os/hostEnv';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { IFileOps } from '../../../shared/fs/fileOps';
 import { HostProfileError, type HostProfile, type HubHostProfile } from '../../../shared/os/hostProfile';
@@ -13,7 +14,7 @@ export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport & IHostBoundTransport>();
 
   /** `hubHost`: the hub's own host, resolved once at the entry point (see `resolveHubHostProfile`). */
-  constructor(private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, private hubHost: HubHostProfile) {}
+  constructor(private publicUrl: string, private host: LocalHost, private taskTempFiles: TaskTempFiles, private hubHost: HubHostProfile) {}
 
   /**
    * The OS / architecture of a server's host. A local server is the hub itself: it comes from the hub's HostEnv and is
@@ -43,7 +44,7 @@ export class TransportFactory {
 
     let transport: IServerTransport & IMuxTransport & IHostBoundTransport;
     if (server.type === 'local') {
-      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir, this.taskTempFiles, this.hostProfileFor(server));
+      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.host.homeDir), this.publicUrl, this.host, this.taskTempFiles, this.hostProfileFor(server));
     } else if (server.type === 'agent') {
       transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name, server.hostProfile);
     } else {

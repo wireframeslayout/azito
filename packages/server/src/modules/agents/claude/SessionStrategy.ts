@@ -2,7 +2,7 @@ import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildFindLatestByMtime } from '../sessionScanUtils';
-import { shellQuote } from '../../../shared/shellQuote';
+import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildClaudeLaunchCommand } from './launchCommand';
 
 export class ClaudeSessionStrategy implements ISessionStrategy {
@@ -23,14 +23,14 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     return `--resume ${sessionId}`;
   }
 
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): string | null {
+  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, dialect: ShellDialect, blockMcp = true): string | null {
     if (agentSessionId) {
       const mcpFlag = blockMcp ? ' --strict-mcp-config' : '';
-      const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
+      const modelFlag = model ? ` --model ${dialect.quote(model)}` : '';
       const extra = extraArgs?.trim() ? ` ${extraArgs.trim()}` : '';
       return `claude --resume ${agentSessionId} --dangerously-skip-permissions${mcpFlag}${modelFlag}${extra}`;
     }
-    return buildClaudeLaunchCommand({ model, extraArgs, blockMcp });
+    return buildClaudeLaunchCommand({ model, extraArgs, blockMcp, dialect });
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

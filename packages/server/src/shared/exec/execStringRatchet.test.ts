@@ -34,9 +34,11 @@ const REMAINING: Record<string, number> = {
   'modules/transcripts/WindowSessionResolver.ts': 2,
   'modules/tasks/execution/WorkerWaiter.ts': 2,
   'modules/tasks/execution/GitInfoCollector.ts': 2, // git commands, not yet moved (not in P6's list)
-  // C-2: Unix-only install scripts → unsupported_os (P9)
-  'modules/servers/agent-deploy/BrowserRuntimeInstaller.ts': 13,
-  'modules/servers/agent-deploy/TmuxInstaller.ts': 10,
+  // C-2: Unix-only install scripts. They stay sh; each entry point first refuses a win32 server with unsupported_os (P9,
+  // `assertPosixHost`), and the Windows versions are separate functions added with the Windows agent (#369 / #380). The OS probes
+  // (`uname`, `echo $HOME`) are gone: the OS comes from the recorded host profile.
+  'modules/servers/agent-deploy/BrowserRuntimeInstaller.ts': 12,
+  'modules/servers/agent-deploy/TmuxInstaller.ts': 7,
   'modules/system/misao/MisaoAgentInstaller.ts': 10,
   'modules/git/hub-transfer/RemoteBundleOps.ts': 15,
   'modules/servers/isolationDoctor.ts': 1,

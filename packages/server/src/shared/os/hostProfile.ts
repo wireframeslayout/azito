@@ -66,11 +66,16 @@ export function parseHostProbe(output: string): HostProfile {
   return toHostProfile(parts[0], parts[1]);
 }
 
-/** `exec(command: string)` runs `/bin/sh -c`: it is POSIX-only, so a win32 host is refused (a cmd.exe would otherwise interpret the sh text). A null profile is an agent registered before the OS was recorded: a Unix one. */
-export function assertPosixHost(profile: HostProfile | null, serverLabel: string): void {
-  if (profile?.platform === 'win32') {
-    throw new HostProfileError('unsupported_os', `exec(command: string) runs the command with /bin/sh, which ${serverLabel} (win32) does not have. This operation is not available on Windows hosts yet.`);
-  }
+/**
+ * A POSIX-only operation (`exec(command: string)` runs `/bin/sh -c`; an install script is sh) is refused on a win32 host: a
+ * cmd.exe would otherwise interpret the sh text. A null profile is an agent registered before the OS was recorded: a Unix one.
+ * `operation` names what was refused when it is more than the shell command itself (e.g. "installing tmux"); the Windows
+ * version of those operations is a separate function, added with the Windows agent (#369 / #380).
+ */
+export function assertPosixHost(profile: HostProfile | null, serverLabel: string, operation?: string): void {
+  if (profile?.platform !== 'win32') return;
+  const what = operation ? `${operation} is a POSIX shell script` : 'exec(command: string) runs the command with /bin/sh';
+  throw new HostProfileError('unsupported_os', `${what}, which ${serverLabel} (win32) does not have. This operation is not available on Windows hosts yet.`);
 }
 
 /** The separator of a host's PATH. A null profile (a Unix agent registered before the OS was recorded) uses `:`. */

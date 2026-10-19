@@ -1,4 +1,5 @@
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modules/tmux/MuxCapabilityError';
+import { HostProfileError } from '../shared/os/hostProfile';
 import { AgentUnreachableError } from '../modules/servers/transport/AgentUnreachableError';
 
 export interface AppErrorResponse {
@@ -16,6 +17,10 @@ export function mapAppError(err: unknown): AppErrorResponse | null {
   }
   if (err instanceof MuxOperationUnsupportedError) {
     return { status: 501, body: { error: 'mux_operation_unsupported', kind: err.kind, operation: err.operation } };
+  }
+  if (err instanceof HostProfileError) {
+    // `error` is the reason in words, like the other install routes answer: the UI shows it as it is. `code` is `unsupported_os` / `unsupported_host`.
+    return { status: 501, body: { error: err.message, code: err.code } };
   }
   return null;
 }

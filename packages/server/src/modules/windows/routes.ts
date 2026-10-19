@@ -15,6 +15,8 @@ import type { ISessionStrategyFactory } from '../agents/SessionStrategy';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { shellDialectFor } from '../../shared/os/shellDialect';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
@@ -37,6 +39,8 @@ export interface WindowsRouteOptions {
   tmux: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
+  /** Tells the OS of a server, hence the shell its panes run (the lines typed into them). */
+  transportFactory: Pick<TransportFactory, 'hostProfileFor'>;
   respawnService: WindowRespawnService;
   sleepService: WindowSleepService;
   sessionStrategyFactory: ISessionStrategyFactory;
@@ -483,6 +487,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
+            dialect: shellDialectFor(opts.transportFactory.hostProfileFor(srv)),
             target: win.tmuxTarget,
             harnessPrefix: opts.harnessPrefix,
             ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),

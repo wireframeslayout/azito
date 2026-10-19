@@ -1,5 +1,6 @@
 import type { SubagentConfig } from '../units/Unit';
 import { buildWorkerLaunchCommand, buildHeadlessLaunchCommand, shellQuote } from '../agents/LaunchCommand';
+import { posixDialect } from '../../shared/os/shellDialect';
 import {
   stateMachineEnvelope,
   skillEnvelope,
@@ -116,7 +117,8 @@ export function buildSubagentDelegationBlock(
 ): string {
   const isNative = config.provider === workerType;
   const headlessCmd = isNative ? null : buildHeadlessLaunchCommand(config.provider, config.model);
-  const interactiveCmd = buildWorkerLaunchCommand(config.provider, config.model, null)
+  // Prose for the parent agent (it types the command itself, in its own POSIX shell), not a line the hub types into a pane.
+  const interactiveCmd = buildWorkerLaunchCommand(config.provider, config.model, null, posixDialect)
     ?? `${config.provider} --model ${shellQuote(config.model)}`;
 
   const roleWord = role === 'review' ? 'レビュー' : '実装';

@@ -2,7 +2,7 @@ import os from 'os';
 import { describe, it, expect, afterEach } from 'vitest';
 import { resolveHostEnv, resolveCurrentHostEnv } from './hostEnv';
 
-const base = { platform: 'linux' as const, arch: 'x64', homeDir: '/home/u', tmpDir: '/tmp', execPath: '/usr/bin/node', uid: 1000 };
+const base = { platform: 'linux' as const, arch: 'x64', homeDir: '/home/u', tmpDir: '/tmp', execPath: '/usr/bin/node', uid: 1000, systemRoot: undefined };
 
 describe('resolveHostEnv', () => {
   it('入力をそのまま返す', () => {
@@ -10,7 +10,7 @@ describe('resolveHostEnv', () => {
   });
 
   it('win32 / darwin の入力も受け付ける', () => {
-    const win = { platform: 'win32' as const, arch: 'x64', homeDir: 'C:\\Users\\u', tmpDir: 'C:\\Temp', execPath: 'C:\\node\\node.exe', uid: 1000 };
+    const win = { platform: 'win32' as const, arch: 'x64', homeDir: 'C:\\Users\\u', tmpDir: 'C:\\Temp', execPath: 'C:\\node\\node.exe', uid: 1000, systemRoot: undefined };
     expect(resolveHostEnv(win)).toEqual(win);
     expect(resolveHostEnv({ ...base, platform: 'darwin', arch: 'arm64' }).platform).toBe('darwin');
   });
@@ -58,6 +58,10 @@ describe('resolveCurrentHostEnv (HOME の扱い)', () => {
   it.skipIf(process.platform === 'win32')('HOME が空文字: 起動時に投げる', () => {
     process.env.HOME = '';
     expect(() => resolveCurrentHostEnv()).toThrow(/home directory/);
+  });
+
+  it('systemRoot は実プロセスの SystemRoot（Windows 以外では通常未設定）', () => {
+    expect(resolveCurrentHostEnv().systemRoot).toBe(process.env.SystemRoot);
   });
 
   it('platform / arch / execPath は実プロセスの値', () => {

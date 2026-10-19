@@ -1,4 +1,6 @@
-import type { IServerTransport } from '../transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport } from '../transport/ServerTransport';
+import { assertPosixHost } from '../../../shared/os/hostProfile';
+import { resolveArchName, resolveOsName } from '../installProbe';
 
 const TMUX_VERSION = '3.6b';
 
@@ -41,25 +43,28 @@ export function buildApplyTmuxConfigCommands(homeDir: string): string[] {
 }
 
 export class TmuxInstaller {
-  async install(transport: IServerTransport): Promise<TmuxInstallResult> {
+  /**
+   * Unix only (the managed tmux is a Linux binary put in place with sh): a win32 server is refused with `unsupported_os`
+   * (thrown, not returned, so the route can answer with the reason and its code). The OS and architecture come from the
+   * server's recorded profile; only a host with none recorded (an agent from before the OS was kept) is asked with `uname`.
+   */
+  async install(transport: IServerTransport & IHostBoundTransport): Promise<TmuxInstallResult> {
+    assertPosixHost(transport.hostProfile, 'this server', 'installing tmux');
     try {
-      const osResult = await transport.exec('uname -s');
-      const osName = osResult.stdout.trim();
+      const osName = await resolveOsName(transport, transport.hostProfile);
       if (osName !== 'Linux') {
         return { success: false, error: `managed tmux は Linux のみ対応。${osName} は後続イシューで対応予定` };
       }
 
-      const archResult = await transport.exec('uname -m');
-      const rawArch = archResult.stdout.trim();
+      const rawArch = await resolveArchName(transport, transport.hostProfile);
       const arch = rawArch === 'arm64' ? 'aarch64' : rawArch;
       const binary = BINARIES[arch];
       if (!binary) {
         return { success: false, error: `Unsupported architecture: ${rawArch}. Supported: x86_64, aarch64/arm64` };
       }
 
-      const homeResult = await transport.exec('echo $HOME');
-      const home = homeResult.stdout.trim();
-      const dir = `${home}/.azito/tmux`;
+      // Each script below is run by sh, which expands $HOME itself: the home directory is not looked up first.
+      const dir = '$HOME/.azito/tmux';
       const binDir = `${dir}/bin`;
       const tmpFile = `${binDir}/tmux.tmp`;
       const finalFile = `${binDir}/tmux`;

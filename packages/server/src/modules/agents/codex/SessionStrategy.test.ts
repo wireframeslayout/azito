@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { CodexSessionStrategy } from './SessionStrategy';
+import { posixDialect } from '../../../shared/os/shellDialect';
 
 const server: ServerConfig = {
   name: 'local',
@@ -35,8 +36,8 @@ function meta(filePath: string, sessionId: string, cwd: string | null, originato
 describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review: respawn MCP-bypass fix)', () => {
   it('includes the azt-mcp disable override on a resume respawn, same as a fresh launch', () => {
     const { strategy } = createStrategy('');
-    const fresh = strategy.buildRespawnCommand(null, null, null);
-    const resumed = strategy.buildRespawnCommand('session-1', null, null);
+    const fresh = strategy.buildRespawnCommand(null, null, null, posixDialect);
+    const resumed = strategy.buildRespawnCommand('session-1', null, null, posixDialect);
     expect(fresh).toContain('-c mcp_servers.azt-mcp.enabled=false');
     // This is the exact gap the review caught: buildRespawnCommand's
     // `codex resume` branch previously hand-rolled its own command string
@@ -52,7 +53,7 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
 
   it('forwards model and extraArgs on a resume respawn, same as a fresh launch', () => {
     const { strategy } = createStrategy('');
-    const resumed = strategy.buildRespawnCommand('session-2', 'gpt-5.6-sol', '--verbose');
+    const resumed = strategy.buildRespawnCommand('session-2', 'gpt-5.6-sol', '--verbose', posixDialect);
     expect(resumed).toBe(
       "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol' '--verbose'",
     );
@@ -60,14 +61,14 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
 
   it('omits MCP disable flag when blockMcp is false (Issue #471)', () => {
     const { strategy } = createStrategy('');
-    const fresh = strategy.buildRespawnCommand(null, null, null, false);
+    const fresh = strategy.buildRespawnCommand(null, null, null, posixDialect, false);
     expect(fresh).not.toContain('mcp_servers.azt-mcp.enabled=false');
     expect(fresh).toBe('codex --dangerously-bypass-approvals-and-sandbox');
   });
 
   it('omits MCP disable flag on resume when blockMcp is false', () => {
     const { strategy } = createStrategy('');
-    const resumed = strategy.buildRespawnCommand('session-3', null, null, false);
+    const resumed = strategy.buildRespawnCommand('session-3', null, null, posixDialect, false);
     expect(resumed).not.toContain('mcp_servers.azt-mcp.enabled=false');
     expect(resumed).toBe('codex resume session-3 --dangerously-bypass-approvals-and-sandbox');
   });

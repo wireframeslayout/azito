@@ -1,7 +1,7 @@
 import type { MuxDriverKind } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
 import { resolveSupervisorCommand } from './SupervisorPath';
-import { shellQuote } from '../../shared/shellQuote';
+import type { ShellDialect } from '../../shared/os/shellDialect';
 
 /** `windowKind` is the mux kind of the window being launched (its `MuxRef.kind`), not the server's default mux. */
 export function shouldSupervise(serverType: ServerConfig['type'], windowType: string, windowKind: MuxDriverKind): boolean {
@@ -10,6 +10,8 @@ export function shouldSupervise(serverType: ServerConfig['type'], windowType: st
 
 export interface WrapWithSupervisorOptions {
   server: Pick<ServerConfig, 'name' | 'type'>;
+  /** The shell of the pane the wrapped line is typed into (the target host's `shellDialectFor(hostProfile)`). */
+  dialect: ShellDialect;
   target: string;
   taskId?: number;
   unitId?: number;
@@ -37,11 +39,12 @@ export interface WrapWithSupervisorOptions {
  * round-trip intact (quotes/spaces/pipes preserved).
  */
 export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions): string {
-  const supervisorCmd = resolveSupervisorCommand(opts.server);
-  const envPrefix: string[] = [];
+  const { dialect } = opts;
+  const supervisorCmd = resolveSupervisorCommand(opts.server, dialect);
+  const env: Record<string, string> = {};
 
   if (opts.harnessPrefix) {
-    envPrefix.push(`AZITO_PREFIX=${shellQuote(opts.harnessPrefix)}`);
+    env.AZITO_PREFIX = opts.harnessPrefix;
   }
 
   if (opts.launchId !== undefined && opts.bootstrapToken !== undefined) {
@@ -81,19 +84,16 @@ export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions)
     // `child_exit`/task-window-destroy expiry paths (`SupervisorRegistry.
     // expireLaunchId`/`resolveLaunchForExpiry`+`expireResolvedLaunch`)
     // still bound how long a captured token stays useful.
-    envPrefix.push(
-      `AZITO_SUPERVISOR_LAUNCH_ID=${shellQuote(opts.launchId)}`,
-      `AZITO_SUPERVISOR_BOOTSTRAP=${shellQuote(opts.bootstrapToken)}`,
-    );
+    env.AZITO_SUPERVISOR_LAUNCH_ID = opts.launchId;
+    env.AZITO_SUPERVISOR_BOOTSTRAP = opts.bootstrapToken;
   }
 
   const parts = [
-    ...envPrefix,
     supervisorCmd,
     '--server',
-    shellQuote(opts.server.name),
+    dialect.quote(opts.server.name),
     '--target',
-    shellQuote(opts.target),
+    dialect.quote(opts.target),
   ];
 
   if (opts.taskId !== undefined) {
@@ -103,6 +103,7 @@ export function wrapWithSupervisor(cmd: string, opts: WrapWithSupervisorOptions)
     parts.push('--unit-id', String(opts.unitId));
   }
 
-  parts.push('--', shellQuote(cmd));
-  return parts.join(' ');
+  parts.push('--', dialect.quote(cmd));
+  const line = parts.join(' ');
+  return Object.keys(env).length > 0 ? dialect.withEnv(env, line) : line;
 }

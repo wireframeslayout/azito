@@ -6,7 +6,7 @@ import { createSecretFileGuard } from '../shared/os/secretFileGuard';
 import type { HostEnv } from '../shared/os/hostEnv';
 import { TaskTempFiles } from '../shared/os/taskTempFiles';
 const doctorTaskTempFiles = new TaskTempFiles('/tmp', 'linux');
-const doctorHostEnv = (homeDir: string): HostEnv => ({ platform: 'linux', arch: 'x64', homeDir, tmpDir: '/tmp', execPath: process.execPath, uid: 1000 });
+const doctorHostEnv = (homeDir: string): HostEnv => ({ platform: 'linux', arch: 'x64', homeDir, tmpDir: '/tmp', execPath: process.execPath, uid: 1000, systemRoot: undefined });
 
 const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 

@@ -16,7 +16,7 @@ describe('agent POST /api/run', () => {
     // As in agent/main.ts: the routes are registered, then the auth hook covers them.
     await app.register(agentRoutes, {
       agentVersion: 'v', startedAt: Date.now(), agentEventBus: new EventEmitter(), browserSessionManager: {} as never,
-      bindAddress: '127.0.0.1', homeDir: '/home/u', hostProfile: { platform: 'linux', arch: 'x64' },
+      bindAddress: '127.0.0.1', homeDir: '/home/u', hostProfile: { platform: 'linux', arch: 'x64' }, runHost: { windows: false },
     });
     app.addHook('onRequest', agentAuthHook((header) => header === 'Bearer secret'));
     await app.ready();

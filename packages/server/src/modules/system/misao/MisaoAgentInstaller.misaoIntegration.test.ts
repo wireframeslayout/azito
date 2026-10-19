@@ -17,6 +17,7 @@ import { MisaoAgentInstaller } from './MisaoAgentInstaller';
 import { MISAO_CLI } from '../../../shared/misaoTestBinary';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { hubPaneShell } from '../../tmux/misao/paneShell';
+import { testLocalHost } from '../../../shared/os/testing/testLocalHost';
 
 // Installs the "bundled" misao on a real agent process (a throwaway port, token and HOME) the way the hub does, and then
 // talks to the daemon it started through the relay. The bundle carries the misao binary named by MISAO_CLI, and no misao
@@ -83,7 +84,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('installing misao on a real agent pro
     }, { timeout: 30000, interval: 200 });
 
     server = { name: 'agent2', type: 'agent', host: '127.0.0.1', agentPort: port, agentToken: AGENT_SECRET_TOKEN, defaultMux: 'misao', muxRuntime: 'system', isolationIntent: false } as ServerConfig;
-    transport = new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(server);
+    transport = new TransportFactory(HUB_ENV.publicUrl, testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(server);
   }, 60000);
 
   afterAll(async () => {
@@ -127,9 +128,9 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('installing misao on a real agent pro
     const registry = new MuxDriverRegistry();
     const sdk = await import('@misao/sdk');
     misao = registerMisaoDriver(registry, { sdk, socketPath: path.join(dir, 'unused-local.sock'), paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => undefined, { warn }, HUB_ENV, {
-      target: (srv) => ({ connect: ({ signal }) => new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(srv).connectMisaoRelay(signal) }),
-      status: (srv) => new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(srv).fetchMisaoStatus(),
-      hostInfo: (srv) => new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(srv).fetchHostInfo(),
+      target: (srv) => ({ connect: ({ signal }) => new TransportFactory(HUB_ENV.publicUrl, testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(srv).connectMisaoRelay(signal) }),
+      status: (srv) => new TransportFactory(HUB_ENV.publicUrl, testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(srv).fetchMisaoStatus(),
+      hostInfo: (srv) => new TransportFactory(HUB_ENV.publicUrl, testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' }).getAgentTransport(srv).fetchHostInfo(),
       latest: () => server,
     });
     const node = misao.servers.ensureAgentNode(server);

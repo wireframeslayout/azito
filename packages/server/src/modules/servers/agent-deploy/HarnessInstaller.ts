@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
+import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
+import { shellQuote } from '../../../shared/shellQuote';
 
 export type HarnessInstallStep = 'transfer' | 'setup';
 
@@ -22,6 +24,11 @@ import { resolveRoot } from '../../../shared/releaseInfo';
 const HARNESS_DIR = path.join(resolveRoot(), 'harness');
 
 export interface HarnessInstallOptions {
+  /**
+   * The target server's OS (`TransportFactory.hostProfileFor`; null = a Unix agent registered before the OS was recorded). The
+   * harness is installed with `setup.sh`, so a win32 target is refused with `unsupported_os` before anything is sent.
+   */
+  hostProfile: HostProfile | null;
   azitoUrl?: string;
   webhookToken?: string;
   uiToken?: string;
@@ -54,17 +61,12 @@ function remoteHarnessDir(prefix?: string): string {
   return `~/.azito/harness${prefix ? `-${prefix}` : ''}`;
 }
 
-/** Single-quote a value for safe interpolation into a remote shell command string. */
-function shellQuote(value: string): string {
-  return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
 export class HarnessInstaller {
   constructor(private sshClient: SshClient) {}
 
   async install(
     sshHost: string,
-    options: HarnessInstallOptions = {},
+    options: HarnessInstallOptions,
     onProgress?: (p: HarnessInstallProgress) => void,
   ): Promise<HarnessInstallResult> {
     const steps: HarnessInstallProgress[] = [];
@@ -74,6 +76,7 @@ export class HarnessInstaller {
       onProgress?.(p);
     };
 
+    assertPosixHost(options.hostProfile, 'this server', 'installing the harness (setup.sh)');
     if (options.prefix) validatePrefix(options.prefix);
     const harnessDir = remoteHarnessDir(options.prefix);
 
@@ -110,13 +113,14 @@ export class HarnessInstaller {
     return { success: true, steps };
   }
 
-  async installLocal(options: HarnessInstallOptions = {}): Promise<HarnessInstallResult> {
+  async installLocal(options: HarnessInstallOptions): Promise<HarnessInstallResult> {
     const steps: HarnessInstallProgress[] = [];
     const report = (step: HarnessInstallStep, status: HarnessInstallProgress['status'], message: string) => {
       const p: HarnessInstallProgress = { step, status, message };
       steps.push(p);
     };
 
+    assertPosixHost(options.hostProfile, 'this hub', 'installing the harness (setup.sh)');
     if (options.prefix) validatePrefix(options.prefix);
 
     report('transfer', 'ok', 'Local install — harness already at ' + HARNESS_DIR);

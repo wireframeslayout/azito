@@ -34,7 +34,7 @@ import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
-import { shellQuote } from '../../../shared/shellQuote';
+import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
@@ -253,6 +253,11 @@ export class ExecuteTaskUseCase {
 
   private resolveDriver(server: ServerConfig): IMuxClient {
     return this.muxDriverRegistry.resolve(server);
+  }
+
+  /** The shell of the server's panes: what the lines typed into them are written in. */
+  private dialectOf(server: ServerConfig): ShellDialect {
+    return shellDialectFor(this.transportFactory.hostProfileFor(server));
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -1330,7 +1335,7 @@ export class ExecuteTaskUseCase {
         // metacharacters via a maliciously named directory/symlink inside
         // the allowed root (Issue #27 review finding: cd command injection).
         // `--` guards against a leading `-` being read as a cd option.
-        await this.resolveDriver(server).sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
+        await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(effectiveDir), 'Enter']);
         await sleep(500);
       } catch {}
     }
@@ -1365,7 +1370,7 @@ export class ExecuteTaskUseCase {
 
     const windowType = unit.workerType ? 'agent' as const : 'terminal' as const;
 
-    const launchCommandOfWindow = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+    const launchCommandOfWindow = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
     let windowRowId: number;
     if (createdPrimaryRowId !== null) {
       windowRowId = createdPrimaryRowId;
@@ -1402,7 +1407,7 @@ export class ExecuteTaskUseCase {
     await labelAddedWindowOrRemove(this.resolveDriver(server), server, ref, { windowId: windowRowId, taskId }, this.windowRepo);
 
     // Launch worker command
-    const workerLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+    const workerLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
     if (workerLaunchCommand) {
       let effectiveLaunchCommand = workerLaunchCommand;
       const strategy = this.sessionStrategyFactory.create(unit.workerType);
@@ -1460,6 +1465,7 @@ export class ExecuteTaskUseCase {
           windowType,
           workerExecutionMode: unit.workerExecutionMode,
           effectiveLaunchCommand,
+          dialect: this.dialectOf(server),
         });
         this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
       } catch (launchErr) {
@@ -1861,7 +1867,7 @@ export class ExecuteTaskUseCase {
             workerType: unit.workerType,
             workerModel: unit.workerModel,
             agentSessionId: task.agentSessionId,
-            launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs),
+            launchCommand: buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(created.server)),
             workingDirectory: task.worktreePath || task.workingDirectory || null,
             paneLayout: null,
             sleeping: false,
@@ -1946,12 +1952,12 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [`cd -- ${shellQuote(followUpDir)}`, 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(followUpDir), 'Enter']);
           await sleep(500);
         } catch {}
       }
 
-      const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs);
+      const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));
       if (followUpLaunchCommand) {
         let effectiveFollowUpCommand = followUpLaunchCommand;
         if (task.agentSessionId) {
@@ -1977,6 +1983,7 @@ export class ExecuteTaskUseCase {
             windowType: followUpWindowType,
             workerExecutionMode: unit.workerExecutionMode,
             effectiveLaunchCommand: effectiveFollowUpCommand,
+            dialect: this.dialectOf(server),
           });
           this.appendLog(taskId, unitId, 'command', { type: 'worker_launch', command: actualCommand });
         } catch (launchErr) {

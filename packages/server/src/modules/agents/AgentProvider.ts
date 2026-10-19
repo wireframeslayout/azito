@@ -1,5 +1,6 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ISessionStrategy } from './SessionStrategy';
+import type { ShellDialect } from '../../shared/os/shellDialect';
 
 // ─── Catalog types (旧 AgentCatalog.AgentDefinition 相当) ───
 
@@ -27,6 +28,8 @@ export interface LaunchOptions {
   extraArgs?: string | null;
   /** When false, omit MCP blocking flags. Default true (fail-closed). */
   blockMcp?: boolean;
+  /** The shell of the pane the line is typed into (the target host's: `shellDialectFor(hostProfile)`). */
+  dialect: ShellDialect;
 }
 
 // ─── Session strategy injection ───

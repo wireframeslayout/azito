@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import { FetchDistributionService } from './FetchDistributionService';
 import { RemoteGitCommandError } from '../execWithSentinel';
 import { computeRepoHash } from './repoHash';
@@ -27,6 +28,7 @@ function mockHubRepoCache(overrides: Record<string, any> = {}) {
 
 function mockRemoteBundleOps(overrides: Record<string, any> = {}) {
   return {
+    assertSupported: vi.fn(),
     verify: vi.fn(async () => true),
     resolveHomeDir: vi.fn(async () => homeDir),
     mirrorDir: vi.fn(() => mirrorDir),
@@ -116,6 +118,17 @@ const makeParams = (overrides: Record<string, any> = {}) => ({
 });
 
 describe('FetchDistributionService', () => {
+  it('fails with the unsupported_os reason, before anything else is asked of the server, when the server is a Windows one', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      assertSupported: vi.fn(() => { throw new HostProfileError('unsupported_os', 'distributing a repository to it is a POSIX shell script, which this server (win32) does not have.'); }),
+    });
+    const service = new FetchDistributionService(mockHubRepoCache(), remoteBundleOps, mockSftpService(), mockDistRepo(), null, { name: 'Test Op', email: 'test@example.com' });
+    const result = await service.distribute(makeParams());
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('win32');
+    expect(remoteBundleOps.resolveHomeDir).not.toHaveBeenCalled();
+  });
+
   it('returns already_current when the mirror already has headSha and still ensures workingDir', async () => {
     const remoteBundleOps = mockRemoteBundleOps({
       getMirrorBranchSha: vi.fn(async () => sha),

@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { runIsolationDoctor, probeFilesFramed } from './isolationDoctor';
 import { isCanaryStillIntact } from './hubCanary';
-import type { IServerTransport, ExecResult } from './transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport, ExecResult } from './transport/ServerTransport';
+import type { HostProfile } from '../../shared/os/hostProfile';
 
 // Issue #29 Step 2 B: fail-closed contract — every check must default to
 // 'unknown' unless it actually confirmed something, and the overall
@@ -37,13 +38,14 @@ function b64(s: string): string {
   return Buffer.from(s, 'utf-8').toString('base64');
 }
 
-function makeTransport(handler: (cmd: string) => Promise<ExecResult> | ExecResult): IServerTransport {
+function makeTransport(handler: (cmd: string) => Promise<ExecResult> | ExecResult, hostProfile: HostProfile | null = null): IServerTransport & IHostBoundTransport {
   return {
+    hostProfile,
     exec: vi.fn(async (cmd: string) => handler(cmd)),
     execMux: vi.fn(),
     openTerminal: vi.fn(),
     createPaneStream: vi.fn(),
-  } as unknown as IServerTransport;
+  } as unknown as IServerTransport & IHostBoundTransport;
 }
 
 // A transport that reports a fully clean agent server — every individual
@@ -92,6 +94,12 @@ function bootIdResult(value: string | null): ExecResult {
 }
 
 describe('runIsolationDoctor', () => {
+  it('refuses a win32 server with unsupported_os before running any check', async () => {
+    const transport = makeTransport(cleanHandler, { platform: 'win32', arch: 'x64' });
+    await expect(runIsolationDoctor(transport, HUB)).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('the isolation doctor') });
+    expect(transport.exec).not.toHaveBeenCalled();
+  });
+
   // cleanHandler answers with an absent canary (isCanaryStillIntact mocked
   // true by beforeEach), so a fully "clean" agent server reaches
   // `verified: true` overall via the canary-absence branch — boot_id and

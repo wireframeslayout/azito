@@ -1,8 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import { PushNotaryService } from './PushNotaryService';
 
 function mockRemoteBundleOps(overrides: Partial<Record<string, any>> = {}) {
   return {
+    assertSupported: vi.fn(),
     getHeadSha: vi.fn(async () => 'a'.repeat(40)),
     getHeadBranch: vi.fn(async () => null),
     createFromWorktree: vi.fn(async () => '/tmp/azito-push-test.bundle'),
@@ -62,6 +64,21 @@ const makeRepo = (overrides: Record<string, any> = {}): import('../../projects/P
 
 describe('PushNotaryService', () => {
   const sha = 'a'.repeat(40);
+
+  it('returns failed with the unsupported_os reason, before reading the worktree, when the server is a Windows one', async () => {
+    const remoteBundleOps = mockRemoteBundleOps({
+      assertSupported: vi.fn(() => { throw new HostProfileError('unsupported_os', 'distributing a repository to it is a POSIX shell script, which this server (win32) does not have.'); }),
+    });
+    const service = new PushNotaryService(remoteBundleOps, mockSftpService(), mockCleanPusher(), mockGitProvider(), mockHubRepoCache());
+    const result = await service.notarize({
+      taskId: 1, unitId: 1, server: makeServer() as any,
+      transport: {} as any, worktreePath: '/wt', branch: 'feat', baseBranch: 'main', repo: makeRepo(), token: 'ghp_test',
+      targetBranch: null, defaultBranch: null,
+    });
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('win32');
+    expect(remoteBundleOps.getHeadSha).not.toHaveBeenCalled();
+  });
 
   it('returns failed when sshHost is missing', async () => {
     const service = new PushNotaryService(mockRemoteBundleOps(), mockSftpService(), mockCleanPusher(), mockGitProvider(), mockHubRepoCache());

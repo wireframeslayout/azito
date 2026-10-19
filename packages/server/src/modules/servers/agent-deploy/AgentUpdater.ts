@@ -1,4 +1,5 @@
 import type { AgentBundler } from './AgentBundler';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import type { AgentInstaller } from './AgentInstaller';
 import type { AgentHostRecorder } from './AgentHostRecorder';
 import type { IServerRepository } from '../Server';
@@ -49,8 +50,12 @@ export class AgentUpdater {
       }
 
       try {
-        await this.installer.recoverAgent(sshHost, server.host, server.agentToken, server.muxRuntime);
-      } catch {
+        await this.installer.recoverAgent(sshHost, server.host, server.agentToken, server.hostProfile, server.muxRuntime);
+      } catch (recoverErr) {
+        // The restart over SSH is the Unix bootstrap: for a Windows agent it is refused, and that is the reason to show.
+        if (recoverErr instanceof HostProfileError) {
+          return { name: server.name, status: 'error', message: `Agent unreachable: ${(err as Error).message}; ${recoverErr.code}: ${recoverErr.message}` };
+        }
         // Best-effort: fall through to the health re-check below, which reports the
         // appropriate error status regardless of why recovery failed.
       }
@@ -101,7 +106,7 @@ export class AgentUpdater {
       return { name: server.name, status: 'error', message: 'Cannot determine SSH host for update' };
     }
 
-    const result = await this.installer.update(sshHost, server.host, server.agentToken, server.muxRuntime);
+    const result = await this.installer.update(sshHost, server.host, server.agentToken, server.hostProfile, server.muxRuntime);
     if (result.success) {
       this.serverRepo.updateAgentVersion(server.name, result.version);
       // The new agent may be the first to know how to report its host: ask again.

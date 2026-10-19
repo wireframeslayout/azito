@@ -69,6 +69,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
     const sendCommand = shouldSupervise(ctx.server.type, ctx.windowType, ctx.windowKind)
       ? wrapWithSupervisor(ctx.effectiveLaunchCommand, {
           server: ctx.server,
+          dialect: ctx.dialect,
           target: ctx.supervisorTarget,
           taskId: ctx.taskId,
           unitId: ctx.unitId,

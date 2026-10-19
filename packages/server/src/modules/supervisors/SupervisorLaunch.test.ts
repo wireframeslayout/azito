@@ -4,6 +4,7 @@ import * as path from 'path';
 import { describe, it, expect, afterAll } from 'vitest';
 import { shouldSupervise, wrapWithSupervisor } from './SupervisorLaunch';
 import { resolveSupervisorCommand } from './SupervisorPath';
+import { posixDialect, powershellDialect } from '../../shared/os/shellDialect';
 
 describe('shouldSupervise', () => {
   it('is true for agent windows on local servers', () => {
@@ -36,10 +37,28 @@ describe('shouldSupervise', () => {
   });
 });
 
+describe('wrapWithSupervisor for a PowerShell pane', () => {
+  it('sets the launch binding as $env: variables and quotes the values the PowerShell way', () => {
+    const wrapped = wrapWithSupervisor("claude --model 'x'", {
+      server: { name: "it's", type: 'local' },
+      dialect: powershellDialect,
+      target: 'azito:task-1.1',
+      harnessPrefix: 'rc',
+      launchId: 'launch-1',
+      bootstrapToken: 'tok',
+    });
+    expect(wrapped.startsWith("$env:AZITO_PREFIX = 'rc'; $env:AZITO_SUPERVISOR_LAUNCH_ID = 'launch-1'; $env:AZITO_SUPERVISOR_BOOTSTRAP = 'tok'; ")).toBe(true);
+    expect(wrapped).toContain("--server 'it''s'");
+    expect(wrapped).toContain("--target 'azito:task-1.1'");
+    expect(wrapped.endsWith("-- 'claude --model ''x'''")).toBe(true);
+  });
+});
+
 describe('wrapWithSupervisor', () => {
   it('wraps a simple command with quoted --server/--target and -- <cmd>', () => {
     const wrapped = wrapWithSupervisor('claude --dangerously-skip-permissions', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-1.1',
     });
 
@@ -55,6 +74,7 @@ describe('wrapWithSupervisor', () => {
   it('includes --task-id and --unit-id when provided', () => {
     const wrapped = wrapWithSupervisor('codex', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-2.1',
       taskId: 7,
       unitId: 3,
@@ -68,6 +88,7 @@ describe('wrapWithSupervisor', () => {
     const cmd = `echo "it's a test" && run --flag value`;
     const wrapped = wrapWithSupervisor(cmd, {
       server: { name: 'srv', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-3.1',
     });
 
@@ -78,6 +99,7 @@ describe('wrapWithSupervisor', () => {
   it('prefixes AZITO_SUPERVISOR_LAUNCH_ID/AZITO_SUPERVISOR_BOOTSTRAP env vars when both are provided (fix/supervisor-launch-flag-compat)', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-9.1',
       launchId: 'launch-abc',
       bootstrapToken: 'secret-xyz',
@@ -91,6 +113,7 @@ describe('wrapWithSupervisor', () => {
   it('omits the launch env prefix when only one of the pair is provided', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-9.2',
       launchId: 'launch-abc',
     });
@@ -124,6 +147,7 @@ describe('wrapWithSupervisor', () => {
 
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-9.3',
       taskId: 1,
       unitId: 2,
@@ -147,6 +171,7 @@ describe('wrapWithSupervisor', () => {
   it('prefixes AZITO_PREFIX env var when harnessPrefix is provided', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-10.1',
       harnessPrefix: 'dev',
     });
@@ -157,6 +182,7 @@ describe('wrapWithSupervisor', () => {
   it('omits AZITO_PREFIX when harnessPrefix is not provided', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-10.2',
     });
 
@@ -166,6 +192,7 @@ describe('wrapWithSupervisor', () => {
   it('includes AZITO_PREFIX alongside launch binding env vars when both are provided', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'local-server', type: 'local' },
+      dialect: posixDialect,
       target: 'azito:task-10.3',
       harnessPrefix: 'dev',
       launchId: 'launch-abc',
@@ -184,6 +211,7 @@ describe('wrapWithSupervisor', () => {
   it('resolves an agent-server command using the ~/.azito/agent/current path', () => {
     const wrapped = wrapWithSupervisor('claude', {
       server: { name: 'agent-server', type: 'agent' },
+      dialect: posixDialect,
       target: 'azito:task-5.1',
     });
 
@@ -207,7 +235,7 @@ describe('resolveSupervisorCommand — local path quoting', () => {
     const distPath = path.join(distDir, 'azito-supervisor.cjs');
     fs.writeFileSync(distPath, '// stub');
 
-    const cmd = resolveSupervisorCommand({ type: 'local' }, spacedRoot);
+    const cmd = resolveSupervisorCommand({ type: 'local' }, posixDialect, spacedRoot);
 
     expect(cmd).toBe(`node '${distPath.replace(/'/g, "'\\''")}'`);
     // The raw (unquoted) path must not appear bare after `node `
@@ -219,7 +247,7 @@ describe('resolveSupervisorCommand — local path quoting', () => {
     try {
       const srcPath = path.join(emptyRoot, 'packages', 'tui-supervisor', 'src', 'main.ts');
 
-      const cmd = resolveSupervisorCommand({ type: 'local' }, emptyRoot);
+      const cmd = resolveSupervisorCommand({ type: 'local' }, posixDialect, emptyRoot);
 
       expect(cmd).toBe(`npx tsx '${srcPath}'`);
     } finally {
@@ -239,7 +267,7 @@ describe('resolveSupervisorCommand — local path quoting', () => {
       fs.writeFileSync(supervisorPath, '// stub');
       fs.writeFileSync(nodePath, '// stub');
 
-      expect(resolveSupervisorCommand({ type: 'local' }, releaseRoot)).toBe(`'${nodePath}' '${supervisorPath}'`);
+      expect(resolveSupervisorCommand({ type: 'local' }, posixDialect, releaseRoot)).toBe(`'${nodePath}' '${supervisorPath}'`);
     } finally {
       fs.rmSync(releaseRoot, { recursive: true, force: true });
     }
@@ -253,13 +281,13 @@ describe('resolveSupervisorCommand — local path quoting', () => {
       fs.mkdirSync(path.join(bothRoot, 'packages', 'tui-supervisor', 'dist'), { recursive: true });
       fs.writeFileSync(path.join(bothRoot, 'packages', 'tui-supervisor', 'dist', 'azito-supervisor.cjs'), '// stub');
 
-      expect(resolveSupervisorCommand({ type: 'local' }, bothRoot)).toContain(path.join(bothRoot, 'azito-supervisor.cjs'));
+      expect(resolveSupervisorCommand({ type: 'local' }, posixDialect, bothRoot)).toContain(path.join(bothRoot, 'azito-supervisor.cjs'));
     } finally {
       fs.rmSync(bothRoot, { recursive: true, force: true });
     }
   });
 
   it('does not quote the agent path (tilde must stay expandable by the remote shell)', () => {
-    expect(resolveSupervisorCommand({ type: 'agent' })).toBe('node ~/.azito/agent/current/azito-supervisor.cjs');
+    expect(resolveSupervisorCommand({ type: 'agent' }, posixDialect)).toBe('node ~/.azito/agent/current/azito-supervisor.cjs');
   });
 });

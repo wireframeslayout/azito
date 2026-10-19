@@ -5,9 +5,10 @@ vi.mock('node-pty', () => ({ spawn: vi.fn() }));
 
 import { LocalTransport } from './LocalTransport';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import { testLocalHost } from '../../../shared/os/testing/testLocalHost';
 
 const rt = { bin: 'tmux', baseArgs: [] } as never;
-const make = (platform: 'linux' | 'darwin' | 'win32') => new LocalTransport(rt, 'http://hub', os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform, arch: 'x64' });
+const make = (platform: 'linux' | 'darwin' | 'win32') => new LocalTransport(rt, 'http://hub', testLocalHost(), new TaskTempFiles('/tmp', 'linux'), { platform, arch: 'x64' });
 
 describe('LocalTransport host profile', () => {
   it.skipIf(process.platform === 'win32')('keeps running sh commands on a Unix hub', async () => {

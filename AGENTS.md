@@ -198,6 +198,17 @@ packages/
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
   (neither is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
 
+### Shell text (ShellDialect, #379 P9)
+- `shared/os/shellDialect.ts`: `ShellDialect` (POSIX sh / PowerShell 5.1) is for the two places text goes through a shell on the target — a fixed SSH bootstrap script and the line typed
+  into a pane — never for ordinary commands (those are a `CommandSpec`). `shellDialectFor(hostProfile)` is the one chooser (NULL / linux / darwin → POSIX, win32 → PowerShell). `shellQuote` is the POSIX
+  `quote`. Pane lines (`buildWorkerLaunchCommand`, `ISessionStrategy.buildRespawnCommand`, `wrapWithSupervisor`, the `cd` before a launch) take the server's dialect
+  (`shellDialectFor(transportFactory.hostProfileFor(server))`). PowerShell `wrapScript` is the fixed `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>`
+  (≤ 8191 characters, cmd.exe's limit); a native program with arbitrary arguments is `invoke`d through a fixed `node -e` launcher given `{ file, args }` as base64 JSON (nothing is placed on the host; `node` must be on PATH).
+  A win32 node's pane is still `unsupported_os` (`paneShell.ts`) until #370 / #371.
+- Unix-only install scripts (tmux / browser runtime / harness `setup.sh` / misao on an agent / hub-transfer `RemoteBundleOps` / isolation doctor / agent redeploy over SSH) stay sh; each entry point starts with
+  `assertPosixHost(transport.hostProfile, label, operation)` and a win32 server gets `HostProfileError('unsupported_os')`, which `mapAppError` answers as 501 `{ error: <reason>, code }` (the UI shows `error`).
+  A host with no recorded OS is a Unix one. Their Windows versions are separate functions (#369 / #380).
+
 ### File operations (IFileOps, #379 P7)
 - `IServerTransport.files()` returns the host's `IFileOps` (list / stat / read / write / create / remove / rename / realpath): Node `fs` on the machine that owns the files, no shell,
   the same code on every OS. `LocalFileOps` (`shared/fs/`) is the hub's own and what the agent runs for each request; an agent server gets `RemoteFileOps` over `POST /api/fileops`

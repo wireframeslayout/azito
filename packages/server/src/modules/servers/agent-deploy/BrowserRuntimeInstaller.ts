@@ -1,4 +1,6 @@
-import type { IServerTransport } from '../transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport } from '../transport/ServerTransport';
+import { assertPosixHost } from '../../../shared/os/hostProfile';
+import { resolveOsName } from '../installProbe';
 import { readFileSync } from 'fs';
 import { createRequire } from 'module';
 
@@ -56,10 +58,15 @@ export interface BrowserRuntimeInstallResult {
 }
 
 export class BrowserRuntimeInstaller {
-  async install(transport: IServerTransport): Promise<BrowserRuntimeInstallResult> {
+  /**
+   * Unix only (sh scripts: npx, fontconfig, `cd /tmp && ...`): a win32 server is refused with `unsupported_os` (thrown, so
+   * the route can answer with the reason and its code). The OS comes from the server's recorded profile; only a host with none
+   * recorded (an agent from before the OS was kept) is asked with `uname`.
+   */
+  async install(transport: IServerTransport & IHostBoundTransport): Promise<BrowserRuntimeInstallResult> {
+    assertPosixHost(transport.hostProfile, 'this server', 'installing the browser runtime');
     try {
-      const osResult = await transport.exec('uname -s');
-      const osName = osResult.stdout.trim();
+      const osName = await resolveOsName(transport, transport.hostProfile);
       if (osName !== 'Linux' && osName !== 'Darwin') {
         return { success: false, error: `Browser runtime は Linux/macOS のみ対応。検出: ${osName}` };
       }

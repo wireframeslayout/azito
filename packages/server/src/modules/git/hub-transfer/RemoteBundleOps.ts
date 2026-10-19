@@ -1,6 +1,7 @@
 import * as crypto from 'crypto';
-import type { IServerTransport } from '../../servers/transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport } from '../../servers/transport/ServerTransport';
 import { shellQuote } from '../../../shared/shellQuote';
+import { assertPosixHost } from '../../../shared/os/hostProfile';
 import { setRemoteGitConfigValue } from '../gitConfigOps';
 import { assertSafeBranch } from '../assertSafeGitArgs';
 import { execGitOrThrow, execWithSentinel, RemoteGitCommandError } from '../execWithSentinel';
@@ -54,6 +55,14 @@ export class RemoteBundleOps {
       });
     }
     return outcome.ok;
+  }
+
+  /**
+   * Every operation here is a POSIX shell command (`cd X && git ...`, `rm -f`, `$HOME`): a win32 server is refused with
+   * `unsupported_os`. Called first by each flow that uses this class (the Windows version is a separate class, with the Windows agent).
+   */
+  assertSupported(transport: IHostBoundTransport): void {
+    assertPosixHost(transport.hostProfile, 'this server', 'distributing a repository to it');
   }
 
   /** サーバーのホームディレクトリを解決する（`TmuxInstaller` と同じ `$HOME` 規約）。 */

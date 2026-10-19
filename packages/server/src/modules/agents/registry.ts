@@ -2,6 +2,7 @@ import type { AgentContext, AgentDefinition, AgentModel, IAgentProvider } from '
 import { claudeProvider } from './claude';
 import { codexProvider } from './codex';
 import { genericProvider } from './generic';
+import { posixDialect } from '../../shared/os/shellDialect';
 
 // ─── API-facing definition (definition + derived launch command) ───
 //
@@ -68,7 +69,8 @@ export function listAgentDefinitions(): AgentApiDefinition[] {
     // Issue #471: launchCommand is used for the "Add Window" UI preset
     // (user-added windows), so it should not include MCP blocking flags.
     launchCommand: p.definition.launchable
-      ? p.buildLaunchCommand({ model: null, extraArgs: null, blockMcp: false })
+      // The catalog shows the bare command (nothing in it is quoted), so the dialect does not change it.
+      ? p.buildLaunchCommand({ model: null, extraArgs: null, blockMcp: false, dialect: posixDialect })
       : null,
   }));
 }
