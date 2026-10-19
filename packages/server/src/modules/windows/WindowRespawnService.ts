@@ -776,6 +776,37 @@ export class WindowRespawnService {
   }
 
   /**
+   * Issue #471: lightweight check whether a task's execution gate allows
+   * running (for the MCP blocking decision in launch-agent). Unlike
+   * enforceExecutionGate(), this does NOT throw, block the task, or log —
+   * it only returns whether MCP should be unblocked. Returns `true` when
+   * the gate allows (trusted / policy=allow / fingerprint match), `false`
+   * when denied or pending approval, and `false` on any resolution error
+   * (fail-closed).
+   */
+  isTaskExecutionAllowed(task: Task, serverName: string): boolean {
+    try {
+      const server = this.serverRepo.findByName(serverName);
+      if (!server) return false;
+      const { manifest, projectServer } = resolveExecutionManifest(task, {
+        unitRepo: this.unitRepo,
+        projectRepo: this.projectRepo,
+        projectServerRepo: this.projectServerRepo,
+        serverRepo: this.serverRepo,
+        projectSecretRepo: this.projectSecretRepo,
+        unitTypeLoader: this.unitTypeLoader,
+        sidekickLoader: this.sidekickLoader,
+      }, 'continuation', undefined, serverName);
+      const manifestHash = hashExecutionManifest(manifest);
+      const effective = resolveEffectiveInputPolicy(projectServer, server, this.scopedAuthEnabled);
+      const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
+      return gate.allowed;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
    * Legacy recovery path for tasks that predate Window records (migration
    * 034): creates a fresh tmux window and launches `claude --resume
    * <agentSessionId>` directly, with no Window row involved — respawn()

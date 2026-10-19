@@ -67,17 +67,14 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   };
 
   // Issue #471: resolve a task's execution-allowed status for the MCP
-  // blocking decision. Trusted tasks are always allowed; untrusted tasks
-  // use 'unknown' (fail-closed) because the full manifest resolution
-  // dependencies are not available in the routes layer.
-  const resolveLinkedTaskForMcp = (taskId: number): { executionAllowed: boolean } | 'unknown' => {
+  // blocking decision. Delegates to respawnService.isTaskExecutionAllowed()
+  // which has the full ExecutionGate dependencies.
+  const resolveLinkedTaskForMcp = (taskId: number, serverName: string): { executionAllowed: boolean } | 'unknown' => {
     try {
       const task = taskRepo.findById(taskId);
       if (!task) return 'unknown';
       if (task.inputTrust !== 'untrusted') return { executionAllowed: true };
-      // Untrusted task: fail-closed — full gate evaluation requires
-      // dependencies not available here (unitRepo, projectSecretRepo, etc.).
-      return 'unknown';
+      return { executionAllowed: respawnService.isTaskExecutionAllowed(task, serverName) };
     } catch {
       return 'unknown';
     }
@@ -452,7 +449,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       // we must add them when the window requires blocking.
       const blockMcp = shouldBlockMcp({
         isPrimary: win.isPrimary,
-        linkedTask: win.taskId !== null ? resolveLinkedTaskForMcp(win.taskId) : null,
+        linkedTask: win.taskId !== null ? resolveLinkedTaskForMcp(win.taskId, win.serverName) : null,
       });
 
       const strategy = sessionStrategyFactory.create(win.workerType);

@@ -91,8 +91,10 @@ access to the `azt-mcp` MCP server (Claude: `--strict-mcp-config`, Codex:
 full-authority API surface through the operator's `AZITO_UI_TOKEN`-carrying MCP server.
 
 User-added windows (`is_primary = 0`) do **not** receive these blocking flags. These windows
-are interactive development sessions that need MCP server access. Non-primary windows attached
-to a task with `inputTrust = 'untrusted'` are fail-closed (blocking is applied).
+are interactive development sessions that need MCP server access. However, non-primary windows
+attached to a task with `inputTrust = 'untrusted'` are blocked until execution is approved
+(`approve-execution` with a matching fingerprint). If the task or its settings cannot be
+resolved, blocking is applied (fail-closed).
 
 ### `~/.azito/operator.env`
 
