@@ -371,7 +371,7 @@ describe('RecoverStuckTasksUseCase', () => {
     vi.mocked(fs.readdirSync).mockImplementation((dir) =>
       (String(dir) === '/tmp' ? ['azito-pipe-41-sig-1.log'] : []) as never);
     vi.mocked(fs.readFileSync).mockImplementation((file) =>
-      (String(file).endsWith('/tmp/azito-pipe-41-sig-1.log') ? doneMarker : '') as never);
+      (String(file).replace(/\\/g, '/').endsWith('/tmp/azito-pipe-41-sig-1.log') ? doneMarker : '') as never);
 
     const mac = new TaskTempFiles('/var/folders/xy/T', 'darwin');
     const useCase = createUseCase(mocks, undefined, [], mac);
