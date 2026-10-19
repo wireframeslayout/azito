@@ -4,11 +4,10 @@ import type { ExecResult, IServerTransport } from '../servers/transport/ServerTr
  * Exit-status sentinel for remote git commands (Issue #87 third-party
  * review, seventh pass, Important finding 1).
  *
- * `hasGitError()`'s doc comment explains why `result.code`/`result.stderr`
- * can't be trusted on `ssh` transports: `SshClient.execRemote()` always
- * returns `code: 0`/`stderr: ''`, so the only way to detect a failure there
- * used to be scanning combined stdout+stderr text for a `fatal:`/`error:`
- * line. That text scan misses any failure that doesn't happen to print in
+ * `result.code`/`result.stderr` can't be trusted on `ssh` transports:
+ * `SshClient.execRemote()` always returns `code: 0`/`stderr: ''`, so the
+ * only way to detect a failure there used to be scanning combined
+ * stdout+stderr text for a `fatal:`/`error:` line. That text scan misses any failure that doesn't happen to print in
  * git's own message format — e.g. `sh: git: command not found` or
  * `Permission denied` from the remote shell itself, neither of which starts
  * with `fatal:`/`error:`. On `ssh` transports those failures were silently
@@ -33,10 +32,8 @@ import type { ExecResult, IServerTransport } from '../servers/transport/ServerTr
  *    fallback) can tell "the transfer/execution layer broke" apart from
  *    "git ran and rejected the content" without any string matching.
  *
- * This module is deliberately separate from `hasGitError()`, which
- * `RemoteWorktreeService` still uses unchanged (out of scope here) — the
- * two solve the same underlying transport problem with different
- * mechanisms and are not meant to be merged.
+ * Commands that have moved to `transport.run` (see `runGit`) do not need
+ * this: `run` reports the program's real exit code.
  */
 
 const SENTINEL_PREFIX = 'AZITO_RC:';
