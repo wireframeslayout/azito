@@ -13,7 +13,7 @@ import { checkIsolationBlockers as checkIsolationBlockersFor } from './isolation
 import type { MuxCapabilities, MuxDriverKind, MuxStatusItem, MuxWorkspace } from '@azito/shared';
 import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem } from './muxStatus';
 import { probeOutput, resolveOsName } from './installProbe';
-import { runGit } from '../git/runGit';
+import { buildCommandSpec } from '../../shared/exec/commandSpec';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { AgentHostRecorder } from './agent-deploy/AgentHostRecorder';
@@ -1342,7 +1342,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!workingDir) return { branches: [] };
 
       try {
-        const result = await runGit(transportFactory.getTransport(srv), workingDir, ['branch', '-a', '--format=%(refname:short)']);
+        const result = await transportFactory.getTransport(srv).run(buildCommandSpec('git', ['branch', '-a', '--format=%(refname:short)'], { cwd: workingDir }));
         if (result.exitCode !== 0) return { branches: [] };
         const lines = stripTerminalArtifacts(result.stdout).trim().split('\n').filter(Boolean);
 
