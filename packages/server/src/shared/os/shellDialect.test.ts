@@ -223,7 +223,9 @@ describe.skipIf(!isWindows)('PowerShell dialect on a real powershell.exe', () =>
           powershellDialect.invoke(process.execPath, ['-e', 'console.log("SECOND")']),
         ]);
         const out = runLine(powershellDialect.wrapScript(body), login);
-        expect(out.status).toBe(3);
+        // Under a cmd.exe login the step's own code comes through. A PowerShell login shell runs the line as `-Command`, which
+        // reports only 0 or 1 for a native command that failed (a PowerShell rule, not the dialect's).
+        expect(out.status).toBe(login === 'cmd.exe' ? 3 : 1);
         expect(out.stdout).not.toContain('SECOND');
       }, 60_000);
 

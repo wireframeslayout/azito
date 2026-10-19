@@ -25,7 +25,8 @@ export interface ShellDialect {
   chain(steps: readonly string[]): string;
   /**
    * A whole script as one command line that a remote login shell (cmd.exe, PowerShell or sh) runs the same way. Its exit
-   * status is the one of the step that stopped it.
+   * status is the one of the step that stopped it (exactly, under sh and cmd.exe; a PowerShell login shell reduces any
+   * failure of a native command to 1, as `powershell -Command` does).
    */
   wrapScript(script: string): string;
 }
