@@ -16,6 +16,7 @@ import type { MuxRuntime } from '../Server';
 import { AGENT_HOST_PATH, AgentHostOutdatedError, parseAgentHostInfo, type AgentHostInfo } from './agentHostProtocol';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 import { CommandOutputLimitError, CommandSpawnError, type CommandResult, type CommandSpec } from '../../../shared/exec/commandSpec';
+import { truncateUtf8 } from '../../../shared/exec/utf8';
 import { toPosixCommandLine } from '../../../shared/exec/posixCommandLine';
 import { AGENT_RUN_PATH, responseToResult } from '../../../shared/exec/runWire';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
@@ -154,8 +155,9 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   /** The run of an agent without `/api/run`: the quoted command line through `exec`. See `toPosixCommandLine` for what a shell cannot report. */
   private async runThroughShell(spec: CommandSpec): Promise<CommandResult> {
     const result = await this.exec(toPosixCommandLine(spec), spec.timeoutMs);
-    if (result.stdout.length > spec.maxOutputBytes || result.stderr.length > spec.maxOutputBytes) {
-      throw new CommandOutputLimitError(spec.maxOutputBytes, result.stdout.slice(0, spec.maxOutputBytes), result.stderr.slice(0, spec.maxOutputBytes));
+    // The limit is in bytes, like the shared runner's, and a character is never cut in half.
+    if (Buffer.byteLength(result.stdout) > spec.maxOutputBytes || Buffer.byteLength(result.stderr) > spec.maxOutputBytes) {
+      throw new CommandOutputLimitError(spec.maxOutputBytes, truncateUtf8(result.stdout, spec.maxOutputBytes), truncateUtf8(result.stderr, spec.maxOutputBytes));
     }
     // sh: 127 = command not found. The program's own 127 is told apart by sh having named it on stderr.
     if (result.code === 127 && /not found/i.test(result.stderr)) {

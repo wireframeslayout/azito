@@ -1,5 +1,6 @@
-import { execFile } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import { constants as osConstants } from 'os';
+import * as path from 'path';
 import {
   CommandOutputLimitError,
   CommandSpawnError,
@@ -7,6 +8,7 @@ import {
   type CommandResult,
   type CommandSpec,
 } from './commandSpec';
+import { trimIncompleteUtf8 } from './utf8';
 
 /**
  * `.cmd` / `.bat` are run by cmd.exe, and Node's `execFile` cannot start one without a shell (and starting one through a shell
@@ -15,69 +17,150 @@ import {
  */
 const BATCH_FILE = /\.(cmd|bat)$/i;
 
-function toText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (Buffer.isBuffer(value)) return value.toString('utf-8');
-  return '';
+/** After the polite stop (SIGTERM), how long a command gets before it is killed outright (SIGKILL). */
+export const DEFAULT_KILL_GRACE_MS = 2000;
+/** After the outright kill, how long to wait for the pipes to close before the call gives up on them and settles anyway. */
+const ABANDON_PIPES_MS = 1000;
+
+export interface RunCommandOptions {
+  /** The host is Windows: a command is stopped with `taskkill /T /F` (its whole tree), where Unix signals its process group. */
+  windows: boolean;
+  /** Overrides {@link DEFAULT_KILL_GRACE_MS}. */
+  killGraceMs?: number;
+}
+
+/** One output stream, kept as bytes and cut at the byte limit (`exceeded`: more than the limit was written). */
+class Capture {
+  private chunks: Buffer[] = [];
+  private bytes = 0;
+  exceeded = false;
+
+  constructor(private readonly maxBytes: number) {}
+
+  /** Returns true when this chunk is the one that crossed the limit. */
+  push(chunk: Buffer): boolean {
+    if (this.exceeded) return false;
+    const room = this.maxBytes - this.bytes;
+    if (chunk.length > room) {
+      this.chunks.push(chunk.subarray(0, room));
+      this.bytes = this.maxBytes;
+      this.exceeded = true;
+      return true;
+    }
+    this.chunks.push(chunk);
+    this.bytes += chunk.length;
+    return false;
+  }
+
+  text(): string {
+    const all = Buffer.concat(this.chunks);
+    return (this.exceeded ? trimIncompleteUtf8(all) : all).toString('utf-8');
+  }
+}
+
+function signalGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  try {
+    process.kill(-child.pid, signal);
+  } catch {
+    // The group is already gone.
+  }
+}
+
+function killWindowsTree(child: ChildProcess): void {
+  const systemRoot = process.env.SystemRoot;
+  if (child.pid === undefined) return;
+  if (!systemRoot) {
+    child.kill();
+    return;
+  }
+  // The system's own taskkill by absolute path: a PATH lookup could find another program of that name.
+  const taskkill = path.win32.join(systemRoot, 'System32', 'taskkill.exe');
+  const killer = spawn(taskkill, ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' });
+  killer.on('error', () => child.kill());
 }
 
 /**
- * Runs `spec` with `execFile` and no shell, on the machine this Node process runs on. The hub (local servers) and the agent
+ * Runs `spec` without a shell, on the machine this Node process runs on. The hub (local servers) and the agent
  * (`POST /api/run`) both call this, so a spec behaves the same wherever it executes.
  *
  * Resolves with the real exit code, non-zero included. Rejects with a {@link CommandSpawnError} (not startable),
- * {@link CommandTimeoutError} or {@link CommandOutputLimitError}; each carries the output produced so far.
+ * {@link CommandTimeoutError} or {@link CommandOutputLimitError}; each carries the output produced so far. The deadline
+ * and the output limit are this function's own: once either is hit the command is stopped (SIGTERM to its process group,
+ * then SIGKILL after a grace period; the whole tree with `taskkill` on Windows) and the call fails with that reason
+ * whatever the command exits with — a command that exits 0 on SIGTERM did not succeed.
  */
-export function runCommandSpec(spec: CommandSpec): Promise<CommandResult> {
+export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): Promise<CommandResult> {
   if (BATCH_FILE.test(spec.file)) {
     return Promise.reject(new CommandSpawnError(
       'UNSUPPORTED_FILE',
       `Cannot run "${spec.file}": .cmd / .bat files need a shell, and commands are run without one. Name the executable itself.`,
     ));
   }
+  const killGraceMs = options.killGraceMs ?? DEFAULT_KILL_GRACE_MS;
 
   return new Promise((resolve, reject) => {
-    const child = execFile(
-      spec.file,
-      spec.args,
-      {
-        cwd: spec.cwd,
-        env: spec.env ? { ...process.env, ...spec.env } : undefined,
-        timeout: spec.timeoutMs,
-        maxBuffer: spec.maxOutputBytes,
-        windowsHide: true,
-        shell: false,
-        encoding: 'utf-8',
-      },
-      (err, stdoutRaw, stderrRaw) => {
-        const stdout = toText(stdoutRaw);
-        const stderr = toText(stderrRaw);
-        if (!err) {
-          resolve({ exitCode: 0, signal: null, stdout, stderr });
-          return;
-        }
-        const failure = err as NodeJS.ErrnoException & { killed?: boolean; signal?: NodeJS.Signals | null; code?: string | number };
-        if (failure.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') {
-          reject(new CommandOutputLimitError(spec.maxOutputBytes, stdout, stderr));
-          return;
-        }
-        if (typeof failure.code === 'number') {
-          resolve({ exitCode: failure.code, signal: null, stdout, stderr });
-          return;
-        }
-        if (failure.killed && failure.signal) {
-          // execFile kills the child itself only for the timeout (the output limit is reported above); a signal from outside leaves `killed` false.
-          reject(new CommandTimeoutError(spec.timeoutMs, stdout, stderr));
-          return;
-        }
-        if (failure.signal) {
-          const signalNumber = osConstants.signals[failure.signal];
-          resolve({ exitCode: 128 + signalNumber, signal: failure.signal, stdout, stderr });
-          return;
-        }
-        reject(new CommandSpawnError(typeof failure.code === 'string' ? failure.code : 'UNKNOWN', failure.message, stdout, stderr));
-      },
-    );
+    const child = spawn(spec.file, spec.args, {
+      cwd: spec.cwd,
+      env: spec.env ? { ...process.env, ...spec.env } : undefined,
+      shell: false,
+      windowsHide: true,
+      // Its own process group on Unix, so a stop reaches the grandchildren too.
+      detached: !options.windows,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    const stdout = new Capture(spec.maxOutputBytes);
+    const stderr = new Capture(spec.maxOutputBytes);
+    const timers: NodeJS.Timeout[] = [];
+    let stopReason: 'timeout' | 'output_limit' | null = null;
+    let settled = false;
+
+    const settle = (finish: () => void): void => {
+      if (settled) return;
+      settled = true;
+      timers.forEach(clearTimeout);
+      finish();
+    };
+    const failureOrResult = (exitCode: number | null, signal: NodeJS.Signals | null): void => {
+      settle(() => {
+        const out = stdout.text();
+        const err = stderr.text();
+        if (stopReason === 'timeout') reject(new CommandTimeoutError(spec.timeoutMs, out, err));
+        else if (stopReason === 'output_limit') reject(new CommandOutputLimitError(spec.maxOutputBytes, out, err));
+        else if (exitCode !== null) resolve({ exitCode, signal: null, stdout: out, stderr: err });
+        else resolve({ exitCode: 128 + (signal ? osConstants.signals[signal] : 0), signal, stdout: out, stderr: err });
+      });
+    };
+
+    const stop = (reason: 'timeout' | 'output_limit'): void => {
+      if (stopReason) return;
+      stopReason = reason;
+      if (options.windows) {
+        killWindowsTree(child);
+      } else {
+        signalGroup(child, 'SIGTERM');
+        timers.push(setTimeout(() => signalGroup(child, 'SIGKILL'), killGraceMs));
+      }
+      // A descendant that kept the pipes open must not hold the call forever.
+      timers.push(setTimeout(() => {
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        failureOrResult(child.exitCode, child.signalCode);
+      }, killGraceMs + ABANDON_PIPES_MS));
+    };
+
+    timers.push(setTimeout(() => stop('timeout'), spec.timeoutMs));
+    child.stdout?.on('data', (chunk: Buffer) => { if (stdout.push(chunk)) stop('output_limit'); });
+    child.stderr?.on('data', (chunk: Buffer) => { if (stderr.push(chunk)) stop('output_limit'); });
+
+    child.on('error', (err: NodeJS.ErrnoException) => {
+      // Only a failure to start ends the call here; the process is gone before it ever ran.
+      if (child.pid !== undefined) return;
+      settle(() => reject(new CommandSpawnError(err.code ?? 'UNKNOWN', err.message, stdout.text(), stderr.text())));
+    });
+    child.on('close', (exitCode, signal) => failureOrResult(exitCode, signal));
+
     // A program that exits without reading its stdin breaks the pipe: that is the program's choice, not our failure.
     child.stdin?.on('error', () => undefined);
     child.stdin?.end(spec.stdin ?? '');

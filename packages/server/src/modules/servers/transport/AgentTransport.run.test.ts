@@ -84,7 +84,7 @@ describe('AgentTransport.run: the route is chosen by whether the agent host is r
       const [url, init] = fetchSpy.mock.calls[0];
       expect(url).toBe('http://10.0.0.1:4021/api/exec');
       expect(JSON.parse(init!.body as string)).toEqual({
-        command: "cd -- '/repo' && 'git' '-C' 'it'\\''s here' 'status'",
+        command: "cd -- '/repo' && 'git' '-C' 'it'\\''s here' 'status' </dev/null",
         timeoutMs: 2000,
       });
     });
@@ -102,6 +102,23 @@ describe('AgentTransport.run: the route is chosen by whether the agent host is r
     it('leaves an exit code 127 the program chose itself as a result', async () => {
       fetchSpy.mockResolvedValue(json({ stdout: '', stderr: 'custom failure', code: 127 }));
       expect((await make().run(spec)).exitCode).toBe(127);
+    });
+
+    it('counts the output cap in bytes and cuts at a character boundary (Japanese, emoji)', async () => {
+      // 'あ' is 3 bytes: 4 of them are 12 bytes, over a 10 byte cap although only 4 characters long.
+      fetchSpy.mockResolvedValue(json({ stdout: 'ああああ', stderr: '', code: 0 }));
+      const japanese = await make().run({ ...spec, maxOutputBytes: 10 }).catch((e: unknown) => e);
+      expect(japanese).toBeInstanceOf(CommandOutputLimitError);
+      expect((japanese as CommandOutputLimitError).stdout).toBe('あああ');
+
+      fetchSpy.mockResolvedValue(json({ stdout: '', stderr: '😀😀😀', code: 0 }));
+      const emoji = await make().run({ ...spec, maxOutputBytes: 10 }).catch((e: unknown) => e);
+      expect((emoji as CommandOutputLimitError).stderr).toBe('😀😀');
+    });
+
+    it('accepts output of exactly the cap in bytes', async () => {
+      fetchSpy.mockResolvedValue(json({ stdout: 'あああ', stderr: '', code: 0 }));
+      expect((await make().run({ ...spec, maxOutputBytes: 9 })).stdout).toBe('あああ');
     });
 
     it('keeps the output cap', async () => {

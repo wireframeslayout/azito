@@ -130,7 +130,7 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
     if (!parsed.success) {
       return reply.status(400).send({ error: 'invalid_command_spec', issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
     }
-    return runToResponse(parsed.data);
+    return runToResponse(parsed.data, { windows: hostProfile.platform === 'win32' });
   });
 
   // ── POST /api/tmux (compatibility wrapper) ──

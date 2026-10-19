@@ -6,7 +6,7 @@ import {
   type CommandResult,
   type CommandSpec,
 } from './commandSpec';
-import { runCommandSpec } from './runCommandSpec';
+import { runCommandSpec, type RunCommandOptions } from './runCommandSpec';
 
 /** Agent endpoint (behind the agent token) that runs a {@link CommandSpec} on the agent's host. */
 export const AGENT_RUN_PATH = '/api/run';
@@ -23,9 +23,9 @@ const runResponseSchema = z.discriminatedUnion('outcome', [
 export type RunResponse = z.infer<typeof runResponseSchema>;
 
 /** The agent side: runs the spec with the same function the hub uses and reports how it ended. Unexpected errors propagate. */
-export async function runToResponse(spec: CommandSpec): Promise<RunResponse> {
+export async function runToResponse(spec: CommandSpec, options: RunCommandOptions): Promise<RunResponse> {
   try {
-    const result = await runCommandSpec(spec);
+    const result = await runCommandSpec(spec, options);
     return { outcome: 'result', ...result };
   } catch (err) {
     if (err instanceof CommandSpawnError) return { outcome: 'spawn_failed', code: err.code, message: err.message, stdout: err.stdout, stderr: err.stderr };

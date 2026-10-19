@@ -26,6 +26,12 @@ describe.skipIf(process.platform === 'win32')('toPosixCommandLine', () => {
     expect(execFileSync('/bin/sh', ['-c', line], { encoding: 'utf-8' })).toBe('/|x y|in');
   });
 
+  it('closes stdin with </dev/null when none is given, so a program that reads it sees EOF', () => {
+    const line = toPosixCommandLine(buildCommandSpec('cat', []));
+    expect(line).toBe("'cat' </dev/null");
+    expect(execFileSync('/bin/sh', ['-c', line], { encoding: 'utf-8', timeout: 5000 })).toBe('');
+  });
+
   it('refuses an environment variable name that is not an identifier', () => {
     expect(() => toPosixCommandLine(buildCommandSpec('x', [], { env: { 'A;rm -rf /': '1' } }))).toThrow(/Invalid environment variable name/);
   });

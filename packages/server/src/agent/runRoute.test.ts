@@ -54,6 +54,23 @@ describe('agent POST /api/run', () => {
   });
 
   it.each([
+    ['an env name with "="', 'A=B'],
+    ['an env name that is not an identifier', 'A;rm -rf /'],
+    ['an empty env name', ''],
+    ['an env name with a NUL', 'A\u0000B'],
+    ['an env name starting with a digit', '1A'],
+  ])('answers 400 for %s, as the shell route of an older agent would refuse it', async (_label, name) => {
+    const res = await post({ file: 'git', args: [], env: { [name]: 'v' }, timeoutMs: 1000, maxOutputBytes: 1000 });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ error: 'invalid_command_spec' });
+  });
+
+  it('accepts an env name that is an identifier', async () => {
+    const res = await post(node('process.stdout.write(process.env.AZITO_ENV_OK ?? "")', { env: { AZITO_ENV_OK: 'yes' } }));
+    expect(res.json()).toMatchObject({ outcome: 'result', stdout: 'yes' });
+  });
+
+  it.each([
     ['no body', undefined],
     ['a string for args', { file: 'git', args: 'status', timeoutMs: 1000, maxOutputBytes: 1000 }],
     ['an empty file', { file: '', args: [], timeoutMs: 1000, maxOutputBytes: 1000 }],

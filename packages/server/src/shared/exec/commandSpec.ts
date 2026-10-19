@@ -6,6 +6,9 @@ export const MAX_COMMAND_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 const noNul = (s: string): boolean => !s.includes('\0');
 
+/** What a name in `env` may be. One rule for every path a spec takes: the schema below and the quoted shell line of an older agent. */
+export const ENV_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 export const commandSpecSchema = z.object({
   /** The program: a name looked up on the host's PATH, or a path. Never a shell command line. */
   file: z.string().min(1).refine(noNul, 'file must not contain a NUL byte'),
@@ -13,7 +16,7 @@ export const commandSpecSchema = z.object({
   args: z.array(z.string().refine(noNul, 'an argument must not contain a NUL byte')),
   cwd: z.string().min(1).refine(noNul, 'cwd must not contain a NUL byte').optional(),
   /** Added to the host process's own environment. */
-  env: z.record(z.string(), z.string().refine(noNul, 'an env value must not contain a NUL byte')).optional(),
+  env: z.record(z.string().regex(ENV_NAME_PATTERN, 'an env name must be an identifier'), z.string().refine(noNul, 'an env value must not contain a NUL byte')).optional(),
   stdin: z.string().optional(),
   timeoutMs: z.number().int().positive().max(MAX_COMMAND_TIMEOUT_MS),
   /** stdout and stderr are each capped at this many bytes. */
