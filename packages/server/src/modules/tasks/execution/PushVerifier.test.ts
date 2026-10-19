@@ -1,8 +1,10 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { PushVerifier } from './PushVerifier';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { ServerConfig } from '../../servers/Server';
+import type { CommandSpec } from '../../../shared/exec/commandSpec';
+import { argvOfShellLine, argvOfSpec, failed, fakeRunTransport, ok } from '../../../shared/exec/testing/commandTesting';
 
 function makeAgentServer(): ServerConfig {
   return {
@@ -22,49 +24,75 @@ function makeAgentServer(): ServerConfig {
   };
 }
 
-describe('PushVerifier (remote server, non-local)', () => {
-  // workingDir/branch reach `readShasRemote` after passing through
-  // `assertPathContained`, which no longer restricts their character set
-  // (Issue #27 review finding 2 — that restriction was moved out in favor
-  // of quoting at each shell boundary). This call site is one of those
-  // boundaries, so it must quote both values itself.
-  it('quotes workingDir and branch when building the remote `cd -- ... && git ...` commands, so shell metacharacters in either do not reach the shell unquoted', async () => {
-    const exec = vi.fn(async (command: string) => {
-      if (command.includes('rev-parse HEAD')) return { stdout: 'a'.repeat(40) + '\n', stderr: '', code: 0 };
-      if (command.includes('ls-remote')) return { stdout: `${'a'.repeat(40)}\trefs/heads/x\n`, stderr: '', code: 0 };
-      throw new Error(`unexpected command: ${command}`);
-    });
-    const transportFactory = { getTransport: () => ({ exec }) } as unknown as TransportFactory;
-    const gitProvider = {} as GitProviderService;
-    const verifier = new PushVerifier(transportFactory, gitProvider);
+const SHA = 'a'.repeat(40);
 
+function makeVerifier(respond: (spec: CommandSpec) => ReturnType<typeof ok>) {
+  const transport = fakeRunTransport(respond);
+  const verifier = new PushVerifier({ getTransport: () => transport } as unknown as TransportFactory, {} as GitProviderService);
+  return { verifier, specs: transport.specs };
+}
+
+const answerShas = (spec: CommandSpec): ReturnType<typeof ok> =>
+  spec.args[0] === 'rev-parse' ? ok(`${SHA}\n`) : ok(`${SHA}\trefs/heads/x\n`);
+
+describe('PushVerifier (remote server, non-local)', () => {
+  // workingDir/branch reach `readShasRemote` after passing through `assertPathContained`, which does not restrict their
+  // character set (Issue #27 review finding 2). With no shell involved they reach git as whole arguments.
+  it('passes workingDir (as cwd) and branch as whole arguments, whatever shell metacharacters they contain', async () => {
+    const { verifier, specs } = makeVerifier(answerShas);
     const dangerousDir = "/work/repo; touch /tmp/pwned; echo '";
     const dangerousBranch = "feature/x'; touch /tmp/pwned; echo '";
 
     const result = await verifier.verifyPushCompleted(makeAgentServer(), dangerousDir, dangerousBranch, true, null);
 
     expect(result).toBe(true);
-    const calls = exec.mock.calls.map((call) => call[0] as string);
-    for (const cmd of calls) {
-      // Every occurrence of the dangerous directory/branch must be wrapped
-      // in single quotes (with embedded `'` escaped as `'\''`), never
-      // interpolated bare.
-      expect(cmd).toContain(`cd -- '/work/repo; touch /tmp/pwned; echo '\\'''`);
+    expect(specs).toHaveLength(2);
+    for (const spec of specs) {
+      expect(spec.file).toBe('git');
+      expect(spec.cwd).toBe(dangerousDir);
     }
-    const lsRemoteCall = calls.find((c) => c.includes('ls-remote'));
-    expect(lsRemoteCall).toContain(`git ls-remote --heads origin 'feature/x'\\''; touch /tmp/pwned; echo '\\'''`);
+    expect(specs[0].args).toEqual(['rev-parse', 'HEAD']);
+    expect(specs[1].args).toEqual(['ls-remote', '--heads', '--', 'origin', dangerousBranch]);
   });
 
-  it('returns false (fails closed) when the remote exec throws, instead of leaking the error', async () => {
-    const exec = vi.fn(async () => {
-      throw new Error('transport failure');
-    });
-    const transportFactory = { getTransport: () => ({ exec }) } as unknown as TransportFactory;
-    const gitProvider = {} as GitProviderService;
-    const verifier = new PushVerifier(transportFactory, gitProvider);
+  it('keeps a branch that starts with a dash from being read as an option', async () => {
+    const { verifier, specs } = makeVerifier(answerShas);
+    await verifier.verifyPushCompleted(makeAgentServer(), '/work/repo', '--upload-pack=evil', true, null);
+    expect(specs[1].args).toEqual(['ls-remote', '--heads', '--', 'origin', '--upload-pack=evil']);
+  });
 
-    const result = await verifier.verifyPushCompleted(makeAgentServer(), '/work/repo', 'main', true, null);
+  it('returns false when the local and remote SHAs differ', async () => {
+    const { verifier } = makeVerifier((spec) => (spec.args[0] === 'rev-parse' ? ok(`${SHA}\n`) : ok(`${'b'.repeat(40)}\trefs/heads/x\n`)));
+    expect(await verifier.verifyPushCompleted(makeAgentServer(), '/work/repo', 'x', true, null)).toBe(false);
+  });
 
-    expect(result).toBe(false);
+  it('returns false when git exits non-zero, even if it printed a SHA', async () => {
+    const { verifier } = makeVerifier((spec) => (spec.args[0] === 'rev-parse' ? failed(128, 'fatal: not a git repository', SHA) : answerShas(spec)));
+    expect(await verifier.verifyPushCompleted(makeAgentServer(), '/work/repo', 'x', true, null)).toBe(false);
+  });
+
+  it('returns false when the branch is not on the remote (ls-remote prints nothing)', async () => {
+    const { verifier } = makeVerifier((spec) => (spec.args[0] === 'rev-parse' ? ok(`${SHA}\n`) : ok('')));
+    expect(await verifier.verifyPushCompleted(makeAgentServer(), '/work/repo', 'x', true, null)).toBe(false);
+  });
+
+  it('returns false (fails closed) when the remote run throws, instead of leaking the error', async () => {
+    const transportFactory = { getTransport: () => ({ run: async () => { throw new Error('transport failure'); } }) } as unknown as TransportFactory;
+    const verifier = new PushVerifier(transportFactory, {} as GitProviderService);
+    expect(await verifier.verifyPushCompleted(makeAgentServer(), '/work/repo', 'main', true, null)).toBe(false);
+  });
+
+  // The old strings were `cd -- <dir> && git rev-parse HEAD` and `... git ls-remote --heads origin <branch>`. The only
+  // difference is the `--` before `origin`, which the local variant already used.
+  it.skipIf(process.platform === 'win32')('runs the same argv as the old shell strings, plus the `--` guard', async () => {
+    const { verifier, specs } = makeVerifier(answerShas);
+    await verifier.verifyPushCompleted(makeAgentServer(), "/work/it's", "feature/it's", true, null);
+    const oldArgv = [
+      argvOfShellLine('git rev-parse HEAD'),
+      argvOfShellLine("git ls-remote --heads origin 'feature/it'\\''s'"),
+    ];
+    const withoutGuard = specs.map(argvOfSpec).map((argv) => argv.filter((a, i) => !(a === '--' && argv[i - 1] === '--heads')));
+    expect(withoutGuard).toEqual(oldArgv);
+    expect(specs.map((s) => s.cwd)).toEqual(["/work/it's", "/work/it's"]);
   });
 });
