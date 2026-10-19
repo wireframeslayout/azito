@@ -194,6 +194,39 @@ test.describe('misao ドライバ', () => {
     await expect(finishedRow(app, windowId)).toBeVisible({ timeout: REALTIME_BUDGET_MS });
   });
 
+  test('ペイン削除: サイドバーから消した行だけが消え、残りは自分のハンドルを保つ（#475）', async ({ app, harness }) => {
+    const { windowId, label } = await createRegisteredWindow(harness, projectId, 'pane-del');
+
+    await harness.api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction: 'v' }) });
+    await harness.api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction: 'v' }) });
+
+    const sessions = await harness.api<{ sessions: Array<{ name: string; windows: Array<{ panes: Array<{ index: number; handle: string }> }> }> }>('/servers/local/sessions?detail=1');
+    const sess = sessions.sessions.find((s) => s.name === label);
+    const panes = sess!.windows[0].panes;
+    expect(panes).toHaveLength(3);
+    const [first, second, third] = panes.map((p) => p.handle);
+
+    await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
+    const windowRow = app.locator('.row-hover, [class*="row"]').filter({ hasText: label }).first();
+    await expect(windowRow).toBeVisible({ timeout: 20_000 });
+
+    const shortBadge = (h: string) => `#${h.slice(-4)}`;
+    await harness.api(`/windows/${windowId}/panes/2?handle=${encodeURIComponent(second)}`, { method: 'DELETE' });
+
+    await expect.poll(async () => {
+      const s2 = await harness.api<{ sessions: Array<{ name: string; windows: Array<{ panes: Array<{ handle: string }> }> }> }>('/servers/local/sessions?detail=1');
+      return s2.sessions.find((s) => s.name === label)!.windows[0].panes.length;
+    }, { timeout: 10_000 }).toBe(2);
+
+    await app.reload();
+    await expect(windowRow).toBeVisible({ timeout: 20_000 });
+
+    const pageText = await app.locator('body').textContent();
+    expect(pageText).toContain(shortBadge(first));
+    expect(pageText).toContain(shortBadge(third));
+    expect(pageText).not.toContain(shortBadge(second));
+  });
+
   test('デーモン断: 概要に「misao に接続できません」が出る', async ({ app, harness, misaoDaemon }) => {
     // 記録した PID にだけ SIGTERM を送る。ディレクトリはワーカー終了時の stop() が消す。
     await misaoDaemon.stopProcess();
