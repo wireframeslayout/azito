@@ -527,10 +527,13 @@ export class WindowRespawnService {
             await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
           }
         } else if (win.paneLayout) {
-          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+          // Issue #471: MCP blocking is only for task worker (primary) windows.
+          // By this point the execution gate has already passed for task
+          // windows, so `isPrimary` alone decides.
+          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, isPrimary);
         } else {
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
+          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, isPrimary);
         }
       } catch (err) {
         try {
@@ -1080,6 +1083,8 @@ export class WindowRespawnService {
     // Issue #274: when true, restore layout and working directories but do
     // not launch agent commands — the caller will launch the agent itself.
     skipAgentLaunch = false,
+    // Issue #471: when true, include MCP blocking flags in agent commands.
+    blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     const paneCount = paneLayout.panes.length;
@@ -1115,7 +1120,7 @@ export class WindowRespawnService {
         const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
         if (workerType) {
           const strategy = this.sessionStrategyFactory.create(workerType);
-          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
+          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, blockMcp);
           if (cmd) {
             const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
@@ -1132,6 +1137,7 @@ export class WindowRespawnService {
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
     singleCwd: string | null,
+    blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     if (singleCwd) {
@@ -1145,7 +1151,7 @@ export class WindowRespawnService {
         sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
       }
       const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
+      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, blockMcp);
       if (cmd) {
         const sendCmd = this.wrapIfSupervised(cmd, server, supervisorTarget, supervision);
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);

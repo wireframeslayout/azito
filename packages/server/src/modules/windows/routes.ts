@@ -17,6 +17,7 @@ import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
+import { shouldBlockMcp, ensureClaudeMcpBlock, ensureCodexMcpBlock } from '../agents/shouldBlockMcp';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { isSameWindowTarget, isValidModelId } from '@azito/shared';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal, type MuxDriverKind } from '@azito/shared';
@@ -63,6 +64,23 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
   const muxUnavailableBody = (srv: ServerConfig, kind: MuxDriverKind): { error: string; kind: MuxDriverKind; reason: MuxDriverUnavailableReason } | null => {
     const availability = opts.muxDriverRegistry.availabilityFor(kind, srv);
     return availability.available ? null : { error: 'mux_driver_unavailable', kind, reason: availability.reason };
+  };
+
+  // Issue #471: resolve a task's execution-allowed status for the MCP
+  // blocking decision. Trusted tasks are always allowed; untrusted tasks
+  // use 'unknown' (fail-closed) because the full manifest resolution
+  // dependencies are not available in the routes layer.
+  const resolveLinkedTaskForMcp = (taskId: number): { executionAllowed: boolean } | 'unknown' => {
+    try {
+      const task = taskRepo.findById(taskId);
+      if (!task) return 'unknown';
+      if (task.inputTrust !== 'untrusted') return { executionAllowed: true };
+      // Untrusted task: fail-closed — full gate evaluation requires
+      // dependencies not available here (unitRepo, projectSecretRepo, etc.).
+      return 'unknown';
+    } catch {
+      return 'unknown';
+    }
   };
 
   // A row whose panes could not be labelled is removed so a retry registers (and labels) it again.
@@ -428,8 +446,24 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
           return reply.status(409).send({ error: 'insufficient_resources', resources: status });
       }
 
+      // Issue #471: enforce MCP blocking for task worker windows, but not
+      // user-added windows. The command from the frontend was built without
+      // MCP flags (listAgentDefinitions now returns unblocked commands), so
+      // we must add them when the window requires blocking.
+      const blockMcp = shouldBlockMcp({
+        isPrimary: win.isPrimary,
+        linkedTask: win.taskId !== null ? resolveLinkedTaskForMcp(win.taskId) : null,
+      });
+
       const strategy = sessionStrategyFactory.create(win.workerType);
       let effectiveCommand = command;
+      if (blockMcp) {
+        if (win.workerType === 'claude') {
+          effectiveCommand = ensureClaudeMcpBlock(effectiveCommand);
+        } else if (win.workerType === 'codex') {
+          effectiveCommand = ensureCodexMcpBlock(effectiveCommand);
+        }
+      }
       if (strategy.supportsSession && !strategy.needsPostLaunchScan) {
         const existingId = /(?:^|\s)--session-id\s+(\S+)/.exec(command)?.[1]
           ?? /(?:^|\s)--resume\s+(\S+)/.exec(command)?.[1];
