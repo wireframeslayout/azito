@@ -13,6 +13,14 @@ export function isFullyQualifiedRef(value: string): boolean {
   return value.startsWith('refs/');
 }
 
+/**
+ * A value passed to git as a positional argument must not be read as an option. A command run without a shell cannot be
+ * split into extra arguments, but `-x` is still an option to git itself: the safe-pattern checks above allow a leading `-`.
+ */
+export function assertNotOptionLike(value: string, label: string): void {
+  if (value.startsWith('-')) throw new Error(`Unsafe ${label}: ${value}`);
+}
+
 export function assertSafePath(value: string, label: string): void {
   if (!SAFE_PATH_PATTERN.test(value)) throw new Error(`Unsafe ${label}: ${value}`);
 }

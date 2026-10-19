@@ -1,459 +1,322 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { RemoteWorktreeService } from './RemoteWorktreeService';
 import type { IServerTransport, ExecResult } from '../servers/transport/ServerTransport';
+import type { CommandResult, CommandSpec } from '../../shared/exec/commandSpec';
+import { CommandSpawnError } from '../../shared/exec/commandSpec';
+import { argvOfShellLine, argvOfSpec, failed, ok, specText } from '../../shared/exec/testing/commandTesting';
 
-function mockTransport(responses: ExecResult[]): IServerTransport {
-  let callIndex = 0;
-  return {
-    exec: vi.fn(async () => {
-      if (callIndex < responses.length) return responses[callIndex++];
-      return { stdout: '', stderr: '', code: 0 };
-    }),
-    execMux: vi.fn(),
-    openTerminal: vi.fn(),
-    createPaneStream: vi.fn(),
+const WD = '/home/user/project';
+const WT = `${WD}/.worktrees/task-1`;
+
+type ExecResponder = (command: string) => ExecResult | Promise<ExecResult>;
+type GitResponder = (spec: CommandSpec) => CommandResult | Promise<CommandResult>;
+
+/** git goes through `run`, the file operations (mkdir / test / rm) still through `exec`. Both are recorded in order. */
+function setup(onGit: GitResponder = () => ok(), onExec: ExecResponder = defaultExec()) {
+  const gitCalls: CommandSpec[] = [];
+  const execCalls: string[] = [];
+  const transport = {
+    run: async (spec: CommandSpec) => { gitCalls.push(spec); return onGit(spec); },
+    exec: async (command: string) => { execCalls.push(command); return onExec(command); },
   } as unknown as IServerTransport;
+  return { svc: new RemoteWorktreeService(transport), gitCalls, execCalls, gitTexts: () => gitCalls.map(specText) };
 }
 
-function ok(stdout = ''): ExecResult {
-  return { stdout, stderr: '', code: 0 };
+const execOk = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
+
+/** The stale-worktree check says "no"; the check after creation says "yes". */
+function defaultExec(): ExecResponder {
+  return (command) => {
+    if (!command.startsWith('test -d')) return execOk();
+    return execOk(command.includes('echo exists') ? 'no\n' : 'yes\n');
+  };
 }
 
 describe('RemoteWorktreeService', () => {
   describe('list', () => {
-    it('returns empty array when working directory is not a git repository', async () => {
-      const transport = mockTransport([
-        { stdout: '', stderr: 'fatal: not a git repository (or any of the parent directories): .git\n', code: 128 },
-      ]);
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.list('/home/user/non-git-dir');
-      expect(result).toEqual([]);
+    it('runs git in the working directory as cwd', async () => {
+      const { svc, gitCalls } = setup(() => ok('worktree /home/user/project\nHEAD abc1234\nbranch refs/heads/main\n\n'));
+      const result = await svc.list(WD);
+      expect(result).toHaveLength(1);
+      expect(result[0].branch).toBe('main');
+      expect(gitCalls).toHaveLength(1);
+      expect(gitCalls[0]).toMatchObject({ file: 'git', args: ['worktree', 'list', '--porcelain'], cwd: WD });
     });
 
-    it('returns empty array when not-a-git-repository appears in stdout (SSH code 0)', async () => {
-      const transport = mockTransport([
-        { stdout: 'fatal: not a git repository (or any of the parent directories): .git\n', stderr: '', code: 0 },
-      ]);
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.list('/home/user/non-git-dir');
-      expect(result).toEqual([]);
+    it('returns empty array when working directory is not a git repository', async () => {
+      const { svc } = setup(() => failed(128, 'fatal: not a git repository (or any of the parent directories): .git\n'));
+      expect(await svc.list('/home/user/non-git-dir')).toEqual([]);
     });
 
     it('throws on other git errors', async () => {
-      const transport = mockTransport([
-        { stdout: '', stderr: 'fatal: invalid reference: bad-ref', code: 128 },
-      ]);
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.list('/home/user/project')).rejects.toThrow('Failed to list worktrees');
+      const { svc } = setup(() => failed(128, 'fatal: invalid reference: bad-ref'));
+      await expect(svc.list(WD)).rejects.toThrow('Failed to list worktrees');
     });
 
-    it('parses worktree list output', async () => {
-      const porcelainOutput = 'worktree /home/user/project\nHEAD abc1234\nbranch refs/heads/main\n\n';
-      const transport = mockTransport([ok(porcelainOutput)]);
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.list('/home/user/project');
-      expect(result.length).toBe(1);
-      expect(result[0].branch).toBe('main');
+    it('lets a program that cannot start propagate instead of reporting an empty list', async () => {
+      const { svc } = setup(() => { throw new CommandSpawnError('ENOENT', 'spawn git ENOENT'); });
+      await expect(svc.list(WD)).rejects.toBeInstanceOf(CommandSpawnError);
     });
   });
 
   describe('create', () => {
-    it('creates worktree on remote with correct commands', async () => {
-      const transport = mockTransport([
-        ok(),           // mkdir -p
-        ok('no\n'),     // test -d (not exists)
-        ok(),           // git branch -D (may throw, caught)
-        ok(),           // git worktree add
+    it('creates the worktree with the file operations on exec and git on run', async () => {
+      const { svc, gitTexts, execCalls } = setup();
+      const result = await svc.create(WD, 42, 'my-task', 'main');
+
+      expect(result).toEqual({ path: `${WD}/.worktrees/task-42`, branch: 'task/42-my-task' });
+      expect(execCalls[0]).toBe(`mkdir -p ${WD}/.worktrees`);
+      expect(gitTexts()).toEqual([
+        'git branch -D task/42-my-task',
+        `git worktree add -b task/42-my-task ${WD}/.worktrees/task-42 main`,
       ]);
-      let testDCallCount = 0;
-      (transport.exec as ReturnType<typeof vi.fn>).mockImplementation(async (cmd: string) => {
-        if (cmd.includes('git branch -D')) throw new Error('branch not found');
-        if (cmd.includes('test -d')) {
-          testDCallCount++;
-          if (testDCallCount === 1) return ok('no\n');
-          return ok('yes\n');
+    });
+
+    it('removes a stale worktree if the path exists, and falls back to prune and rm when removal fails', async () => {
+      let tests = 0;
+      const { svc, gitTexts, execCalls } = setup(
+        (spec) => (spec.args[1] === 'remove' ? failed(128, 'fatal: not a worktree') : ok()),
+        (command) => {
+          if (command.startsWith('test -d')) return execOk(++tests === 1 ? 'exists\n' : 'yes\n');
+          return execOk();
+        },
+      );
+      await svc.create(WD, 1, 'slug', 'main');
+
+      expect(gitTexts().slice(0, 2)).toEqual([`git worktree remove ${WT} --force`, 'git worktree prune']);
+      expect(execCalls).toContain(`rm -rf ${WT}`);
+    });
+
+    it('does not prune or rm when the stale worktree was removed', async () => {
+      let tests = 0;
+      const { svc, gitTexts, execCalls } = setup(() => ok(), (command) => {
+        if (command.startsWith('test -d')) return execOk(++tests === 1 ? 'exists\n' : 'yes\n');
+        return execOk();
+      });
+      await svc.create(WD, 1, 'slug', 'main');
+      expect(gitTexts()).not.toContain('git worktree prune');
+      expect(execCalls.some((c) => c.startsWith('rm -rf'))).toBe(false);
+    });
+
+    it('uses -b when branchName is specified and neither the local nor the remote branch exists', async () => {
+      const { svc, gitTexts } = setup((spec) => (spec.args[0] === 'rev-parse' ? failed(128, 'fatal: Needed a single revision') : ok()));
+      const result = await svc.create(WD, 1, 'slug', 'main', 'feature/new-branch');
+
+      expect(result.branch).toBe('feature/new-branch');
+      expect(gitTexts()).toEqual([
+        'git rev-parse --verify feature/new-branch',
+        'git rev-parse --verify origin/feature/new-branch',
+        `git worktree add -b feature/new-branch ${WT} main`,
+      ]);
+    });
+
+    it('reuses the existing local branch when rev-parse --verify exits 0', async () => {
+      const { svc, gitTexts } = setup((spec) => (spec.args[0] === 'rev-parse' ? ok('a'.repeat(40) + '\n') : ok()));
+      const result = await svc.create(WD, 1, 'slug', 'main', 'feature/existing-branch');
+
+      expect(result.branch).toBe('feature/existing-branch');
+      expect(gitTexts()).toEqual([
+        'git rev-parse --verify feature/existing-branch',
+        `git worktree add ${WT} feature/existing-branch`,
+      ]);
+    });
+
+    it('uses the remote branch when only origin/<branch> exists', async () => {
+      const { svc, gitTexts } = setup((spec) => (spec.args[0] === 'rev-parse' && spec.args[2] === 'feature/x' ? failed(128) : ok()));
+      await svc.create(WD, 1, 'slug', 'main', 'feature/x');
+      expect(gitTexts()[2]).toBe(`git worktree add ${WT} feature/x`);
+    });
+
+    it('treats the exit code alone as "branch does not exist", with no text in the output', async () => {
+      const { svc, gitTexts } = setup((spec) => (spec.args[0] === 'rev-parse' ? failed(128) : ok()));
+      await svc.create(WD, 1, 'slug', 'main', 'feature/missing-branch');
+      expect(gitTexts()).toContain(`git worktree add -b feature/missing-branch ${WT} main`);
+    });
+
+    it('prunes and retries, then forces, when the branch is already used by another worktree', async () => {
+      let adds = 0;
+      const { svc, gitTexts } = setup((spec) => {
+        if (spec.args[0] === 'worktree' && spec.args[1] === 'add') {
+          adds++;
+          return failed(128, "fatal: 'feature/x' is already used by worktree at '/old'");
         }
         return ok();
       });
-
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.create('/home/user/project', 42, 'my-task', 'main');
-
-      expect(result).toEqual({
-        path: '/home/user/project/.worktrees/task-42',
-        branch: 'task/42-my-task',
-      });
-      expect(transport.exec).toHaveBeenCalledWith('mkdir -p /home/user/project/.worktrees');
+      await expect(svc.create(WD, 1, 'slug', 'main', 'feature/x')).rejects.toThrow('git worktree add failed');
+      expect(adds).toBe(3);
+      expect(gitTexts().slice(-4)).toEqual([
+        `git worktree add ${WT} feature/x`,
+        'git worktree prune',
+        `git worktree add ${WT} feature/x`,
+        `git worktree add --force ${WT} feature/x`,
+      ]);
     });
 
-    it('removes stale worktree if path exists', async () => {
-      const calls: string[] = [];
-      let testDCallCount = 0;
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd.includes('test -d')) {
-            testDCallCount++;
-            if (testDCallCount === 1) return ok('exists\n');
-            return ok('yes\n');
-          }
-          if (cmd.includes('git branch -D')) throw new Error('no branch');
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      await svc.create('/home/user/project', 1, 'slug', 'main');
-
-      expect(calls.some(c => c.includes('git worktree remove'))).toBe(true);
-    });
-
-    it('uses -b flag when branchName is specified but rev-parse returns fatal', async () => {
-      const calls: string[] = [];
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('rev-parse --verify')) return ok('fatal: Needed a single revision\n');
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'feature/new-branch');
-
-      expect(result.branch).toBe('feature/new-branch');
-      expect(calls.some(c => c.includes('git worktree add -b feature/new-branch'))).toBe(true);
-    });
-
-    it('reuses the existing local branch when rev-parse --verify succeeds (code 0)', async () => {
-      const calls: string[] = [];
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('rev-parse --verify')) return ok('a'.repeat(40) + '\n');
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'feature/existing-branch');
-
-      expect(result.branch).toBe('feature/existing-branch');
-      // Existing-branch path: plain `git worktree add <path> <branch>`, no `-b`.
-      expect(calls.some(c => c.includes('git worktree add /home/user/project/.worktrees/task-1 feature/existing-branch'))).toBe(true);
-      expect(calls.some(c => c.includes('git worktree add -b'))).toBe(false);
-    });
-
-    // Issue #87 third-party review, fourth pass, Important finding 2:
-    // `hasGitError` now also treats a non-zero exit code as an error, on
-    // top of the pre-existing `fatal:`/`error:` text scan. Branch-existence
-    // checks here rely on `!hasGitError(...)`; a real `git rev-parse
-    // --verify` failure always both exits non-zero AND prints a `fatal:`
-    // line, so the two signals never disagree in practice — but this pins
-    // down that a non-zero exit alone (without matching text, an
-    // otherwise-untestable shape with real git) is still correctly treated
-    // as "branch does not exist", not silently ignored.
-    it('treats a non-zero rev-parse exit code as "branch does not exist" even without fatal:/error: text', async () => {
-      const calls: string[] = [];
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('rev-parse --verify')) return { stdout: '', stderr: '', code: 128 };
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'feature/missing-branch');
-
-      expect(result.branch).toBe('feature/missing-branch');
-      expect(calls.some(c => c.includes('git worktree add -b feature/missing-branch'))).toBe(true);
-    });
-
-    it('throws when git worktree add outputs fatal error', async () => {
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('git branch -D')) throw new Error('no branch');
-          if (cmd.includes('git worktree add')) return ok('fatal: \'task-1\' is already checked out at \'/other/path\'\n');
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'main'))
-        .rejects.toThrow('git worktree add failed');
-    });
-
-    it('throws when git worktree add outputs error message', async () => {
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('git branch -D')) throw new Error('no branch');
-          if (cmd.includes('git worktree add')) return ok('error: unknown switch `x\'\n');
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'main'))
-        .rejects.toThrow('git worktree add failed');
+    it('throws with git\'s message when worktree add fails', async () => {
+      const { svc } = setup((spec) => (spec.args[1] === 'add' ? failed(128, "fatal: invalid reference: bad-ref") : ok()));
+      await expect(svc.create(WD, 1, 'slug', 'main')).rejects.toThrow('git worktree add failed: fatal: invalid reference: bad-ref');
     });
 
     it('throws when worktree directory does not exist after creation', async () => {
-      let existsCallCount = 0;
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          if (cmd.includes('git branch -D')) throw new Error('no branch');
-          if (cmd.includes('test -d')) {
-            existsCallCount++;
-            if (existsCallCount === 1) return ok('no\n');
-            return ok('no\n');
-          }
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'main'))
-        .rejects.toThrow('Worktree directory not found after creation');
+      const { svc } = setup(() => ok(), (command) => execOk(command.startsWith('test -d') ? 'no\n' : ''));
+      await expect(svc.create(WD, 1, 'slug', 'main')).rejects.toThrow('Worktree directory not found after creation');
     });
 
-    it('throws when stderr contains fatal error', async () => {
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('git branch -D')) throw new Error('no branch');
-          if (cmd.includes('git worktree add')) return { stdout: '', stderr: 'fatal: invalid reference: bad-ref', code: 1 };
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'main'))
-        .rejects.toThrow('git worktree add failed');
+    it('does not read a git exit 0 with "error:" in its output as a failure', async () => {
+      const { svc } = setup((spec) => (spec.args[1] === 'add' ? ok('', 'error: unable to rmdir something (non-fatal)') : ok()));
+      await expect(svc.create(WD, 1, 'slug', 'main')).resolves.toBeDefined();
     });
   });
 
   describe('exists', () => {
     it('returns true when directory exists', async () => {
-      const transport = mockTransport([ok('yes\n')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.exists('/home/user/project/.worktrees/task-1')).toBe(true);
+      const { svc } = setup(undefined, () => execOk('yes\n'));
+      expect(await svc.exists(WT)).toBe(true);
     });
 
     it('returns false when directory does not exist', async () => {
-      const transport = mockTransport([ok('no\n')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.exists('/home/user/project/.worktrees/task-1')).toBe(false);
+      const { svc } = setup(undefined, () => execOk('no\n'));
+      expect(await svc.exists(WT)).toBe(false);
     });
 
     it('returns false on transport error', async () => {
-      const transport = {
-        exec: vi.fn(async () => { throw new Error('connection failed'); }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.exists('/home/user/project/.worktrees/task-1')).toBe(false);
+      const { svc } = setup(undefined, () => { throw new Error('connection failed'); });
+      expect(await svc.exists(WT)).toBe(false);
     });
   });
 
   describe('remove', () => {
-    it('calls git worktree remove and prune', async () => {
-      const transport = mockTransport([ok(), ok()]);
-      const svc = new RemoteWorktreeService(transport);
-      await svc.remove('/home/user/project', '/home/user/project/.worktrees/task-1');
+    it('runs worktree remove and prune in the working directory', async () => {
+      const { svc, gitCalls } = setup();
+      await svc.remove(WD, WT);
+      expect(gitCalls.map((c) => c.args)).toEqual([['worktree', 'remove', WT, '--force'], ['worktree', 'prune']]);
+      expect(gitCalls.every((c) => c.cwd === WD)).toBe(true);
+    });
 
-      expect(transport.exec).toHaveBeenCalledTimes(2);
-      expect(transport.exec).toHaveBeenCalledWith(expect.stringContaining('git worktree remove'));
-      expect(transport.exec).toHaveBeenCalledWith(expect.stringContaining('git worktree prune'));
+    it('still prunes when remove fails', async () => {
+      const { svc, gitTexts } = setup((spec) => (spec.args[1] === 'remove' ? failed(128) : ok()));
+      await svc.remove(WD, WT);
+      expect(gitTexts()).toEqual([`git worktree remove ${WT} --force`, 'git worktree prune']);
     });
   });
 
   describe('getBranch', () => {
     it('returns branch name', async () => {
-      const transport = mockTransport([ok('task/42-my-task\n')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.getBranch('/home/user/project/.worktrees/task-42')).toBe('task/42-my-task');
+      const { svc, gitCalls } = setup(() => ok('task/42-my-task\n'));
+      expect(await svc.getBranch(`${WD}/.worktrees/task-42`)).toBe('task/42-my-task');
+      expect(gitCalls[0].args).toEqual(['-C', `${WD}/.worktrees/task-42`, 'branch', '--show-current']);
+      expect(gitCalls[0].cwd).toBeUndefined();
     });
 
     it('returns null on empty output', async () => {
-      const transport = mockTransport([ok('')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.getBranch('/home/user/project/.worktrees/task-42')).toBeNull();
+      const { svc } = setup(() => ok(''));
+      expect(await svc.getBranch(WT)).toBeNull();
     });
 
-    it('returns null on error', async () => {
-      const transport = {
-        exec: vi.fn(async () => { throw new Error('fail'); }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.getBranch('/home/user/project/.worktrees/task-42')).toBeNull();
+    it('returns null on a non-zero exit and on error', async () => {
+      expect(await setup(() => failed(128, 'fatal: not a git repository')).svc.getBranch(WT)).toBeNull();
+      expect(await setup(() => { throw new Error('fail'); }).svc.getBranch(WT)).toBeNull();
     });
   });
 
   describe('getDiff', () => {
     it('parses diff output into JSON', async () => {
-      const diffOutput = 'M\tsrc/file1.ts\nA\tsrc/file2.ts\n';
-      const transport = mockTransport([ok(diffOutput)]);
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.getDiff('/home/user/project/.worktrees/task-42', 'main');
-
-      expect(result).not.toBeNull();
-      const parsed = JSON.parse(result!);
-      expect(parsed).toEqual([
+      const { svc, gitCalls } = setup(() => ok('M\tsrc/file1.ts\nA\tsrc/file2.ts\n'));
+      const result = await svc.getDiff(WT, 'main');
+      expect(JSON.parse(result!)).toEqual([
         { status: 'M', file: 'src/file1.ts' },
         { status: 'A', file: 'src/file2.ts' },
       ]);
+      expect(gitCalls[0].args).toEqual(['-c', 'core.quotepath=false', '-C', WT, 'diff', '--name-status', 'main...HEAD']);
     });
 
     it('returns null when no changes', async () => {
-      const transport = mockTransport([ok('')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.getDiff('/home/user/project/.worktrees/task-42', 'main')).toBeNull();
+      expect(await setup(() => ok('')).svc.getDiff(WT, 'main')).toBeNull();
     });
 
-    it('falls back to HEAD~1 on first diff failure', async () => {
-      let callCount = 0;
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          callCount++;
-          if (callCount === 1) throw new Error('no merge base');
-          return ok('A\tnew-file.ts\n');
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.getDiff('/home/user/project/.worktrees/task-42', 'main');
-      expect(result).not.toBeNull();
+    it('falls back to HEAD~1 when the first diff exits non-zero', async () => {
+      const { svc, gitCalls } = setup((spec) => (spec.args.includes('main...HEAD') ? failed(128, 'fatal: no merge base') : ok('A\tnew-file.ts\n')));
+      const result = await svc.getDiff(WT, 'main');
       expect(JSON.parse(result!)).toEqual([{ status: 'A', file: 'new-file.ts' }]);
+      expect(gitCalls[1].args.at(-1)).toBe('HEAD~1');
+    });
+
+    it('returns null when both diffs fail', async () => {
+      expect(await setup(() => failed(128)).svc.getDiff(WT, 'main')).toBeNull();
     });
   });
 
   describe('input validation', () => {
     it('rejects unsafe workingDir in create', async () => {
-      const transport = mockTransport([]);
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/tmp; rm -rf /', 1, 'slug', 'main')).rejects.toThrow('Unsafe workingDir');
+      await expect(setup().svc.create('/tmp; rm -rf /', 1, 'slug', 'main')).rejects.toThrow('Unsafe workingDir');
     });
 
     it('rejects unsafe taskSlug in create', async () => {
-      const transport = mockTransport([]);
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug; echo pwned', 'main')).rejects.toThrow('Unsafe taskSlug');
+      await expect(setup().svc.create(WD, 1, 'slug; echo pwned', 'main')).rejects.toThrow('Unsafe taskSlug');
     });
 
     it('rejects unsafe baseBranch in create', async () => {
-      const transport = mockTransport([]);
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'main && echo pwned')).rejects.toThrow('Unsafe baseBranch');
+      await expect(setup().svc.create(WD, 1, 'slug', 'main && echo pwned')).rejects.toThrow('Unsafe baseBranch');
     });
 
     it('rejects unsafe worktreePath in exists', async () => {
-      const transport = mockTransport([]);
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.exists('$(whoami)')).rejects.toThrow('Unsafe worktreePath');
+      await expect(setup().svc.exists('$(whoami)')).rejects.toThrow('Unsafe worktreePath');
     });
 
-    it('allows valid paths with common characters', async () => {
-      const transport = mockTransport([ok('no\n')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.exists('/home/user-1/my_project/path.name')).toBe(false);
+    it('allows valid paths and branch names', async () => {
+      expect(await setup(undefined, () => execOk('no\n')).svc.exists('/home/user-1/my_project/path.name')).toBe(false);
+      expect(await setup(() => ok('')).svc.getBranch(WD)).toBeNull();
     });
 
-    it('allows valid branch names', async () => {
-      const transport = mockTransport([ok('')]);
-      const svc = new RemoteWorktreeService(transport);
-      expect(await svc.getBranch('/home/user/project')).toBeNull();
+    it.each([
+      ['baseBranch', (svc: RemoteWorktreeService) => svc.create(WD, 1, 'slug', '--help')],
+      ['branchName', (svc: RemoteWorktreeService) => svc.create(WD, 1, 'slug', 'main', '--force')],
+      ['worktreePath', (svc: RemoteWorktreeService) => svc.remove(WD, '-rf')],
+      ['baseBranch in getDiff', (svc: RemoteWorktreeService) => svc.getDiff(WT, '--output=x')],
+    ])('refuses a value git would read as an option: %s', async (_label, call) => {
+      const { svc, gitCalls } = setup();
+      await expect(call(svc)).rejects.toThrow(/Unsafe/);
+      expect(gitCalls).toHaveLength(0);
     });
 
-    // Issue #87 third-party review, 12th round, Important finding 2:
-    // `assertSafeBranch` used to also reject any fully-qualified ref
-    // (`refs/...`), but it runs against PERSISTED values here — a task
-    // saved before the API boundary rejected new `refs/...` input can still
-    // have `task.branch: 'refs/heads/main'` in the database. That must not
-    // make every future run of that task fail before worktree creation even
-    // starts.
-    it('does not reject a fully-qualified ref (refs/heads/main) as baseBranch — back-compat for pre-existing persisted values', async () => {
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          if (cmd.startsWith('test -d') && cmd.includes('exists')) return ok('no\n');
-          if (cmd.startsWith('test -d') && cmd.includes('yes')) return ok('yes\n');
-          return ok('');
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'refs/heads/main')).resolves.toBeDefined();
+    // Issue #87 third-party review, 12th round: `assertSafeBranch` runs against PERSISTED values, so a task saved before the API
+    // boundary rejected `refs/...` input must still run.
+    it('does not reject a fully-qualified ref (refs/heads/main) as baseBranch — back-compat for persisted values', async () => {
+      await expect(setup().svc.create(WD, 1, 'slug', 'refs/heads/main')).resolves.toBeDefined();
     });
 
-    it('does not reject a fully-qualified ref (refs/heads/main) as branchName — back-compat for pre-existing persisted task.branch values', async () => {
-      const calls: string[] = [];
-      const transport = {
-        exec: vi.fn(async (cmd: string) => {
-          calls.push(cmd);
-          if (cmd.includes('test -d') && cmd.includes('echo yes')) return ok('yes\n');
-          if (cmd.includes('test -d')) return ok('no\n');
-          if (cmd.includes('rev-parse --verify')) return ok('fatal: Needed a single revision\n');
-          return ok();
-        }),
-        execMux: vi.fn(),
-        openTerminal: vi.fn(),
-        createPaneStream: vi.fn(),
-      } as unknown as IServerTransport;
-
-      const svc = new RemoteWorktreeService(transport);
-      const result = await svc.create('/home/user/project', 1, 'slug', 'main', 'refs/heads/main');
-
+    it('does not reject a fully-qualified ref (refs/heads/main) as branchName — back-compat for persisted task.branch values', async () => {
+      const { svc } = setup((spec) => (spec.args[0] === 'rev-parse' ? failed(128) : ok()));
+      const result = await svc.create(WD, 1, 'slug', 'main', 'refs/heads/main');
       expect(result.branch).toBe('refs/heads/main');
-      expect(calls.some(c => c.includes('Unsafe'))).toBe(false);
     });
 
     it('still rejects a baseBranch containing shell metacharacters, refs/-qualified or not', async () => {
-      const transport = mockTransport([]);
-      const svc = new RemoteWorktreeService(transport);
-      await expect(svc.create('/home/user/project', 1, 'slug', 'refs/heads/main; rm -rf /')).rejects.toThrow('Unsafe baseBranch');
+      await expect(setup().svc.create(WD, 1, 'slug', 'refs/heads/main; rm -rf /')).rejects.toThrow('Unsafe baseBranch');
+    });
+  });
+
+  // Each migrated call is pinned to what the old shell string became: the argv a real sh makes of the old `git ...` part equals the new args.
+  describe.skipIf(process.platform === 'win32')('argv is the same as the old shell strings', () => {
+    it('matches every git command of the old implementation', async () => {
+      const { svc, gitCalls } = setup(() => ok('a'.repeat(40)), (command) => execOk(command.startsWith('test -d') ? (command.includes('echo yes') ? 'yes\n' : 'exists\n') : ''));
+      await svc.create(WD, 1, 'slug', 'main', 'feature/x');
+      await svc.remove(WD, WT);
+      await svc.getBranch(WT);
+      await svc.getDiff(WT, 'main');
+      await svc.list(WD);
+
+      const expected = [
+        `git worktree remove ${WT} --force`,
+        `git rev-parse --verify feature/x`,
+        `git worktree add ${WT} feature/x`,
+        `git worktree remove ${WT} --force`,
+        `git worktree prune`,
+        `git -C ${WT} branch --show-current`,
+        `git -c core.quotepath=false -C ${WT} diff --name-status main...HEAD`,
+        `git worktree list --porcelain`,
+      ];
+      expect(gitCalls.map(argvOfSpec)).toEqual(expected.map(argvOfShellLine));
     });
   });
 });

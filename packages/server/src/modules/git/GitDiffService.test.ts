@@ -1,23 +1,26 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { GitDiffService, SAFE_HASH } from './GitDiffService';
 import type { IServerTransport, ExecResult } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
+import type { CommandResult, CommandSpec } from '../../shared/exec/commandSpec';
+import { argvOfShellLine, argvOfSpec, failed, ok, specText } from '../../shared/exec/testing/commandTesting';
 
-function ok(stdout = ''): ExecResult {
-  return { stdout, stderr: '', code: 0 };
-}
+type GitResponder = (spec: CommandSpec, index: number) => CommandResult;
+type ExecResponder = (command: string, index: number) => ExecResult;
 
-function makeService(execFn: (...args: unknown[]) => Promise<ExecResult>): GitDiffService {
-  const transport = { exec: vi.fn(execFn) } as unknown as IServerTransport;
+const execOk = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
+
+/** git goes through `run`; the untracked-file reads (wc / head / cat) still through `exec`. Calls are recorded in order. */
+function makeService(onGit: GitResponder = () => ok(), onExec: ExecResponder = () => execOk()) {
+  const gitCalls: CommandSpec[] = [];
+  const execCalls: string[] = [];
+  const transport = {
+    run: async (spec: CommandSpec) => onGit(spec, gitCalls.push(spec)),
+    exec: async (command: string) => onExec(command, execCalls.push(command)),
+  } as unknown as IServerTransport;
   const factory = { getTransport: () => transport } as unknown as TransportFactory;
-  return new GitDiffService(factory);
-}
-
-function makeServiceWithTransport(execFn: (...args: unknown[]) => Promise<ExecResult>) {
-  const transport = { exec: vi.fn(execFn) } as unknown as IServerTransport;
-  const factory = { getTransport: () => transport } as unknown as TransportFactory;
-  return { service: new GitDiffService(factory), execFn: transport.exec as ReturnType<typeof vi.fn> };
+  return { service: new GitDiffService(factory), gitCalls, execCalls, gitTexts: () => gitCalls.map(specText) };
 }
 
 const srv = { name: 'test', type: 'local' } as ServerConfig;
@@ -44,8 +47,8 @@ describe('GitDiffService.getCommits', () => {
       `aaa1111222233334444555566667777888899990000${F}aaa1111${F}Alice${F}2026-01-15T10:00:00+09:00${F}First commit${R}` +
       `bbb2222333344445555666677778888999900001111${F}bbb2222${F}Bob${F}2026-01-16T11:00:00+09:00${F}Second commit${R}`;
 
-    const svc = makeService(async () => ok(stdout));
-    const commits = await svc.getCommits(srv, '/path/to/repo', 'main');
+    const { service } = makeService(() => ok(stdout));
+    const commits = await service.getCommits(srv, '/path/to/repo', 'main');
 
     expect(commits).toHaveLength(2);
     expect(commits[0]).toEqual({
@@ -59,40 +62,54 @@ describe('GitDiffService.getCommits', () => {
   });
 
   it('returns empty array when no commits', async () => {
-    const svc = makeService(async () => ok(''));
-    const commits = await svc.getCommits(srv, '/path/to/repo', 'main');
-    expect(commits).toEqual([]);
+    expect(await makeService(() => ok('')).service.getCommits(srv, '/path/to/repo', 'main')).toEqual([]);
   });
 
   it('uses -50 HEAD when base is omitted', async () => {
-    const { service, execFn } = makeServiceWithTransport(async () => ok(''));
+    const { service, gitCalls } = makeService();
     await service.getCommits(srv, '/repo');
-    expect((execFn.mock.calls as string[][])[0][0]).toContain('-50 HEAD');
+    expect(gitCalls[0].args.slice(-2)).toEqual(['-50', 'HEAD']);
   });
 
   it('uses base..HEAD when base is provided', async () => {
-    const { service, execFn } = makeServiceWithTransport(async () => ok(''));
+    const { service, gitCalls } = makeService();
     await service.getCommits(srv, '/repo', 'main');
-    expect((execFn.mock.calls as string[][])[0][0]).toContain('main..HEAD');
+    expect(gitCalls[0].args.at(-1)).toBe('main..HEAD');
   });
 
-  it('throws on fatal git output', async () => {
-    const svc = makeService(async () => ok('fatal: not a git repository'));
-    await expect(svc.getCommits(srv, '/bad/path')).rejects.toThrow('git log failed');
+  it('passes the directory as a whole argument, whatever it contains', async () => {
+    const { service, gitCalls } = makeService();
+    await service.getCommits(srv, "/repo/it's here; echo pwned");
+    expect(gitCalls[0].args.slice(0, 4)).toEqual(['-c', 'core.quotepath=false', '-C', "/repo/it's here; echo pwned"]);
+  });
+
+  it('throws with git\'s message when git exits non-zero', async () => {
+    const { service } = makeService(() => failed(128, 'fatal: not a git repository'));
+    await expect(service.getCommits(srv, '/bad/path')).rejects.toThrow('git log failed: fatal: not a git repository');
+  });
+
+  it('throws with the exit code when git said nothing', async () => {
+    const { service } = makeService(() => failed(1));
+    await expect(service.getCommits(srv, '/bad/path')).rejects.toThrow('git log failed: exit 1');
   });
 
   it('throws on invalid base branch', async () => {
-    const svc = makeService(async () => ok(''));
-    await expect(svc.getCommits(srv, '/repo', 'bad branch!')).rejects.toThrow('Invalid base branch');
+    await expect(makeService().service.getCommits(srv, '/repo', 'bad branch!')).rejects.toThrow('Invalid base branch');
+  });
+
+  it('refuses a base git would read as an option', async () => {
+    const { service, gitCalls } = makeService();
+    await expect(service.getCommits(srv, '/repo', '--all')).rejects.toThrow(/Unsafe base branch/);
+    expect(gitCalls).toHaveLength(0);
   });
 });
 
 describe('GitDiffService.getDiff with commit', () => {
   it('uses git show for single commit diff', async () => {
-    const { service, execFn } = makeServiceWithTransport(async () => ok(''));
+    const { service, gitCalls } = makeService();
     await service.getDiff(srv, '/repo', '', 'abc1234');
-    expect((execFn.mock.calls as string[][])[0][0]).toContain('show --format= --unified=3 abc1234');
-    expect(execFn).toHaveBeenCalledTimes(1);
+    expect(gitCalls).toHaveLength(1);
+    expect(gitCalls[0].args).toEqual(['-c', 'core.quotepath=false', '-C', '/repo', 'show', '--format=', '--unified=3', 'abc1234']);
   });
 
   it('returns commit short hash as headBranch', async () => {
@@ -104,26 +121,34 @@ index abc..def 100644
  line1
 +line2
 `;
-    const svc = makeService(async () => ok(diffOutput));
-    const result = await svc.getDiff(srv, '/repo', '', 'abc1234def5678');
+    const { service } = makeService(() => ok(diffOutput));
+    const result = await service.getDiff(srv, '/repo', '', 'abc1234def5678');
     expect(result.headBranch).toBe('abc1234');
     expect(result.baseBranch).toBe('abc1234def5678^');
   });
 
   it('throws on invalid commit hash', async () => {
-    const svc = makeService(async () => ok(''));
-    await expect(svc.getDiff(srv, '/repo', '', 'not-a-hash!')).rejects.toThrow('Invalid commit hash');
+    await expect(makeService().service.getDiff(srv, '/repo', '', 'not-a-hash!')).rejects.toThrow('Invalid commit hash');
   });
 
   it('skips rev-parse when commit is specified', async () => {
-    const { service, execFn } = makeServiceWithTransport(async () => ok(''));
+    const { service, gitTexts } = makeService();
     await service.getDiff(srv, '/repo', '', 'abc1234');
-    const calls = (execFn.mock.calls as string[][]).map((c) => c[0]);
-    expect(calls.some((c) => c.includes('rev-parse'))).toBe(false);
+    expect(gitTexts().some((c) => c.includes('rev-parse'))).toBe(false);
+  });
+
+  it('throws when git show fails', async () => {
+    const { service } = makeService(() => failed(128, 'fatal: bad object abc1234'));
+    await expect(service.getDiff(srv, '/repo', '', 'abc1234')).rejects.toThrow('git diff failed: fatal: bad object abc1234');
   });
 });
 
 describe('GitDiffService.getDiff with scope=uncommitted', () => {
+  /** The five parallel git commands in order: staged names, unstaged names, diff HEAD, status, rev-parse. */
+  function uncommittedAnswers(answers: string[]): GitResponder {
+    return (_spec, index) => ok(answers[index - 1] ?? '');
+  }
+
   it('assigns staged group to files in cached diff only', async () => {
     const diffOutput = `diff --git a/staged.ts b/staged.ts
 --- a/staged.ts
@@ -132,25 +157,12 @@ describe('GitDiffService.getDiff with scope=uncommitted', () => {
  line1
 +line2
 `;
-    let callIndex = 0;
-    const svc = makeService(async () => {
-      callIndex++;
-      // 1: cached name-only (staged)
-      if (callIndex === 1) return ok('staged.ts\n');
-      // 2: name-only (unstaged)
-      if (callIndex === 2) return ok('');
-      // 3: diff HEAD
-      if (callIndex === 3) return ok(diffOutput);
-      // 4: status --porcelain
-      if (callIndex === 4) return ok('');
-      // 5: rev-parse HEAD
-      return ok('feature-branch');
-    });
-
-    const result = await svc.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
+    const { service } = makeService(uncommittedAnswers(['staged.ts\n', '', diffOutput, '', 'feature-branch']));
+    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
     expect(result.files).toHaveLength(1);
     expect(result.files[0].group).toBe('staged');
     expect(result.files[0].file).toBe('staged.ts');
+    expect(result.headBranch).toBe('feature-branch');
   });
 
   it('assigns unstaged group when file is in both staged and unstaged', async () => {
@@ -161,59 +173,36 @@ describe('GitDiffService.getDiff with scope=uncommitted', () => {
  line1
 +line2
 `;
-    let callIndex = 0;
-    const svc = makeService(async () => {
-      callIndex++;
-      if (callIndex === 1) return ok('both.ts\n');
-      if (callIndex === 2) return ok('both.ts\n');
-      if (callIndex === 3) return ok(diffOutput);
-      if (callIndex === 4) return ok('');
-      return ok('main');
-    });
-
-    const result = await svc.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
+    const { service } = makeService(uncommittedAnswers(['both.ts\n', 'both.ts\n', diffOutput, '', 'main']));
+    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
     expect(result.files[0].group).toBe('unstaged');
   });
 
-  it('synthesizes untracked file diffs', async () => {
-    let callIndex = 0;
-    const svc = makeService(async () => {
-      callIndex++;
-      if (callIndex <= 2) return ok('');
-      if (callIndex === 3) return ok('');
-      if (callIndex === 4) return ok('?? newfile.ts\n');
-      if (callIndex === 5) return ok('main');
-      // wc -c for file size
-      if (callIndex === 6) return ok('25');
-      // head -c for binary check
-      if (callIndex === 7) return ok('0');
-      // cat for content
-      if (callIndex === 8) return ok('const x = 1;\nexport default x;\n');
-      return ok('');
-    });
+  it('names HEAD when rev-parse fails (no commits yet)', async () => {
+    const { service } = makeService((spec, index) => (spec.args.includes('rev-parse') ? failed(128, 'fatal: ambiguous argument HEAD') : uncommittedAnswers([])(spec, index)));
+    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
+    expect(result.headBranch).toBe('HEAD');
+  });
 
-    const result = await svc.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
+  it('synthesizes untracked file diffs', async () => {
+    const execAnswers = ['25', '0', 'const x = 1;\nexport default x;\n'];
+    const { service, execCalls } = makeService(uncommittedAnswers(['', '', '', '?? newfile.ts\n', 'main']), (_c, i) => execOk(execAnswers[i - 1] ?? ''));
+
+    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
     const untracked = result.files.filter((f) => f.group === 'untracked');
     expect(untracked).toHaveLength(1);
     expect(untracked[0].file).toBe('newfile.ts');
     expect(untracked[0].status).toBe('A');
     expect(untracked[0].additions).toBe(2);
     expect(untracked[0].isBinary).toBe(false);
+    expect(execCalls).toHaveLength(3);
   });
 
   it('marks binary untracked files', async () => {
-    let callIndex = 0;
-    const svc = makeService(async () => {
-      callIndex++;
-      if (callIndex <= 3) return ok('');
-      if (callIndex === 4) return ok('?? image.png\n');
-      if (callIndex === 5) return ok('main');
-      if (callIndex === 6) return ok('5000');
-      if (callIndex === 7) return ok('3');
-      return ok('');
-    });
+    const execAnswers = ['5000', '3'];
+    const { service } = makeService(uncommittedAnswers(['', '', '', '?? image.png\n', 'main']), (_c, i) => execOk(execAnswers[i - 1] ?? ''));
 
-    const result = await svc.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
+    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
     const untracked = result.files.filter((f) => f.group === 'untracked');
     expect(untracked).toHaveLength(1);
     expect(untracked[0].isBinary).toBe(true);
@@ -221,62 +210,107 @@ describe('GitDiffService.getDiff with scope=uncommitted', () => {
 
   it('truncates when too many untracked files', async () => {
     const untrackedLines = Array.from({ length: 60 }, (_, i) => `?? file${i}.ts`).join('\n') + '\n';
-    let callIndex = 0;
-    const svc = makeService(async () => {
-      callIndex++;
-      if (callIndex <= 3) return ok('');
-      if (callIndex === 4) return ok(untrackedLines);
-      if (callIndex === 5) return ok('main');
-      // For each of the 50 processed files: wc -c, head, cat
-      return ok('10');
-    });
+    const { service } = makeService(uncommittedAnswers(['', '', '', untrackedLines, 'main']), () => execOk('10'));
 
-    const result = await svc.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
+    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
     expect(result.truncated).toBe(true);
+  });
+
+  it('throws when the diff against HEAD fails', async () => {
+    const { service } = makeService((spec, index) => (spec.args.includes('--unified=3') ? failed(128, 'fatal: bad revision') : uncommittedAnswers([])(spec, index)));
+    await expect(service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' })).rejects.toThrow('git diff failed: fatal: bad revision');
   });
 });
 
 describe('GitDiffService.getDiff with scope=base', () => {
   it('uses merge-base when includeUncommitted=true', async () => {
-    const { service, execFn } = makeServiceWithTransport(async (...args: unknown[]) => { const cmd = args[0] as string;
-      if (typeof cmd === 'string' && cmd.includes('rev-parse')) return ok('feature');
-      if (typeof cmd === 'string' && cmd.includes('merge-base')) return ok('abc1234567890');
+    const { service, gitCalls } = makeService((spec) => {
+      if (spec.args.includes('rev-parse')) return ok('feature');
+      if (spec.args.includes('merge-base')) return ok('abc1234567890\n');
       return ok('');
     });
 
     await service.getDiff(srv, '/repo', 'main', undefined, { scope: 'base', includeUncommitted: true });
-    const calls = (execFn.mock.calls as string[][]).map((c) => c[0]);
-    expect(calls.some((c) => c.includes('merge-base'))).toBe(true);
-    expect(calls.some((c) => c.includes('abc1234567890'))).toBe(true);
+    expect(gitCalls.map((c) => c.args)).toEqual([
+      ['-C', '/repo', 'rev-parse', '--abbrev-ref', 'HEAD'],
+      ['-C', '/repo', 'merge-base', 'main', 'HEAD'],
+      ['-c', 'core.quotepath=false', '-C', '/repo', 'diff', '--unified=3', 'abc1234567890'],
+    ]);
+  });
+
+  it('throws when merge-base fails', async () => {
+    const { service } = makeService((spec) => (spec.args.includes('merge-base') ? failed(1) : ok('feature')));
+    await expect(service.getDiff(srv, '/repo', 'main', undefined, { scope: 'base', includeUncommitted: true })).rejects.toThrow('git merge-base failed: exit 1');
   });
 
   it('uses three-dot when includeUncommitted=false', async () => {
-    const { service, execFn } = makeServiceWithTransport(async (...args: unknown[]) => { const cmd = args[0] as string;
-      if (typeof cmd === 'string' && cmd.includes('rev-parse')) return ok('feature');
-      return ok('');
-    });
+    const { service, gitTexts } = makeService((spec) => (spec.args.includes('rev-parse') ? ok('feature') : ok('')));
 
     await service.getDiff(srv, '/repo', 'main', undefined, { scope: 'base', includeUncommitted: false });
-    const calls = (execFn.mock.calls as string[][]).map((c) => c[0]);
-    expect(calls.some((c) => c.includes('main...HEAD'))).toBe(true);
-    expect(calls.some((c) => c.includes('merge-base'))).toBe(false);
+    expect(gitTexts().some((c) => c.endsWith('main...HEAD'))).toBe(true);
+    expect(gitTexts().some((c) => c.includes('merge-base'))).toBe(false);
   });
 
   it('throws when base is missing for base scope', async () => {
-    const svc = makeService(async () => ok(''));
-    await expect(svc.getDiff(srv, '/repo', '', undefined, { scope: 'base' })).rejects.toThrow('base branch is required');
+    await expect(makeService().service.getDiff(srv, '/repo', '', undefined, { scope: 'base' })).rejects.toThrow('base branch is required');
+  });
+
+  it('refuses a base git would read as an option', async () => {
+    const { service, gitCalls } = makeService();
+    await expect(service.getDiff(srv, '/repo', '--output=/tmp/x', undefined, { scope: 'base' })).rejects.toThrow();
+    await expect(service.getDiff(srv, '/repo', '--cached', undefined, { scope: 'base' })).rejects.toThrow(/Unsafe base branch/);
+    expect(gitCalls).toHaveLength(0);
   });
 });
 
 describe('GitDiffService.getDiff backward compatibility', () => {
   it('uses legacy diff when no scope is specified', async () => {
-    const { service, execFn } = makeServiceWithTransport(async (...args: unknown[]) => { const cmd = args[0] as string;
-      if (typeof cmd === 'string' && cmd.includes('rev-parse')) return ok('feature');
-      return ok('');
-    });
+    const { service, gitTexts } = makeService((spec) => (spec.args.includes('rev-parse') ? ok('feature') : ok('')));
+    const result = await service.getDiff(srv, '/repo', 'main');
+    expect(gitTexts().some((c) => c.endsWith('main...HEAD'))).toBe(true);
+    expect(result.headBranch).toBe('feature');
+  });
 
-    await service.getDiff(srv, '/repo', 'main');
-    const calls = (execFn.mock.calls as string[][]).map((c) => c[0]);
-    expect(calls.some((c) => c.includes('main...HEAD'))).toBe(true);
+  it('diffs against HEAD when there is no base', async () => {
+    const { service, gitCalls } = makeService();
+    await service.getDiff(srv, '/repo', '');
+    expect(gitCalls.at(-1)!.args.at(-1)).toBe('HEAD');
+  });
+});
+
+// Each migrated call is pinned to what the old shell string became: the argv a real sh makes of the old `git ...` part equals the new args.
+describe.skipIf(process.platform === 'win32')('GitDiffService: argv is the same as the old shell strings', () => {
+  const dir = "/path/it's here";
+  const quoted = "'/path/it'\\''s here'";
+
+  it('matches the commands of every scope', async () => {
+    const { service, gitCalls } = makeService((spec) => (spec.args.includes('merge-base') ? ok('abc1234\n') : ok('x')));
+    await service.getCommits(srv, dir, 'main');
+    await service.getCommits(srv, dir);
+    await service.getDiff(srv, dir, '', 'abc1234');
+    await service.getDiff(srv, dir, 'main');
+    await service.getDiff(srv, dir, '', undefined, { scope: 'uncommitted' });
+    await service.getDiff(srv, dir, 'main', undefined, { scope: 'base', includeUncommitted: true });
+    await service.getDiff(srv, dir, 'main', undefined, { scope: 'base', includeUncommitted: false });
+
+    const fmt = '%H<<>>%h<<>>%an<<>>%aI<<>>%s<<||>>';
+    const expected = [
+      `git -c core.quotepath=false -C ${quoted} log --pretty=format:'${fmt}' main..HEAD`,
+      `git -c core.quotepath=false -C ${quoted} log --pretty=format:'${fmt}' -50 HEAD`,
+      `git -c core.quotepath=false -C ${quoted} show --format= --unified=3 abc1234`,
+      `git -C ${quoted} rev-parse --abbrev-ref HEAD`,
+      `git -c core.quotepath=false -C ${quoted} diff --unified=3 main...HEAD`,
+      `git -c core.quotepath=false -C ${quoted} diff --cached --name-only`,
+      `git -c core.quotepath=false -C ${quoted} diff --name-only`,
+      `git -c core.quotepath=false -C ${quoted} diff --unified=3 HEAD`,
+      `git -c core.quotepath=false -C ${quoted} status --porcelain -uall`,
+      `git -C ${quoted} rev-parse --abbrev-ref HEAD`,
+      `git -C ${quoted} rev-parse --abbrev-ref HEAD`,
+      `git -C ${quoted} merge-base 'main' HEAD`,
+      `git -c core.quotepath=false -C ${quoted} diff --unified=3 abc1234`,
+      `git -C ${quoted} rev-parse --abbrev-ref HEAD`,
+      `git -c core.quotepath=false -C ${quoted} diff --unified=3 main...HEAD`,
+    ];
+    expect(gitCalls.map(argvOfSpec)).toEqual(expected.map(argvOfShellLine));
   });
 });

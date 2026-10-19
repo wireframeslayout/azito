@@ -1,5 +1,7 @@
 import type { IServerTransport } from '../servers/transport/ServerTransport';
-import { shellQuote } from '../../shared/shellQuote';
+import { runGit } from './runGit';
+
+const GIT_TIMEOUT_MS = 10_000;
 
 /**
  * Detects the repository's default branch from git state.
@@ -8,40 +10,29 @@ import { shellQuote } from '../../shared/shellQuote';
  *    - exactly one exists -> use it
  *    - both exist / neither exists -> null (ambiguous or empty)
  *
- * Uses stdout/stderr content (not exit code) for SSH transport compatibility
- * (SSH transports always return exit code 0 — see `hasGitError()` in
- * RemoteWorktreeService for the same pattern).
+ * Each git command's real exit code decides whether its answer counts: a non-zero exit (no origin/HEAD, no such
+ * branch, not a repository) is "no answer", and the next step is tried.
  */
 export async function detectDefaultBranch(
-  transport: IServerTransport,
+  transport: Pick<IServerTransport, 'run'>,
   workingDir: string,
 ): Promise<string | null> {
   // 1. Try origin/HEAD (set by git clone)
-  const symRef = await transport.exec(
-    `cd ${shellQuote(workingDir)} && git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null`,
-    10_000,
-  );
-  const symRefOut = symRef.stdout?.trim();
-  if (symRefOut && !symRefOut.includes('fatal:') && !symRefOut.includes('error:')) {
+  const symRef = await runGit(transport, workingDir, ['symbolic-ref', 'refs/remotes/origin/HEAD'], { timeoutMs: GIT_TIMEOUT_MS });
+  if (symRef.exitCode === 0) {
     // e.g. "refs/remotes/origin/main" -> "main"
-    const match = symRefOut.match(/^refs\/remotes\/origin\/(.+)$/);
+    const match = symRef.stdout.trim().match(/^refs\/remotes\/origin\/(.+)$/);
     if (match) return match[1];
   }
 
   // 2. Check main and master existence
   const [mainResult, masterResult] = await Promise.all([
-    transport.exec(
-      `cd ${shellQuote(workingDir)} && git rev-parse --verify --quiet refs/heads/main 2>/dev/null`,
-      10_000,
-    ),
-    transport.exec(
-      `cd ${shellQuote(workingDir)} && git rev-parse --verify --quiet refs/heads/master 2>/dev/null`,
-      10_000,
-    ),
+    runGit(transport, workingDir, ['rev-parse', '--verify', '--quiet', 'refs/heads/main'], { timeoutMs: GIT_TIMEOUT_MS }),
+    runGit(transport, workingDir, ['rev-parse', '--verify', '--quiet', 'refs/heads/master'], { timeoutMs: GIT_TIMEOUT_MS }),
   ]);
 
-  const mainExists = isValidSha(mainResult.stdout);
-  const masterExists = isValidSha(masterResult.stdout);
+  const mainExists = mainResult.exitCode === 0 && isValidSha(mainResult.stdout);
+  const masterExists = masterResult.exitCode === 0 && isValidSha(masterResult.stdout);
 
   if (mainExists && !masterExists) return 'main';
   if (masterExists && !mainExists) return 'master';
@@ -49,7 +40,6 @@ export async function detectDefaultBranch(
   return null;
 }
 
-function isValidSha(stdout: string | undefined): boolean {
-  const trimmed = stdout?.trim();
-  return !!trimmed && /^[0-9a-f]{40}$/.test(trimmed);
+function isValidSha(stdout: string): boolean {
+  return /^[0-9a-f]{40}$/.test(stdout.trim());
 }

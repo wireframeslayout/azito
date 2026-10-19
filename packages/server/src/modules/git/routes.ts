@@ -9,7 +9,7 @@ import type { WorktreeServiceFactory } from './WorktreeServiceFactory';
 import type { GitProviderService } from './providers/GitProviderService';
 import type { ProviderFilter } from './RepositoryCandidateService';
 import { RepositoryCandidateService } from './RepositoryCandidateService';
-import { shellQuote } from '../../shared/shellQuote';
+import { runGit } from './runGit';
 
 const VALID_SCOPES = new Set<string>(['uncommitted', 'base', 'commit']);
 const VALID_PROVIDER_FILTERS = new Set<string>(['github', 'gitlab', 'all']);
@@ -114,7 +114,8 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
         const changedCounts = await Promise.all(
           entries.map(async (entry) => {
             try {
-              const r = await transport.exec(`git -C ${shellQuote(entry.path)} status --porcelain`, 10000);
+              const r = await runGit(transport, undefined, ['-C', entry.path, 'status', '--porcelain'], { timeoutMs: 10000 });
+              if (r.exitCode !== 0) return null;
               const lines = r.stdout.trim();
               return lines === '' ? 0 : lines.split('\n').length;
             } catch {
