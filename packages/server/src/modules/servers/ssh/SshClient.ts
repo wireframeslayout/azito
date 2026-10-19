@@ -69,13 +69,20 @@ function findDefaultKey(): string | null {
   return null;
 }
 
-function loadSSHConfig(): ReturnType<typeof SSHConfig.parse> {
-  const sshConfigPath = path.join(process.env.HOME || '', '.ssh', 'config');
+function loadSSHConfig(configPath: string): ReturnType<typeof SSHConfig.parse> {
   try {
-    const raw = fs.readFileSync(sshConfigPath, 'utf8');
+    const raw = fs.readFileSync(configPath, 'utf8');
     return SSHConfig.parse(raw);
   } catch {
     return SSHConfig.parse('');
+  }
+}
+
+function configMtimeMs(configPath: string): number | null {
+  try {
+    return fs.statSync(configPath).mtimeMs;
+  } catch {
+    return null;
   }
 }
 
@@ -92,12 +99,18 @@ const END_MARKER = '\x02AGENTMGR_E';
 export class SshClient {
   private shellPool: Map<string, PersistentShell> = new Map();
   private parsedConfig: ReturnType<typeof SSHConfig.parse> | null = null;
+  private configMtime: number | null = null;
+  private configPath: string;
 
-  constructor(private fingerprintStore?: FingerprintStore) {}
+  constructor(private fingerprintStore?: FingerprintStore, configPath?: string) {
+    this.configPath = configPath ?? path.join(process.env.HOME || '', '.ssh', 'config');
+  }
 
   private getConfig(): ReturnType<typeof SSHConfig.parse> {
-    if (this.parsedConfig) return this.parsedConfig;
-    this.parsedConfig = loadSSHConfig();
+    const mtime = configMtimeMs(this.configPath);
+    if (this.parsedConfig && mtime === this.configMtime) return this.parsedConfig;
+    this.parsedConfig = loadSSHConfig(this.configPath);
+    this.configMtime = mtime;
     return this.parsedConfig;
   }
 
