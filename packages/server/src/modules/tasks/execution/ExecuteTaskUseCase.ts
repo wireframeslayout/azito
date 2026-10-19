@@ -18,7 +18,7 @@ import { confirmOldWindowGone, createRotatedWindow, createRotatedWindowInLock, e
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { IWorktreeService, WorktreeInfo } from '../../git/IWorktreeService';
 import type { WorktreeServiceFactory } from '../../git/WorktreeServiceFactory';
-import { PathResolverFactory, assertDirectoryContained } from '../../git/PathContainment';
+import { assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
 import { ensureClaudeTrust } from '../../agents/claude/ensureClaudeTrust';
@@ -100,7 +100,6 @@ export class ExecuteTaskUseCase {
   private readonly phaseLoopRunner: PhaseLoopRunner;
   private readonly httpSignalCoordinator: HttpSignalTurnCoordinator;
   private readonly runtimeRegistry: WorkerRuntimeRegistry;
-  private readonly pathResolverFactory = new PathResolverFactory();
 
   constructor(
     private taskRepo: ITaskRepository,
@@ -279,8 +278,9 @@ export class ExecuteTaskUseCase {
     { target, allowedRoot }: { target: string; allowedRoot: string | null | undefined },
     label: string,
   ): Promise<string> {
-    const transport = this.transportFactory.getTransport(server);
-    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target, allowedRoot }, label);
+    // No configured boundary: nothing to resolve, so the host's file operations are not even asked for.
+    if (!allowedRoot) return target;
+    return assertDirectoryContained(this.transportFactory.getFileOps(server), { target, allowedRoot }, label);
   }
 
   /**
@@ -1304,13 +1304,8 @@ export class ExecuteTaskUseCase {
       if (unit.workerType === 'claude' && workingDir) {
         try {
           const transport = this.transportFactory.getTransport(server);
-          const resolver = this.pathResolverFactory.create(server.type, transport);
-          const resolvedWorkingDir = await resolver.resolveRealPath(workingDir);
-          const trustResult = await ensureClaudeTrust(
-            server.type,
-            transport,
-            resolvedWorkingDir,
-          );
+          const resolvedWorkingDir = await transport.files().realpath(workingDir);
+          const trustResult = await ensureClaudeTrust(transport, resolvedWorkingDir);
           if (trustResult.action === 'registered') {
             this.appendLog(taskId, unitId, 'command', { type: 'claude_trust_registered', path: resolvedWorkingDir });
           } else if (trustResult.action === 'skipped') {

@@ -6,7 +6,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'path';
 import { sanitizeFileName, fileBrowseRoutes } from './routes';
 import storageRoutes from './routes';
-import { isPathContained } from '../git/PathContainment';
+import { isHostPathContained } from '../../shared/os/hostPath';
+import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+
+const localOps = (dir: string): LocalFileOps => new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: dir, tmpDir: dir }, process.env));
+
+const isPathContained = (pair: { target: string; allowedRoot: string }): boolean => isHostPathContained('linux', pair);
 import type { IServerRepository } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -173,7 +178,7 @@ describe('PUT /api/servers/:name/files/content — baseMtime/baseHash enforcemen
       serverRepo: serverRepo as IServerRepository,
       tmux: {} as any,
       projectServerRepo: projectServerRepo as IProjectServerRepository,
-      transportFactory: {} as any,
+      transportFactory: { getFileOps: () => localOps(tmpDir) } as any,
       searchService: {} as any,
     });
     await app.ready();

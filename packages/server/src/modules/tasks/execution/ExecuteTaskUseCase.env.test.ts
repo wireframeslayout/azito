@@ -26,6 +26,10 @@ import type { ServerConfig, IServerRepository } from '../../servers/Server';
 import type { ProjectDetail, IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
 import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import { LocalFileOps, localFileOpsHostFromEnv } from '../../../shared/fs/LocalFileOps';
+
+// Containment resolves real paths through the host's file operations: here the real ones, on this machine.
+const hostFiles = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: '/', tmpDir: '/tmp' }, process.env));
 
 // ─── Fixtures ───
 
@@ -373,7 +377,7 @@ function buildUseCase(opts: {
 
   const worktreeServiceFactory = { create: vi.fn() };
   const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-  const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
+  const transportFactory = { getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
   const paneClassifier = {};
   const contentExtractor = { generateSlug: vi.fn(async () => 'slug') };
   const paneStreamFactory = {};
@@ -1581,7 +1585,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
     };
     const worktreeServiceFactory = { create: vi.fn(() => ({ exists: vi.fn(async () => false) })) };
     const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-    const transportFactory = { getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
+    const transportFactory = { getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
     const paneClassifier = { classify: vi.fn(async () => ({ status: 'still_working' })) };
     const contentExtractor = { generateSlug: vi.fn(async () => 'slug'), extractPlan: vi.fn(async () => ({ planMarkdown: null })) };
     const paneStreamFactory = {
@@ -2833,7 +2837,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       })),
     };
     const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-    const transportFactory = { getTransport: vi.fn(() => ({})) };
+    const transportFactory = { getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({})) };
     const paneClassifier = {};
     const contentExtractor = { generateSlug: vi.fn(async () => 'slug'), extractPlan: vi.fn(async () => ({ planMarkdown: null })) };
     const windowRepo = {

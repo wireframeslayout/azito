@@ -18,6 +18,9 @@ vi.mock('../git/providers/cliToken', async (importOriginal) => {
 
 import type { Task } from './Task';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+
+const hostFiles = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: tmpdir(), tmpDir: tmpdir() }, process.env));
 
 // Containment checks (Issue #27) resolve real paths via fs.realpath, so the
 // working directory / worktree path fixtures below must exist on disk —
@@ -184,7 +187,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       })),
     } as unknown as TaskRestoreDeps['worktreeServiceFactory'],
     transportFactory: {
-      getTransport: vi.fn(() => ({})),
+      getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({})),
     } as unknown as TaskRestoreDeps['transportFactory'],
     contentExtractor: {
       extractPlan: vi.fn(async () => ({ planMarkdown: null })),
@@ -831,22 +834,12 @@ describe('TaskRestoreService', () => {
       } as unknown as NonNullable<TaskRestoreDeps['fetchDistributionService']>;
     }
 
-    // agent/ssh servers route worktree-path containment through
-    // PathResolverFactory's RemotePathResolver, which shells out via
-    // `transport.exec('cd -- <path> && pwd -P')` — echo the requested path
-    // straight back (it's already a real, existing directory: `worktreeDir`)
-    // so the containment check these tests don't otherwise care about
-    // doesn't throw.
+    // Worktree-path containment resolves real paths through the host's file operations (here the real ones: the
+    // directories these tests use exist), so the check these tests don't otherwise care about doesn't throw.
     function agentTransportFactory(): TaskRestoreDeps['transportFactory'] {
       return {
-        getTransport: vi.fn(() => ({
-          exec: vi.fn(async (cmd: string) => {
-            const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
-            const rawPath = match ? match[1] : worktreeDir;
-            const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
-            return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
-          }),
-        })),
+        getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+                  })),
       } as unknown as TaskRestoreDeps['transportFactory'];
     }
 
@@ -1305,14 +1298,8 @@ describe('TaskRestoreService', () => {
           findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, hostProfile: null, sshHostFingerprint: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
         transportFactory: {
-          getTransport: vi.fn(() => ({
-            exec: vi.fn(async (cmd: string) => {
-              const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
-              const rawPath = match ? match[1] : worktreeDir;
-              const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
-              return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
-            }),
-          })),
+          getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+                      })),
         } as unknown as TaskRestoreDeps['transportFactory'],
         projectServerRepo: {
           ...deps.projectServerRepo,
@@ -1434,14 +1421,8 @@ describe('TaskRestoreService', () => {
         ...deps,
         fetchDistributionService,
         transportFactory: {
-          getTransport: vi.fn(() => ({
-            exec: vi.fn(async (cmd: string) => {
-              const match = /^cd -- (.+) && pwd -P$/.exec(cmd);
-              const rawPath = match ? match[1] : worktreeDir;
-              const unquoted = rawPath.startsWith("'") ? rawPath.slice(1, -1).replace(/'\\''/g, "'") : rawPath;
-              return { stdout: `${unquoted}\n`, stderr: '', code: 0 };
-            }),
-          })),
+          getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+                      })),
         } as unknown as TaskRestoreDeps['transportFactory'],
         serverRepo: { ...deps.serverRepo, findByName: vi.fn(() => isolatedServer) },
         projectRepo: {
@@ -1537,7 +1518,7 @@ describe('TaskRestoreService base-branch detection and persistence (Issue #63 re
         find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       },
       transportFactory: {
-        getTransport: vi.fn(() => ({
+        getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
           run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: 'refs/remotes/origin/develop', stderr: '' })),
         })),
       } as unknown as TaskRestoreDeps['transportFactory'],

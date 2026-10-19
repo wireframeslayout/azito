@@ -1,4 +1,3 @@
-import * as path from 'path';
 import type { FastifyPluginCallback } from 'fastify';
 import type { IProjectRepository } from '../projects/Project';
 import type { IStorageSettingsRepository } from './SqliteStorageSettingsRepository';
@@ -9,7 +8,8 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import type { FileSearchService } from './FileSearchService';
-import { assertDirectoryContained, isPathContained, PathResolverFactory } from '../git/PathContainment';
+import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
+import { isHostPathContained, pathApiFor } from '../../shared/os/hostPath';
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
@@ -205,7 +205,6 @@ export interface FileBrowseRouteOptions {
 export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (fastify, opts, done) => {
   const { serverRepo, projectServerRepo, transportFactory, searchService } = opts;
   const fileBrowseService = new FileBrowseService(transportFactory);
-  const resolverFactory = new PathResolverFactory();
 
   // ── GET /api/servers/:name/directories ──
   fastify.get<{ Params: { name: string }; Querystring: { path?: string } }>(
@@ -319,41 +318,37 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
 
       let writeTargetPath = filePath;
       try {
-        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
-        const parentDir = path.dirname(filePath);
-        // Containment is verified here (ancestor directories resolved to their real path via
-        // assertDirectoryContained, then the target itself below) and the resolved real path is what
-        // actually gets written (see writeTargetPath below) — not the raw request path. What this does
-        // NOT close: an ancestor directory could be swapped for a symlink pointing outside
-        // ps.workingDirectory *after* this check runs but *before* writeFileContent() opens the file
-        // (TOCTOU). Closing that gap requires atomic "resolve + open" primitives the Node fs API doesn't
-        // expose today — namely openat2(RESOLVE_BENEATH)/O_BENEATH-style syscalls that refuse to resolve
-        // through a symlink race at the kernel level, not just re-check after the fact. Node's fs.open
-        // has no such flag, and the local write already uses O_NOFOLLOW to close the narrower case of the
-        // save target *itself* becoming a symlink after resolveExistingTargetRealPath() below runs.
-        // Per this repo's established policy (see the execution-gate TOCTOU notes), this residual race on
-        // ancestor directories is accepted and documented rather than worked around with a partial
-        // mitigation that would give false confidence.
-        await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
+        const fileOps = transportFactory.getFileOps(srv);
+        const parentDir = pathApiFor(fileOps.platform).dirname(filePath);
+        // Containment is verified here (ancestor directories resolved to their real path on the target host via
+        // assertDirectoryContained, then the target itself below) and the resolved real path is what actually gets
+        // written (see writeTargetPath below) — not the raw request path. What this does NOT close: an ancestor
+        // directory could be swapped for a symlink pointing outside ps.workingDirectory *after* this check runs but
+        // *before* writeFileContent() replaces the file (TOCTOU). Closing that gap requires atomic "resolve + open"
+        // primitives the Node fs API doesn't expose today — namely openat2(RESOLVE_BENEATH)/O_BENEATH-style syscalls
+        // that refuse to resolve through a symlink race at the kernel level, not just re-check after the fact. The
+        // write itself refuses a save target that became a symlink (IFileOps.write: SYMLINK_REFUSED), which closes the
+        // narrower case of the target *itself* being swapped after resolveExistingTargetRealPath() below runs. Per this
+        // repo's established policy (see the execution-gate TOCTOU notes), the residual race on ancestor directories is
+        // accepted and documented rather than worked around with a partial mitigation that would give false confidence.
+        await assertDirectoryContained(fileOps, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
 
-        // Parent-directory containment alone doesn't catch a save target
-        // that is itself a symlink pointing outside workingDirectory — the
-        // write would land at the symlink's target. When the target already
-        // exists, resolve its real path and re-verify containment on that
-        // (Issue #27 review Critical 2); a target that doesn't exist yet has
-        // no symlink to escape through, so it's created directly under the
-        // already-contained parent.
+        // Parent-directory containment alone doesn't catch a save target that is itself a symlink pointing outside
+        // workingDirectory — the write would land at the symlink's target. When the target already exists, resolve its
+        // real path and re-verify containment on that (Issue #27 review Critical 2); a target that doesn't exist yet is
+        // checked as a new path (its nearest existing ancestor is resolved) and created under the contained parent.
         const existingRealPath = await fileBrowseService.resolveExistingTargetRealPath(srv, filePath);
         if (existingRealPath != null) {
-          const resolver = resolverFactory.create(srv.type, transport);
-          const resolvedRoot = await resolver.resolveRealPath(ps.workingDirectory);
-          if (!isPathContained({ target: existingRealPath, allowedRoot: resolvedRoot })) {
+          const resolvedRoot = await fileOps.realpath(ps.workingDirectory);
+          if (!isHostPathContained(fileOps.platform, { target: existingRealPath, allowedRoot: resolvedRoot })) {
             return reply.status(400).send({ error: 'target path escapes the allowed directory' });
           }
           // Use the resolved real path — not the original request path — for
           // the actual write, so the verified path is what's acted on rather
           // than the pre-verification value (TOCTOU-adjacent discard).
           writeTargetPath = existingRealPath;
+        } else {
+          await assertNewPathContained(fileOps, { target: filePath, allowedRoot: ps.workingDirectory }, 'target path');
         }
       } catch (err: unknown) {
         const message = (err as Error).message;
@@ -404,7 +399,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       const targetPath = typeof request.body?.path === 'string' ? request.body.path.trim() : '';
       if (!targetPath) return reply.status(400).send({ error: 'path is required' });
       if (/[\x00-\x1f]/.test(targetPath)) return reply.status(400).send({ error: 'Invalid path' });
-      if (!path.isAbsolute(targetPath)) return reply.status(400).send({ error: 'path must be absolute' });
+      if (!pathApiFor(transportFactory.getFileOps(srv).platform).isAbsolute(targetPath)) return reply.status(400).send({ error: 'path must be absolute' });
 
       try {
         const result = await fileBrowseService.ensureDirectory(srv, targetPath);
@@ -431,9 +426,10 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
 
       try {
-        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
-        const parentDir = path.dirname(rawPath);
-        await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
+        const fileOps = transportFactory.getFileOps(srv);
+        const parentDir = pathApiFor(fileOps.platform).dirname(rawPath);
+        await assertDirectoryContained(fileOps, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
+        await assertNewPathContained(fileOps, { target: rawPath, allowedRoot: ps.workingDirectory }, 'target path');
         await fileBrowseService.createEntry(srv, rawPath, type);
         return { ok: true };
       } catch (err: unknown) {
@@ -457,21 +453,21 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (!rawPath) return reply.status(400).send({ error: 'path is required' });
       if (/[\x00-\x1f]/.test(rawPath)) return reply.status(400).send({ error: 'Invalid path' });
 
-      if (path.basename(rawPath) === '.git') return reply.status(400).send({ error: 'Cannot delete .git directory' });
+      const api = pathApiFor(transportFactory.getFileOps(srv).platform);
+      if (api.basename(rawPath) === '.git') return reply.status(400).send({ error: 'Cannot delete .git directory' });
 
       const ps = projectServerRepo.find(projectId, srv.name);
       if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
 
       try {
-        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
-        const parentDir = path.dirname(rawPath);
-        const resolvedParent = await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
-        const resolver = resolverFactory.create(srv.type, transport);
-        const resolvedRoot = await resolver.resolveRealPath(ps.workingDirectory);
-        if (resolvedParent === resolvedRoot && path.basename(rawPath) === '.') {
+        const fileOps = transportFactory.getFileOps(srv);
+        const parentDir = api.dirname(rawPath);
+        const resolvedParent = await assertDirectoryContained(fileOps, { target: parentDir, allowedRoot: ps.workingDirectory }, 'target path');
+        const resolvedRoot = await fileOps.realpath(ps.workingDirectory);
+        if (resolvedParent === resolvedRoot && api.basename(rawPath) === '.') {
           return reply.status(400).send({ error: 'Cannot delete the root directory' });
         }
-        const resolvedTarget = path.join(resolvedParent, path.basename(rawPath));
+        const resolvedTarget = api.join(resolvedParent, api.basename(rawPath));
         if (resolvedTarget === resolvedRoot) return reply.status(400).send({ error: 'Cannot delete the root directory' });
 
         await fileBrowseService.deleteEntry(srv, rawPath);
@@ -502,9 +498,10 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (!ps?.workingDirectory) return reply.status(400).send({ error: 'Project server has no working directory' });
 
       try {
-        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
-        const parentDir = path.dirname(rawPath);
-        await assertDirectoryContained(resolverFactory, srv.type, transport, { target: parentDir, allowedRoot: ps.workingDirectory }, 'source path');
+        const fileOps = transportFactory.getFileOps(srv);
+        const api = pathApiFor(fileOps.platform);
+        await assertDirectoryContained(fileOps, { target: api.dirname(rawPath), allowedRoot: ps.workingDirectory }, 'source path');
+        await assertNewPathContained(fileOps, { target: api.join(api.dirname(rawPath), newName), allowedRoot: ps.workingDirectory }, 'destination path');
 
         await fileBrowseService.renameEntry(srv, rawPath, newName);
         return { ok: true };
@@ -545,8 +542,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
       if (/[\x00-\x1f]/.test(root)) return reply.status(400).send({ error: 'Invalid root path' });
 
       try {
-        const transport = srv.type !== 'local' ? transportFactory.getTransport(srv) : undefined;
-        root = await assertDirectoryContained(resolverFactory, srv.type, transport, { target: root, allowedRoot: ps.workingDirectory }, 'search root');
+        root = await assertDirectoryContained(transportFactory.getFileOps(srv), { target: root, allowedRoot: ps.workingDirectory }, 'search root');
       } catch (err: unknown) {
         const message = (err as Error).message;
         if (message.includes('escapes the allowed directory') || message.includes('Cannot verify')) {

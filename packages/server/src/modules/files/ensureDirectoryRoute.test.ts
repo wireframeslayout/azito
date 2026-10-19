@@ -1,6 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import Fastify from 'fastify';
 import { fileBrowseRoutes, type FileBrowseRouteOptions } from './routes';
+import { LocalFileOps, localFileOpsHostFromEnv } from '../../shared/fs/LocalFileOps';
+import { tmpdir, homedir } from 'os';
+
+const localOps = new LocalFileOps(localFileOpsHostFromEnv({ platform: process.platform, homeDir: homedir(), tmpDir: tmpdir() }, process.env));
 
 // Issue #87 review, Important finding 1: the project wizard's "existing
 // directory" mode showed "このパスを作成します" for a path discovery found
@@ -22,7 +26,7 @@ function makeOpts(overrides: Partial<FileBrowseRouteOptions> = {}): FileBrowseRo
       clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), delete: vi.fn(),
     } as unknown as FileBrowseRouteOptions['serverRepo'],
     projectServerRepo: { find: vi.fn(() => null), findByProject: vi.fn(() => []), findByServer: vi.fn(() => []), upsert: vi.fn(), remove: vi.fn() } as unknown as FileBrowseRouteOptions['projectServerRepo'],
-    transportFactory: { getTransport: vi.fn() } as unknown as FileBrowseRouteOptions['transportFactory'],
+    transportFactory: { getFileOps: vi.fn(() => localOps) } as unknown as FileBrowseRouteOptions['transportFactory'],
     searchService: {} as unknown as FileBrowseRouteOptions['searchService'],
     ...overrides,
   };
