@@ -99,6 +99,8 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // against sessions.ts — that's covered by sessions.test.ts's own
     // instance plus the shared-wiring assertion in buildServer.ts).
     serverIsolationMutex: new KeyedMutex(),
+    harnessHash: 'testhash',
+    harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     // Issue #29 Step 2 C-1: defaults to true (scoped auth already enabled)
     // so every pre-existing test in this file — none of which are about the
     // C-1 gate itself — keeps exercising the false->true/true->true

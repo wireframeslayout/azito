@@ -62,6 +62,8 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     webhookToken: 'wh',
     uiToken: 'ui',
     serverIsolationMutex: new KeyedMutex(),
+    harnessHash: 'testhash',
+    harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     scopedAuthEnabled: true,
     muxDriverRegistry: { resolve: vi.fn(() => ({ caps: { changeEvents: true, agentState: false, independentClients: true, copyMode: true } })), has: vi.fn(() => true), register: vi.fn() } as unknown as ServersRouteOptions['muxDriverRegistry'],
     repoDiscovery: {

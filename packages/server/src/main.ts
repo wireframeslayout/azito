@@ -260,6 +260,16 @@ async function main(): Promise<void> {
       else if (r.status === 'error') app.log.warn(`Agent update error on ${r.name}: ${r.message}`);
     }
   }).catch(() => {});
+
+  // ─── Startup: check harness versions ───
+
+  wiring.harnessUpdater.checkAllServers().then((results) => {
+    for (const r of results) {
+      if (r.status === 'updated') app.log.info(`Harness updated on ${r.name}`);
+      else if (r.status === 'skipped') app.log.info(`Harness update skipped on ${r.name}: ${r.message}`);
+      else if (r.status === 'error') app.log.warn(`Harness update error on ${r.name}: ${r.message}`);
+    }
+  }).catch(() => {});
 }
 
 main().catch((err) => {

@@ -38,6 +38,8 @@ export interface HarnessInstallOptions {
    * regardless of isolation.
    */
   isolationIntent?: boolean;
+  /** Written to the remote VERSION file after a successful install for staleness detection. */
+  version?: string;
 }
 
 const VALID_PREFIX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
@@ -95,6 +97,14 @@ export class HarnessInstaller {
       const msg = (err as Error).message;
       report('setup', 'error', msg);
       return { success: false, steps, error: msg };
+    }
+
+    if (options.version) {
+      try {
+        await this.sshClient.execIsolated(sshHost, `echo ${shellQuote(options.version)} > ${harnessDir}/VERSION`);
+      } catch {
+        // VERSION write failure is non-fatal; the next auto-update cycle will retry.
+      }
     }
 
     return { success: true, steps };
