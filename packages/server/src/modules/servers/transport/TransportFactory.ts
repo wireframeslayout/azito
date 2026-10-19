@@ -3,11 +3,12 @@ import type { ServerConfig } from '../Server';
 import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
+import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 export class TransportFactory {
   private cache = new Map<string, IServerTransport & IMuxTransport>();
 
-  constructor(private publicUrl: string, private homeDir: string) {}
+  constructor(private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles) {}
 
   /** The shell/tmux transport of a server. It does not depend on the server's mux kinds: a misao window is reached through its driver. */
   getTransport(server: Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>): IServerTransport & IMuxTransport {
@@ -26,7 +27,7 @@ export class TransportFactory {
 
     let transport: IServerTransport & IMuxTransport;
     if (server.type === 'local') {
-      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir);
+      transport = new LocalTransport(resolveTmuxRuntime(server.muxRuntime, this.homeDir), this.publicUrl, this.homeDir, this.taskTempFiles);
     } else if (server.type === 'agent') {
       transport = new AgentTransport(server.host!, server.agentPort!, server.agentToken!, server.muxRuntime, server.name);
     } else {

@@ -1,6 +1,7 @@
 import WebSocket from 'ws';
 import { BasePaneStream } from '../../tmux/PaneOutputStream';
 import type { AgentTransport } from './AgentTransport';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 export class AgentPaneStream extends BasePaneStream {
   protected filePath: string;
@@ -16,15 +17,11 @@ export class AgentPaneStream extends BasePaneStream {
     private authHeader: string,
   ) {
     super();
-    this.filePath = `/tmp/azito-pipe-${paneId}-${Date.now()}.log`;
+    this.filePath = TaskTempFiles.remotePipeFile(paneId, Date.now());
   }
 
   start(): void {
-    this.transport.exec(`touch ${this.filePath}`).then(() => {
-      this.connectWs();
-    }).catch(() => {
-      this.connectWs();
-    });
+    void this.registerAndConnect();
   }
 
   stop(): void {
@@ -37,7 +34,27 @@ export class AgentPaneStream extends BasePaneStream {
       try { this.ws.close(); } catch { /* ignore */ }
       this.ws = null;
     }
-    this.transport.exec(`rm -f ${this.filePath}`).catch(() => {});
+    this.transport.releasePaneStreamFile(this.filePath).catch(() => {});
+  }
+
+  /**
+   * The agent serves only files it manages, so every attempt registers the file first (idempotent: it is not truncated), which
+   * also covers an agent restart between reconnects. A failure (an older agent without the endpoint, an unreachable agent)
+   * is retried like a lost connection and ends in the reconnection-limit error.
+   */
+  private async registerAndConnect(): Promise<void> {
+    try {
+      await this.transport.registerPaneStreamFile(this.filePath);
+    } catch {
+      if (!this.stopped) this.scheduleReconnect();
+      return;
+    }
+    if (this.stopped) {
+      // stop() ran while the registration was in flight: its release came first, so release again.
+      this.transport.releasePaneStreamFile(this.filePath).catch(() => {});
+      return;
+    }
+    this.connectWs();
   }
 
   private connectWs(): void {
@@ -75,6 +92,6 @@ export class AgentPaneStream extends BasePaneStream {
       this.emit('error', new Error('AgentPaneStream: reconnection limit reached'));
       return;
     }
-    this.retryTimer = setTimeout(() => this.connectWs(), delay);
+    this.retryTimer = setTimeout(() => { void this.registerAndConnect(); }, delay);
   }
 }

@@ -7,6 +7,7 @@ import { resolveExecutionManifest, hashExecutionManifest } from './execution/Exe
 import { checkExecutionGate } from './execution/ExecutionGate';
 import { resolveInputPolicy } from '../projects/ProjectServer';
 import { buildRespawnManifestInput } from '../windows/WindowRespawnService';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 // GET /api/tasks/:id/execution-approval (Issue #51) — the browser-facing
 // read API for what the untrusted-input execution gate blocked and what a
@@ -200,6 +201,7 @@ function makeOpts(existingTask: Task | null): TasksRouteOptions {
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
   };
 }
 

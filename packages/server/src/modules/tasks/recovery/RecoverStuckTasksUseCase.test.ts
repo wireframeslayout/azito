@@ -7,6 +7,7 @@ import type { Unit, IUnitRepository } from '../../units/Unit';
 import type { IExecutionLogRepository, ExecutionLog } from '../ExecutionLog';
 import type { ServerConfig } from '../../servers/Server';
 import type { AgentTurn, AgentTurnStatus } from '../turns/AgentTurn';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 vi.mock('fs');
 
@@ -242,7 +243,7 @@ function createMocks(): Mocks {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function createUseCase(mocks: Mocks, registry?: any, windowRows: unknown[] = []): RecoverStuckTasksUseCase {
+function createUseCase(mocks: Mocks, registry?: any, windowRows: unknown[] = [], taskTempFiles: TaskTempFiles = new TaskTempFiles('/tmp', 'linux')): RecoverStuckTasksUseCase {
   const mockRegistry = registry ?? { resolve: () => mocks.tmuxClient, availabilityFor: () => ({ available: true }), supportedKinds: () => ['tmux'] } as any;
   return new RecoverStuckTasksUseCase(
     mocks.taskRepo as any,
@@ -266,6 +267,7 @@ function createUseCase(mocks: Mocks, registry?: any, windowRows: unknown[] = [])
       return { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) };
     })() as any,
     { findByTask: vi.fn().mockReturnValue(windowRows) } as any,
+    taskTempFiles,
   );
 }
 
@@ -338,6 +340,45 @@ describe('RecoverStuckTasksUseCase', () => {
     expect(mocks.taskRepo.updateCurrentPhase).toHaveBeenCalledWith(10, 'reviewing');
     expect(mocks.executeTaskUseCase.resumeStateMachine).toHaveBeenCalledWith(1, 10);
     expect(mocks.tmuxClient.sendKeysToHandle).toHaveBeenCalled();
+  });
+
+  it('reads the signal file the phase recorded, even when no file carries the usual name', async () => {
+    const task = makeTask({ id: 40 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    const doneMarker = 'AZITO_DONE_40_rec';
+    mocks.logRepo.findByTask.mockReturnValue([{
+      ...makePhasePromptLog(40, 'implementing', doneMarker),
+      content: JSON.stringify({ type: 'phase_prompt', phase: 'implementing', doneMarker, signalFilePath: '/custom/azito-pipe-40-sig-1.log' }),
+    }]);
+    vi.mocked(fs.readdirSync).mockReturnValue([]);
+    vi.mocked(fs.readFileSync).mockImplementation((file) =>
+      (String(file) === '/custom/azito-pipe-40-sig-1.log' ? doneMarker : '') as never);
+
+    await createUseCase(mocks).run();
+
+    expect(mocks.taskRepo.updateCurrentPhase).toHaveBeenCalledWith(40, 'reviewing');
+  });
+
+  it('finds a signal file in the hub temp folder and in the legacy /tmp (macOS $TMPDIR)', async () => {
+    const task = makeTask({ id: 41 });
+    mocks.taskRepo.findByStatus.mockImplementation((status: TaskStatus) =>
+      status === 'running' ? [task] : [],
+    );
+    const doneMarker = 'AZITO_DONE_41_leg';
+    mocks.logRepo.findByTask.mockReturnValue([makePhasePromptLog(41, 'implementing', doneMarker)]);
+    vi.mocked(fs.readdirSync).mockImplementation((dir) =>
+      (String(dir) === '/tmp' ? ['azito-pipe-41-sig-1.log'] : []) as never);
+    vi.mocked(fs.readFileSync).mockImplementation((file) =>
+      (String(file).endsWith('/tmp/azito-pipe-41-sig-1.log') ? doneMarker : '') as never);
+
+    const mac = new TaskTempFiles('/var/folders/xy/T', 'darwin');
+    const useCase = createUseCase(mocks, undefined, [], mac);
+    await useCase.run();
+
+    expect(vi.mocked(fs.readdirSync).mock.calls.map((c) => String(c[0]))).toEqual(expect.arrayContaining(['/var/folders/xy/T', '/tmp']));
+    expect(mocks.taskRepo.updateCurrentPhase).toHaveBeenCalledWith(41, 'reviewing');
   });
 
   it('should retry current phase when marker not found (incomplete)', async () => {

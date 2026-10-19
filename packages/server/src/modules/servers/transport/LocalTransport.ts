@@ -12,6 +12,7 @@ import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
+import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 export function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
@@ -59,7 +60,7 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
 export class LocalTransport implements IServerTransport, IMuxTransport {
   private sessionCounter = 0;
 
-  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string) {}
+  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles) {}
 
   exec(command: string, timeoutMs?: number): Promise<ExecResult> {
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
@@ -136,6 +137,6 @@ export class LocalTransport implements IServerTransport, IMuxTransport {
   }
 
   createPaneStream(handle: PaneHandle): IPaneStream {
-    return new PaneOutputStream(handle as string);
+    return new PaneOutputStream(this.taskTempFiles.pipeFile({ type: 'local' }, handle as string, Date.now()));
   }
 }

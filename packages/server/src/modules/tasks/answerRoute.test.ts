@@ -4,6 +4,7 @@ import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 import { ExecutionGatePendingApprovalError } from './execution/ExecutionGate';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 // POST /api/tasks/:id/answer — Issue #328 sixth-round review finding 1:
 // the route used to clear task.pendingQuestions and fire followUp()
@@ -193,6 +194,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
   };
   return { opts: routeOpts, task };
 }

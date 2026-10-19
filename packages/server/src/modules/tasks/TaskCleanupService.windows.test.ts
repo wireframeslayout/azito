@@ -4,6 +4,7 @@ import { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import type { IMuxClient } from '../tmux/IMuxClient';
 import type { Task } from './Task';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 const WINDOW_ID = 'w_01M3XFD8H97JCPKS5Y5BH3JZQH';
 const ok = { stdout: '', stderr: '', code: 0 };
@@ -22,6 +23,8 @@ function setup(opts: { windows?: unknown[]; closeWindow?: ReturnType<typeof vi.f
     projectServerRepo: { find: () => ({ tmuxSession: 'azito' }), findByProject: () => [] } as never,
     projectRepo: {} as never,
     muxDriverRegistry: registry,
+    logRepo: { findByTask: () => [] } as never,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
     // By default the misao task has its primary row with a misao ref (stored data without a ref is tmux).
     windowRepo: { findByTask: () => opts.windows ?? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] } as never,
   });

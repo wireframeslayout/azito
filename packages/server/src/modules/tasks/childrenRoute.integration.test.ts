@@ -10,6 +10,7 @@ import { AuditLogService } from '../../shared/audit/AuditLogService';
 import { resolvePrincipal } from '../../shared/auth/resolvePrincipal';
 import { evaluateRouteAuth } from '../../shared/auth/routeAuth';
 import { createTokenVerifier } from '../servers/auth/tokenAuth';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 // Integration coverage for Issue #28 design v3 §4's task-principal surface:
 // POST /api/tasks/:id/children (task-self-only, untrusted-fixed) and POST
@@ -129,6 +130,7 @@ function buildApp(scopedAuthEnabled: boolean, db: SqliteDatabase, createCalls: R
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
   };
 
   const app = Fastify();

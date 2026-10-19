@@ -8,6 +8,7 @@ import { destroyPrimaryTaskWindow } from './execution/TaskWindowDestruction';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { mapAppError } from '../../app/mapAppError';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 /**
  * Wires `destroyPrimaryTaskWindow` (kill → reread-gated revoke → cleanup,
@@ -214,6 +215,7 @@ function makeOpts(
       destroyPrimaryTaskWindow(taskId, windowName, taskRepo, paneEnvService as TaskPaneEnvironmentService, reason, kill, onDestroyed),
     paneEnvService,
     scopedAuthEnabled: true,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
   };
 }
 

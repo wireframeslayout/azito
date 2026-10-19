@@ -237,6 +237,7 @@ async function main(): Promise<void> {
     app.log,
     wiring.unitTypeLoader,
     wiring.windowRepo,
+    wiring.taskTempFiles,
   );
   // tmux tasks are recovered at once; misao tasks need the daemon, so recovery runs once more on its first connect (only the tasks the first run skipped).
   void scheduleStartupRecovery(

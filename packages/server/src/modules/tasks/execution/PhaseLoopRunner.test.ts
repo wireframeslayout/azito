@@ -8,6 +8,7 @@ import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { isDistributionRequired } from './DistributionHelper';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 // Hub push notarization resolves its credential through the shared
 // `cliToken` module (Issue #87). Stubbed here so these tests never depend on
@@ -212,6 +213,7 @@ function makeRunner(overrides: {
     overrides.scopedAuthEnabled ?? true,
     (overrides.pushNotaryService ?? null) as any,
     sleepTaskWindows,
+    new TaskTempFiles('/tmp', 'linux'),
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator, sleepTaskWindows };

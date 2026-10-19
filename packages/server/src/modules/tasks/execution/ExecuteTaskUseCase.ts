@@ -31,6 +31,7 @@ import type { PaneClassifier } from '../../llm/PaneClassifier';
 import type { IContentExtractor } from '../../llm/ContentExtractor';
 import type { IWindowRepository } from '../../windows/Window';
 import type { IPaneStreamFactory } from '../../tmux/PaneStream';
+import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
 import { shellQuote } from '../../../shared/shellQuote';
@@ -181,6 +182,7 @@ export class ExecuteTaskUseCase {
     // as a direct dependency (avoids circular dependency direction: tasks →
     // windows is forbidden). Wired as an adapter in wiring.ts.
     private primaryWindowWaker: IPrimaryWindowWaker,
+    private taskTempFiles: TaskTempFiles,
     private harnessPrefix?: string,
     private hubGitIdentity: GitIdentity | null = null,
   ) {
@@ -234,6 +236,7 @@ export class ExecuteTaskUseCase {
       this.scopedAuthEnabled,
       this.pushNotaryService,
       this.sleepTaskWindows,
+      this.taskTempFiles,
     );
   }
 
@@ -2017,7 +2020,7 @@ export class ExecuteTaskUseCase {
       const doneMarker = `AZITO_DONE_${taskId}_${nonce}`;
       const questionsMarker = `AZITO_QUESTIONS_${taskId}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${taskId}_${nonce}`;
-      const outputFilePath = `/tmp/azito-output-${taskId}-${nonce}.md`;
+      const outputFilePath = this.taskTempFiles.outputFile(server, taskId, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
 
       // Start pipe-pane BEFORE sending to capture all output — this capture runs
@@ -2076,7 +2079,10 @@ export class ExecuteTaskUseCase {
       const commentWithMarkers = envelopeResult.markerizedPrompt;
       let httpSignalTurn = envelopeResult.httpSignalTurn;
 
-      this.appendLog(taskId, unitId, 'command', { type: 'follow_up_prompt', text: commentWithMarkers, doneMarker, questionsMarker });
+      this.appendLog(taskId, unitId, 'command', {
+        type: 'follow_up_prompt', text: commentWithMarkers, doneMarker, questionsMarker, outputFilePath,
+        ...(httpSignalMode ? {} : { signalFilePath: followUpSignalStream.getFilePath() }),
+      });
 
       // For non-LLM modes: send the comment with marker instructions to the worker
       // (supervisor PTY when supervised+connected, tmux send-keys otherwise —

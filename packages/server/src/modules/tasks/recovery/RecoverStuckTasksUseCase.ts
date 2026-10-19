@@ -22,6 +22,7 @@ import type { MuxDriverKind, PaneHandle } from '@azito/shared';
 import { isPrimaryTaskWindow, type IWindowRepository } from '../../windows/Window';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
 import { taskWindowRef } from '../../tmux/windowIdentity';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../../tmux/storedWindowKind';
 
 export interface RecoveryLogger {
@@ -58,6 +59,7 @@ export class RecoverStuckTasksUseCase {
     private logger: RecoveryLogger,
     private unitTypeLoader: UnitTypeLoader,
     private windowRepo: IWindowRepository,
+    private taskTempFiles: TaskTempFiles,
   ) {}
 
   private isRunning = false;
@@ -448,16 +450,26 @@ export class RecoverStuckTasksUseCase {
     const doneMarker = lastPrompt.parsed.doneMarker as string | undefined;
     if (!doneMarker) return false;
 
-    const sigPrefix = `azito-pipe-${task.id}-sig-`;
-    try {
-      const tmpFiles = fs.readdirSync('/tmp');
-      const sigFiles = tmpFiles.filter((f) => f.startsWith(sigPrefix) && f.endsWith('.log'));
-      for (const sigFile of sigFiles) {
-        const content = fs.readFileSync(path.join('/tmp', sigFile), 'utf-8');
-        if (content.includes(doneMarker)) return true;
+    // The path the phase recorded when it started wins; the folders the hub places signal files in (including the legacy
+    // Unix /tmp) cover phases started before the path was recorded.
+    const recorded = lastPrompt.parsed.signalFilePath;
+    const candidates = typeof recorded === 'string' ? [recorded] : [];
+    const sigPrefix = TaskTempFiles.signalPrefixForTask(task.id);
+    for (const dir of this.taskTempFiles.hubScanDirs()) {
+      try {
+        for (const f of fs.readdirSync(dir)) {
+          if (f.startsWith(sigPrefix) && f.endsWith('.log')) candidates.push(path.join(dir, f));
+        }
+      } catch (err) {
+        this.logger.warn(`[recovery] Could not read ${dir} for signal files of task ${task.id}: ${(err as Error).message}`);
       }
-    } catch {
-      // /tmp read failed
+    }
+    for (const file of candidates) {
+      try {
+        if (fs.readFileSync(file, 'utf-8').includes(doneMarker)) return true;
+      } catch {
+        // gone or unreadable: not evidence of completion
+      }
     }
     return false;
   }

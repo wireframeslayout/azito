@@ -1,5 +1,9 @@
 import { readdirSync, unlinkSync } from 'fs';
+import * as path from 'path';
 import type { Task } from './Task';
+import type { IExecutionLogRepository } from './ExecutionLog';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
+import { recordedTempFilePaths } from './recordedTempFiles';
 import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
@@ -16,18 +20,28 @@ import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
 
 const WORKTREE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-]+\/\.worktrees\/task-\d+$/;
 
-function removeTempFiles(taskId: number, log: { warn: (msg: string) => void }): void {
-  const prefixes = [`azito-pipe-${taskId}-`, `azito-output-${taskId}-`, `azito-rules-${taskId}-`];
-  try {
-    for (const f of readdirSync('/tmp')) {
-      if (prefixes.some(p => f.startsWith(p))) {
-        try { unlinkSync(`/tmp/${f}`); } catch (e) {
-          log.warn(`[task-cleanup] Failed to remove temp file /tmp/${f}: ${(e as Error).message}`);
-        }
-      }
+/**
+ * Removes the task's temp files of the hub's own server: the paths recorded in its execution_log first, then whatever
+ * carries the task's file-name prefixes in the folders the hub places them in (the current one, plus the legacy `/tmp`
+ * on Unix — see TaskTempFiles.hubScanDirs).
+ */
+function removeTempFiles(taskId: number, taskTempFiles: TaskTempFiles, recorded: readonly string[], log: { warn: (msg: string) => void }): void {
+  const remove = (filePath: string): void => {
+    try { unlinkSync(filePath); } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+      log.warn(`[task-cleanup] Failed to remove temp file ${filePath}: ${(e as Error).message}`);
     }
-  } catch (e) {
-    log.warn(`[task-cleanup] Failed to read /tmp for cleanup: ${(e as Error).message}`);
+  };
+  recorded.forEach(remove);
+  const prefixes = TaskTempFiles.prefixesForTask(taskId);
+  for (const dir of taskTempFiles.hubScanDirs()) {
+    try {
+      for (const f of readdirSync(dir)) {
+        if (prefixes.some(p => f.startsWith(p))) remove(path.join(dir, f));
+      }
+    } catch (e) {
+      log.warn(`[task-cleanup] Failed to read ${dir} for cleanup: ${(e as Error).message}`);
+    }
   }
 }
 
@@ -39,6 +53,8 @@ export interface TaskCleanupDeps {
   projectRepo: IProjectRepository;
   muxDriverRegistry: MuxDriverRegistry;
   windowRepo: IWindowRepository;
+  logRepo: IExecutionLogRepository;
+  taskTempFiles: TaskTempFiles;
 }
 
 export class TaskCleanupService {
@@ -121,7 +137,7 @@ export class TaskCleanupService {
     }
 
     if (server.type === 'local') {
-      removeTempFiles(task.id, log);
+      removeTempFiles(task.id, this.deps.taskTempFiles, recordedTempFilePaths(this.deps.logRepo.findByTask(task.id), task.id), log);
     }
   }
 }

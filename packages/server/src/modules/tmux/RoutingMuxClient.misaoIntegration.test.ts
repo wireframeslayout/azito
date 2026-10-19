@@ -17,6 +17,7 @@ import { handleTerminalConnection } from './ws/terminalHandler';
 import sessionsRoutes, { invalidateSessionCache } from './routes/sessions';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { MISAO_CLI } from '../../shared/misaoTestBinary';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 // One local server holding a tmux window and a misao window side by side (#311), driven through the routing driver.
 // tmux runs on a throwaway socket (TMUX_TMPDIR) and misao is a throwaway daemon: the resident ones are never touched.
@@ -77,7 +78,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('one local server with a tmux and a m
     await vi.waitFor(() => expect(fs.existsSync(socketPath)).toBe(true), { timeout: 10000, interval: 50 });
 
     registry = new MuxDriverRegistry();
-    tmuxClient = new TmuxClient(new TransportFactory('http://127.0.0.1:1', os.homedir()), 'http://127.0.0.1:1', 'ui', 'http://127.0.0.1:1', 'wh');
+    tmuxClient = new TmuxClient(new TransportFactory('http://127.0.0.1:1', os.homedir(), new TaskTempFiles('/tmp', 'linux')), 'http://127.0.0.1:1', 'ui', 'http://127.0.0.1:1', 'wh');
     registry.register('tmux', tmuxClient);
     const sdk = await import('@misao/sdk');
     const handle = registerMisaoDriver(registry, { sdk, socketPath, shell: '/bin/bash' }, () => {}, { warn: () => {} }, { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh' }, NO_AGENT_MISAO);
