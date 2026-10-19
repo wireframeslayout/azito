@@ -10,7 +10,7 @@ const rt = { bin: 'tmux', baseArgs: [] } as never;
 const make = (platform: 'linux' | 'darwin' | 'win32') => new LocalTransport(rt, 'http://hub', os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform, arch: 'x64' });
 
 describe('LocalTransport host profile', () => {
-  it('keeps running sh commands on a Unix hub', async () => {
+  it.skipIf(process.platform === 'win32')('keeps running sh commands on a Unix hub', async () => {
     const result = await make(process.platform === 'darwin' ? 'darwin' : 'linux').exec('echo hello');
     expect(result.stdout.trim()).toBe('hello');
   });
