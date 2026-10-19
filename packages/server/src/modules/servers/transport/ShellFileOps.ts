@@ -17,9 +17,14 @@ import {
   type WriteResult,
 } from '../../../shared/fs/fileOps';
 import type { IServerTransport } from './ServerTransport';
+import { AgentUnreachableError } from './AgentUnreachableError';
 
 // base64 chunk length of an upload: the whole command must stay under Linux's MAX_ARG_STRLEN (128KB).
 const WRITE_CHUNK_SIZE = 48 * 1024;
+
+/** A walk's output is cut here, below the 1MB an agent's exec keeps. */
+const WALK_OUTPUT_BYTES = 900_000;
+const WALK_END_MARKER = 'AZITO_WALK_END';
 
 /**
  * {@link IFileOps} for an agent registered before its OS was recorded (a Unix one that has no `/api/fileops`): each operation
@@ -199,31 +204,41 @@ export class ShellFileOps implements IFileOps {
 
   /**
    * `find` does the walk on the host, as the file-name search and the session scans always did: GNU `-printf`, the excluded names
-   * pruned, `head` cutting the output at the limit, and the time budget as the exec deadline (a walk that runs out of time has no
-   * partial output to return, so it reports `truncated` with nothing). Entries come in `find`'s order, not level by level.
+   * pruned, and `head` cutting the output at the entry limit and at WALK_OUTPUT_BYTES (the agent's exec keeps 1MB of output).
+   * Entries come in `find`'s order, not level by level.
+   *
+   * That agent hands back the output so far when a command is killed (its time, its output limit), as if it had finished, so a
+   * list is complete only if the end marker the command prints last is there. Without it the last line may be cut in the middle
+   * of a path: it is dropped and the result is `truncated`. A hit time budget is the same case. An exec that is not answered at
+   * all (the agent's HTTP deadline) is `truncated` with nothing.
    */
   async walk(root: string, options: WalkOptions): Promise<WalkResult> {
     const q = sq(this.checked(root));
     const prune = options.excludeNames.length > 0 ? `\\( ${options.excludeNames.map((glob) => `-name ${sq(glob)}`).join(' -o ')} \\) -prune -o ` : '';
-    const depth = options.maxDepth === undefined ? '' : ` -maxdepth ${options.maxDepth + 1}`;
     const command =
-      `if [ -d ${q} ]; then LC_ALL=C command find ${q} -mindepth 1${depth} ${prune}-type f -printf '%T@ %P\\n' 2>/dev/null | head -n ${options.maxEntries + 1}; ` +
+      `if [ -d ${q} ]; then { LC_ALL=C command find ${q} -mindepth 1 ${prune}-type f -printf '%T@ %P\\n' 2>/dev/null | head -n ${options.maxEntries + 1} | head -c ${WALK_OUTPUT_BYTES}; echo; echo ${WALK_END_MARKER}; }; ` +
       `else echo AZITO_NOT_A_DIRECTORY; fi`;
     let stdout: string;
     try {
       stdout = await this.out(command, options.timeBudgetMs);
     } catch (err) {
-      if (err instanceof Error && ((err as Error & { killed?: boolean }).killed === true || err.message.includes('timed out'))) return { entries: [], truncated: true };
+      if (err instanceof AgentUnreachableError && err.reason === 'timeout') return { entries: [], truncated: true };
       throw err;
     }
     if (stdout.startsWith('AZITO_NOT_A_DIRECTORY')) throw new FileOpsError('NOT_FOUND', `No such directory: ${root}`);
+    const markerAt = stdout.lastIndexOf(`\n${WALK_END_MARKER}`);
+    const finished = markerAt !== -1;
+    let body = finished ? stdout.slice(0, markerAt) : stdout;
+    // The output limit cut the list (the last line may be half a path), or nothing says the command ran to its end.
+    const cut = !finished || Buffer.byteLength(body) >= WALK_OUTPUT_BYTES;
+    if (cut) body = body.slice(0, body.lastIndexOf('\n') + 1);
     const entries: WalkEntry[] = [];
-    for (const line of stdout.split('\n')) {
+    for (const line of body.split('\n')) {
       const match = line.match(/^(\d+(?:\.\d+)?) (.+)$/);
       if (match) entries.push({ path: match[2], mtimeMs: parseFloat(match[1]) * 1000 });
     }
-    const truncated = entries.length > options.maxEntries;
-    return { entries: truncated ? entries.slice(0, options.maxEntries) : entries, truncated };
+    const tooMany = entries.length > options.maxEntries;
+    return { entries: tooMany ? entries.slice(0, options.maxEntries) : entries, truncated: cut || tooMany };
   }
 
   /** One script: the old tree is moved aside, `staging` moved in, and the old tree removed only after that; if the move in fails, the old tree is moved back. */

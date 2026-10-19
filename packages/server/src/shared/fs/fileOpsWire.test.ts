@@ -64,7 +64,7 @@ describe('RemoteFileOps over executeFileOp', () => {
     writeFileSync(path.join(dir, 'target', 'old.txt'), 'o');
 
     await remote.replaceDirectory(path.join(dir, 'staging'), path.join(dir, 'target'));
-    const walked = await remote.walk(dir, { excludeNames: ['x'], maxEntries: 10, maxDepth: 3, timeBudgetMs: 5_000 });
+    const walked = await remote.walk(dir, { excludeNames: ['x'], maxEntries: 10, timeBudgetMs: 5_000 });
 
     expect(walked.truncated).toBe(false);
     expect(walked.entries.map((e) => e.path)).toEqual(['target/new.txt']);

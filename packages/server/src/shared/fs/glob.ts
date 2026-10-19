@@ -57,9 +57,22 @@ function matchesOne(token: GlobToken, char: string): boolean {
   }
 }
 
+/**
+ * Lower case, one UTF-16 unit at a time, and a unit whose lower case is not a single unit (`İ` becomes `i` + a combining dot) is
+ * left as it is: the text keeps its length, and the comparison is per character like the `i` flag of a regular expression.
+ */
+function foldCase(text: string): string {
+  let folded = '';
+  for (let i = 0; i < text.length; i++) {
+    const lower = text[i].toLowerCase();
+    folded += lower.length === 1 ? lower : text[i];
+  }
+  return folded;
+}
+
 /** A matcher for `glob`: true when the whole text matches it. */
 export function compileGlob(glob: string, caseSensitive: boolean): (text: string) => boolean {
-  const fold = caseSensitive ? (text: string): string => text : (text: string): string => text.toLowerCase();
+  const fold = caseSensitive ? (text: string): string => text : foldCase;
   const tokens = parseGlob(glob, fold);
   return (rawText) => {
     const text = fold(rawText);

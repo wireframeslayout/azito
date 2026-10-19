@@ -147,11 +147,12 @@ export class LocalFileOps implements IFileOps {
     const excluded = options.excludeNames.map((glob) => compileGlob(glob, true));
     const deadline = Date.now() + options.timeBudgetMs;
     const entries: WalkEntry[] = [];
-    let level = [{ absolute: base, relative: '', depth: 0 }];
+    const expired = (): boolean => Date.now() > deadline;
+    let level = [{ absolute: base, relative: '' }];
     while (level.length > 0) {
       const next: typeof level = [];
       for (const dir of level) {
-        if (Date.now() > deadline) return { entries, truncated: true };
+        if (expired()) return { entries, truncated: true };
         let items: fs.Dirent[];
         try {
           items = await fs.promises.readdir(dir.absolute, { withFileTypes: true });
@@ -161,16 +162,17 @@ export class LocalFileOps implements IFileOps {
         }
         items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
         for (const item of items) {
+          // Checked per entry and after each await, not per directory: one directory can hold a very large number of files.
+          if (expired()) return { entries, truncated: true };
           if (excluded.some((matches) => matches(item.name))) continue;
           const relative = dir.relative === '' ? item.name : `${dir.relative}/${item.name}`;
           if (item.isDirectory()) {
-            if (options.maxDepth === undefined || dir.depth < options.maxDepth) {
-              next.push({ absolute: this.api.join(dir.absolute, item.name), relative, depth: dir.depth + 1 });
-            }
+            next.push({ absolute: this.api.join(dir.absolute, item.name), relative });
           } else if (item.isFile()) {
             if (entries.length >= options.maxEntries) return { entries, truncated: true };
             // A file that vanished since the listing is not one.
             const stats = await fs.promises.lstat(this.api.join(dir.absolute, item.name)).catch(() => null);
+            if (expired()) return { entries, truncated: true };
             if (stats) entries.push({ path: relative, mtimeMs: stats.mtimeMs });
           }
         }

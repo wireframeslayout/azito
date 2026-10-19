@@ -43,9 +43,36 @@ function depthOf(path: string): number {
   return depth;
 }
 
-/** Shallower first, then by name: the same order whether the host walked level by level or in `find`'s order. */
-function byDepthThenName(a: WalkEntry, b: WalkEntry): number {
-  return depthOf(a.path) - depthOf(b.path) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0);
+/** Entries examined between two looks at the clock; the event loop gets a turn each time. */
+const MATCH_CHUNK = 2_000;
+
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+/**
+ * The entries `keep` accepts, shallower first and by name within a level, up to `limit`. The depth of each path is worked out once
+ * (one pass), and a level is sorted only when it is reached, so a search that finds its `limit` among the shallow files never sorts
+ * the deep ones. Between chunks the event loop runs and the deadline is checked: past it, what was kept so far is returned.
+ */
+async function filterInOrder(entries: WalkEntry[], keep: (entry: WalkEntry) => boolean, limit: number, deadlineAtMs: number): Promise<{ kept: WalkEntry[]; timedOut: boolean }> {
+  const levels: WalkEntry[][] = [];
+  for (const entry of entries) (levels[depthOf(entry.path)] ??= []).push(entry);
+  const kept: WalkEntry[] = [];
+  for (const level of levels) {
+    if (!level) continue;
+    level.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+    for (let start = 0; start < level.length; start += MATCH_CHUNK) {
+      if (Date.now() > deadlineAtMs) return { kept, timedOut: true };
+      for (const entry of level.slice(start, start + MATCH_CHUNK)) {
+        if (!keep(entry)) continue;
+        kept.push(entry);
+        if (kept.length >= limit) return { kept, timedOut: false };
+      }
+      await yieldToEventLoop();
+    }
+  }
+  return { kept, timedOut: false };
 }
 
 /**
@@ -74,22 +101,18 @@ export async function searchFileNames(files: IFileOps, search: NameSearchQuery, 
   const includes = search.include.map((glob) => (glob.includes('/')
     ? { onPath: true, matches: compileGlob(`*/${glob}`, true) }
     : { onPath: false, matches: compileGlob(glob, true) }));
-  const candidates = walked.entries.sort(byDepthThenName).filter((entry) => {
-    const fullPath = `${rootPrefix}/${entry.path}`;
-    const name = entry.path.slice(entry.path.lastIndexOf('/') + 1);
-    return includes.length === 0 || includes.some((include) => include.matches(include.onPath ? fullPath : name));
-  });
+  const nameOf = (entry: WalkEntry): string => entry.path.slice(entry.path.lastIndexOf('/') + 1);
+  const included = (entry: WalkEntry): boolean =>
+    includes.length === 0 || includes.some((include) => include.matches(include.onPath ? `${rootPrefix}/${entry.path}` : nameOf(entry)));
 
   if (!search.regex) {
     const contains = compileGlob(`*${search.query}*`, search.caseSensitive);
-    const paths: string[] = [];
-    for (const entry of candidates) {
-      if (contains(entry.path.slice(entry.path.lastIndexOf('/') + 1))) paths.push(entry.path);
-      if (paths.length >= limits.maxResults) break;
-    }
-    return { paths, truncated: walked.truncated };
+    const { kept, timedOut } = await filterInOrder(walked.entries, (entry) => included(entry) && contains(nameOf(entry)), limits.maxResults, deadline);
+    return { paths: kept.map((entry) => entry.path), truncated: walked.truncated || timedOut };
   }
 
+  const { kept: candidates, timedOut: listingTimedOut } = await filterInOrder(walked.entries, included, Infinity, deadline);
+  if (listingTimedOut) return { paths: [], truncated: true };
   const found = await matchWithRegex({
     pattern: `^(?:${search.query})$`,
     flags: search.caseSensitive ? 's' : 'si',

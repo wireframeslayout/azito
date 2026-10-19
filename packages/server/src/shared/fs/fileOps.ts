@@ -69,8 +69,6 @@ export interface WalkOptions {
   excludeNames: string[];
   /** The walk stops after this many files. */
   maxEntries: number;
-  /** Directory levels entered below `root` (0: only the files directly in `root`). Unlimited when absent. */
-  maxDepth?: number;
   /** The walk stops after this long, by the host's clock. */
   timeBudgetMs: number;
 }

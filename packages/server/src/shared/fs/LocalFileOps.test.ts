@@ -472,16 +472,12 @@ describe('LocalFileOps.walk', () => {
     expect((await ops.walk(dir, { ...options, excludeNames: ['home'] })).entries.map((e) => e.path)).toEqual(['real/a.txt']);
   });
 
-  it('stops at maxEntries and says so, and honors maxDepth', async () => {
+  it('stops at maxEntries and says so', async () => {
     files('a.txt', 'b.txt', 'c.txt', 'd/e.txt');
 
     const limited = await ops.walk(dir, { ...options, maxEntries: 2 });
     expect(limited.entries).toHaveLength(2);
     expect(limited.truncated).toBe(true);
-
-    const shallow = await ops.walk(dir, { ...options, maxDepth: 0 });
-    expect(shallow.entries.map((e) => e.path)).toEqual(['a.txt', 'b.txt', 'c.txt']);
-    expect(shallow.truncated).toBe(false);
   });
 
   it('stops when the time budget is used up', async () => {
@@ -491,6 +487,23 @@ describe('LocalFileOps.walk', () => {
 
     expect(late.truncated).toBe(true);
     expect(late.entries).toEqual([]);
+  });
+
+  it('checks the time inside one large directory, not only between directories', async () => {
+    files(...Array.from({ length: 200 }, (_, i) => `f${String(i).padStart(3, '0')}.txt`));
+    let clock = 0;
+    const spy = vi.spyOn(Date, 'now').mockImplementation(() => (clock += 10));
+
+    let result;
+    try {
+      result = await ops.walk(dir, { ...options, timeBudgetMs: 500 });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(result.truncated).toBe(true);
+    expect(result.entries.length).toBeGreaterThan(0);
+    expect(result.entries.length).toBeLessThan(200);
   });
 
   it('is NOT_FOUND for a missing root and NOT_A_DIRECTORY for a file', async () => {

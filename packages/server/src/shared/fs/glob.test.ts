@@ -33,6 +33,12 @@ describe('compileGlob', () => {
     expect(compileGlob('[a-c]', false)('B')).toBe(true);
   });
 
+  it('compares case per character, so a letter whose lower case is longer does not shift the text', () => {
+    expect(compileGlob('?', false)('\u0130')).toBe(true);
+    expect(compileGlob('\u0130x', false)('\u0130X')).toBe(true);
+    expect(/^.$/i.test('\u0130')).toBe(true);
+  });
+
   it('backtracks to the last star only, so many stars cannot make it run long', () => {
     const matches = compileGlob('*a*a*a*a*a*a*a*a*a*a*a*b', true);
     const started = Date.now();

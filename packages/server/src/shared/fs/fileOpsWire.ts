@@ -50,7 +50,6 @@ export const fileOpRequestSchema = z.discriminatedUnion('op', [
     path: filePath,
     excludeNames: z.array(z.string()).max(MAX_WALK_EXCLUDES),
     maxEntries: z.number().int().positive().max(MAX_WALK_ENTRIES),
-    maxDepth: z.number().int().nonnegative().optional(),
     timeBudgetMs: z.number().int().positive().max(MAX_WALK_TIME_BUDGET_MS),
   }),
   z.object({ op: z.literal('realpath'), path: filePath }),
@@ -105,7 +104,7 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
     case 'remove': await ops.remove(request.path); return null;
     case 'rename': await ops.rename(request.from, request.to); return null;
     case 'replaceDirectory': await ops.replaceDirectory(request.staging, request.target); return null;
-    case 'walk': return ops.walk(request.path, { excludeNames: request.excludeNames, maxEntries: request.maxEntries, maxDepth: request.maxDepth, timeBudgetMs: request.timeBudgetMs });
+    case 'walk': return ops.walk(request.path, { excludeNames: request.excludeNames, maxEntries: request.maxEntries, timeBudgetMs: request.timeBudgetMs });
     case 'realpath': return ops.realpath(request.path);
   }
 }
@@ -167,7 +166,7 @@ export class RemoteFileOps implements IFileOps {
   }
 
   walk(root: string, options: WalkOptions): Promise<WalkResult> {
-    return this.call('walk', { op: 'walk', path: root, excludeNames: options.excludeNames, maxEntries: options.maxEntries, maxDepth: options.maxDepth, timeBudgetMs: options.timeBudgetMs });
+    return this.call('walk', { op: 'walk', path: root, excludeNames: options.excludeNames, maxEntries: options.maxEntries, timeBudgetMs: options.timeBudgetMs });
   }
 
   realpath(path: string): Promise<string> {

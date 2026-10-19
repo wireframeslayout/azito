@@ -6,6 +6,7 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError, type FileOpsErrorCode } from '../../../shared/fs/fileOps';
 import { ShellFileOps } from './ShellFileOps';
+import { AgentUnreachableError } from './AgentUnreachableError';
 import type { ExecResult } from './ServerTransport';
 
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -120,12 +121,10 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       expect(sh.commands).toHaveLength(1);
     });
 
-    it('prunes excluded names and honors maxDepth', async () => {
+    it('prunes excluded names', async () => {
       files('keep.ts', 'node_modules/p/a.js', 'a/node_modules/b.js', 'a/skip.log', 'a/ok.ts', 'a/b/deep.ts');
 
       expect((await ops.walk(dir, { ...options, excludeNames: ['node_modules', '*.log'] })).entries.map((e) => e.path).sort()).toEqual(['a/b/deep.ts', 'a/ok.ts', 'keep.ts']);
-      expect((await ops.walk(dir, { ...options, maxDepth: 0 })).entries.map((e) => e.path)).toEqual(['keep.ts']);
-      expect((await ops.walk(dir, { ...options, maxDepth: 1 })).entries.map((e) => e.path).sort()).toEqual(['a/ok.ts', 'a/skip.log', 'keep.ts']);
     });
 
     it('stops at maxEntries and says so', async () => {
@@ -147,10 +146,52 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       expect(await codeOf(ops.walk(path.join(dir, 'missing'), options))).toBe('NOT_FOUND');
     });
 
-    it('reports an exec that ran out of time as truncated, with nothing', async () => {
-      const slow = new ShellFileOps({ exec: async () => { throw Object.assign(new Error('timed out'), { killed: true }); } });
+    it('reports an exec that was not answered in time (the agent\'s HTTP deadline) as truncated, with nothing', async () => {
+      const slow = new ShellFileOps({ exec: async () => { throw new AgentUnreachableError('old', 'timeout'); } });
 
       expect(await slow.walk(dir, options)).toEqual({ entries: [], truncated: true });
+    });
+
+    it('lets an agent that cannot be reached at all propagate', async () => {
+      const down = new ShellFileOps({ exec: async () => { throw new AgentUnreachableError('old', 'refused'); } });
+
+      await expect(down.walk(dir, options)).rejects.toBeInstanceOf(AgentUnreachableError);
+    });
+
+    // An old agent hands back the output so far when it kills a command (its time, its 1MB output limit), as if it had finished.
+    describe('output cut by the agent', () => {
+      const line = (n: number): string => `1700000000.5 dir/file-${String(n).padStart(6, '0')}.txt`;
+
+      it('is truncated, without the half line, when the end marker is missing', async () => {
+        const cutOutput = `${line(1)}\n${line(2)}\n1700000000.5 dir/file-0000`;
+        const stub = new ShellFileOps({ exec: async () => ({ stdout: cutOutput, stderr: '', code: 0 }) });
+
+        const result = await stub.walk(dir, options);
+
+        expect(result.truncated).toBe(true);
+        expect(result.entries.map((e) => e.path)).toEqual(['dir/file-000001.txt', 'dir/file-000002.txt']);
+      });
+
+      it('is truncated, without the half line, when the command\'s own output limit cut it (a stub that resolves at 1MB)', async () => {
+        const all = Array.from({ length: 30_000 }, (_, n) => line(n)).join('\n');
+        const atLimit = Buffer.from(all).subarray(0, 900_000).toString();
+        // what `head -c` leaves, then the command's own newline and marker
+        const stub = new ShellFileOps({ exec: async () => ({ stdout: `${atLimit}\nAZITO_WALK_END\n`, stderr: '', code: 0 }) });
+
+        const result = await stub.walk(dir, { ...options, maxEntries: 1_000_000 });
+
+        expect(result.truncated).toBe(true);
+        expect(result.entries.every((e) => /^dir\/file-\d{6}\.txt$/.test(e.path))).toBe(true);
+      });
+
+      it('is complete, and not truncated, when the end marker is there', async () => {
+        const stub = new ShellFileOps({ exec: async () => ({ stdout: `${line(1)}\n${line(2)}\n\nAZITO_WALK_END\n`, stderr: '', code: 0 }) });
+
+        expect(await stub.walk(dir, options)).toEqual({
+          entries: [{ path: 'dir/file-000001.txt', mtimeMs: 1700000000500 }, { path: 'dir/file-000002.txt', mtimeMs: 1700000000500 }],
+          truncated: false,
+        });
+      });
     });
   });
 
