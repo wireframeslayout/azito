@@ -50,7 +50,7 @@ import {
   SUB_TAB_KEY, viewTabId, parseViewTabId, windowTabId, parseWindowTabId,
   browserTabId, parseBrowserTabId, listPersistedBrowserTabIds,
   makeTaskLayoutStorage, hasPersistedTaskLayout, SELECT_BROWSER_EVENT, SELECT_TERMINAL_EVENT, resolveWindowContextExtra,
-  resolveDisplayedTaskTerminal, selectTaskTerminal,
+  resolveDisplayedTaskTerminal, selectTaskTerminal, remapWindowTabsById,
   type FixedView, type TerminalRef,
 } from '../task/taskPaneLayout';
 import { ApprovalRequestTracker, isApprovalDataForTask } from '../task/executionApprovalRequest';
@@ -310,6 +310,7 @@ export default function TaskPanel({
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [submittingApproval, setSubmittingApproval] = useState<'approve' | 'deny' | null>(null);
   const [windows, setWindows] = useState<Window[]>([]);
+  const windowsRef = useRef<Window[]>([]);
   // Tracks whether this task's windows have been *successfully* fetched at least once
   // since the panel last switched to this taskId. `allTabIds` starts out windowless
   // (`windows === []`) on every task switch, so the pane layout's allTabIds-sync
@@ -443,6 +444,7 @@ export default function TaskPanel({
   // the user explicitly closed via × stays closed instead of reappearing the next
   // time allTabIds changes reference (e.g. the windows-list 30s poll).
   const layout = usePaneLayout(`${SUB_TAB_KEY}:${taskId}`, allTabIds, initialTabIds, taskLayoutStorage, { appendMissing: false, ready: windowsReady });
+  const { replaceTab } = layout;
   const paneRects = usePaneRects();
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
@@ -544,7 +546,12 @@ export default function TaskPanel({
       const res = await api<Task & { windows?: Window[] }>(`/tasks/${taskId}`);
       if (currentTaskIdRef.current !== taskId) return; // stale response for a previous task
       setTaskDetail(res);
-      if (res.windows) setWindows(res.windows);
+      if (res.windows) {
+        const remaps = remapWindowTabsById(windowsRef.current, res.windows);
+        for (const [oldId, newId] of remaps) replaceTab(oldId, newId);
+        setWindows(res.windows);
+        windowsRef.current = res.windows;
+      }
       setWindowsReady(true);
     } catch {
       // Do NOT mark windows as "ready" on failure: `windows` is still `[]` at this
@@ -555,7 +562,7 @@ export default function TaskPanel({
       // ready only flips once one of them actually succeeds, protecting the
       // persisted layout until we truly know the current windows.
     }
-  }, [taskId]);
+  }, [taskId, replaceTab]);
 
   useNotificationChannel({
     onTaskStatus: useCallback(({ taskId: id }: { taskId: number }) => {
@@ -570,6 +577,7 @@ export default function TaskPanel({
 
   useEffect(() => {
     setWindows([]);
+    windowsRef.current = [];
     setWindowsReady(false);
     setTaskDetail(null);
     if (!taskId) return;

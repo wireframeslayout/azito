@@ -458,3 +458,30 @@ export function resolveWindowContextExtra(
   const paneTitle = pane.title && pane.title !== pane.command ? pane.title : pane.command;
   return { online: true, stale, windowName: sw.name, paneTarget, paneTitle, paneCommand: pane.command };
 }
+
+/**
+ * 窓の一覧が更新されたとき、同じ windowId (id) で serverName または tmuxTarget が
+ * 変わった窓のタブ ID マッピング（旧→新）を返す。reconcile がタブを閉じる前に
+ * layout.replaceTab で付け替えるために使う。
+ *
+ * 限界: タブ ID には windowId が含まれないため、TaskPanel が閉じている間にサーバー側で
+ * 窓が作り直された場合、保存済みレイアウトの古いタブ ID は付け替えられない（windowId
+ * 基準のタブ ID 化は別 Issue のスコープ）。
+ */
+export function remapWindowTabsById(
+  prevWindows: ReadonlyArray<Pick<Window, 'id' | 'serverName' | 'tmuxTarget'>>,
+  nextWindows: ReadonlyArray<Pick<Window, 'id' | 'serverName' | 'tmuxTarget'>>,
+): Map<string, string> {
+  const remaps = new Map<string, string>();
+  const prevById = new Map(prevWindows.map((w) => [w.id, w]));
+  for (const next of nextWindows) {
+    const prev = prevById.get(next.id);
+    if (!prev) continue;
+    const oldTabId = windowTabId(prev.serverName, prev.tmuxTarget);
+    const newTabId = windowTabId(next.serverName, next.tmuxTarget);
+    if (oldTabId !== newTabId) {
+      remaps.set(oldTabId, newTabId);
+    }
+  }
+  return remaps;
+}
