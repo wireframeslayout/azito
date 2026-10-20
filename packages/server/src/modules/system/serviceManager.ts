@@ -79,18 +79,17 @@ export interface ServiceManager {
   /** Writes the unit/plist and registers it (enable at login) without starting it. Also how a previous definition is put back. */
   install(content: string): Promise<void>;
   /**
-   * Starts the service when it is not running. launchd: bootstraps an unloaded job (re-reading the plist) into `domain`
-   * (default: `gui` when that domain exists, else `user`), only kickstarts a loaded one. A caller that stopped the job
-   * itself passes the domain it was in, so putting it back never moves it to the other domain.
+   * Starts the service when it is not running. launchd: bootstraps an unloaded job (re-reading the plist) into
+   * `user/<uid>`, only kickstarts one that is loaded there, and moves one that an older install loaded into `gui/<uid>`.
    */
-  start(domain?: LaunchdDomain): Promise<void>;
+  start(): Promise<void>;
   /** Stops the service. launchd: boots the job out of every domain it is loaded into (and so unloads the definition). */
   stop(): Promise<void>;
   /** Restarts a running service, or starts a stopped one. launchd: throws `DuplicateLoadError` when it is loaded twice. */
   restart(): Promise<void>;
   /**
    * Makes the service run its current definition. systemd: `daemon-reload`, then `restart`. launchd: boots the job out
-   * and bootstraps it again into the domain it was in (`DuplicateLoadError` when it is loaded twice).
+   * and bootstraps it again into `user/<uid>` (`DuplicateLoadError` when it is loaded twice).
    */
   reload(): Promise<void>;
   /** State and domains from one inspection. Never throws for a double load: the caller reports it. */
@@ -178,23 +177,49 @@ export class SystemdServiceManager implements ServiceManager {
   }
 }
 
-/**
- * `launchctl print gui/<uid>` exits with these when the user has no GUI session (nobody is logged in on the screen,
- * e.g. a Mac reached only over SSH), and so the `gui` domain does not exist:
- * - 125 "Domain does not support specified action": observed on macOS 26.6.2 with `user/<uid>` but no `gui/<uid>` (#366).
- * - 113 "Could not find domain for ...": launchctl's usual exit for a missing domain. NOT observed on a real Mac for this
- *   case; it is accepted defensively, next to the observed 125.
- * Any other failure is not read as "no GUI session": the domain cannot be decided, so it is an error.
- */
-const GUI_DOMAIN_ABSENT_EXIT_CODES: ReadonlySet<number> = new Set([125, 113]);
-
 const DOMAINS: readonly LaunchdDomain[] = ['gui', 'user'];
 
+const SESSION_LIMIT_KEY = 'LimitLoadToSessionType';
+
 /**
- * launchd. A LaunchAgent is bootstrapped into `gui/<uid>` (a logged-in screen session) when that domain exists, and
- * into `user/<uid>` when it does not. A job that is already loaded into a domain stays there: every later operation
- * (kickstart, bootout, print) uses the domain it is loaded into, and a second copy is never loaded. A job loaded into
- * BOTH domains is an error for every operation that would have to choose (only `stop` and `inspect` work on it).
+ * A LaunchAgent loaded into `user/<uid>` must be limited to the Background session type: without
+ * `LimitLoadToSessionType = Background`, `launchctl bootstrap user/<uid>` fails with exit 5 (Input/output error), and a
+ * plist with it cannot be loaded into `gui/<uid>` (checked on macOS, #366). The limit also keeps macOS from loading the
+ * plist into `gui/<uid>` by itself when someone logs in on the screen later. The shipped templates carry it; this adds it
+ * to a plist written by an older install (which has none). A plist that already names the key is left as it is.
+ */
+export function limitToBackgroundSession(plist: string): string {
+  if (plist.includes(SESSION_LIMIT_KEY)) return plist;
+  const end = plist.lastIndexOf('</dict>');
+  if (end < 0) throw new Error(`The plist has no top-level <dict>, so ${SESSION_LIMIT_KEY} cannot be added to it.`);
+  return `${plist.slice(0, end)}  <key>${SESSION_LIMIT_KEY}</key>\n  <string>Background</string>\n${plist.slice(end)}`;
+}
+
+/** How long launchd gets to finish a bootout, and how often a bootstrap that races it is tried again. */
+export interface LaunchdTiming {
+  /** The longest wait for `launchctl print` to stop finding a job that was just booted out. */
+  settleTimeoutMs: number;
+  pollIntervalMs: number;
+  /** Extra bootstrap attempts after exit 5 (launchd answers 5 while the previous copy of the job is still being removed). */
+  bootstrapRetries: number;
+  retryDelayMs: number;
+}
+
+export const DEFAULT_LAUNCHD_TIMING: LaunchdTiming = { settleTimeoutMs: 3000, pollIntervalMs: 100, bootstrapRetries: 3, retryDelayMs: 500 };
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** launchctl's "Input/output error": what bootstrap answers both for a plist the domain cannot take and for a job that is still being removed. */
+const BOOTSTRAP_IO_ERROR = 5;
+
+/**
+ * launchd. The job always lives in `user/<uid>` with a plist limited to the Background session type, whether or not
+ * someone is logged in on the screen, so it runs the same before and after a login and survives a logout.
+ *
+ * An install from before that (v0.11.x and earlier) loaded a plist without the limit into `gui/<uid>`. Starting,
+ * restarting or reloading such a job moves it: boot it out of `gui`, add the limit to the plist, bootstrap into `user`;
+ * if that fails the original plist is put back and loaded into `gui` again. A job loaded into BOTH domains is an error
+ * for every operation that would have to choose (only `stop` and `inspect` work on it).
  */
 export class LaunchdServiceManager implements ServiceManager {
   readonly kind = 'launchd' as const;
@@ -203,7 +228,7 @@ export class LaunchdServiceManager implements ServiceManager {
   private readonly plistPath: string;
   private readonly duplicateLoadFix: string;
 
-  constructor(private readonly run: CommandRunner, spec: ServiceSpec, homeDir: string, private readonly uid: number) {
+  constructor(private readonly run: CommandRunner, spec: ServiceSpec, homeDir: string, private readonly uid: number, private readonly timing: LaunchdTiming) {
     this.label = spec.launchdLabel;
     this.templateName = spec.templates.launchd;
     this.duplicateLoadFix = spec.duplicateLoadFix;
@@ -261,58 +286,106 @@ export class LaunchdServiceManager implements ServiceManager {
     return domains[0];
   }
 
-  /** Where an unloaded job goes: the GUI domain when there is one, else the user domain. */
-  private async domainToBootstrap(): Promise<LaunchdDomain> {
-    const gui = this.domainTarget('gui');
-    const result = await this.run('launchctl', ['print', gui]);
-    if (result.code === 0) return 'gui';
-    if (GUI_DOMAIN_ABSENT_EXIT_CODES.has(result.code)) return 'user';
-    const detail = (result.stderr || result.stdout).trim();
-    throw new Error(`launchctl print ${gui} failed (exit ${result.code}), so it cannot be told whether ${gui} exists${detail ? `: ${detail}` : ''}`);
+  /** Boots the job out of a domain and waits until launchd no longer reports it: a bootstrap right after a bootout otherwise fails with exit 5. */
+  private async bootout(domain: LaunchdDomain): Promise<void> {
+    const target = this.jobTarget(domain);
+    await mustSucceed(this.run, 'launchctl', ['bootout', target], 'launchctl bootout');
+    const deadline = Date.now() + this.timing.settleTimeoutMs;
+    while ((await this.run('launchctl', ['print', target])).code === 0 && Date.now() < deadline) {
+      await sleep(this.timing.pollIntervalMs);
+    }
   }
 
+  /** bootstrap, tried again a few times when launchd answers exit 5 (a copy of the job that was just booted out may still be going away). */
   private async bootstrap(domain: LaunchdDomain): Promise<void> {
     const target = this.domainTarget(domain);
-    await mustSucceed(this.run, 'launchctl', ['bootstrap', target, this.plistPath], `launchctl bootstrap ${target}`);
+    for (let attempt = 0; ; attempt++) {
+      const result = await this.run('launchctl', ['bootstrap', target, this.plistPath]);
+      if (result.code === 0) return;
+      if (result.code === BOOTSTRAP_IO_ERROR && attempt < this.timing.bootstrapRetries) {
+        await sleep(this.timing.retryDelayMs);
+        continue;
+      }
+      const detail = (result.stderr || result.stdout).trim();
+      throw new Error(`launchctl bootstrap ${target} failed (exit ${result.code})${detail ? `: ${detail}` : ''}`);
+    }
   }
 
-  async start(domain?: LaunchdDomain): Promise<void> {
-    // `bootstrap` reads the plist again, so an edited plist takes effect; a loaded job is only kicked.
-    const loaded = await this.loadedDomain();
-    if (loaded) {
-      await mustSucceed(this.run, 'launchctl', ['kickstart', this.jobTarget(loaded)], 'launchctl kickstart');
-      return;
+  /** Loads the job into `user/<uid>`, with the session limit added to the plist when it has none. */
+  private async bootstrapUser(): Promise<void> {
+    const plist = this.readDefinition();
+    if (plist === undefined) throw new Error(`${this.plistPath} does not exist, so ${this.label} cannot be loaded.`);
+    const limited = limitToBackgroundSession(plist);
+    if (limited !== plist) fs.writeFileSync(this.plistPath, limited);
+    await this.bootstrap('user');
+  }
+
+  /** Moves a job that an older install loaded into `gui` to `user`; the original plist goes back into `gui` if that fails. */
+  private async migrateFromGui(): Promise<void> {
+    const original = this.readDefinition();
+    if (original === undefined) throw new Error(`${this.plistPath} does not exist, so ${this.label} cannot be moved to user/${this.uid}.`);
+    await this.bootout('gui');
+    try {
+      await this.bootstrapUser();
+    } catch (err) {
+      const cause = err instanceof Error ? err.message : String(err);
+      try {
+        fs.writeFileSync(this.plistPath, original);
+        await this.bootstrap('gui');
+      } catch (restoreErr) {
+        throw new Error(`Moving ${this.label} from gui/${this.uid} to user/${this.uid} failed (${cause}) and loading it back into gui/${this.uid} failed too (${restoreErr instanceof Error ? restoreErr.message : String(restoreErr)}). It is not running.`);
+      }
+      throw new Error(`Moving ${this.label} from gui/${this.uid} to user/${this.uid} failed (${cause}); it was loaded back into gui/${this.uid} as it was.`);
     }
-    await this.bootstrap(domain ?? await this.domainToBootstrap());
+  }
+
+  async start(): Promise<void> {
+    // `bootstrap` reads the plist again, so an edited plist takes effect; a job loaded into user/ is only kicked.
+    const loaded = await this.loadedDomain();
+    if (loaded === 'user') {
+      await mustSucceed(this.run, 'launchctl', ['kickstart', this.jobTarget('user')], 'launchctl kickstart');
+    } else if (loaded === 'gui') {
+      await this.migrateFromGui();
+    } else {
+      await this.bootstrapUser();
+    }
   }
 
   async stop(): Promise<void> {
-    // Every domain the job is loaded into, not just the first: a copy macOS loaded into gui/ at a later login would
-    // otherwise survive a stop of the one in user/ (or the other way round).
+    // Every domain the job is loaded into, not just the first: a copy in gui/ (an older install) would otherwise survive
+    // a stop of the one in user/.
     const { domains } = await this.inspect();
-    for (const domain of domains) {
-      await mustSucceed(this.run, 'launchctl', ['bootout', this.jobTarget(domain)], 'launchctl bootout');
-    }
+    for (const domain of domains) await this.bootout(domain);
   }
 
   /** launchd has no `restart` verb: `kickstart -k` sends SIGTERM to the running job and starts it again. */
   async restart(): Promise<void> {
     const loaded = await this.loadedDomain();
-    if (!loaded) return this.start();
-    await mustSucceed(this.run, 'launchctl', ['kickstart', '-k', this.jobTarget(loaded)], 'launchctl kickstart');
+    if (loaded === 'user') {
+      await mustSucceed(this.run, 'launchctl', ['kickstart', '-k', this.jobTarget('user')], 'launchctl kickstart');
+    } else if (loaded === 'gui') {
+      await this.migrateFromGui();
+    } else {
+      await this.bootstrapUser();
+    }
   }
 
   async reload(): Promise<void> {
     const loaded = await this.loadedDomain();
-    if (!loaded) return this.start();
-    await mustSucceed(this.run, 'launchctl', ['bootout', this.jobTarget(loaded)], 'launchctl bootout');
-    await this.bootstrap(loaded);
+    if (loaded === 'user') {
+      await this.bootout('user');
+      await this.bootstrapUser();
+    } else if (loaded === 'gui') {
+      await this.migrateFromGui();
+    } else {
+      await this.bootstrapUser();
+    }
   }
 }
 
 /** The service manager of a known kind (the update script is told which one the hub runs under). */
 export function serviceManagerOfKind(kind: ServiceManagerKind, spec: ServiceSpec, run: CommandRunner, host: Pick<HostEnv, 'homeDir' | 'uid'>): ServiceManager {
-  return kind === 'systemd' ? new SystemdServiceManager(run, spec, host.homeDir) : new LaunchdServiceManager(run, spec, host.homeDir, host.uid);
+  return kind === 'systemd' ? new SystemdServiceManager(run, spec, host.homeDir) : new LaunchdServiceManager(run, spec, host.homeDir, host.uid, DEFAULT_LAUNCHD_TIMING);
 }
 
 export type ServiceManagerResult = { manager: ServiceManager } | { error: HostProfileError };

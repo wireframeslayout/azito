@@ -4,18 +4,20 @@ import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readMisaoBundle } from './MisaoBundle';
-import { LaunchdServiceManager, type CommandRunner } from '../serviceManager';
+import { LaunchdServiceManager, limitToBackgroundSession, type CommandRunner, type LaunchdTiming } from '../serviceManager';
 import { MisaoServiceService } from './MisaoServiceService';
 import { MISAO_SERVICE, resolveMisaoPaths, type MisaoPaths } from './misaoPaths';
 import { writeHubBundle } from './misaoBundleFixture';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
-const LEGACY_PLIST = '<plist>/old/node /old/misao/current/misao.mjs</plist>';
+const LEGACY_PLIST = '<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.azito.misao</string>\n  <key>ProgramArguments</key>\n  <string>/old/node /old/misao/current/misao.mjs</string>\n</dict>\n</plist>\n';
+const TIMING: LaunchdTiming = { settleTimeoutMs: 200, pollIntervalMs: 1, bootstrapRetries: 2, retryDelayMs: 1 };
 
 /**
  * launchd as far as it matters here: `bootstrap` reads the plist and loads the job (starting the daemon), `kickstart`
  * restarts a loaded job WITHOUT reading the plist again, `bootout` unloads it. The loaded definition is what runs.
- * The `gui/<uid>` domain exists only while someone is logged in on the screen; `user/<uid>` always does.
+ * As found on a real Mac (#366): `user/<uid>` only takes a plist limited to the Background session type, `gui/<uid>`
+ * only one that is not, and for a moment after a bootout `print` still reports the job and a bootstrap answers 5.
  */
 class LaunchdEmulator {
   loaded: string | null = null;
@@ -24,30 +26,41 @@ class LaunchdEmulator {
   running = false;
   /** The next bootstrap loads the job but its daemon never opens the socket. */
   failNextStart = false;
+  /** How many `print` / `bootstrap` answers still see a job that was just booted out. */
+  lingerAfterBootout = 0;
   readonly calls: string[] = [];
+  private lingering = 0;
   private server: net.Server | undefined;
 
-  constructor(private readonly socketPath: string, private readonly guiExists: boolean) {}
-
-  private domainExists(domain: string): boolean {
-    return domain === 'user/501' || (domain === 'gui/501' && this.guiExists);
-  }
+  constructor(private readonly socketPath: string) {}
 
   readonly run: CommandRunner = async (_file, args) => {
     const [sub, ...rest] = args;
     this.calls.push(sub);
     if (sub === 'print') {
       const [domain, label] = rest[0].split(/\/(?=com\.)/);
-      if (!this.domainExists(domain)) return { code: 125, stdout: '', stderr: 'Domain does not support specified action' };
       if (label === undefined) return { code: 0, stdout: '', stderr: '' };
-      if (this.loaded === null || this.loadedDomain !== domain.split('/')[0]) return { code: 113, stdout: '', stderr: '' };
+      if (this.loaded === null || this.loadedDomain !== domain.split('/')[0]) {
+        if (this.lingering > 0) {
+          this.lingering--;
+          return { code: 0, stdout: '', stderr: '' };
+        }
+        return { code: 113, stdout: '', stderr: '' };
+      }
       return { code: 0, stdout: `\tstate = ${this.running ? 'running' : 'waiting'}\n`, stderr: '' };
     }
     if (sub === 'bootstrap') {
-      if (!this.domainExists(rest[0])) return { code: 125, stdout: '', stderr: 'Bootstrap failed: 125: Domain does not support specified action' };
+      const domain = rest[0].split('/')[0] as 'gui' | 'user';
+      const plist = fs.readFileSync(rest[1], 'utf-8');
+      const limited = plist.includes('LimitLoadToSessionType');
+      if ((domain === 'user') !== limited) return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' };
+      if (this.lingering > 0) {
+        this.lingering--;
+        return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' };
+      }
       if (this.loaded !== null) return { code: 5, stdout: '', stderr: 'already loaded' };
-      this.loaded = fs.readFileSync(rest[1], 'utf-8');
-      this.loadedDomain = rest[0].split('/')[0] as 'gui' | 'user';
+      this.loaded = plist;
+      this.loadedDomain = domain;
       await this.startDaemon();
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -59,6 +72,7 @@ class LaunchdEmulator {
     if (sub === 'bootout') {
       this.loaded = null;
       this.loadedDomain = null;
+      this.lingering = this.lingerAfterBootout;
       await this.stopDaemon();
       return { code: 0, stdout: '', stderr: '' };
     }
@@ -85,7 +99,10 @@ class LaunchdEmulator {
   }
 }
 
-describe.each([['a logged-in screen session (gui/501)', true, 'gui', 'gui'], ['no screen session (user/501)', false, 'user', 'user'], ['a job running in user/501 while gui/501 exists (a later login)', true, 'gui', 'user']] as const)('MisaoServiceService with launchd, which keeps the definition of a loaded job: %s', (_name, guiExists, domain, jobDomain) => {
+describe.each([
+  ['an older install in gui/501 (v0.11.x and earlier)', 'gui'],
+  ['a job already in user/501', 'user'],
+] as const)('MisaoServiceService with launchd, which keeps the definition of a loaded job: %s', (_name, jobDomain) => {
   let prefix: string;
   let paths: MisaoPaths;
   let emulator: LaunchdEmulator;
@@ -108,9 +125,12 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui', 'gui'], ['n
     fs.writeFileSync(path.join(paths.root, '0.2.0', 'misao.mjs'), '// node build\n');
     fs.symlinkSync('0.2.0', paths.current);
     fs.mkdirSync(path.dirname(plistPath), { recursive: true });
-    fs.writeFileSync(plistPath, LEGACY_PLIST);
-    emulator.loaded = LEGACY_PLIST;
+    // A job in user/ was loaded from a limited plist (launchd takes nothing else there); an older install's gui job from the plain one.
+    const loadedPlist = jobDomain === 'user' ? limitToBackgroundSession(LEGACY_PLIST) : LEGACY_PLIST;
+    fs.writeFileSync(plistPath, loadedPlist);
+    emulator.loaded = loadedPlist;
     emulator.loadedDomain = jobDomain;
+    emulator.lingerAfterBootout = 3;
     if (running) await emulator.run('launchctl', ['kickstart', 'x']);
   }
 
@@ -119,8 +139,8 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui', 'gui'], ['n
     paths = resolveMisaoPaths(prefix);
     fs.mkdirSync(path.join(prefix, 'hub'), { recursive: true });
     writeHubBundle(path.join(prefix, 'hub', 'current'), '0.3.0', '#!/bin/sh\n# misao');
-    emulator = new LaunchdEmulator(paths.socket, guiExists);
-    controller = new LaunchdServiceManager(emulator.run, MISAO_SERVICE, prefix, 501);
+    emulator = new LaunchdEmulator(paths.socket);
+    controller = new LaunchdServiceManager(emulator.run, MISAO_SERVICE, prefix, 501, TIMING);
     plistPath = path.join(prefix, 'Library', 'LaunchAgents', 'com.azito.misao.plist');
     fs.mkdirSync(paths.root, { recursive: true, mode: 0o700 });
   });
@@ -138,27 +158,28 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui', 'gui'], ['n
     expect(emulator.loaded).toContain(`${prefix}/misao/current/misao`);
     expect(emulator.loaded).not.toContain('misao.mjs');
     expect(emulator.running).toBe(true);
-    expect(emulator.loadedDomain).toBe(jobDomain);
+    expect(emulator.loadedDomain).toBe('user');
   });
 
-  it('a fresh install loads the job into the domain that exists and reports it in the status', async () => {
+  it('a fresh install loads the job into user/<uid> and reports it in the status', async () => {
     const status = await newService().install();
 
-    expect(emulator.loadedDomain).toBe(domain);
-    expect(status).toMatchObject({ serviceManager: 'launchd', serviceState: 'active', serviceDomain: domain });
+    expect(emulator.loadedDomain).toBe('user');
+    expect(status).toMatchObject({ serviceManager: 'launchd', serviceState: 'active', serviceDomain: 'user' });
   });
 
-  it('a failed update puts the previous definition back into the job (the new one is booted out before the old plist is loaded again)', async () => {
+  it('a failed update puts the previous definition back into the job, in user/<uid> (the new one is booted out before the old plist is loaded again)', async () => {
     await installNodeEra(true);
     emulator.failNextStart = true;
 
     await expect(newService().update()).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('was restored and started') });
 
-    expect(emulator.loaded).toBe(LEGACY_PLIST);
-    expect(fs.readFileSync(plistPath, 'utf-8')).toBe(LEGACY_PLIST);
+    // The old definition runs again; an older install's plist only gets the session limit added, which user/<uid> needs.
+    expect(emulator.loaded).toBe(limitToBackgroundSession(LEGACY_PLIST));
+    expect(fs.readFileSync(plistPath, 'utf-8')).toBe(limitToBackgroundSession(LEGACY_PLIST));
     expect(fs.readlinkSync(paths.current)).toBe('0.2.0');
     expect(emulator.running).toBe(true);
-    expect(emulator.loadedDomain).toBe(jobDomain);
+    expect(emulator.loadedDomain).toBe('user');
   });
 
   it('a successful update loads the new definition', async () => {
@@ -169,7 +190,7 @@ describe.each([['a logged-in screen session (gui/501)', true, 'gui', 'gui'], ['n
     expect(emulator.loaded).toContain(`${prefix}/misao/current/misao`);
     expect(emulator.loaded).not.toContain('misao.mjs');
     expect(fs.readlinkSync(paths.current)).toBe('0.3.0');
-    expect(emulator.loadedDomain).toBe(jobDomain);
+    expect(emulator.loadedDomain).toBe('user');
   });
 
   it('an install does not boot out a running daemon of the same version (it only rewrites the file)', async () => {

@@ -158,7 +158,7 @@ packages/
         supervisors/              # [base] SupervisorRegistry/Launch/Path — tui-supervisor process management
         system/                   # [upper] SystemUpdateService, DeployModeDetector, UpdateChannelResolver,
                                   #         updateScript (out-of-process self-update),
-                                  #         serviceManager (ServiceManager over systemd / launchd for the hub and misao; launchd picks gui/<uid> or user/<uid>)
+                                  #         serviceManager (ServiceManager over systemd / launchd for the hub and misao; launchd always uses user/<uid> with a Background-limited plist, moving older gui/<uid> installs)
         health/                   # [upper] GET /api/health (hub-wide flags: scopedAuthEnabled)
       shared/
         fs/                       # IFileOps, LocalFileOps (Node fs on the host), fileOpsWire (agent /api/fileops request/response)

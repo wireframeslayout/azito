@@ -18,6 +18,10 @@
     <string>--data</string>
     <string>__AZITO_PREFIX__/misao</string>
   </array>
+  <!-- user/<uid> (ログインの有無に関わらず動くドメイン) に入れるために必要。無いと bootstrap が exit 5 で失敗する。
+       これがあると、画面へのログイン時に macOS が gui へ自動で読み込むこともない。 -->
+  <key>LimitLoadToSessionType</key>
+  <string>Background</string>
   <key>RunAtLoad</key>
   <true/>
   <!-- 異常終了 (クラッシュ・非ゼロ終了) のときだけ再起動する。systemd の Restart=on-failure と同じ。

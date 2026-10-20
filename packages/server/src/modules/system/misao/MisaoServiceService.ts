@@ -8,7 +8,7 @@ import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { bundleFilesFor, sha256File, type MisaoBundle, type MisaoTargetFiles } from './MisaoBundle';
 import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
-import { DuplicateLoadError, type LaunchdDomain, type ServiceManager } from '../serviceManager';
+import { DuplicateLoadError, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 
@@ -178,10 +178,10 @@ export class MisaoServiceService {
   }
 
   /** Writes MISAO_SOCKET into the hub's `.env`, and starts the service when it is not running (never restarts a running one). */
-  private async pointHubAndStart(controller: ServiceManager, domain?: LaunchdDomain): Promise<void> {
+  private async pointHubAndStart(controller: ServiceManager): Promise<void> {
     upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket, this.deps.secretFileGuard);
     if ((await controller.state()) !== 'active') {
-      await controller.start(domain);
+      await controller.start();
       await this.waitUntilListening();
     }
   }
@@ -202,12 +202,10 @@ export class MisaoServiceService {
     const previousDefinition = controller.readDefinition();
     const envFile = this.paths.hubEnvFile;
     const previousEnv = fs.existsSync(envFile) ? fs.readFileSync(envFile) : undefined;
-    // launchd: the job goes back into the domain it was in, whatever domains exist by the time it is started again.
-    const domain = await controller.loadedDomain();
     try {
       await controller.stop();
       await this.registerBundled(bundle, controller, installed);
-      await this.pointHubAndStart(controller, domain);
+      await this.pointHubAndStart(controller);
     } catch (err) {
       const failed: string[] = [];
       const attempt = async (what: string, step: () => void | Promise<void>): Promise<void> => {
@@ -271,16 +269,14 @@ export class MisaoServiceService {
       throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     }
     this.extractVersion(bundle.version, bundleFilesFor(bundle, process.platform, process.arch));
-    // launchd: the job is restarted, and a failed update restored, in the domain it was in (not whichever exists later).
-    const domain = await controller.loadedDomain();
     await controller.stop();
     try {
       this.switchCurrent(bundle.version);
       await controller.install(this.renderUnit(bundle, controller));
-      await controller.start(domain);
+      await controller.start();
       await this.waitUntilListening();
     } catch (err) {
-      return this.recoverFromFailedUpdate(err, previous, previousDefinition, bundle.version, controller, domain);
+      return this.recoverFromFailedUpdate(err, previous, previousDefinition, bundle.version, controller);
     }
     return this.status();
   }
@@ -291,7 +287,7 @@ export class MisaoServiceService {
    * only slow to open its socket, it is left alone (restoring would kill a daemon that is about to be ready). If the restore
    * fails too, both errors are reported with the manual steps.
    */
-  private async recoverFromFailedUpdate(cause: unknown, previous: string, previousDefinition: string, bundledVersion: string, controller: ServiceManager, domain: LaunchdDomain | undefined): Promise<never> {
+  private async recoverFromFailedUpdate(cause: unknown, previous: string, previousDefinition: string, bundledVersion: string, controller: ServiceManager): Promise<never> {
     const causeText = cause instanceof Error ? cause.message : String(cause);
     const manual = `To restore the previous version by hand: ln -sfn ${previous} ${this.paths.current} && azito misao start`;
     if (cause instanceof MisaoServiceError && cause.code === 'daemon_not_ready' && (await controller.state()) === 'active') {
@@ -302,7 +298,7 @@ export class MisaoServiceService {
       await controller.stop();
       this.switchCurrent(previous);
       await controller.install(previousDefinition);
-      await controller.start(domain);
+      await controller.start();
       await this.waitUntilListening();
     } catch (restoreErr) {
       const restoreText = restoreErr instanceof Error ? restoreErr.message : String(restoreErr);

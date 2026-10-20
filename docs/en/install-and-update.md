@@ -199,35 +199,34 @@ journalctl --user -u azito -f
 cp ~/.azito/hub/current/deploy/com.azito.hub.plist ~/Library/LaunchAgents/
 sed -i '' "s|__AZITO_PREFIX__|$HOME/.azito|g" ~/Library/LaunchAgents/com.azito.hub.plist
 
-azito service start    # bootstraps into gui/<uid>, or user/<uid> when nobody is logged in on the screen
+azito service start    # bootstraps into user/<uid>
 ```
 
-### macOS: installing over SSH while nobody is logged in on the screen
+### macOS: the services run in `user/<uid>`, logged in or not
 
-launchd keeps two per-user domains. `gui/<uid>` exists only while that user is logged in on the Mac's screen; `user/<uid>`
-exists as soon as the user has any session (an SSH login is enough). A LaunchAgent in `~/Library/LaunchAgents` is loaded by
-macOS itself into `gui/<uid>` when the user logs in on the screen.
+launchd keeps two per-user domains: `gui/<uid>` (only while that user is logged in on the Mac's screen) and `user/<uid>`
+(as soon as the user has any session, an SSH login included). AZITO's hub (`com.azito.hub`) and misao (`com.azito.misao`)
+always run in **`user/<uid>`**, as Background-session LaunchAgents (`LimitLoadToSessionType = Background` in the plist, which
+`user/<uid>` requires and `gui/<uid>` refuses).
 
-- **Installing over SSH on a Mac with nobody logged in on the screen**: `launchctl print gui/<uid>` fails (exit 125), so the
-  hub (`com.azito.hub`) and misao (`com.azito.misao`) are bootstrapped into `user/<uid>` and start right away. Where
-  `gui/<uid>` exists they go into `gui/<uid>` as before.
+- **Installing over SSH on a Mac nobody is logged in on** works: both services are bootstrapped into `user/<uid>` and start right away.
+- **Logging in on the screen later does not start a second copy.** The Background limit keeps macOS from loading the plist into
+  `gui/<uid>`; the processes and their PIDs stay as they were. **Logging out does not stop them either.**
 - **Which domain a service runs in** is shown by `azito service status` (hub), `azito misao status` and
-  `GET /api/system/misao` (`serviceDomain`: `gui` or `user`).
-- **No second copy**: a service that is already loaded into either domain stays there. `azito service start|stop|restart`,
-  `azito misao start|update` and the in-app update all use the domain it is loaded into (`kickstart`, `bootout` and `print` too),
-  and none of them loads it into the other one. `azito service stop` and `reload` boot it out of *every* domain it is
-  loaded into. `install.sh` boots out a hub job that is already loaded and loads it again, so the plist it just wrote is the one that runs.
+  `GET /api/system/misao` (`serviceDomain`). After this version it is `user`.
+- **Installs from before this version** (v0.11.x and earlier) were loaded into `gui/<uid>` from a plist without that limit. Whenever
+  a service is started, restarted or reloaded (`azito service start|restart|reload`, the in-app hub update, `azito misao start|update`,
+  `install.sh`) AZITO finds it in `gui/<uid>`, boots it out, adds the limit to the plist and bootstraps it into `user/<uid>`; if that
+  fails the original plist is loaded back into `gui/<uid>`. A running misao daemon is not moved by `azito misao install`
+  (moving it ends its panes): `azito misao update` does it, when you choose to.
+- **After a bootout** AZITO waits until launchd has forgotten the job before it bootstraps again, and retries a few times when
+  launchd answers exit 5, so `azito service reload` and an update do not leave the service stopped.
 - **A failed load is an error**: `install.sh` prints `launchctl`'s message and exits non-zero; the files stay installed, and
   `azito service start` retries after the cause is fixed.
-- **After someone logs in on the screen later**: check that only one copy is loaded, one domain per service:
-
-  ```bash
-  launchctl print gui/$UID/com.azito.hub  >/dev/null 2>&1 && echo "hub: gui"
-  launchctl print user/$UID/com.azito.hub >/dev/null 2>&1 && echo "hub: user"
-  ```
-
-  If both print, status shows `gui + user` with a warning, and `start` / `restart` / `reload` / `azito misao update` refuse to pick one (`duplicate_load` from the API). Run `azito service stop` (boots it out of both) and then `azito service start`. Check misao the same way with
-  `com.azito.misao`; booting a misao copy out closes the panes it hosts, so do that deliberately.
+- **Loaded into both domains** (it should not happen; the migration is the only moment both could hold a copy): status shows
+  `gui + user` with a warning, and `start` / `restart` / `reload` / `azito misao update` / the hub update refuse to pick one
+  (`duplicate_load` from the API). Run `azito service stop` (boots it out of both) and then `azito service start`. For misao, boot
+  the copies out with `launchctl bootout gui/$UID/com.azito.misao` and `launchctl bootout user/$UID/com.azito.misao` (this ends its panes), then `azito misao start`.
 
 ### `azito service` on an existing install
 
@@ -278,7 +277,7 @@ azito misao start     # start an installed service that is stopped
 systemctl --user status azito-misao       # Linux
 journalctl --user -u azito-misao -f
 azito misao status                        # macOS (the status line shows the launchd domain)
-launchctl print gui/$UID/com.azito.misao  # macOS (user/$UID when the domain shown is user)
+launchctl print user/$UID/com.azito.misao  # macOS
 ```
 
 - **Fresh install**: `install.sh` sets it up, starts it and writes `MISAO_SOCKET` to `.env` (with `--no-service` it installs nothing; run `azito misao install` later).

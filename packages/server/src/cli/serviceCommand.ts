@@ -33,7 +33,7 @@ async function printStatus(manager: ServiceManager): Promise<void> {
 
 /**
  * `azito service ...`: operate the hub's own service. The CLI wrapper install.sh puts in ~/.local/bin calls this on macOS,
- * so the launchd domain (gui/user, #366) is chosen in one place, the same one the in-app update and `azito misao` use.
+ * so the launchd handling (user/<uid>, moving older gui/<uid> installs, #366) is in one place, the same one the in-app update and `azito misao` use.
  */
 export async function serviceCommand(argv: string[], host: Pick<HostEnv, 'platform' | 'homeDir' | 'uid'>): Promise<void> {
   const [command, ...rest] = argv;

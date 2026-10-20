@@ -44,7 +44,7 @@ describe('azito service', () => {
   const plistPath = (): string => path.join(home, 'Library', 'LaunchAgents', 'com.azito.hub.plist');
   const installPlist = (): void => {
     fs.mkdirSync(path.dirname(plistPath()), { recursive: true });
-    fs.writeFileSync(plistPath(), '<plist/>');
+    fs.writeFileSync(plistPath(), '<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.azito.hub</string>\n</dict>\n</plist>\n');
   };
 
   it('prints the usage for an unknown command', async () => {
@@ -70,17 +70,17 @@ describe('azito service', () => {
     expect(out).toEqual(['service:   launchd (active)', 'domain:    user']);
   });
 
-  it('reload bootstraps the job into the domain that exists, and fails with the launchctl error', async () => {
+  it('reload bootstraps the job into user/<uid>, and fails with the launchctl error', async () => {
     installPlist();
     launchctl.results[`launchctl print gui/${uid}/com.azito.hub`] = 113;
     launchctl.results[`launchctl print user/${uid}/com.azito.hub`] = 113;
     await serviceCommand(['reload'], { platform: 'darwin', homeDir: home, uid });
-    expect(launchctl.calls.filter((c) => /bootstrap|bootout/.test(c))).toEqual([`launchctl bootstrap gui/${uid} ${plistPath()}`]);
+    expect(launchctl.calls.filter((c) => /bootstrap|bootout/.test(c))).toEqual([`launchctl bootstrap user/${uid} ${plistPath()}`]);
     expect(process.exitCode).toBeUndefined();
 
-    launchctl.results[`launchctl bootstrap gui/${uid} ${plistPath()}`] = 5;
+    launchctl.results[`launchctl bootstrap user/${uid} ${plistPath()}`] = 37;
     await serviceCommand(['reload'], { platform: 'darwin', homeDir: home, uid });
-    expect(err.join('\n')).toMatch(/launchctl bootstrap gui\/-?\d+ failed \(exit 5\)/);
+    expect(err.join('\n')).toMatch(/launchctl bootstrap user\/-?\d+ failed \(exit 37\)/);
     expect(process.exitCode).toBe(1);
   });
 

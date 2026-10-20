@@ -201,31 +201,31 @@ cp ~/.azito/hub/current/deploy/com.azito.hub.plist ~/Library/LaunchAgents/
 # __AZITO_PREFIX__ を実際のパスに置換
 sed -i '' "s|__AZITO_PREFIX__|$HOME/.azito|g" ~/Library/LaunchAgents/com.azito.hub.plist
 
-azito service start    # gui/<uid>、画面に誰もログインしていなければ user/<uid> に bootstrap する
+azito service start    # user/<uid> に bootstrap する
 ```
 
-### macOS: 画面に誰もログインしていない Mac に SSH からインストールするとき
+### macOS: ログインの有無にかかわらず `user/<uid>` で動く
 
-launchd にはユーザーごとのドメインが 2 つあります。`gui/<uid>` はそのユーザーが Mac の画面にログインしている間だけ存在し、
-`user/<uid>` はそのユーザーのセッションが（SSH でも）あれば存在します。`~/Library/LaunchAgents` の LaunchAgent は、画面へのログイン時に
-macOS 自身が `gui/<uid>` に読み込みます。
+launchd にはユーザーごとのドメインが 2 つあります。`gui/<uid>`（そのユーザーが Mac の画面にログインしている間だけ）と、
+`user/<uid>`（SSH を含め、そのユーザーのセッションがあれば）です。AZITO のハブ（`com.azito.hub`）と misao（`com.azito.misao`）は、
+常に **`user/<uid>`** の Background セッション用 LaunchAgent として動きます（plist に `LimitLoadToSessionType = Background`。
+`user/<uid>` はこれを必要とし、`gui/<uid>` は受け付けません）。
 
-- **画面に誰もログインしていない Mac に SSH でインストールしたとき**: `launchctl print gui/<uid>` が失敗する（終了コード 125）ので、
-  ハブ（`com.azito.hub`）と misao（`com.azito.misao`）は `user/<uid>` に bootstrap され、すぐ起動します。`gui/<uid>` があるときは従来どおり `gui/<uid>` に入ります
-- **どちらのドメインで動いているか**は `azito service status`（ハブ）、`azito misao status`、`GET /api/system/misao`（`serviceDomain`: `gui` または `user`）に出ます
-- **二重に読み込まない**: すでにどちらかのドメインに読み込まれているサービスは、そのドメインのまま扱います。`azito service start|stop|restart`、
-  `azito misao start|update`、画面からの更新はどれも、読み込まれているドメインを使い（`kickstart`・`bootout`・`print` も同じ）、もう一方には読み込みません。
-  `azito service stop` と `reload` は、読み込まれているすべてのドメインから外します。`install.sh` は、読み込み済みのハブを一度 bootout してから読み込み直すので、書いたばかりの plist が使われます
+- **画面に誰もログインしていない Mac に SSH でインストール**しても、2 つのサービスは `user/<uid>` に bootstrap されてすぐ起動します
+- **後から画面にログインしても、二重には起動しません。** Background 限定のおかげで macOS が plist を `gui/<uid>` に読み込まず、
+  プロセスも PID もそのままです。**ログアウトしても止まりません。**
+- **どちらのドメインで動いているか**は `azito service status`（ハブ）、`azito misao status`、`GET /api/system/misao`（`serviceDomain`）に出ます。この版以降は `user` です
+- **この版より前のインストール**（v0.11.x 以前）は、限定なしの plist で `gui/<uid>` に読み込まれていました。サービスを起動・再起動・
+  reload するとき（`azito service start|restart|reload`、画面からのハブ更新、`azito misao start|update`、`install.sh`）、AZITO は
+  `gui/<uid>` にあるのを見つけて bootout し、plist に限定を足して `user/<uid>` に bootstrap し直します。失敗したときは元の plist を
+  `gui/<uid>` に戻します。動いている misao は `azito misao install` では移しません（移すとペインが終了するため）。`azito misao update` を
+  実行したときに移ります
+- **bootout の後**は、launchd がジョブを忘れるまで待ってから bootstrap し、exit 5 のときは数回やり直します。`azito service reload` や更新でサービスが止まったまま残ることはありません
 - **読み込みの失敗はエラー**: `install.sh` は `launchctl` のメッセージを表示して非ゼロで終わります。ファイルは入った状態なので、原因を直してから `azito service start` で再試行できます
-- **後から画面にログインしたとき**: 1 つのサービスが 1 つのドメインにだけ読み込まれていることを確かめます
-
-  ```bash
-  launchctl print gui/$UID/com.azito.hub  >/dev/null 2>&1 && echo "hub: gui"
-  launchctl print user/$UID/com.azito.hub >/dev/null 2>&1 && echo "hub: user"
-  ```
-
-  両方に出たら、status は警告付きで `gui + user` を示し、`start` / `restart` / `reload` / `azito misao update` はどちらかを推測せずに拒否します（API では `duplicate_load`）。`azito service stop`（両方から外す）→ `azito service start` を実行します。misao も `com.azito.misao` で同様に確かめます
-  （misao のコピーを外すと、そのコピーが持つペインは終了します。意図して行ってください）
+- **両方のドメインに読み込まれている場合**（起きないはずです。移行の途中だけ両方に載りうる）: status が警告付きで `gui + user` を示し、
+  `start` / `restart` / `reload` / `azito misao update` / ハブの更新はどちらかを推測せずに拒否します（API では `duplicate_load`）。
+  `azito service stop`（両方から外す）→ `azito service start` を実行します。misao は `launchctl bootout gui/$UID/com.azito.misao` と
+  `launchctl bootout user/$UID/com.azito.misao` で外し（ペインは終了します）、`azito misao start` で起動します
 
 ### 既存のインストールでの `azito service`
 
@@ -274,7 +274,7 @@ azito misao start     # 設置済みで止まっているときに起動する
 systemctl --user status azito-misao       # Linux
 journalctl --user -u azito-misao -f
 azito misao status                        # macOS（状態に launchd のドメインが出る）
-launchctl print gui/$UID/com.azito.misao  # macOS（ドメインが user のときは user/$UID）
+launchctl print user/$UID/com.azito.misao  # macOS
 ```
 
 - **新規インストール**: `install.sh` が設置・起動し、`.env` に `MISAO_SOCKET` を書きます（`--no-service` のときは設置せず、後で `azito misao install`）。

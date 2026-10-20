@@ -9,9 +9,11 @@ import {
   SystemdServiceManager,
   createServiceManager,
   isServiceManagerKind,
+  limitToBackgroundSession,
   serviceManagerOfKind,
   type CommandResult,
   type CommandRunner,
+  type LaunchdTiming,
 } from '../serviceManager';
 import { MISAO_SERVICE } from '../misao/misaoPaths';
 
@@ -115,167 +117,286 @@ describe('SystemdServiceManager', () => {
   });
 });
 
+const LEGACY_PLIST = '<?xml version="1.0"?>\n<plist version="1.0">\n<dict>\n  <key>Label</key>\n  <string>com.azito.hub</string>\n</dict>\n</plist>\n';
+const TIMING: LaunchdTiming = { settleTimeoutMs: 200, pollIntervalMs: 1, bootstrapRetries: 2, retryDelayMs: 1 };
+
+type Domain = 'gui' | 'user';
+
+/**
+ * launchctl as far as it matters here, with what was found on a real Mac (#366): `bootstrap user/` only takes a plist
+ * limited to the Background session type, `bootstrap gui/` only takes one that is not, and for a moment after a
+ * `bootout` the job is still reported by `print` and a bootstrap answers 5.
+ */
+class FakeLaunchctl {
+  readonly loaded = new Set<Domain>();
+  readonly calls: string[] = [];
+  /** How many `print` / `bootstrap` answers still see a job that was just booted out. */
+  lingerAfterBootout = 0;
+  /** The next N bootstraps fail with exit 5 whatever the plist. */
+  failBootstraps = 0;
+  /** Every bootstrap into this domain fails with this exit code. */
+  alwaysFail: Partial<Record<Domain, number>> = {};
+  private lingering = new Map<Domain, number>();
+
+  constructor(private readonly plistPath: string) {}
+
+  readonly run: CommandRunner = async (_file, args) => {
+    this.calls.push(args.join(' '));
+    const [sub, ...rest] = args;
+    if (sub === 'print') {
+      const domain = rest[0].split('/')[0] as Domain;
+      if (this.loaded.has(domain)) return { code: 0, stdout: '\tstate = running\n', stderr: '' };
+      const left = this.lingering.get(domain) ?? 0;
+      if (left > 0 && rest[0].includes('com.azito')) {
+        this.lingering.set(domain, left - 1);
+        return { code: 0, stdout: '', stderr: '' };
+      }
+      return { code: 113, stdout: '', stderr: '' };
+    }
+    if (sub === 'bootstrap') {
+      const domain = rest[0].split('/')[0] as Domain;
+      const forced = this.alwaysFail[domain];
+      if (forced !== undefined) return { code: forced, stdout: '', stderr: `forced ${forced}` };
+      if (this.failBootstraps > 0) {
+        this.failBootstraps--;
+        return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' };
+      }
+      const limited = fs.readFileSync(rest[1], 'utf-8').includes('LimitLoadToSessionType');
+      if ((domain === 'user') !== limited) return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' };
+      const left = this.lingering.get(domain) ?? 0;
+      if (left > 0) {
+        this.lingering.set(domain, left - 1);
+        return { code: 5, stdout: '', stderr: 'Bootstrap failed: 5: Input/output error' };
+      }
+      this.loaded.add(domain);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (sub === 'bootout') {
+      const domain = rest[0].split('/')[0] as Domain;
+      this.loaded.delete(domain);
+      this.lingering.set(domain, this.lingerAfterBootout);
+      return { code: 0, stdout: '', stderr: '' };
+    }
+    if (sub === 'kickstart') {
+      const target = rest[rest.length - 1];
+      return this.loaded.has(target.split('/')[0] as Domain) ? { code: 0, stdout: '', stderr: '' } : { code: 113, stdout: '', stderr: '' };
+    }
+    return { code: 1, stdout: '', stderr: `unexpected ${sub}` };
+  };
+
+  count(prefix: string): number {
+    return this.calls.filter((c) => c.startsWith(prefix)).length;
+  }
+}
+
+describe('limitToBackgroundSession', () => {
+  it('adds the session limit to a plist from an older install, once', () => {
+    const limited = limitToBackgroundSession(LEGACY_PLIST);
+    expect(limited).toContain('<key>LimitLoadToSessionType</key>\n  <string>Background</string>\n</dict>');
+    expect(limitToBackgroundSession(limited)).toBe(limited);
+  });
+
+  it('refuses text that is not a plist instead of guessing', () => {
+    expect(() => limitToBackgroundSession('not a plist')).toThrow(/no top-level <dict>/);
+  });
+
+  it('is already in both shipped templates (install.sh and the misao installer write them)', () => {
+    for (const name of ['com.azito.hub.plist', 'com.azito.misao.plist']) {
+      const template = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', '..', '..', '..', 'deploy', name), 'utf-8');
+      expect(template).toMatch(/<key>LimitLoadToSessionType<\/key>\s*<string>Background<\/string>/);
+    }
+  });
+});
+
 describe('LaunchdServiceManager', () => {
   let home: string;
-  beforeEach(() => { home = fs.mkdtempSync(path.join(os.tmpdir(), 'azc-')); });
+  let plistPath: string;
+  let launchctl: FakeLaunchctl;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'azc-'));
+    plistPath = path.join(home, 'Library', 'LaunchAgents', 'com.azito.hub.plist');
+    fs.mkdirSync(path.dirname(plistPath), { recursive: true });
+    fs.writeFileSync(plistPath, LEGACY_PLIST);
+    launchctl = new FakeLaunchctl(plistPath);
+  });
   afterEach(() => fs.rmSync(home, { recursive: true, force: true }));
 
-  const plist = (label: string): string => path.join(home, 'Library', 'LaunchAgents', `${label}.plist`);
-  const gui = 'gui/501/com.azito.hub';
-  const user = 'user/501/com.azito.hub';
-  const printGui = `launchctl print ${gui}`;
-  const printUser = `launchctl print ${user}`;
-  /** What launchctl does on a Mac where nobody is logged in on the screen: the gui domain is not there. */
-  const noGui = {
-    'launchctl print gui/501': { code: 125, stderr: 'Domain does not support specified action' },
-    [printGui]: { code: 125, stderr: 'Domain does not support specified action' },
-  };
-  const notLoaded = { [printGui]: { code: 113 }, [printUser]: { code: 113 } };
-  /** Loaded into one domain only. */
-  const onlyIn = (domain: 'gui' | 'user'): Record<string, Partial<CommandResult>> => ({ [domain === 'gui' ? printUser : printGui]: { code: 113 } });
-  const manager = (run: CommandRunner): LaunchdServiceManager => new LaunchdServiceManager(run, HUB_SERVICE, home, 501);
+  const manager = (run: CommandRunner = launchctl.run): LaunchdServiceManager => new LaunchdServiceManager(run, HUB_SERVICE, home, 501, TIMING);
+  const onDisk = (): string => fs.readFileSync(plistPath, 'utf-8');
 
   it('writes the plist and starts nothing on install', async () => {
     const { run, calls } = recorder();
-    await new LaunchdServiceManager(run, MISAO_SERVICE, home, 501).install('<plist/>');
-    expect(fs.readFileSync(plist('com.azito.misao'), 'utf-8')).toBe('<plist/>');
+    await new LaunchdServiceManager(run, MISAO_SERVICE, home, 501, TIMING).install('<plist/>');
+    expect(fs.readFileSync(path.join(home, 'Library', 'LaunchAgents', 'com.azito.misao.plist'), 'utf-8')).toBe('<plist/>');
     expect(calls).toEqual([]);
   });
 
   describe('start', () => {
-    it('bootstraps an unloaded job into the gui domain when it exists', async () => {
-      const { run, calls } = recorder(notLoaded);
-      await manager(run).start();
-      expect(calls).toEqual([printGui, printUser, 'launchctl print gui/501', `launchctl bootstrap gui/501 ${plist('com.azito.hub')}`]);
+    it('bootstraps an unloaded job into user/<uid>, whether or not anyone is logged in, with the session limit added to an old plist', async () => {
+      await manager().start();
+      expect([...launchctl.loaded]).toEqual(['user']);
+      expect(onDisk()).toContain('LimitLoadToSessionType');
+      expect(launchctl.calls.filter((c) => c.startsWith('bootstrap'))).toEqual([`bootstrap user/501 ${plistPath}`]);
+      expect(launchctl.calls.some((c) => c === 'print gui/501')).toBe(false);
     });
 
-    it('bootstraps into the user domain when there is no gui domain (nobody is logged in on the screen)', async () => {
-      const { run, calls } = recorder({ ...noGui, [printUser]: { code: 113 } });
-      await manager(run).start();
-      expect(calls).toEqual([printGui, printUser, 'launchctl print gui/501', `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
+    it('only kickstarts a job that is loaded into user/<uid>', async () => {
+      launchctl.loaded.add('user');
+      await manager().start();
+      expect(launchctl.calls).toEqual(['print gui/501/com.azito.hub', 'print user/501/com.azito.hub', 'kickstart user/501/com.azito.hub']);
     });
 
-    it('also reads "could not find domain" (113) as no gui domain', async () => {
-      const { run, calls } = recorder({ ...notLoaded, 'launchctl print gui/501': { code: 113 } });
-      await manager(run).start();
-      expect(calls.at(-1)).toBe(`launchctl bootstrap user/501 ${plist('com.azito.hub')}`);
+    it('moves a job an older install loaded into gui/<uid>: boot it out, limit the plist, bootstrap into user/<uid>', async () => {
+      launchctl.loaded.add('gui');
+      await manager().start();
+      expect([...launchctl.loaded]).toEqual(['user']);
+      expect(onDisk()).toContain('LimitLoadToSessionType');
+      expect(launchctl.calls.filter((c) => /^(bootout|bootstrap)/.test(c))).toEqual(['bootout gui/501/com.azito.hub', `bootstrap user/501 ${plistPath}`]);
     });
 
-    it('bootstraps into the domain it is told to, even when the gui domain exists (putting a job back where it was)', async () => {
-      const { run, calls } = recorder(notLoaded);
-      await manager(run).start('user');
-      expect(calls).toEqual([printGui, printUser, `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
+    it('puts the original plist back into gui/<uid> when the move fails', async () => {
+      launchctl.loaded.add('gui');
+      launchctl.alwaysFail.user = 5;
+      await expect(manager().start()).rejects.toThrow(/Moving com\.azito\.hub from gui\/501 to user\/501 failed .*loaded back into gui\/501 as it was/);
+      expect(onDisk()).toBe(LEGACY_PLIST);
+      expect([...launchctl.loaded]).toEqual(['gui']);
     });
 
-    it('only kickstarts a job that is already loaded, in the domain it is loaded into, and never bootstraps a second copy', async () => {
-      const inGui = recorder(onlyIn('gui'));
-      await manager(inGui.run).start();
-      expect(inGui.calls).toEqual([printGui, printUser, `launchctl kickstart ${gui}`]);
-
-      // Loaded into user/ while gui/ exists (someone logged in later): it stays in user/.
-      const inUser = recorder(onlyIn('user'));
-      await manager(inUser.run).start('gui');
-      expect(inUser.calls).toEqual([printGui, printUser, `launchctl kickstart ${user}`]);
+    it('says so when the move and the way back both fail', async () => {
+      launchctl.loaded.add('gui');
+      launchctl.alwaysFail.user = 5;
+      launchctl.alwaysFail.gui = 5;
+      await expect(manager().start()).rejects.toThrow(/loading it back into gui\/501 failed too .*It is not running/);
+      expect(onDisk()).toBe(LEGACY_PLIST);
     });
 
     it('refuses a job loaded into both domains instead of picking one', async () => {
-      const { run, calls } = recorder();
-      await expect(manager(run).start()).rejects.toThrow(DuplicateLoadError);
-      await expect(manager(run).start()).rejects.toThrow(/both gui\/501 and user\/501.*azito service stop/);
-      expect(calls.some((c) => /kickstart|bootstrap|bootout/.test(c))).toBe(false);
+      launchctl.loaded.add('gui');
+      launchctl.loaded.add('user');
+      await expect(manager().start()).rejects.toThrow(DuplicateLoadError);
+      await expect(manager().start()).rejects.toThrow(/both gui\/501 and user\/501.*azito service stop/);
+      expect(launchctl.calls.some((c) => /^(kickstart|bootstrap|bootout)/.test(c))).toBe(false);
     });
 
-    it('fails with launchctl output when bootstrap fails, naming the domain', async () => {
-      const { run } = recorder({ ...noGui, [printUser]: { code: 113 }, [`launchctl bootstrap user/501 ${plist('com.azito.hub')}`]: { code: 125, stderr: 'Bootstrap failed: 125: Domain does not support specified action' } });
-      await expect(manager(run).start()).rejects.toThrow(/launchctl bootstrap user\/501 failed \(exit 125\): Bootstrap failed: 125/);
+    it('tries a bootstrap again when launchd answers 5, a few times at most', async () => {
+      launchctl.failBootstraps = 2;
+      await manager().start();
+      expect(launchctl.count('bootstrap')).toBe(3);
+      expect([...launchctl.loaded]).toEqual(['user']);
+
+      launchctl.loaded.clear();
+      launchctl.calls.length = 0;
+      launchctl.failBootstraps = 3;
+      await expect(manager().start()).rejects.toThrow(/launchctl bootstrap user\/501 failed \(exit 5\): Bootstrap failed: 5/);
+      expect(launchctl.count('bootstrap')).toBe(3);
     });
 
-    it('does not guess a domain when print gui/<uid> fails for another reason', async () => {
-      const { run, calls } = recorder({ ...notLoaded, 'launchctl print gui/501': { code: 1, stderr: 'boom' } });
-      await expect(manager(run).start()).rejects.toThrow(/cannot be told whether gui\/501 exists: boom/);
-      expect(calls.some((c) => c.includes('bootstrap'))).toBe(false);
+    it('does not try a bootstrap again for any other failure', async () => {
+      launchctl.alwaysFail.user = 37;
+      await expect(manager().start()).rejects.toThrow(/exit 37/);
+      expect(launchctl.count('bootstrap')).toBe(1);
     });
   });
 
   describe('stop', () => {
-    it('boots a loaded job out of the domain it is loaded into, and does nothing for an unloaded one', async () => {
-      const inUser = recorder(onlyIn('user'));
-      await manager(inUser.run).stop();
-      expect(inUser.calls).toEqual([printGui, printUser, `launchctl bootout ${user}`]);
-
-      const inGui = recorder(onlyIn('gui'));
-      await manager(inGui.run).stop();
-      expect(inGui.calls).toEqual([printGui, printUser, `launchctl bootout ${gui}`]);
-
-      const unloaded = recorder(notLoaded);
-      await manager(unloaded.run).stop();
-      expect(unloaded.calls).toEqual([printGui, printUser]);
+    it('boots a loaded job out and waits until launchd stops reporting it', async () => {
+      launchctl.loaded.add('user');
+      launchctl.lingerAfterBootout = 3;
+      await manager().stop();
+      const afterBootout = launchctl.calls.slice(launchctl.calls.indexOf('bootout user/501/com.azito.hub') + 1);
+      expect(afterBootout).toEqual(Array(4).fill('print user/501/com.azito.hub'));
     });
 
-    it('boots out both copies when the job ended up loaded into both domains', async () => {
-      const { run, calls } = recorder();
-      await manager(run).stop();
-      expect(calls.filter((c) => c.includes('bootout'))).toEqual([`launchctl bootout ${gui}`, `launchctl bootout ${user}`]);
+    it('does nothing for an unloaded job, and boots both copies out of a job loaded twice', async () => {
+      await manager().stop();
+      expect(launchctl.count('bootout')).toBe(0);
+
+      launchctl.loaded.add('gui');
+      launchctl.loaded.add('user');
+      await manager().stop();
+      expect(launchctl.calls.filter((c) => c.startsWith('bootout'))).toEqual(['bootout gui/501/com.azito.hub', 'bootout user/501/com.azito.hub']);
+    });
+
+    it('a stop followed by a start works although launchd is slow to forget the job (an update, or putting the old version back)', async () => {
+      launchctl.loaded.add('user');
+      launchctl.lingerAfterBootout = 6;
+      await manager().stop();
+      await manager().start();
+      expect([...launchctl.loaded]).toEqual(['user']);
     });
   });
 
   describe('restart', () => {
-    it('kickstarts -k a loaded job in its own domain', async () => {
-      const inGui = recorder(onlyIn('gui'));
-      await manager(inGui.run).restart();
-      expect(inGui.calls).toEqual([printGui, printUser, `launchctl kickstart -k ${gui}`]);
+    it('kickstarts -k a job loaded into user/<uid>, starts one that is not loaded, moves one from gui/<uid>, and refuses a double load', async () => {
+      launchctl.loaded.add('user');
+      await manager().restart();
+      expect(launchctl.calls.at(-1)).toBe('kickstart -k user/501/com.azito.hub');
 
-      const inUser = recorder(onlyIn('user'));
-      await manager(inUser.run).restart();
-      expect(inUser.calls.at(-1)).toBe(`launchctl kickstart -k ${user}`);
-    });
+      launchctl.loaded.clear();
+      await manager().restart();
+      expect([...launchctl.loaded]).toEqual(['user']);
 
-    it('starts a job that is not loaded, as systemctl restart starts a stopped unit', async () => {
-      const { run, calls } = recorder(notLoaded);
-      await manager(run).restart();
-      expect(calls.at(-1)).toBe(`launchctl bootstrap gui/501 ${plist('com.azito.hub')}`);
-    });
+      launchctl.loaded.clear();
+      launchctl.loaded.add('gui');
+      await manager().restart();
+      expect([...launchctl.loaded]).toEqual(['user']);
 
-    it('refuses a job loaded into both domains', async () => {
-      await expect(manager(recorder().run).restart()).rejects.toThrow(DuplicateLoadError);
+      launchctl.loaded.add('gui');
+      await expect(manager().restart()).rejects.toThrow(DuplicateLoadError);
     });
   });
 
   describe('reload', () => {
-    it('boots the job out and bootstraps it again into the domain it was in, even when the gui domain exists', async () => {
-      const { run, calls } = recorder(onlyIn('user'));
-      await manager(run).reload();
-      expect(calls).toEqual([printGui, printUser, `launchctl bootout ${user}`, `launchctl bootstrap user/501 ${plist('com.azito.hub')}`]);
+    it('boots the job out, waits, and bootstraps it again: the loaded job stays running even when launchd is slow (3 of 3 on a real Mac failed 2 times before)', async () => {
+      launchctl.loaded.add('user');
+      launchctl.lingerAfterBootout = 4;
+      fs.writeFileSync(plistPath, limitToBackgroundSession(LEGACY_PLIST));
+      await manager().reload();
+      expect([...launchctl.loaded]).toEqual(['user']);
+      expect(launchctl.count('bootstrap')).toBe(1);
     });
 
-    it('starts a job that is not loaded, and refuses one loaded into both domains', async () => {
-      const unloaded = recorder(notLoaded);
-      await manager(unloaded.run).reload();
-      expect(unloaded.calls.at(-1)).toBe(`launchctl bootstrap gui/501 ${plist('com.azito.hub')}`);
-      await expect(manager(recorder().run).reload()).rejects.toThrow(DuplicateLoadError);
+    it('starts a job that is not loaded, moves one from gui/<uid>, and refuses a double load', async () => {
+      await manager().reload();
+      expect([...launchctl.loaded]).toEqual(['user']);
+
+      launchctl.loaded.clear();
+      launchctl.loaded.add('gui');
+      await manager().reload();
+      expect([...launchctl.loaded]).toEqual(['user']);
+
+      launchctl.loaded.add('gui');
+      await expect(manager().reload()).rejects.toThrow(DuplicateLoadError);
     });
   });
 
   describe('inspect', () => {
     it('returns the state and the domains from one pair of launchctl print calls', async () => {
-      const running = recorder({ ...onlyIn('gui'), [printGui]: { stdout: `${gui} = {\n\tstate = running\n}` } });
-      expect(await manager(running.run).inspect()).toEqual({ state: 'active', domains: ['gui'] });
-      expect(running.calls).toEqual([printGui, printUser]);
+      launchctl.loaded.add('gui');
+      expect(await manager().inspect()).toEqual({ state: 'active', domains: ['gui'] });
+      expect(launchctl.calls).toEqual(['print gui/501/com.azito.hub', 'print user/501/com.azito.hub']);
 
-      const waiting = recorder({ ...onlyIn('user'), [printUser]: { stdout: '\tstate = waiting\n' } });
-      expect(await manager(waiting.run).inspect()).toEqual({ state: 'inactive', domains: ['user'] });
+      launchctl.loaded.clear();
+      expect(await manager().inspect()).toEqual({ state: 'inactive', domains: [] });
 
-      const absent = recorder(notLoaded);
-      expect(await manager(absent.run).inspect()).toEqual({ state: 'inactive', domains: [] });
-
-      const both = recorder({ [printGui]: { stdout: '\tstate = waiting\n' }, [printUser]: { stdout: '\tstate = running\n' } });
-      expect(await manager(both.run).inspect()).toEqual({ state: 'active', domains: ['gui', 'user'] });
+      launchctl.loaded.add('gui');
+      launchctl.loaded.add('user');
+      expect(await manager().inspect()).toEqual({ state: 'active', domains: ['gui', 'user'] });
     });
 
     it('loadedDomain gives the one domain, none, or refuses a double load', async () => {
-      expect(await manager(recorder(onlyIn('user')).run).loadedDomain()).toBe('user');
-      expect(await manager(recorder(notLoaded).run).loadedDomain()).toBeUndefined();
-      await expect(manager(recorder().run).loadedDomain()).rejects.toThrow(DuplicateLoadError);
+      launchctl.loaded.add('user');
+      expect(await manager().loadedDomain()).toBe('user');
+      launchctl.loaded.clear();
+      expect(await manager().loadedDomain()).toBeUndefined();
+      launchctl.loaded.add('gui');
+      launchctl.loaded.add('user');
+      await expect(manager().loadedDomain()).rejects.toThrow(DuplicateLoadError);
+    });
+
+    it('reads a loaded job that prints no state as unknown, not inactive', async () => {
+      const run: CommandRunner = async () => ({ code: 0, stdout: 'no state line', stderr: '' });
+      expect((await manager(run).inspect()).state).toBe('unknown');
     });
   });
 
