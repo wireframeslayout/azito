@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { powershellDialect } from '../../../shared/os/shellDialect';
+import { diagnostics } from './hostOsProbe';
 
 const BEGIN_MARKER = '<<AZITO_PREFLIGHT_BEGIN>>';
 const END_MARKER = '<<AZITO_PREFLIGHT_END>>';
@@ -25,19 +26,25 @@ $tailscaleIp = $null
 if ($tailscalePath) {
   try { $tailscaleIp = @(& $tailscalePath ip -4 2>$null)[0] } catch { $tailscaleIp = $null }
 }
-$osVersion = [System.Environment]::OSVersion.Version
+# The native architecture of the OS from the registry: an x64-emulated PowerShell on Windows on ARM still reports X64 through
+# RuntimeInformation.OSArchitecture and $env:PROCESSOR_ARCHITECTURE, but this machine-wide value is the OS's own. Unreadable = null (refused with a reason).
+$arch = $null
+try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
+$caption = $null
+try { $caption = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).Caption } catch { $caption = $null }
 $info = [ordered]@{
   nodePath = $nodePath
   nodeVersion = $nodeVersion
-  arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-  windowsMajor = $osVersion.Major
-  windowsBuild = $osVersion.Build
+  arch = $arch
+  windowsCaption = $caption
   tailscaleIp = $tailscaleIp
   home = $env:USERPROFILE
 }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
-Write-Output (ConvertTo-Json -InputObject $info -Compress)
+# ASCII only: a cmd.exe login shell returns the output in the OEM code page, which would garble a non-ASCII user name or path.
+$json = ConvertTo-Json -InputObject $info -Compress
+Write-Output ([regex]::Replace($json, '[^\\x00-\\x7F]', { param($m) '\\u{0:x4}' -f [int][char]$m.Value }))
 Write-Output '${END_MARKER}'
 `;
 
@@ -49,9 +56,8 @@ export function buildWindowsPreflightCommand(): string {
 const rawSchema = z.object({
   nodePath: z.string().nullable(),
   nodeVersion: z.string().nullable(),
-  arch: z.string(),
-  windowsMajor: z.number().int(),
-  windowsBuild: z.number().int(),
+  arch: z.string().nullable(),
+  windowsCaption: z.string().nullable(),
   tailscaleIp: z.string().nullable(),
   home: z.string().min(1),
 });
@@ -60,27 +66,23 @@ export interface WindowsPreflightInfo {
   nodePath: string | null;
   /** Without the leading `v`; null = node is not on the host. */
   nodeVersion: string | null;
-  /** Lower case as .NET names it: `x64`, `arm64`, `x86`. Only x64 is accepted. */
-  arch: string;
-  /** `Windows 10` / `Windows 11` (build 22000 and later). */
-  windowsVersion: string;
+  /** The OS's native architecture: `x64`, `arm64`, `x86`, or the registry's own word for another; null = unreadable. Only x64 is accepted. */
+  arch: string | null;
+  /** The OS name as Windows gives it (`Windows 11 Pro`, `Windows Server 2022 Datacenter`), for display only; null = unreadable. */
+  windowsVersion: string | null;
   tailscaleIp: string | null;
   home: string;
 }
 
-/** Windows 11 is NT 10.0 like Windows 10; the build number (22000 and later) tells them apart. */
-function windowsVersionName(major: number, build: number): string {
-  if (major === 10) return build >= 22000 ? 'Windows 11' : 'Windows 10';
-  return `Windows NT ${major}`;
-}
+const ARCH_BY_REGISTRY_VALUE: Readonly<Record<string, string>> = { AMD64: 'x64', ARM64: 'arm64', x86: 'x86' };
 
 /** Reads the script's output. Only the text between the markers counts (a banner or profile output may surround it). Throws when it is absent or malformed. */
-export function parseWindowsPreflight(output: string): WindowsPreflightInfo {
+export function parseWindowsPreflight(output: string, stderr = '', code: number | null = null): WindowsPreflightInfo {
   const text = output.replace(/\r/g, '');
   const begin = text.indexOf(BEGIN_MARKER);
   const end = begin < 0 ? -1 : text.indexOf(END_MARKER, begin + BEGIN_MARKER.length);
   if (begin < 0 || end < 0) {
-    throw new Error(`Could not read the Windows preflight (no result between the markers; got: ${output.trim().slice(0, 300) || 'nothing'}).`);
+    throw new Error(`Could not read the Windows preflight (no result between the markers; got: ${output.trim().slice(0, 300) || 'nothing'}${diagnostics(stderr, code)}).`);
   }
   let json: unknown;
   try {
@@ -94,8 +96,8 @@ export function parseWindowsPreflight(output: string): WindowsPreflightInfo {
   return {
     nodePath: v.nodePath,
     nodeVersion: v.nodeVersion ? v.nodeVersion.trim().replace(/^v/, '') : null,
-    arch: v.arch.toLowerCase(),
-    windowsVersion: windowsVersionName(v.windowsMajor, v.windowsBuild),
+    arch: v.arch === null ? null : (ARCH_BY_REGISTRY_VALUE[v.arch] ?? v.arch),
+    windowsVersion: v.windowsCaption ? v.windowsCaption.trim().replace(/^Microsoft\s+/, '') : null,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
     home: v.home,
   };
@@ -110,7 +112,9 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
   if (isNaN(major) || major < 24) {
     missing.push(`Node.js v24+ required (found: ${info.nodeVersion ? `v${info.nodeVersion}` : 'not installed'})`);
   }
-  if (info.arch !== 'x64') {
+  if (info.arch === null) {
+    missing.push('Could not read the OS architecture (HKLM PROCESSOR_ARCHITECTURE); x86_64 is required');
+  } else if (info.arch !== 'x64') {
     missing.push(`x86_64 architecture required (found: ${info.arch}; Windows on ARM is not supported)`);
   }
   if (!info.tailscaleIp || !IPV4.test(info.tailscaleIp)) {

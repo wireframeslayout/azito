@@ -11,9 +11,8 @@ function output(over: Record<string, unknown> = {}, wrap = (json: string) => `${
   return wrap(JSON.stringify({
     nodePath: 'C:\\Program Files\\nodejs\\node.exe',
     nodeVersion: 'v24.14.0',
-    arch: 'X64',
-    windowsMajor: 10,
-    windowsBuild: 26100,
+    arch: 'AMD64',
+    windowsCaption: 'Microsoft Windows 11 Pro',
     tailscaleIp: '100.64.0.9',
     home: 'C:\\Users\\dev',
     ...over,
@@ -39,15 +38,27 @@ describe('parseWindowsPreflight', () => {
       nodePath: 'C:\\Program Files\\nodejs\\node.exe',
       nodeVersion: '24.14.0',
       arch: 'x64',
-      windowsVersion: 'Windows 11',
+      windowsVersion: 'Windows 11 Pro',
       tailscaleIp: '100.64.0.9',
       home: 'C:\\Users\\dev',
     });
   });
 
-  it('tells Windows 10 from 11 by the build number', () => {
-    expect(parseWindowsPreflight(output({ windowsBuild: 19045 })).windowsVersion).toBe('Windows 10');
-    expect(parseWindowsPreflight(output({ windowsBuild: 22000 })).windowsVersion).toBe('Windows 11');
+  it('shows the OS name Windows gives, Server included (display only)', () => {
+    expect(parseWindowsPreflight(output({ windowsCaption: 'Microsoft Windows Server 2022 Datacenter' })).windowsVersion).toBe('Windows Server 2022 Datacenter');
+    expect(parseWindowsPreflight(output({ windowsCaption: null })).windowsVersion).toBeNull();
+  });
+
+  it('maps the registry\'s architecture words, and keeps an unknown one as it is', () => {
+    expect(parseWindowsPreflight(output({ arch: 'ARM64' })).arch).toBe('arm64');
+    expect(parseWindowsPreflight(output({ arch: 'x86' })).arch).toBe('x86');
+    expect(parseWindowsPreflight(output({ arch: 'IA64' })).arch).toBe('IA64');
+    expect(parseWindowsPreflight(output({ arch: null })).arch).toBeNull();
+  });
+
+  it('reads \\uXXXX-escaped non-ASCII text (the script prints ASCII only)', () => {
+    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8"}\n${END}\n`);
+    expect(parseWindowsPreflight(noisy).home).toBe('C:\\Users\u30c6\u30b9\u30c8');
   });
 
   it('is not broken by a banner or profile output before and after the markers (CRLF too)', () => {
@@ -63,6 +74,7 @@ describe('parseWindowsPreflight', () => {
 
   it('is an error when the markers are missing, the JSON is broken or a field is missing', () => {
     expect(() => parseWindowsPreflight('')).toThrow(/no result between the markers/);
+    expect(() => parseWindowsPreflight('', 'Get-CimInstance : boom\n', 1)).toThrow(/got: nothing; stderr: Get-CimInstance : boom; exit code 1/);
     expect(() => parseWindowsPreflight(`${BEGIN}\n{broken\n${END}`)).toThrow(/not JSON/);
     expect(() => parseWindowsPreflight(`${BEGIN}\n{"arch":"X64"}\n${END}`)).toThrow(/unexpected result/);
     expect(() => parseWindowsPreflight(`${END}\n${BEGIN}`)).toThrow(/no result between the markers/);
@@ -92,27 +104,49 @@ describe('checkWindowsPreflight', () => {
   it('lists every problem at once', () => {
     expect(checkWindowsPreflight(ok({ nodeVersion: null, arch: 'arm64', tailscaleIp: null }))).toHaveLength(3);
   });
+
+  it('refuses an unreadable architecture instead of assuming x64', () => {
+    expect(checkWindowsPreflight(ok({ arch: null }))).toEqual([expect.stringMatching(/^Could not read the OS architecture/)]);
+  });
 });
 
 /**
- * The Windows job runs the real script on the real Windows PowerShell 5.1, under both login shells. The runner has Node but no
- * Tailscale, so it also checks the "no Tailscale" branch.
+ * The Windows job runs the real script on the real Windows PowerShell 5.1 under both login shells, and on PowerShell 7 (pwsh)
+ * when the runner has it. The runner has Node but no Tailscale, so it also checks the "no Tailscale" branch.
  */
-describe.skipIf(!isWindows)('the preflight script on a real powershell.exe', () => {
+const hasPwsh = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' }).status === 0;
+
+type Login = 'cmd.exe' | 'powershell.exe' | 'pwsh';
+const LOGINS: Login[] = hasPwsh ? ['cmd.exe', 'powershell.exe', 'pwsh'] : ['cmd.exe', 'powershell.exe'];
+
+function run(line: string, login: Login, env: NodeJS.ProcessEnv = process.env) {
+  return login === 'cmd.exe'
+    ? spawnSync(line, { shell: true, encoding: 'utf8', timeout: 120_000, env })
+    : spawnSync(login, ['-NoProfile', '-NonInteractive', '-Command', line], { encoding: 'utf8', timeout: 120_000, env });
+}
+
+describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
   const line = buildWindowsPreflightCommand();
 
-  it.each(['cmd.exe', 'powershell.exe'] as const)('prints JSON that is read, with %s as the login shell', (login) => {
-    const out = login === 'cmd.exe'
-      ? spawnSync(line, { shell: true, encoding: 'utf8', timeout: 120_000 })
-      : spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', line], { encoding: 'utf8', timeout: 120_000 });
+  it.each(LOGINS)('prints JSON that is read, with %s as the login shell', (login) => {
+    const out = run(line, login);
     expect(out.status, out.stderr).toBe(0);
     const info = parseWindowsPreflight(out.stdout);
     expect(info.nodeVersion).toBe(process.versions.node);
     expect(info.nodePath).toMatch(/node(\.exe)?$/i);
     expect(info.arch).toBe('x64');
-    expect(info.windowsVersion).toMatch(/^Windows (10|11)$|^Windows NT/);
+    expect(info.windowsVersion).toMatch(/^Windows /);
     expect(info.tailscaleIp).toBeNull();
     expect(info.home.length).toBeGreaterThan(0);
     expect(checkWindowsPreflight(info)).toEqual([expect.stringMatching(/^Tailscale IP not found/)]);
+  }, 120_000);
+
+  it.each(LOGINS)('prints ASCII only and reads a non-ASCII home back unchanged, with %s as the login shell', (login) => {
+    const home = 'C:\\Users\u30c6\u30b9\u30c8 caf\u00e9';
+    const out = run(line, login, { ...process.env, USERPROFILE: home });
+    expect(out.status, out.stderr).toBe(0);
+    // eslint-disable-next-line no-control-regex
+    expect(out.stdout).toMatch(/^[\x00-\x7F]*$/);
+    expect(parseWindowsPreflight(out.stdout).home).toBe(home);
   }, 120_000);
 });

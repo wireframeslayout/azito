@@ -21,7 +21,7 @@ function makeSsh(opts: { tmux?: string; probe?: string } = {}) {
   const execIsolated = vi.fn(async (_host: string, command: string) => {
     commands.push(command);
     const answers: Record<string, string> = {
-      [HOST_OS_PROBE_COMMAND]: 'AZITO_OS:%OS%::OS\n',
+      [HOST_OS_PROBE_COMMAND]: 'AZITO_OS:%OS%:0\n',
       'node --version': 'v24.14.0\n',
       [HOST_PROBE_COMMAND]: opts.probe ?? 'linux x64\n',
       'tmux -V': opts.tmux ?? '',
@@ -223,12 +223,12 @@ describe('AgentInstaller', () => {
 
   describe('OS detection and the Windows preflight', () => {
     const windowsOutput = (over: Record<string, unknown> = {}) => `banner\n<<AZITO_PREFLIGHT_BEGIN>>\n${JSON.stringify({
-      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'X64', windowsMajor: 10, windowsBuild: 26100, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', ...over,
+      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', ...over,
     })}\n<<AZITO_PREFLIGHT_END>>\n`;
 
     function makeWindows(login: 'cmd' | 'powershell', over: Record<string, unknown> = {}) {
       const commands: string[] = [];
-      const osAnswer = login === 'cmd' ? 'AZITO_OS:Windows_NT:$env:OS\r\n' : 'AZITO_OS:%OS%:Windows_NT\r\n';
+      const osAnswer = login === 'cmd' ? 'AZITO_OS:Windows_NT:$?\r\n' : 'AZITO_OS:%OS%:True\r\n';
       const execIsolated = vi.fn(async (_host: string, command: string) => {
         commands.push(command);
         if (command === HOST_OS_PROBE_COMMAND) return { stdout: osAnswer, stderr: '', code: 0 };
@@ -254,18 +254,24 @@ describe('AgentInstaller', () => {
       expect(commands).toEqual([HOST_OS_PROBE_COMMAND, buildWindowsPreflightCommand()]);
       expect(result.success).toBe(false);
       expect(result.hostProfile).toBeUndefined();
-      expect(result.error).toMatch(/Windows 11 x64, Node 24\.14\.0, Tailscale 100\.64\.0\.9: unsupported_os: installing the agent on a Windows host is not supported yet/);
+      expect(result.error).toBe("unsupported_os: installing the agent on a Windows host is not supported yet (preflight passed: Windows 11 Pro x64, Node 24.14.0, Tailscale 100.64.0.9)");
       expect(steps.map((s) => `${s.step}:${s.status}`)).toEqual(['preflight:running', 'preflight:error']);
       expect(steps[1].message).toBe(result.error);
     });
 
     it('fails the preflight of a Windows host with every reason: old Node, arm64, no Tailscale', async () => {
-      const { installer } = makeWindows('cmd', { nodeVersion: 'v22.0.0', arch: 'Arm64', tailscaleIp: null });
+      const { installer } = makeWindows('cmd', { nodeVersion: 'v22.0.0', arch: 'ARM64', tailscaleIp: null });
       const result = await installer.install('user@host');
       expect(result.error).toContain('Node.js v24+ required (found: v22.0.0)');
       expect(result.error).toContain('x86_64 architecture required (found: arm64');
       expect(result.error).toContain('Tailscale IP not found');
       expect(result.error).not.toContain('unsupported_os');
+    });
+
+    it('refuses a Windows host whose native architecture cannot be read, with the reason', async () => {
+      const { installer } = makeWindows('powershell', { arch: null });
+      const result = await installer.install('user@host');
+      expect(result.error).toContain('Could not read the OS architecture');
     });
 
     it('fails with a reason, and sends nothing else, when the OS probe answers as none of sh, cmd or PowerShell', async () => {

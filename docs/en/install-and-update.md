@@ -359,11 +359,11 @@ Installing the agent on Windows is being built (#369). Today the install only ru
 | Prerequisite | Detail |
 |---|---|
 | OpenSSH Server | Enabled on the Windows host and reachable from the hub. The default shell may stay **cmd.exe** (PowerShell also works): the hub reads the OS first and then runs its checks as a PowerShell script that behaves the same under both |
-| Windows | Windows 10 / 11, x64 only (Windows on ARM is refused with the reason) |
+| Windows | x64 only, judged by the OS's native architecture (Windows on ARM is refused with the reason, even under x64 emulation). The edition (10 / 11 / Server) is only displayed, not checked |
 | Node.js v24+ | On the PATH of the SSH session |
 | Tailscale | Installed and signed in. `tailscale.exe` is also found at `%ProgramFiles%\Tailscale\tailscale.exe` when it is not on the PATH |
 
-The OS is detected from one `echo` whose output differs between sh, cmd.exe and PowerShell; an answer that matches none of them is reported as an error, never guessed.
+The OS is detected from one `echo AZITO_OS:%OS%:$?` (it reads no variable, so `set -u` does not matter) whose output differs between sh, cmd.exe and PowerShell; an answer that matches none of them is reported as an error, never guessed.
 
 ## Rollback
 
