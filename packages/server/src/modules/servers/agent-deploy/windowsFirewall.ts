@@ -30,7 +30,7 @@ export function firewallRuleCommand(port: number, nodePath: string, localAddress
  *   such as 3000-3010 is NOT read, so it does not count); the program is `nodePath` or Any; the remote address is Any or the
  *   tailnet range (a rule narrowed to LocalSubnet, one host... does not reach the hub, so it does not count); the local
  *   address is Any or `ip`. The profile is not looked at.
- * - BLOCK counts when it names the port (or Any port) for `nodePath` / any program, or names `nodePath` for TCP. A Block wins
+ * - BLOCK counts when it names the port, for `nodePath` or any program, or covers any port for `nodePath`. A Block for another port of the same program does not. A Block wins
  *   over an Allow in Windows Firewall, so its DisplayName is reported and nothing is added beside it.
  * When there is no covering Allow and no Block, and the session has an elevated token, the rule is added. A host that cannot answer
  * (the NetSecurity module is missing) reports `ruleFound: null`, not a guess.
@@ -53,7 +53,7 @@ if(!(A $af.Package) -or !(A $r.Owner) -or !(A $sf.Service)){continue}
 $lp=@($pf.LocalPort|%{"$_"});$tcp="$($pf.Protocol)" -in 'TCP','Any'
 $pn=$tcp -and $lp -contains "$port";$pa=$tcp -and $lp -contains 'Any'
 $gn="$($af.Program)" -ieq $node;$ga="$($af.Program)" -ieq 'Any'
-if("$($r.Action)" -eq 'Block'){if((($pn -or $pa) -and $gn) -or ($pn -and $ga) -or ($tcp -and $gn)){$blocked+=$r.DisplayName}}elseif("$($r.Action)" -eq 'Allow'){
+if("$($r.Action)" -eq 'Block'){if((($pn -or $pa) -and $gn) -or ($pn -and $ga)){$blocked+=$r.DisplayName}}elseif("$($r.Action)" -eq 'Allow'){
 $rm=@($ad.RemoteAddress|%{"$_"});$lo=@($ad.LocalAddress|%{"$_"})
 if(($pn -or $pa) -and ($gn -or $ga) -and ($rm -contains 'Any' -or @($rm|?{$ours -contains $_}).Count) -and ($lo -contains 'Any' -or $lo -contains $ip)){$ok=$true;$by+=$r.DisplayName}}}
 $found=$ok}catch{$found=$null;$problem='reading the rules failed: '+$_.Exception.Message}
