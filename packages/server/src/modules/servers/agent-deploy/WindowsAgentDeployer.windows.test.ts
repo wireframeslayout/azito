@@ -75,6 +75,16 @@ async function waitForHealth(port: number, version: string, timeoutMs: number): 
   throw new Error(`The agent did not answer /health within ${timeoutMs}ms (${last})`);
 }
 
+async function waitForNoHealth(port: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const answered = await fetch(`http://${BIND}:${port}/health`, { signal: AbortSignal.timeout(2000) }).then(() => true, () => false);
+    if (!answered) return;
+    if (Date.now() >= deadline) throw new Error(`The agent still answers /health ${timeoutMs}ms after the task was stopped`);
+    await new Promise((r) => setTimeout(r, 300));
+  }
+}
+
 function readLog(logFile: string): string {
   try { return fs.readFileSync(logFile, 'utf8').slice(-3000); } catch { return '(no log file)'; }
 }
@@ -188,7 +198,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
     await waitForHealth(OPTIONS.port, version, 60_000);
 
     await deployer.stop('ci', host);
-    await expect(fetch(`http://${BIND}:${OPTIONS.port}/health`, { signal: AbortSignal.timeout(3000) })).rejects.toThrow();
+    // The process is gone a moment after the Task Scheduler reports the task stopped.
+    await waitForNoHealth(OPTIONS.port, 15_000);
   }, 300_000);
 
   /** Waits until the task is running, or says there is no logon session (the only reason accepted for not running). */
