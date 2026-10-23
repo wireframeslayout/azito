@@ -36,6 +36,23 @@ describe('runHostOf', () => {
   });
 });
 
+describe('runCommandSpec rawOutput', () => {
+  const host = runHostOf({ platform: process.platform, systemRoot: process.env.SystemRoot });
+  const script = 'process.stdout.write(Buffer.from([0x83, 0x47, 0x41])); process.stderr.write(Buffer.from([0x81, 0x5b]))';
+
+  it('returns the output bytes untouched when asked, next to the UTF-8 text', async () => {
+    const result = await runCommandSpec(node(script), { ...host, rawOutput: true });
+    expect(result.stdoutBytes).toEqual(Buffer.from([0x83, 0x47, 0x41]));
+    expect(result.stderrBytes).toEqual(Buffer.from([0x81, 0x5b]));
+  });
+
+  it('adds nothing to the result otherwise', async () => {
+    const result = await runCommandSpec(node(script), host);
+    expect(result).not.toHaveProperty('stdoutBytes');
+    expect(result).not.toHaveProperty('stderrBytes');
+  });
+});
+
 describe('runCommandSpec', () => {
   it('returns stdout and stderr with exit code 0', async () => {
     const result = await run(node('process.stdout.write("out"); process.stderr.write("err")'));

@@ -12,6 +12,9 @@ import { HostProfileError } from '../../shared/os/hostProfile';
  */
 export type ServiceManagerKind = 'systemd' | 'launchd';
 
+/** Every manager a `ServiceManager` can be. Task Scheduler (Windows) has no unit/plist template and is built by `createWindowsServiceManager`. */
+export type AnyServiceManagerKind = ServiceManagerKind | 'taskscheduler';
+
 export function isServiceManagerKind(value: string): value is ServiceManagerKind {
   return value === 'systemd' || value === 'launchd';
 }
@@ -23,6 +26,8 @@ export type LaunchdDomain = 'gui' | 'user';
 export interface ServiceSpec {
   systemdUnit: string;
   launchdLabel: string;
+  /** The Task Scheduler task name (letters, digits, `.`, `_`, `-`). */
+  windowsTaskName: string;
   /** Unit / plist template file names inside the bundle's `deploy/`. */
   templates: { systemd: string; launchd: string };
   /** What to tell the user when launchd has the job loaded into both domains (two copies): how to get back to one. */
@@ -32,6 +37,7 @@ export interface ServiceSpec {
 export const HUB_SERVICE: ServiceSpec = {
   systemdUnit: 'azito',
   launchdLabel: 'com.azito.hub',
+  windowsTaskName: 'AzitoHub',
   templates: { systemd: 'azito-release.service', launchd: 'com.azito.hub.plist' },
   duplicateLoadFix: 'Run `azito service stop` (it boots both out), then `azito service start`.',
 };
@@ -70,9 +76,9 @@ export class DuplicateLoadError extends Error {
 
 /** A service of the hub's own host: its definition file, and start / stop / restart / state. `install` does not start. */
 export interface ServiceManager {
-  readonly kind: ServiceManagerKind;
-  /** Unit / plist template file name inside the bundle's `deploy/`. */
-  readonly templateName: string;
+  readonly kind: AnyServiceManagerKind;
+  /** Unit / plist template file name inside the bundle's `deploy/`. Undefined for Task Scheduler, whose XML is generated, not filled in from a template. */
+  readonly templateName: string | undefined;
   isInstalled(): boolean;
   /** The unit/plist as installed now, or undefined when there is none (a failed update puts it back as it was). */
   readDefinition(): string | undefined;

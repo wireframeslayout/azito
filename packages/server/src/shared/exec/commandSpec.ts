@@ -43,6 +43,9 @@ export interface CommandResult {
   signal: string | null;
   stdout: string;
   stderr: string;
+  /** The output as the program wrote it. Present only when the caller asked for it (`rawOutput` of `runCommandSpec`), for programs that do not write UTF-8 (schtasks: the OEM code page). */
+  stdoutBytes?: Buffer;
+  stderrBytes?: Buffer;
 }
 
 /** What went wrong before a result existed. Every one keeps the output produced so far. */
