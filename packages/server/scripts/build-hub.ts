@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
-import { MISAO_RELEASE, stageMisao, type MisaoManifest } from './misaoAssets';
+import { MISAO_RELEASE, misaoExecutableName, stageMisao, type MisaoManifest } from './misaoAssets';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const SERVER_ROOT = path.resolve(SCRIPT_DIR, '..');
@@ -237,14 +237,15 @@ function assertStageContents(): void {
   }
   for (const [target, files] of targets) {
     for (const [name, expected] of Object.entries(files)) {
-      const file = path.join(STAGE, 'misao', target, name);
+      const file = path.join(STAGE, 'misao', target, name === 'misao' ? misaoExecutableName(target) : name);
       const actual = crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex');
       if (actual !== expected) {
         throw new Error(`Stage validation failed: misao/${target}/${name} does not match the manifest sha256`);
       }
     }
-    if ((fs.statSync(path.join(STAGE, 'misao', target, 'misao')).mode & 0o111) === 0) {
-      throw new Error(`Stage validation failed: misao/${target}/misao is not executable`);
+    const executable = misaoExecutableName(target);
+    if ((fs.statSync(path.join(STAGE, 'misao', target, executable)).mode & 0o111) === 0) {
+      throw new Error(`Stage validation failed: misao/${target}/${executable} is not executable`);
     }
   }
 

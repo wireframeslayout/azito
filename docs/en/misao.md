@@ -108,7 +108,7 @@ server uses the daemon on its host, reached through the agent.
 ### Installing misao on an agent server
 
 The hub sends **its own bundled misao** through the agent (the release files are checked against the manifest sha256 on both ends; the
-agent downloads nothing). Every hub carries the binary for all four Unix targets (the hub installs its own misao from the same bundle, and hubs run on
+agent downloads nothing). Every hub carries the binary for all five targets: the four Unix ones and `x86_64-pc-windows-msvc` (`misao.exe`; carried only, installing it on Windows comes with the Windows hub / agent support, and a Windows host is still refused with `unsupported_os` / `unsupported_platform`) (the hub installs its own misao from the same bundle, and hubs run on
 Linux x86_64 / arm64 and macOS arm64) and sends the one that fits the agent's own OS / architecture
 (Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). In practice the agent
 installer of this release accepts x86_64 hosts only, so an arm64 agent server is not supported yet; that is a separate matter from what the hub bundles. It is installed under

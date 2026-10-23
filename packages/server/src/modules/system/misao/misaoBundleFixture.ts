@@ -1,8 +1,8 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { MISAO_RELEASE_FILES } from '../../servers/transport/agentMisaoSocket';
-import { MISAO_TARGETS } from './MisaoBundle';
+import { MISAO_RELEASE_FILES, type MisaoReleaseFile } from '../../servers/transport/agentMisaoSocket';
+import { MISAO_TARGETS, misaoFileName } from './MisaoBundle';
 
 /** Test support: a hub bundle on disk (`misao/<target>/...` for every target, its manifest, the real deploy templates). */
 
@@ -35,7 +35,7 @@ export function writeHubBundle(root: string, version: string, binary: string | B
     };
     manifest.targets[target] = {};
     for (const [name, mode] of Object.entries(MISAO_RELEASE_FILES)) {
-      fs.writeFileSync(path.join(dir, name), contents[name], { mode });
+      fs.writeFileSync(path.join(dir, misaoFileName(target, name as MisaoReleaseFile)), contents[name], { mode });
       manifest.targets[target][name] = sha256Text(contents[name]);
     }
   }

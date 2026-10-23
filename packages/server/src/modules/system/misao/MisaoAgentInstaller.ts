@@ -213,6 +213,9 @@ export class MisaoAgentInstaller {
       throw new MisaoServiceError('unsupported_host', `Could not read the agent's misao status (an agent older than this hub has no such route: update the agent first): ${describeError(err)}`);
     }
     const { host } = status;
+    // The bundle now has a win32 binary, so bundleFilesFor would no longer refuse a host that reports win32 (a registration
+    // without a recorded OS): the sh install below is still Unix only.
+    if (host.platform === 'win32') assertPosixHost({ platform: 'win32', arch: 'x64' }, 'this agent server', 'installing misao');
     assertSafePath(host.homeDir, 'home directory');
     return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath, target.hostProfile) } };
   }

@@ -89,7 +89,7 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   not for pre-releases (GitHub's `releases/latest` returns stable releases only).
 - The tarball also carries the misao **native binary** (Rust, no Node / node-pty needed) for every Unix target
   (`misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for `x86_64`/`aarch64-unknown-linux-musl` and
-  `aarch64`/`x86_64-apple-darwin`, plus `misao/manifest.json` with each file's sha256) (every hub tarball has all four: the hub installs its own from them, since hubs run on linux x64 / arm64 and
+  `aarch64`/`x86_64-apple-darwin`, `x86_64-pc-windows-msvc` (a zip asset extracted with `unzip`; the file is `misao.exe`, keyed `misao` in the manifest — `misaoFileName` / `misaoExecutableName`; carried only, installing on Windows is a later PR and win32 hosts stay `unsupported_os` / `unsupported_platform`), plus `misao/manifest.json` with each file's sha256) (every hub tarball has all five: the hub installs its own from them, since hubs run on linux x64 / arm64 and
   darwin arm64, and the same bundle serves an agent host of another OS / architecture; `AgentInstaller`'s preflight currently accepts
   x86_64 agents only, so arm64 agent support is out of scope here). The archives are pinned release assets: version, URL and sha256 are constants in
   `scripts/misaoAssets.ts`, verified at build time (offline builds set `AZITO_MISAO_ASSET_DIR`). The install target is chosen from the
