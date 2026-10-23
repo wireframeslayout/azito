@@ -1395,6 +1395,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       const path = request.query.path;
       if (!path || !path.startsWith('/')) {

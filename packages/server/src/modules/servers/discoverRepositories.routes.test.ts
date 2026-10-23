@@ -4,6 +4,7 @@ import serversRoutes from './routes';
 import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { mapAppError } from '../../app/mapAppError';
 
 // GET /api/servers/:name/discover-repositories — the project-independent
 // repository scan the create-project wizard calls before any project or
@@ -58,7 +59,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
-    transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    transportFactory: { invalidate: vi.fn(), hostProfileFor: (s: ServerConfig) => s.hostProfile } as unknown as ServersRouteOptions['transportFactory'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
@@ -191,5 +192,29 @@ describe('GET /api/servers/:name/discover-repositories', () => {
     const res = await app.inject({ method: 'GET', url: '/api/servers/local/discover-repositories?path=/work' });
 
     expect(res.statusCode).toBe(501);
+  });
+});
+
+describe('GET discover-repositories on a Windows server (the repository scan is closed until #370)', () => {
+  it('answers 501 unsupported_os before the path is checked and runs nothing', async () => {
+    const checkPathStatus = vi.fn();
+    const discover = vi.fn();
+    const opts = makeOpts({ repoDiscovery: { checkPathStatus, discover } as unknown as ServersRouteOptions['repoDiscovery'] });
+    (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', hostProfile: { platform: 'win32', arch: 'x64' } }));
+    const app = Fastify();
+    const defaultHandler = app.errorHandler;
+    app.setErrorHandler((err, request, reply) => {
+      const mapped = mapAppError(err);
+      if (mapped) return reply.status(mapped.status).send(mapped.body);
+      return defaultHandler.call(app, err, request, reply);
+    });
+    await app.register(serversRoutes, opts);
+
+    const res = await app.inject({ method: 'GET', url: '/api/servers/win/discover-repositories?path=C:%5Cwork' });
+
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
+    expect(checkPathStatus).not.toHaveBeenCalled();
+    expect(discover).not.toHaveBeenCalled();
   });
 });
