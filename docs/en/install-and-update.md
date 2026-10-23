@@ -352,6 +352,19 @@ On hub startup, all registered Agent servers are automatically version-checked. 
 
 To update manually, use Servers → target server → Setup → Agent Server → "Reinstall".
 
+## Adding a Windows host as an agent (not installable yet)
+
+Installing the agent on Windows is being built (#369). Today the install only runs the **preflight** and then stops with `unsupported_os: installing the agent on a Windows host is not supported yet`; nothing is transferred and no server is registered. The preflight already tells you whether a Windows host is ready:
+
+| Prerequisite | Detail |
+|---|---|
+| OpenSSH Server | Enabled on the Windows host and reachable from the hub. The default shell may stay **cmd.exe** (PowerShell also works): the hub reads the OS first and then runs its checks as a PowerShell script that behaves the same under both |
+| Windows | x64 only, judged by the OS's native architecture (Windows on ARM is refused with the reason, even under x64 emulation). The edition (10 / 11 / Server) is only displayed, not checked |
+| Node.js v24+ | On the PATH of the SSH session |
+| Tailscale | Installed and signed in. `tailscale.exe` is also found at `%ProgramFiles%\Tailscale\tailscale.exe` when it is not on the PATH |
+
+The OS is detected from one `echo AZITO_OS:%OS%:$?` (it reads no variable, so `set -u` does not matter) whose output differs between sh, cmd.exe and PowerShell; an answer that matches none of them is reported as an error, never guessed.
+
 ## Rollback
 
 ```bash

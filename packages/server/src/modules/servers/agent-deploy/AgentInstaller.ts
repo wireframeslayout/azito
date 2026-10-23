@@ -5,6 +5,8 @@ import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
+import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
@@ -96,7 +98,7 @@ export class AgentInstaller {
       preflight = await this.preflight(sshHost);
       report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.hostProfile.platform} ${preflight.hostProfile.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
     } catch (err) {
-      const msg = (err as Error).message;
+      const msg = err instanceof HostProfileError ? `${err.code}: ${err.message}` : (err as Error).message;
       report('preflight', 'error', msg);
       return { success: false, host: '', port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg };
     }
@@ -206,6 +208,25 @@ export class AgentInstaller {
   }
 
   private async preflight(sshHost: string): Promise<PreflightInfo> {
+    // The login shell of the target is unknown (sh, cmd.exe or PowerShell): the OS is read first, then the matching probes run.
+    const osProbe = await this.sshClient.execIsolated(sshHost, HOST_OS_PROBE_COMMAND);
+    if (parseHostOsProbe(osProbe.stdout, osProbe.stderr, osProbe.code).os === 'windows') return this.preflightWindows(sshHost);
+    return this.preflightPosix(sshHost);
+  }
+
+  /** One PowerShell script (EncodedCommand: the same under a cmd.exe and a PowerShell login shell) answers everything. */
+  private async preflightWindows(sshHost: string): Promise<never> {
+    const result = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const info = parseWindowsPreflight(result.stdout, result.stderr, result.code);
+    const missing = checkWindowsPreflight(info);
+    if (missing.length > 0) {
+      throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
+    }
+    // The preflight passed; transferring, starting and registering the agent on Windows are #369 A2 / A3. Nothing is stored for the host.
+    throw new HostProfileError('unsupported_os', `installing the agent on a Windows host is not supported yet (preflight passed: ${info.windowsVersion ?? 'Windows'} x64, Node ${info.nodeVersion}, Tailscale ${info.tailscaleIp})`);
+  }
+
+  private async preflightPosix(sshHost: string): Promise<PreflightInfo> {
     const missing: string[] = [];
 
     const nodeResult = await this.sshClient.execIsolated(sshHost, 'node --version');
