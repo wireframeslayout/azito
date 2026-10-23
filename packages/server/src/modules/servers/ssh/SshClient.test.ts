@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import SSHConfig from 'ssh-config';
+import { Client, Server, utils } from 'ssh2';
 import { SshClient } from './SshClient';
 
 const CONFIG_TEXT = `
@@ -114,5 +115,97 @@ describe('SshClient config reload on mtime change', () => {
     writeConfig(configPath, 'Host srv1\n  HostName 10.0.0.5\n');
     const r2 = client.resolveHost('user@srv1');
     expect(r2.host).toBe('10.0.0.5');
+  });
+});
+
+describe('SshClient.buildConnectOpts authHandler', () => {
+  let tmpDir: string | undefined;
+  afterEach(() => {
+    if (tmpDir) fs.rmSync(tmpDir, { recursive: true, force: true });
+    tmpDir = undefined;
+  });
+
+  type AuthHandler = (
+    methodsLeft: string[],
+    partialSuccess: boolean,
+    cb: (auth: Record<string, unknown> | false) => void,
+  ) => void;
+
+  function nextAuth(handler: AuthHandler): Record<string, unknown> | false {
+    let result: Record<string, unknown> | false = false;
+    handler([], false, (auth) => {
+      result = auth;
+    });
+    return result;
+  }
+
+  it('passes username to every authentication method (none / agent / publickey)', () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'));
+    const keyPath = path.join(tmpDir, 'id_test');
+    fs.writeFileSync(keyPath, 'dummy-key');
+    const client = new SshClient(os.homedir(), undefined, path.join(tmpDir, 'nonexistent'));
+
+    const opts = client.buildConnectOpts({
+      host: 'h',
+      port: 22,
+      username: 'alice',
+      identityFile: keyPath,
+      agent: '/tmp/agent.sock',
+    });
+    const handler = opts.authHandler as AuthHandler;
+
+    const methods = [nextAuth(handler), nextAuth(handler), nextAuth(handler)];
+    expect(methods.map((m) => m && m.type)).toEqual(['none', 'agent', 'publickey']);
+    for (const m of methods) {
+      expect(m && m.username).toBe('alice');
+    }
+    expect(nextAuth(handler)).toBe(false);
+  });
+
+  it('authenticates against a public-key-only ssh2 server', async () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'));
+    const hostKey = utils.generateKeyPairSync('ed25519');
+    const userKey = utils.generateKeyPairSync('ed25519');
+    const keyPath = path.join(tmpDir, 'id_ed25519');
+    fs.writeFileSync(keyPath, userKey.private, { mode: 0o600 });
+    const userPub = utils.parseKey(userKey.public);
+    if (userPub instanceof Error) throw userPub;
+
+    let acceptedUser: string | undefined;
+    const server = new Server({ hostKeys: [hostKey.private] }, (conn) => {
+      conn.on('authentication', (ctx) => {
+        if (ctx.method === 'publickey' && ctx.username === 'alice' && ctx.key.algo === userPub.type) {
+          acceptedUser = ctx.username;
+          return ctx.accept();
+        }
+        return ctx.reject(['publickey']);
+      });
+      conn.on('error', () => {});
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('unexpected server address');
+
+    const client = new SshClient(os.homedir(), undefined, path.join(tmpDir, 'nonexistent'));
+    const opts = client.buildConnectOpts({
+      host: '127.0.0.1',
+      port: address.port,
+      username: 'alice',
+      identityFile: keyPath,
+      agent: null,
+    });
+
+    const conn = new Client();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        conn.on('ready', () => resolve());
+        conn.on('error', reject);
+        conn.connect(opts);
+      });
+      expect(acceptedUser).toBe('alice');
+    } finally {
+      conn.end();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 });
