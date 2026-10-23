@@ -1,4 +1,4 @@
-import { spawnSync } from 'child_process';
+import { spawn, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -39,6 +39,16 @@ function powershell(args: string[]): Result {
 function azito(azitoCmd: string, args: string): Result {
   const r = spawnSync(CMD, ['/d', '/s', '/c', `""${azitoCmd}" ${args}"`], { encoding: 'utf-8', timeout: 180_000, windowsVerbatimArguments: true });
   return { status: r.status, output: `${r.stdout}${r.stderr}` };
+}
+
+function azitoAsync(azitoCmd: string, args: string): Promise<Result> {
+  return new Promise((resolve) => {
+    const child = spawn(CMD, ['/d', '/s', '/c', `""${azitoCmd}" ${args}"`], { windowsVerbatimArguments: true });
+    let output = '';
+    child.stdout.on('data', (c: Buffer) => { output += c.toString(); });
+    child.stderr.on('data', (c: Buffer) => { output += c.toString(); });
+    child.on('close', (code) => resolve({ status: code, output }));
+  });
 }
 
 function schtasks(args: string[]): Result {
@@ -154,7 +164,20 @@ async function main(): Promise<void> {
     assert(reinstall.status === 0 && /already registered/.test(reinstall.output), 'azito service install again must be a no-op', reinstall.output);
 
     step('azito stop leaves no node.exe');
-    const stop = azito(azitoCmd, 'stop');
+    // Diagnosis: what is alive of the hub's process chain while `azito stop` runs.
+    const stopChain = ancestorsOf(hubNodePids(entryFragment)[0]);
+    console.log(`[smoke-service] chain before azito stop: ${stopChain.map((p) => `${p.name}(${p.pid})`).join(' <- ')}`);
+    const stopStarted = Date.now();
+    const stopTimeline: string[] = [];
+    const stopRun = azitoAsync(azitoCmd, 'stop');
+    let stopDone = false;
+    void stopRun.then(() => { stopDone = true; });
+    while (!stopDone) {
+      stopTimeline.push(`${Math.round((Date.now() - stopStarted) / 1000)}s: ${stopChain.filter((p) => processAlive(p.pid)).map((p) => `${p.name}`).join(',') || 'none'}`);
+      await sleep(300);
+    }
+    console.log(`[smoke-service] chain alive during azito stop: ${[...new Set(stopTimeline.map((l) => l.replace(/^\d+s: /, '')))].join(' | ')} (${stopTimeline.length} samples)`);
+    const stop = await stopRun;
     assert(stop.status === 0, 'azito stop failed', stop.output);
     assert(hubNodePids(entryFragment).length === 0, 'azito stop must leave no hub node.exe', stop.output);
     assert((await healthStatus()) === null, '/api/health must not answer after azito stop');
