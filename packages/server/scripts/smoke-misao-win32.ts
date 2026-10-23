@@ -234,6 +234,14 @@ async function main(): Promise<void> {
     assert(/daemon:\s+reachable/.test(azito(azitoCmd, 'misao status').output), 'the daemon must be reachable again');
   } catch (err) {
     console.error(`[smoke-misao] hub.log:\n${readLog(hubLog)}\n[smoke-misao] misao.log:\n${readLog(misaoLog)}`);
+    console.error(`[smoke-misao] task XML:\n${schtasks(['/Query', '/TN', MISAO_TASK, '/XML']).output}`);
+    console.error(`[smoke-misao] task state:\n${schtasks(['/Query', '/TN', MISAO_TASK, '/V', '/FO', 'LIST']).output}`);
+    if (misaoExe !== '' && fs.existsSync(misaoExe)) {
+      const direct = spawnSync(misaoExe, ['--version'], { encoding: 'utf-8', timeout: 30_000 });
+      console.error(`[smoke-misao] misao.exe --version: ${direct.status} ${direct.stdout}${direct.stderr}`);
+      const viaCmd = spawnSync(CMD, ['/d', '/c', `""${misaoExe}" --version"`], { encoding: 'utf-8', timeout: 30_000, windowsVerbatimArguments: true });
+      console.error(`[smoke-misao] cmd /d /c ""misao.exe" --version": ${viaCmd.status} ${viaCmd.stdout}${viaCmd.stderr}`);
+    }
     throw err;
   } finally {
     step('cleanup: stop the hub and misao, delete the tasks');
