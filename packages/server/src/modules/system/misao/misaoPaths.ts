@@ -1,3 +1,4 @@
+import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import type { ServiceSpec } from '../serviceManager';
@@ -63,7 +64,11 @@ function resolveWindowsMisaoPaths(prefix: string, user: MisaoWindowsUser): Misao
   if (/["\r\n\0]/.test(prefix)) {
     throw new Error(`AZITO prefix must not contain a quote or a line break: ${prefix}`);
   }
-  const normalized = win32.normalize(prefix).replace(/[\\/]+$/, '');
+  const spelled = win32.normalize(prefix).replace(/[\\/]+$/, '');
+  // One folder, one name: the pipe is made from the folder's path, and Windows spells the same folder many ways (8.3 short names such as
+  // RUNNER~1, letter case). The CLI, the hub and an agent on this host must all land on the same pipe, so an existing prefix is resolved
+  // to its real spelling (a prefix that does not exist yet has nothing to resolve).
+  const normalized = fs.existsSync(spelled) ? fs.realpathSync.native(spelled) : spelled;
   const root = win32.join(normalized, 'misao');
   return {
     prefix: normalized,

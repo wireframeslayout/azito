@@ -160,7 +160,9 @@ async function main(): Promise<void> {
     // The prefix has spaces and parentheses, which conhost.exe re-reads wrongly in a command line: the task runs a launcher script (-EncodedCommand), and the paths are in it, not in the command line.
     assert(/conhost\.exe/i.test(taskXml.output) && /--headless/.test(taskXml.output) && /-EncodedCommand/.test(taskXml.output), 'the misao task must run the launcher script under conhost.exe --headless', taskXml.output);
     const launcher = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(taskXml.output)?.[1] ?? '', 'base64').toString('utf16le');
-    assert(launcher.includes(misaoExe) && launcher.includes(misaoRoot), 'the launcher script must name this release\'s misao.exe and the folder', launcher);
+    // The folder is named in its real spelling (the prefix was given with an 8.3 short name, RUNNER~1), the one every process of this host derives the pipe from.
+    const realRoot = fs.realpathSync.native(misaoRoot);
+    assert(launcher.toLowerCase().includes(path.join(realRoot, misaoVersion, 'misao.exe').toLowerCase()) && launcher.toLowerCase().includes(`'${realRoot.toLowerCase()}'`), 'the launcher script must name this release\'s misao.exe and the folder', launcher);
     assert(!taskXml.output.includes('Foo Bar'), 'no path of the prefix may be in the task\'s command line', taskXml.output);
     pipe = envValue(envFile, 'MISAO_SOCKET') ?? '';
     assert(/^\\\\\.\\pipe\\misao-[A-Za-z0-9._-]+-[0-9a-f]{16}$/.test(pipe), 'hub\\.env must name the misao named pipe as MISAO_SOCKET', pipe);
