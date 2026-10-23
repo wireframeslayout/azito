@@ -244,7 +244,7 @@ export class SchtasksClient {
       throw await this.errorOf('query', taskName, result);
     }
     const stdout = csvText(result.stdout);
-    const row = parseCsvRecords(stdout).find((fields) => sameTaskName(fields[TASK_NAME_COLUMN] ?? '', taskName));
+    const row = parseCsvOutput(stdout, `/Query /TN ${taskName} /FO CSV /NH /V`).find((fields) => sameTaskName(fields[TASK_NAME_COLUMN] ?? '', taskName));
     const lastResult = row ? parseLastResult(row[LAST_RESULT_COLUMN]) : undefined;
     if (lastResult === undefined) throw new Error(`Cannot read the last result of the task "${taskName}" from schtasks output: ${stdout.trim().slice(0, 500)}`);
     return { exists: true, running: lastResult === SCHED_S_TASK_RUNNING, failed: !NOT_A_FAILURE.has(lastResult) && lastResult !== SCHED_S_TASK_RUNNING, lastResult };
@@ -254,7 +254,16 @@ export class SchtasksClient {
   private async listTaskNames(): Promise<string[]> {
     const result = await this.run(this.spec(['/Query', '/FO', 'CSV', '/NH']));
     if (result.exitCode !== 0) throw await this.errorOf('query', '*', result);
-    return parseCsvRecords(csvText(result.stdout)).map((fields) => fields[0] ?? '');
+    return parseCsvOutput(csvText(result.stdout), '/Query /FO CSV /NH').map((fields) => fields[0] ?? '');
+  }
+}
+
+/** {@link parseCsvRecords} for schtasks output, with the output (cut) in the error: a task whose fields schtasks did not quote the way RFC 4180 says can only be diagnosed from what it printed. */
+function parseCsvOutput(text: string, what: string): string[][] {
+  try {
+    return parseCsvRecords(text);
+  } catch (err) {
+    throw new Error(`${err instanceof Error ? err.message : String(err)} (schtasks ${what}, ${text.length} characters, the end: ${JSON.stringify(text.slice(-400))})`);
   }
 }
 

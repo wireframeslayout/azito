@@ -158,16 +158,17 @@ function checkCli(azitoCmd: string, prefix: string, version: string): void {
   assert(t.status === 0 && t.output.trim() === expected, 'azito token show must print the token in hub/.env', t.output);
 
   // This install was made with -NoService, so there is no task: the commands say so (the registered task is checked by smoke-service-win32.ts).
-  step('azito stop / status / service / misao say what is missing');
+  step('azito stop / status / service / misao status say what is missing');
   const stop = azito(azitoCmd, 'stop');
   assert(stop.status === 1 && /not installed/.test(stop.output) && /azito service install/.test(stop.output), 'azito stop without the task must fail with the way to register it', stop.output);
   const status = azito(azitoCmd, 'status');
   assert(status.status === 0 && /service:\s+not installed/.test(status.output), 'azito status without the task must say it is not installed', status.output);
   const service = azito(azitoCmd, 'service status');
   assert(service.status === 0 && /service:\s+not installed/.test(service.output), 'azito service status without the task', service.output);
-  const misao = azito(azitoCmd, 'misao install');
-  assert(misao.status !== 0 && misao.output.trim() !== '', 'azito misao install must fail with its reason', misao.output);
-  console.log(`[smoke-install] azito service status -> ${service.output.trim()}\n[smoke-install] azito misao install -> ${misao.output.trim()}`);
+  // misao is installed by install.ps1 only without -NoService (smoke-misao-win32.ts checks that); here `azito misao status` must report nothing installed.
+  const misao = azito(azitoCmd, 'misao status');
+  assert(misao.status === 0 && /service:\s+not installed/.test(misao.output) && /installed:\s+-/.test(misao.output), 'azito misao status without the task must say it is not installed', misao.output);
+  console.log(`[smoke-install] azito service status -> ${service.output.trim()}\n[smoke-install] azito misao status -> ${misao.output.trim()}`);
   const unknown = azito(azitoCmd, 'bogus');
   assert(unknown.status === 1 && /Unknown command/.test(unknown.output), 'an unknown command must fail', unknown.output);
 }
