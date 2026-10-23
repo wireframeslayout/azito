@@ -197,7 +197,11 @@ async function checkLocalServerOnMisaoOnly(token: string, hubLog: string): Promi
   const killed = await api(token, 'POST', `${windowBase}/kill`);
   assert(killed.status === 200, 'killing the window must work', killed.text);
   const after = await api(token, 'GET', '/api/servers/local/sessions?detail=1');
-  assert(!after.text.includes('w851-renamed') && !after.text.includes('w851b4a'), 'the deleted window must not be listed any more', after.text);
+  const listed = ((after.json as { sessions?: Array<{ name: string; windows: unknown[] }> } | null)?.sessions ?? []).find((session) => session.name === 'w851b4a');
+  // The workspace stays (empty) until it is deleted too, as on Unix.
+  assert(listed === undefined || listed.windows.length === 0, 'the deleted window must not be listed any more', after.text);
+  const removed = await api(token, 'DELETE', '/api/servers/local/mux/workspaces/w851b4a?kind=misao');
+  assert(removed.status === 200, 'deleting the empty workspace must work', removed.text);
 }
 
 async function main(): Promise<void> {
