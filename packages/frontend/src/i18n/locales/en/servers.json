@@ -250,7 +250,10 @@
     "replaceSocketTitle": "Switch the hub to the managed misao?",
     "replaceSocketMessage": "The hub setting (MISAO_SOCKET) points at another daemon than the misao AZITO manages. Installing rewrites it to the managed socket (applied when the hub restarts).",
     "replaceSocketConfirm": "Rewrite and install",
+    "actionsBlocked": "Unavailable while the service is loaded twice.",
     "notice": {
+      "duplicateLoad": "The misao service is loaded into both launchd domains (two copies)",
+      "duplicateLoadSub": "Install, start and update are refused until one copy is booted out. Run `launchctl bootout gui/$UID/com.azito.misao` and `launchctl bootout user/$UID/com.azito.misao` (this ends the panes it hosts), then press start here or run `azito misao start`.",
       "incompatible": "The misao protocol does not match this hub",
       "incompatibleSub": "Updating to the bundled misao fixes this. The update ends every running pane.",
       "updateAvailable": "The running misao ({{running}}) differs from the bundled release ({{bundled}})",

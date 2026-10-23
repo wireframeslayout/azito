@@ -1,4 +1,4 @@
-import type { MisaoServiceManager } from './MisaoServiceController';
+import type { ServiceManagerKind } from '../serviceManager';
 
 function xmlEscape(value: string): string {
   return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -7,7 +7,7 @@ function xmlEscape(value: string): string {
 export interface MisaoUnitInput {
   /** The bundled `deploy/azito-misao.service` or `deploy/com.azito.misao.plist`. */
   template: string;
-  manager: MisaoServiceManager;
+  manager: ServiceManagerKind;
   /** `<prefix>/misao/...` holds the daemon; absolute, no characters a unit file would reinterpret (see resolveMisaoPaths). */
   prefix: string;
   /** PATH the daemon's panes see (see buildServicePath). */

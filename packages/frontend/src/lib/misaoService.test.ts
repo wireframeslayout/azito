@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MisaoServiceStatus } from '@azito/shared';
-import { misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
+import { misaoActionsBlocked, misaoNotices, misaoServiceChipState, misaoServiceMode, misaoVersions, unmanagedReasonKey } from './misaoService';
 
 function status(overrides: Partial<MisaoServiceStatus> = {}): MisaoServiceStatus {
   return {
@@ -33,6 +33,13 @@ describe('misaoServiceMode', () => {
 describe('misaoNotices', () => {
   it('has nothing to say about a current, running service', () => {
     expect(misaoNotices(status())).toEqual([]);
+  });
+
+  it('puts a service loaded into both launchd domains first, even before an incompatible protocol, and blocks the actions', () => {
+    const duplicate = status({ serviceDuplicateLoad: true, updateAvailable: true, daemon: { reachable: true, detail: 'protocol_incompatible' } });
+    expect(misaoNotices(duplicate)).toEqual(['duplicateLoad', 'incompatible']);
+    expect(misaoActionsBlocked(duplicate)).toBe(true);
+    expect(misaoActionsBlocked(status())).toBe(false);
   });
 
   it('puts an incompatible protocol before everything and does not also offer the plain update notice', () => {

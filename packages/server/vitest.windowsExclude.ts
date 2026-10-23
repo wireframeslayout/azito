@@ -22,7 +22,11 @@ export const WINDOWS_EXCLUDED_UNIT_TESTS: readonly WindowsExcludeEntry[] = [
   },
   {
     file: 'src/modules/system/misao/MisaoServiceService.launchd.test.ts',
-    reason: 'POSIX パス前提（launchd の prefix に \\ を含められない）。全 4 ケースが対象',
+    reason: 'POSIX パス前提（launchd の prefix に \\ を含められない）。全ケースが対象（gui あり / なしの両方）',
+  },
+  {
+    file: 'src/cli/installScript.test.ts',
+    reason: 'install.sh を bash で動かし、uname / node / systemctl の代わりに実行ファイルの stub を PATH に置く POSIX 前提',
   },
   {
     file: 'src/modules/transcripts/agentTranscript.integration.test.ts',

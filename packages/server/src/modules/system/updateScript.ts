@@ -6,9 +6,10 @@ import { finished } from 'stream/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
+import type { HostEnv } from '../../shared/os/hostEnv';
 import { UpdateStateManager, type UpdateState, type UpdateStep } from './UpdateStateManager';
 import { computeLocalSha256, assertNoTraversal, readSha256FromSumsFile } from '../servers/agent-deploy/integrityVerifier';
-import { isServiceManagerKind, restartService, type ServiceManagerKind } from './serviceControl';
+import { HUB_SERVICE, isServiceManagerKind, runCommand, serviceManagerOfKind, type ServiceManager, type ServiceManagerKind } from './serviceManager';
 
 const execFileAsync = promisify(execFile);
 
@@ -67,8 +68,9 @@ async function downloadFile(url: string, destPath: string, token?: string): Prom
  * persisted via UpdateStateManager so GET /api/system/update/progress can report
  * on it even across the restart.
  */
-export async function runUpdate(argv: string[], secretFileGuard: SecretFileGuard): Promise<void> {
+export async function runUpdate(argv: string[], host: Pick<HostEnv, 'homeDir' | 'uid'>, secretFileGuard: SecretFileGuard): Promise<void> {
   const args = parseArgs(argv);
+  const service = serviceManagerOfKind(args.serviceManager, HUB_SERVICE, runCommand, host);
   // Under systemd the transient unit does not inherit the launching process's
   // environment, so the caller (SystemUpdateService) passes this via --setenv
   // rather than an argv flag — see launchUpdateScript for why. Under launchd
@@ -152,7 +154,7 @@ export async function runUpdate(argv: string[], secretFileGuard: SecretFileGuard
     });
 
     await runStep('restart', 'Restarting azito service', async () => {
-      await restartService(args.serviceManager);
+      await service.restart();
     });
 
     await runStep('health-check', 'Waiting for healthy restart', async () => {
@@ -166,7 +168,7 @@ export async function runUpdate(argv: string[], secretFileGuard: SecretFileGuard
   } catch (err) {
     const message = (err as Error).message;
     stateManager.appendLog(`Update failed at step "${state.step}": ${message}. Rolling back to ${args.oldVersion}`);
-    await rollback(currentLink, oldTarget, args.serviceManager);
+    await rollback(currentLink, oldTarget, service);
     // Only clean up the partially-extracted new version if `current` no
     // longer points at it — rollback() swallows its own errors, and if it
     // failed to re-point the symlink, newInstallDir may still be live.
@@ -194,11 +196,11 @@ function safeReadlink(linkPath: string): string | null {
   }
 }
 
-async function rollback(currentLink: string, oldTarget: string, manager: ServiceManagerKind): Promise<void> {
+async function rollback(currentLink: string, oldTarget: string, service: ServiceManager): Promise<void> {
   try {
     fs.symlinkSync(oldTarget, `${currentLink}.tmp`);
     fs.renameSync(`${currentLink}.tmp`, currentLink);
-    await restartService(manager);
+    await service.restart();
   } catch {
     // Best-effort: the state file already records the original failure; a
     // rollback failure here would only obscure it, so it's swallowed rather

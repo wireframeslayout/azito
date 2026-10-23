@@ -23,6 +23,7 @@ import { createSecretFileGuard } from './shared/os/secretFileGuard';
 import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
+import { serviceCommand } from './cli/serviceCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
 import { serializeRequestForLog } from './shared/redactUrlSecrets';
@@ -42,7 +43,12 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'misao') {
-    await misaoCommand(process.argv.slice(3), hostEnv.platform, secretFileGuard);
+    await misaoCommand(process.argv.slice(3), hostEnv, secretFileGuard);
+    return;
+  }
+
+  if (process.argv[2] === 'service') {
+    await serviceCommand(process.argv.slice(3), hostEnv);
     return;
   }
 
@@ -72,7 +78,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'update-run') {
-    await runUpdate(process.argv.slice(3), secretFileGuard);
+    await runUpdate(process.argv.slice(3), hostEnv, secretFileGuard);
     return;
   }
 
