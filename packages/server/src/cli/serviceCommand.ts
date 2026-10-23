@@ -1,3 +1,4 @@
+import * as fs from 'fs';
 import * as path from 'path';
 import { HUB_SERVICE, runCommand, type ServiceManager } from '../modules/system/serviceManager';
 import { createServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
@@ -41,7 +42,9 @@ function resolveWindowsHub(context: ServiceCommandContext): WindowsHub {
   if (!context.bundleRoot) throw new Error('This is not a release install (a source checkout has no service): there is no AZITO prefix to register.');
   const prefix = resolveInstallPrefix(context.bundleRoot);
   if (!prefix) throw new Error(`The bundle ${context.bundleRoot} is not inside <prefix>\\hub\\<version>, so the install prefix cannot be told.`);
-  return { layout: hubWindowsLayout(prefix), entry: path.win32.join(context.bundleRoot, 'azito-hub.cjs') };
+  // The hub's command line names the file the way PowerShell resolves it (8.3 short names such as RUNNER~1 come out long), so the sweep
+  // is given the real path too.
+  return { layout: hubWindowsLayout(prefix), entry: fs.realpathSync.native(path.win32.join(context.bundleRoot, 'azito-hub.cjs')) };
 }
 
 async function printStatus(manager: ServiceManager, logFile: string | undefined): Promise<void> {

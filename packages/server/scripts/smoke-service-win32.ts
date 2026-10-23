@@ -99,13 +99,16 @@ async function main(): Promise<void> {
   const hubRoot = path.join(prefix, 'hub');
   const logFile = path.join(prefix, 'logs', 'hub.log');
   const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
-  const entryFragment = path.join(hubRoot, version as string, 'azito-hub.cjs');
+  
+  let entryFragment = '';
   const definitionCopy = path.join(os.homedir(), '.azito', 'service', `${TASK_NAME}.xml`);
 
   try {
     step(`install.ps1 without -NoService into ${prefix}`);
     const installed = powershell(['-File', installPs1, '-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath']);
     console.log(installed.output);
+    // The hub's command line has the path as PowerShell resolved it (8.3 short names such as RUNNER~1 come out long).
+    entryFragment = fs.realpathSync.native(path.join(hubRoot, version as string, 'azito-hub.cjs'));
     assert(installed.status === 0, 'install.ps1 failed', `${installed.output}\n--- hub.log ---\n${readLog(logFile)}`);
     assert(/AZITO is running at http:\/\/localhost:3001\//.test(installed.output), 'install.ps1 must wait for /api/health and say the hub is running', installed.output);
 
