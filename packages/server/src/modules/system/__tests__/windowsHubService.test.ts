@@ -136,7 +136,7 @@ describe('endHubProcesses', () => {
     expect(script.indexOf('AddMilliseconds(20000)')).toBeLessThan(script.indexOf('Stop-Process'));
     expect(script).toContain('$p.CreationDate.ToFileTimeUtc() -eq $_.Created');
     // A single process comes back unwrapped, and a PowerShell 5.1 object has no .Count: every count goes through @().
-    expect(script).not.toMatch(/\(Get-Alive\)\.Count/);
+    expect(script).not.toMatch(/(?<!@)\(Get-Alive\)\.Count/);
     expect(script).toContain('@(Get-Alive).Count');
   });
 
