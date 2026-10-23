@@ -58,6 +58,11 @@ export class HarnessUpdater {
     const servers = this.serverRepo.findAll().filter((s) => s.type === 'agent');
     const results: HarnessUpdateResult[] = [];
     for (const server of servers) {
+      // The update reads and installs the harness with POSIX shell strings; a Windows agent cannot run them.
+      if (server.hostProfile?.platform === 'win32') {
+        this.logger.info(`${server.name}: skipped (Windows agent; the harness auto-update runs POSIX commands)`);
+        continue;
+      }
       results.push(await this.checkAndUpdate(server));
     }
     return results;
