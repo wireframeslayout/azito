@@ -255,7 +255,7 @@ async function main(): Promise<void> {
     assert(azito(azito2, 'stop').status === 0, 'azito stop of the second install');
     assert((await healthStatus()) === null, 'nothing must answer after the stop');
   } catch (err) {
-    console.error(`[smoke-service] hub.log:\n${readLog(logFile)}`);
+    console.error(`[smoke-service] hub.log:\n${readLog(logFile)}\n[smoke-service] misao.log:\n${readLog(path.join(prefix, "misao", "misao.log"))}`);
     throw err;
   } finally {
     step('cleanup: stop and delete the task');
