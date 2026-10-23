@@ -103,7 +103,7 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   `scripts/misaoAssets.ts`, verified at build time (offline builds set `AZITO_MISAO_ASSET_DIR`). The install target is chosen from the
   host's OS / architecture (`misaoTargetFor` in `MisaoBundle.ts`; the hub uses its own, an agent reports its own); a host without a
   binary is an `unsupported_host` error, never a fallback. The Windows build is a zip asset (extracted with `unzip`, which the
-  build host must have; its absence is an explicit error; on a Windows host `System32\tar.exe` reads it instead) whose executable is `misao.exe`, keyed `misao` in the manifest
+  build host must have; its absence is an explicit error; a Windows build host reads it with `hostTar()` of `scripts/archive.ts`) whose executable is `misao.exe`, keyed `misao` in the manifest
   (`misaoFileName` in `MisaoBundle.ts`, `misaoReleaseFileName` in the build script). It is installed on Windows **agents** (below); for the hub's own
   service on a Windows hub, `status` reports `unsupported_platform` and `install` / `update` fail with `not_managed` (the Windows hub, #380). Also `deploy/azito-misao.service` / `com.azito.misao.plist`
   (`ExecStart=<prefix>/misao/current/misao serve ...`, no `__NODE__`). misao is **a separate service**
