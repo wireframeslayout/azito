@@ -15,7 +15,7 @@ $nodePath = $null
 $nodeVersion = $null
 if ($node) {
   $nodePath = $node.Source
-  $nodeVersion = (& $nodePath --version | Select-Object -First 1)
+  $nodeVersion = @(& $nodePath --version)[0]
 }
 $tailscale = Get-Command tailscale -ErrorAction SilentlyContinue | Select-Object -First 1
 $tailscalePath = $null
@@ -23,7 +23,7 @@ if ($tailscale) { $tailscalePath = $tailscale.Source }
 elseif (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe')) { $tailscalePath = Join-Path $env:ProgramFiles 'Tailscale\\tailscale.exe' }
 $tailscaleIp = $null
 if ($tailscalePath) {
-  try { $tailscaleIp = (& $tailscalePath ip -4 2>$null | Select-Object -First 1) } catch { $tailscaleIp = $null }
+  try { $tailscaleIp = @(& $tailscalePath ip -4 2>$null)[0] } catch { $tailscaleIp = $null }
 }
 $osVersion = [System.Environment]::OSVersion.Version
 $info = [ordered]@{
@@ -35,6 +35,7 @@ $info = [ordered]@{
   tailscaleIp = $tailscaleIp
   home = $env:USERPROFILE
 }
+$global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
 Write-Output (ConvertTo-Json -InputObject $info -Compress)
 Write-Output '${END_MARKER}'
