@@ -79,10 +79,18 @@ export class FakeWindowsHost {
       };
       return { stdout: `<<AZITO_PREFLIGHT_BEGIN>>\r\n${JSON.stringify(info)}\r\n<<AZITO_PREFLIGHT_END>>\r\n`, stderr: '', code: 0 };
     }
-    if (script.includes('AZITO_FIREWALL_BEGIN')) {
+    if (script.includes('AZITO_FIREWALL_DUMP_BEGIN')) {
       this.calls.push({ kind: 'firewall', text: script });
-      const fw = { blockedBy: [], ...(this.options.firewall ?? { ruleFound: true, elevated: false, created: false, problem: null }) };
-      return { stdout: `<<AZITO_FIREWALL_BEGIN>>\r\n${JSON.stringify(fw)}\r\n<<AZITO_FIREWALL_END>>\r\n`, stderr: '', code: 0 };
+      const fw = { blockedBy: [] as string[], ...(this.options.firewall ?? { ruleFound: true, elevated: false, created: false, problem: null }) };
+      const rule = (action: string, displayName: string) => ({ name: displayName, displayName, action, profile: 'Any', package: '', owner: '', service: 'Any', protocol: 'TCP', localPort: ['Any'], program: 'Any', remoteAddress: ['Any'], localAddress: ['Any'] });
+      const rules = [...(fw.ruleFound ? [rule('Allow', 'an allow rule')] : []), ...fw.blockedBy.map((n) => rule('Block', n))];
+      const dump = { elevated: fw.elevated, networkCategory: 'Private', store: 'ActiveStore', problem: fw.ruleFound === null ? 'reading the rules failed: no NetSecurity' : null, rules: fw.ruleFound === null ? [] : rules };
+      return { stdout: `<<AZITO_FIREWALL_DUMP_BEGIN>>\r\n${JSON.stringify(dump)}\r\n<<AZITO_FIREWALL_DUMP_END>>\r\n`, stderr: '', code: 0 };
+    }
+    if (script.includes('AZITO_FIREWALL_ADD_BEGIN')) {
+      this.calls.push({ kind: 'firewall', text: script });
+      const fw = this.options.firewall ?? { created: false, problem: null };
+      return { stdout: `<<AZITO_FIREWALL_ADD_BEGIN>>\r\n${JSON.stringify({ created: fw.created, problem: fw.problem })}\r\n<<AZITO_FIREWALL_ADD_END>>\r\n`, stderr: '', code: 0 };
     }
     if (script.includes('AZITO_RUN_BEGIN')) return this.schtasks(script);
     this.calls.push({ kind: 'script', text: script });

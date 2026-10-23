@@ -107,6 +107,7 @@ function describeMisaoHost(hostEnv: HostEnv): AgentMisaoHost {
 // ─── Graceful shutdown ───
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
+const PARENT_WATCH_INTERVAL_MS = 3000;
 
 // ─── Bootstrap ───
 
@@ -299,7 +300,7 @@ async function main(): Promise<void> {
   // tmux hook cleanup + interval clear), then exits. A hard cap forces exit if close() hangs
   // (e.g. a stuck Chromium process), and a running flag ignores a second signal during shutdown.
   let shuttingDown = false;
-  const shutdown = (signal: NodeJS.Signals): void => {
+  const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     app.log.info(`Received ${signal}, shutting down gracefully`);
@@ -313,6 +314,22 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
+
+  // A Windows agent runs under `conhost.exe --headless` (see the task the hub registers), and the Task Scheduler's "End" ends only
+  // that conhost: the agent would be left running with a valid token. Its settings ask it to follow its parent, so when the
+  // parent is gone it shuts down. Only when asked: a `node azito-agent.cjs` started by hand has no such setting.
+  if (hostEnv.platform === 'win32' && process.env.AZITO_AGENT_EXIT_WITH_PARENT === '1') {
+    const parentPid = process.ppid;
+    const watch = setInterval(() => {
+      try {
+        process.kill(parentPid, 0);
+      } catch (err) {
+        // EPERM = the parent exists but is not ours to signal: it is alive. Anything else (ESRCH) = gone.
+        if ((err as NodeJS.ErrnoException).code !== 'EPERM') shutdown(`parent process ${parentPid} is gone`);
+      }
+    }, PARENT_WATCH_INTERVAL_MS);
+    watch.unref();
+  }
 
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case

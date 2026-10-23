@@ -368,11 +368,11 @@ OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo
 導入で行うこと（管理者権限は要りませんし、求めません）:
 
 1. **Windows ファイアウォールの確認。** Windows は、規則が許可するまでプログラムへの受信を遮ります。初回の許可ダイアログはデスクトップに出るだけで、SSH のセッションには出ません。導入は、有効な受信の規則をすべて（ポート・プログラム・アドレスのフィルターごと）読み、TCP 3002・`node.exe`・agent が bind する Tailscale の IP について次のように判定します:
-   - **許可（Allow）** 規則は、次のすべてを満たすときだけ数えます: プロトコルが TCP か Any、ローカルポートが 3002 か Any（`3000-3010` のような**範囲指定は読まない**ので数えません）、プログラムが `node.exe` か Any、リモートアドレスが Any かタンネル範囲 `100.64.0.0/10`（LocalSubnet など**他のリモートアドレスに絞った規則**はハブに届かないので数えません）、ローカルアドレスが Any か agent の IP。プロファイルは見ません。
-   - ポート 3002 または `node.exe` に当たる、有効な受信の **Block** 規則があれば、その DisplayName を示して止まります（初回のダイアログをキャンセルすると Windows が作ります）。Block は Allow より優先されるので、その横に追加はしません。
+   - **許可（Allow）** 規則は、次のすべてを満たすときだけ数えます: プロトコルが TCP か Any、ローカルポートが 3002 か Any（`3000-3010` のような**範囲指定は読まない**ので数えません）、プログラムが `node.exe` か Any、リモートアドレスが Any かタンネル範囲 `100.64.0.0/10`（LocalSubnet など**他のリモートアドレスに絞った規則**はハブに届かないので数えません）、ローカルアドレスが Any か agent の IP、プロファイルが Tailscale アダプターのもの（`Get-NetConnectionProfile`。取れないときは Any か Public）を含むこと。Tailscale アダプターが Public のとき、Private だけを許可する規則は数えません。
+   - ハブを止めうる、有効な受信の **Block** 規則があれば、その DisplayName を示して止まります。対象は、`node.exe` か全プログラムに対するポート 3002（それを含む範囲指定も）で、agent のローカルアドレスに適用され、リモートアドレスがタンネルを含み（Any・重なる範囲・`Internet`）、Tailscale アダプターのプロファイルに適用されるものです。別のポート・別のリモートネットワーク・別のプロファイルの Block は数えません（初回のダイアログをキャンセルすると Windows が作ります）。Block は Allow より優先されるので、その横に追加はしません。
    - 条件を満たす Allow も Block も無く、SSH のセッションが管理者（昇格したトークン）なら、このプログラム・このローカルアドレス・`100.64.0.0/10` からだけ、の `AZITO Agent (TCP 3002)` を追加します。昇格していなければ、**何も転送する前に止まり**、管理者の PowerShell で 1 回だけ実行するコマンドを表示します:
    `New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "C:\Program Files\nodejs\node.exe" -LocalAddress <Tailscale の IP> -RemoteAddress 100.64.0.0/10 -Profile Any`（実際のパスと IP が入って表示されます）。
-   - ホストが答えられない場合（NetSecurity モジュールが無いなど）は止めません。ヘルスチェックが失敗したとき、ファイアウォールを名指しします。
+   - 規則は、読めれば現に有効なもの（`ActiveStore`。グループポリシーを含む）、読めなければローカルのもの（`PersistentStore`）を読みます。そのため、このセッションに読ませないホストでは、グループポリシーが配る Block は見えません。規則のインターフェースの種類による制限も見ません。ホストが答えられない場合（NetSecurity モジュールが無いなど）は止めません。ヘルスチェックが失敗したとき、ファイアウォールを名指しします。
 2. **転送。** バンドルを SFTP で `%USERPROFILE%\.azito\agent\` へ送り、ホスト上で SHA256 を照合します。
 3. **展開。** 標準の `tar.exe` で `%USERPROFILE%\.azito\agent\<version>\` に展開します（先に、フォルダーの外へ出るパスが無いか検査します）。フォルダーは本人だけが読めます。symlink は使いません。下のタスクが版のフォルダーを直接指すので、再導入のたびにタスクを登録し直します。
 4. **設定。** トークン、bind するアドレス（Tailscale の IP）、ポートは `%USERPROFILE%\.azito\agent\agent.env` に書きます。本人だけが読める ACL にし、そうなっていなければハブが検査して先へ進みません。agent は `conhost.exe --headless node.exe --env-file=<そのファイル> <版のフォルダー>\azito-agent.cjs` で起動するので、起動用のスクリプトは挟まず、デスクトップにコンソールウィンドウも出ません。設定ファイルは、トークンを書く前に本人専用で作成してから置き換えます。既存の `agent.env` には書き込みません。agent 自身のログは `%USERPROFILE%\.azito\agent\agent.log` に書かれます。
@@ -386,7 +386,7 @@ OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo
 | 操作 | 方法 |
 |---|---|
 | 再起動 | ハブが agent に届かないとき、タスクを再起動します（`schtasks /End` のあと `/Run`）。または Setup の行の「Reinstall」 |
-| 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`（次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
+| 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`、またはタスクスケジューラの「終了」。agent はタスクが動かす `conhost.exe` に付き従い、それがいなくなって数秒で終わります（手で `node azito-agent.cjs` を起動したものは別です）。次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
 | 削除（#372 まで） | `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は `Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` |
 
 本物の agent の隣で 2 つ目を試すときは、ハブの環境変数 `AZITO_WIN_AGENT_TASK_NAME`、`AZITO_WIN_AGENT_DIR`（ユーザーのホーム直下のフォルダー）、`AZITO_WIN_AGENT_PORT` を設定します。既定は `AzitoAgent`、`.azito\agent`、`3002` です。これは試験用です。サーバーごとには保存されないので、これらを付けずに起動したハブは既定のタスクを探します（使われているときはハブのログに 1 行出ます）。その一時ハブだけで使ってください。

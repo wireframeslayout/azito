@@ -61,7 +61,7 @@ describe('AgentInstaller on a Windows host', () => {
     // The settings are written into agent.env.new, which was created owner-only first, and swapped in after its ACL was checked.
     expect(uploads).toEqual([`.azito/agent/azito-agent-${VERSION}.tar.gz`, '.azito/agent/agent.env.new', '.azito/agent/AzitoAgent.task.xml']);
     const env = host.uploaded.get('.azito/agent/agent.env.new')!.toString('utf8');
-    expect(env).toBe(`AZITO_AGENT_TOKEN="${result.token}"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\dev\\.azito\\agent\\agent.log"\n`);
+    expect(env).toBe(`AZITO_AGENT_TOKEN="${result.token}"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\dev\\.azito\\agent\\agent.log"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\n`);
 
     const scripts = host.calls.filter((c) => c.kind === 'script').map((c) => c.text);
     expect(scripts[0]).toContain("New-Item -ItemType Directory -Force -Path 'C:\\Users\\dev\\.azito\\agent'");
@@ -112,13 +112,13 @@ describe('AgentInstaller on a Windows host', () => {
   });
 
   it('uses the configured task name, folder and port', async () => {
-    const { installer, host, uploads } = make({}, { taskName: 'w806-AzitoAgent', dir: 'w806-agent', port: 3902 });
+    const { installer, host, uploads } = make({ firewall: { ruleFound: false, elevated: true, created: true, problem: null } }, { taskName: 'w806-AzitoAgent', dir: 'w806-agent', port: 3902 });
     const result = await installer.install('user@win');
     expect(result).toMatchObject({ success: true, port: 3902 });
     expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env.new', 'w806-agent/w806-AzitoAgent.task.xml']);
     expect(host.uploaded.get('w806-agent/agent.env.new')!.toString('utf8')).toContain('PORT="3902"\n');
     expect(host.calls.filter((c) => c.kind === 'schtasks').some((c) => c.schtasksArgs!.includes('w806-AzitoAgent'))).toBe(true);
-    expect(host.calls.find((c) => c.kind === 'firewall')!.text).toContain('$port=3902;');
+    expect(host.calls.filter((c) => c.kind === 'firewall').some((c) => c.text.includes('-LocalPort 3902'))).toBe(true);
     expect(fetch).toHaveBeenCalledWith('http://100.64.0.9:3902/health', expect.anything());
   });
 
@@ -224,7 +224,8 @@ describe('AgentInstaller on a Windows host', () => {
         const result = await pending;
         expect(result.success).toBe(false);
         expect(result.error).toContain('Rolled back:');
-        expect(result.error).toContain('restored the previous files');
+        expect(result.error).toContain('restored the version folder');
+        expect(result.error).toContain('restored the settings');
         expect(result.error).toContain('restored the previous task definition');
         expect(result.error).toContain('started the previous agent again');
         // The definition on the host is the previous one again, and the previous agent is running.
@@ -237,6 +238,77 @@ describe('AgentInstaller on a Windows host', () => {
         expect(scripts.some((s) => s.includes("Move-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev' -Destination 'C:\\Users\\dev\\.azito\\agent\\agent.env'"))).toBe(true);
         // Nothing of the previous install was deleted for good.
         expect(scripts.some((s) => s.includes("Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev' -Recurse -Force }"))).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not start the previous agent when its settings could not be put back, and says what stays set aside', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('401'); }));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+      try {
+        const { installer, host } = make({ existingTask: 'running', failScript: { containing: "Move-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev'", stderr: 'Access is denied' } });
+        const pending = installer.install('user@win');
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await pending;
+        expect(result.success).toBe(false);
+        // The folder restore is independent of the settings restore: it was still tried and worked.
+        expect(result.error).toContain('restored the version folder');
+        expect(result.error).toContain('restored the settings failed');
+        expect(result.error).toContain('the previous agent was NOT started');
+        expect(result.error).toContain('agent.env.prev');
+        expect(result.error).not.toContain('started the previous agent again');
+        expect(host.taskState).not.toBe('running');
+        // Nothing deleted the set-aside data.
+        expect(host.calls.filter((c) => c.kind === 'script').some((c) => c.text.includes("Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev'"))).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not start the previous agent when its folder could not be put back, but still restores the settings', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('401'); }));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+      try {
+        const { installer, host } = make({ existingTask: 'running', failScript: { containing: "Move-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\bundlehash1.prev'", stderr: 'Access is denied' } });
+        const pending = installer.install('user@win');
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await pending;
+        expect(result.error).toContain('restored the version folder failed');
+        expect(result.error).toContain('restored the settings');
+        expect(result.error).toContain('the previous agent was NOT started');
+        expect(host.taskState).not.toBe('running');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stops before anything is changed while an earlier reinstall left its previous install set aside', async () => {
+      const { installer, host } = make({ existingTask: 'running', failScript: { containing: "-Filter '*.prev'", stderr: 'An earlier reinstall left its previous install set aside and it was neither put back nor removed: C:\\Users\\dev\\.azito\\agent\\agent.env.prev.' } });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('set aside');
+      expect(host.calls.some((c) => c.kind === 'schtasks' && c.schtasksArgs![0] === '/End')).toBe(false);
+      expect(host.taskState).toBe('running');
+      const prepare = host.calls.filter((c) => c.kind === 'script')[0]!.text;
+      // The script itself refuses (throws) before it removes anything, and never deletes a *.prev.
+      expect(prepare.indexOf("throw ('An earlier reinstall")).toBeGreaterThan(-1);
+      expect(prepare).not.toMatch(/Remove-Item[^\n]*\.prev/);
+    });
+
+    it('removes the version folder and the settings a failed first install created', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('refused'); }));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+      try {
+        const { installer, host } = make();
+        const pending = installer.install('user@win');
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await pending;
+        expect(result.error).toContain('restored the version folder');
+        expect(result.error).toContain('restored the settings');
+        const restore = host.calls.filter((c) => c.kind === 'script').map((c) => c.text).filter((t) => t.includes('elseif (Test-Path'));
+        expect(restore.some((t) => t.includes("Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\bundlehash1'"))).toBe(true);
+        expect(restore.some((t) => t.includes("Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env'"))).toBe(true);
       } finally {
         vi.useRealTimers();
       }

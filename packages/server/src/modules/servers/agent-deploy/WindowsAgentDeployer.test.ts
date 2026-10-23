@@ -26,7 +26,7 @@ describe('buildAgentEnvFile', () => {
 
   it('writes the values node --env-file reads, double-quoted', () => {
     expect(buildAgentEnvFile(env()))
-      .toBe('AZITO_AGENT_TOKEN="tok"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\a b\\agent.log"\n');
+      .toBe('AZITO_AGENT_TOKEN="tok"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\a b\\agent.log"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\n');
   });
 
   it.each([
@@ -42,7 +42,7 @@ describe('buildAgentEnvFile', () => {
 
   it('reads every setting back', () => {
     const parsed = parseEnv(buildAgentEnvFile(env({ token: 'a'.repeat(64) })));
-    expect(parsed).toEqual({ AZITO_AGENT_TOKEN: 'a'.repeat(64), AZITO_AGENT_BIND: '100.64.0.9', PORT: '3002', AZITO_AGENT_LOG_FILE: 'C:\\Users\\a b\\agent.log' });
+    expect(parsed).toEqual({ AZITO_AGENT_TOKEN: 'a'.repeat(64), AZITO_AGENT_BIND: '100.64.0.9', PORT: '3002', AZITO_AGENT_LOG_FILE: 'C:\\Users\\a b\\agent.log', AZITO_AGENT_EXIT_WITH_PARENT: '1' });
   });
 
   it.each(['a\nb', ''])('refuses a value that cannot be written (%j)', (token) => {

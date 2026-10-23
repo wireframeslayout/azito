@@ -6,7 +6,7 @@ import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskS
 import { buildTaskXml, encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
-import { buildFirewallCommand, describeFirewallProblem, parseFirewallResult } from './windowsFirewall';
+import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 
@@ -45,6 +45,7 @@ export interface WindowsDeployment {
 }
 
 const QUICK_MS = 60_000;
+const FIREWALL_MS = 120_000;
 const EXTRACT_MS = 300_000;
 const STOP_WAIT_MS = 20_000;
 const STOP_POLL_MS = 500;
@@ -78,6 +79,11 @@ export interface WindowsAgentLayout {
 /** `<home>\<dir>`: the folder everything of this agent install lives in. */
 export function windowsAgentRoot(home: string, options: WindowsAgentOptions): string {
   return path.win32.join(home, options.dir);
+}
+
+/** The settings file of the install in `<home>\<dir>`; the task, the agent folder and the process sweep all name it. */
+export function windowsAgentEnvFile(home: string, options: WindowsAgentOptions): string {
+  return path.win32.join(windowsAgentRoot(home, options), 'agent.env');
 }
 
 export function windowsAgentLayout(home: string, options: WindowsAgentOptions, version: string): WindowsAgentLayout {
@@ -122,6 +128,8 @@ export function buildAgentEnvFile(env: { token: string; bindAddress: string; por
     ['PORT', String(env.port)],
     // A task has nowhere to send the agent's output: the agent writes its log to this file itself.
     ['AZITO_AGENT_LOG_FILE', env.logFile],
+    // Set only here, so only an agent started by the task ends when its parent (the conhost.exe the task runs) is gone: a `node azito-agent.cjs` started by hand has no such setting.
+    ['AZITO_AGENT_EXIT_WITH_PARENT', '1'],
   ];
   return values.map(([name, value]) => `${name}=${quoteDotenvValue(name, value)}`).join('\n') + '\n';
 }
@@ -135,6 +143,12 @@ export function powershellErrorText(stderr: string): string {
   const parts = [...stderr.matchAll(/<S S="Error">([\s\S]*?)<\/S>/g)].map((m) => m[1]!);
   const text = parts.join('').replace(/_x000D__x000A_|_x000A_/g, '\n').replace(/_x000D_/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
   return text.trim();
+}
+
+/** What a deploy has put in place so far (an undo removes these, and puts back what it moved aside). */
+interface DeployProgress {
+  versionCreated: boolean;
+  settingsSwapped: boolean;
 }
 
 /** What was on the host before a deploy touched it. */
@@ -164,8 +178,8 @@ export class WindowsAgentDeployer {
    * Allow rule that covers this program, port, address and the tailnet. Adds the rule when this session may (elevated).
    */
   async ensureFirewall(sshHost: string, nodePath: string, bindAddress: string): Promise<void> {
-    const result = await this.sshExec(sshHost, buildFirewallCommand(this.options.port, nodePath, bindAddress), QUICK_MS);
-    const problem = describeFirewallProblem(parseFirewallResult(result.stdout, result.stderr, result.code), this.options.port, nodePath, bindAddress);
+    const result = await checkFirewall((command) => this.sshExec(sshHost, command, FIREWALL_MS), this.options.port, nodePath, bindAddress);
+    const problem = describeFirewallProblem(result, this.options.port, nodePath, bindAddress);
     if (problem) throw new Error(problem);
   }
 
@@ -181,16 +195,20 @@ export class WindowsAgentDeployer {
     const taskXml = this.buildTask(input, layout);
     const client = this.schtasks(input.sshHost, input.host);
     let previous: Previous | undefined;
-    const rollback = (): Promise<string> => this.restore(input, layout, client, previous);
+    /** What this deploy has put in place, so that an undo removes exactly that. */
+    const progress: DeployProgress = { versionCreated: false, settingsSwapped: false };
+    const rollback = (): Promise<string> => this.restore(input, layout, client, previous, progress);
 
     try {
       await this.prepareRoot(input.sshHost, layout);
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
       previous = await this.capturePrevious(client);
-      await this.stopTask(input.sshHost, client, layout.root);
+      await this.stopTask(input.sshHost, client, layout.envFile);
       await this.extract(input, layout);
+      progress.versionCreated = true;
       await this.writeSettings(input, layout, envContent);
+      progress.settingsSwapped = true;
       await this.registerXml(input.sshHost, layout, client, taskXml);
     } catch (err) {
       const outcome = await rollback().catch((e: unknown) => `the previous install could not be restored: ${(e as Error).message}`);
@@ -208,7 +226,7 @@ export class WindowsAgentDeployer {
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */
   async stop(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
-    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentRoot(host.home, this.options));
+    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options));
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart). */
@@ -216,7 +234,7 @@ export class WindowsAgentDeployer {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
-    await this.stopTask(sshHost, client, windowsAgentRoot(host.home, this.options));
+    await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
     await client.start(this.options.taskName);
   }
 
@@ -257,12 +275,11 @@ export class WindowsAgentDeployer {
   }
 
   /**
-   * Stops the task and makes sure no agent process is left: the Task Scheduler's `/End` ends the task's own process (the
-   * `conhost.exe`), and the `node.exe` it started can outlive it and keep the version folder open. So after the task has
-   * stopped, any `node.exe` / `conhost.exe` whose command line names this install's folder is ended too (the Windows
-   * counterpart of ending the Unix agent by its command line), and the call fails if one will not go.
+   * Stops the task and makes sure no agent process of this install is left. The agent ends by itself when the `conhost.exe` the
+   * task runs is gone (its settings say so), which is what `/End` and the Task Scheduler's own "End" rely on; this is the
+   * safety net for an agent that does not (an older one, or one whose parent watch has not fired yet).
    */
-  private async stopTask(sshHost: string, client: SchtasksClient, root: string): Promise<void> {
+  private async stopTask(sshHost: string, client: SchtasksClient, envFile: string): Promise<void> {
     const taskName = this.options.taskName;
     let state = await client.query(taskName);
     if (state.exists && state.running) {
@@ -274,18 +291,34 @@ export class WindowsAgentDeployer {
         state = await client.query(taskName);
       }
     }
-    await this.endStrayProcesses(sshHost, root);
+    await this.endStrayProcesses(sshHost, envFile);
   }
 
-  private async endStrayProcesses(sshHost: string, root: string): Promise<void> {
+  /**
+   * Ends the `node.exe` processes of this install and nothing else: one of them has the argument `--env-file=<this install's
+   * agent.env>` exactly (a token of the command line, so the `--env-file` of an install nested below this one, or a program that
+   * merely mentions the folder, does not match) and is owned by the user this session runs as (the SID is compared; an elevated
+   * session does not reach other users' processes). The `conhost.exe` above such a node is ended with it.
+   */
+  private async endStrayProcesses(sshHost: string, envFile: string): Promise<void> {
     const q = powershellDialect.quote;
     await this.script(sshHost, 'Ending the agent processes', [
-      `$root = ${q(`${root}\\`)}`,
-      'function Get-AgentProcesses { @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and ($_.Name -eq \'node.exe\' -or $_.Name -eq \'conhost.exe\') }) }',
-      'foreach ($p in Get-AgentProcesses) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
-      'for ($i = 0; $i -lt 20 -and (Get-AgentProcesses).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }',
-      '$left = @(Get-AgentProcesses)',
-      'if ($left.Count -gt 0) { throw "An agent process did not end: $($left[0].Name) $($left[0].ProcessId)" }',
+      `$envArgument = '--env-file=' + ${q(envFile)}`,
+      "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
+      '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
+      'function Test-Mine($process) { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid).Sid -eq $me }',
+      'function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pattern) -and (Test-Mine $_) }) }',
+      '$targets = @()',
+      'foreach ($node in Get-AgentNodes) {',
+      '  $targets += $node.ProcessId',
+      '  $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($node.ParentProcessId)"',
+      "  if ($parent -and $parent.Name -eq 'conhost.exe' -and (Test-Mine $parent)) { $targets += $parent.ProcessId }",
+      '}',
+      'foreach ($id in $targets) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }',
+      'function Get-Alive { @($targets | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) }',
+      'for ($i = 0; $i -lt 20 -and (Get-Alive).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }',
+      '$left = Get-Alive',
+      'if ($left.Count -gt 0) { throw "An agent process did not end: $($left -join \', \')" }',
     ].join('\n'), QUICK_MS);
   }
 
@@ -299,11 +332,22 @@ export class WindowsAgentDeployer {
     return result.stdout;
   }
 
-  /** Creates the agent's folder and makes it owner-only (files created in it inherit that); clears what a crashed earlier deploy left. */
+  /**
+   * Creates the agent's folder and makes it owner-only (files created in it inherit that), clears the temporary files a crashed
+   * earlier deploy left, and refuses to go on while an earlier reinstall's previous install is still set aside (`*.prev`): it
+   * may be the only copy of settings the hub still holds the token for, so it is never deleted for the sake of a new deploy.
+   */
   private async prepareRoot(sshHost: string, layout: WindowsAgentLayout): Promise<void> {
     const q = powershellDialect.quote;
-    const stale = [layout.versionDirPrev, layout.envFilePrev, layout.envFileNew, layout.extractDir].map((p) => `Remove-Item -LiteralPath ${q(p)} -Recurse -Force -ErrorAction SilentlyContinue`).join('\n');
-    await this.script(sshHost, 'Preparing the agent folder', `New-Item -ItemType Directory -Force -Path ${q(layout.root)} | Out-Null\n${stale}\n$env:AZITO_GUARD_PATH = ${q(layout.root)}\n${PROTECT_SCRIPT}`);
+    const temporary = [layout.envFileNew, layout.extractDir].map((p) => `Remove-Item -LiteralPath ${q(p)} -Recurse -Force -ErrorAction SilentlyContinue`).join('\n');
+    await this.script(sshHost, 'Preparing the agent folder', [
+      `New-Item -ItemType Directory -Force -Path ${q(layout.root)} | Out-Null`,
+      `$aside = @(Get-ChildItem -LiteralPath ${q(layout.root)} -Filter '*.prev' -Force | ForEach-Object { $_.FullName })`,
+      "if ($aside.Count -gt 0) { throw ('An earlier reinstall left its previous install set aside and it was neither put back nor removed: ' + ($aside -join ', ') + '. If the agent that is installed works, delete these; otherwise move each back to its name without .prev. Then install again.') }",
+      temporary,
+      `$env:AZITO_GUARD_PATH = ${q(layout.root)}`,
+      PROTECT_SCRIPT,
+    ].join('\n'));
   }
 
   private async verifySha256(sshHost: string, file: string, expected: string): Promise<void> {
@@ -385,42 +429,49 @@ export class WindowsAgentDeployer {
   }
 
   /**
-   * Puts the host back as it was before the deploy, in this order: stop whatever is running now; restore the folder and the
-   * settings that were moved aside; delete the temporary files; put the previous task definition back (or delete the task if
-   * there was none); start the task again if it was running. A step that fails does not stop the others; what could not be
-   * restored is in the returned text.
+   * Undoes the deploy, in this order: stop whatever is running now; restore the version folder; restore the settings (the two
+   * restores are tried independently); delete the temporary files; put the previous task definition back, or delete the new
+   * task when there was none; start the previous agent again if it was running AND both restores worked (an agent started on
+   * new settings or without its folder would not match the token the hub holds). What this deploy created is removed; what it
+   * moved aside is moved back, and stays aside (`*.prev`) when it could not be, with the reason in the returned text.
    */
-  private async restore(input: WindowsDeployInput, layout: WindowsAgentLayout, client: SchtasksClient, previous: Previous | undefined): Promise<string> {
+  private async restore(input: WindowsDeployInput, layout: WindowsAgentLayout, client: SchtasksClient, previous: Previous | undefined, progress: DeployProgress): Promise<string> {
     const q = powershellDialect.quote;
     const done: string[] = [];
     const problems: string[] = [];
-    const attempt = async (what: string, action: () => Promise<void>): Promise<void> => {
+    const attempt = async (what: string, action: () => Promise<unknown>): Promise<boolean> => {
       try {
         await action();
         done.push(what);
+        return true;
       } catch (err) {
         problems.push(`${what} failed: ${(err as Error).message}`);
+        return false;
       }
     };
+    // Put `aside` back at `place`; when nothing was set aside but this deploy created `place`, remove it.
+    const putBack = (aside: string, place: string, created: boolean): string => [
+      `if (Test-Path -LiteralPath ${q(aside)}) {`,
+      `  if (Test-Path -LiteralPath ${q(place)}) { Remove-Item -LiteralPath ${q(place)} -Recurse -Force }`,
+      `  Move-Item -LiteralPath ${q(aside)} -Destination ${q(place)}`,
+      created ? `} elseif (Test-Path -LiteralPath ${q(place)}) { Remove-Item -LiteralPath ${q(place)} -Recurse -Force }` : '}',
+    ].join('\n');
 
     // Nothing was touched before the capture: only the temporary files are removed.
+    let restored = false;
     if (previous !== undefined) {
-      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.root));
-      await attempt('restored the previous files', async () => {
-        await this.script(input.sshHost, 'Restoring the previous files', [
-          `if (Test-Path -LiteralPath ${q(layout.versionDirPrev)}) { if (Test-Path -LiteralPath ${q(layout.versionDir)}) { Remove-Item -LiteralPath ${q(layout.versionDir)} -Recurse -Force }; Move-Item -LiteralPath ${q(layout.versionDirPrev)} -Destination ${q(layout.versionDir)} }`,
-          `if (Test-Path -LiteralPath ${q(layout.envFilePrev)}) { if (Test-Path -LiteralPath ${q(layout.envFile)}) { Remove-Item -LiteralPath ${q(layout.envFile)} -Force }; Move-Item -LiteralPath ${q(layout.envFilePrev)} -Destination ${q(layout.envFile)} }`,
-        ].join('\n'));
-      });
+      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile));
+      const folder = await attempt('restored the version folder', () => this.script(input.sshHost, 'Restoring the previous version folder', putBack(layout.versionDirPrev, layout.versionDir, progress.versionCreated)));
+      const settings = await attempt('restored the settings', () => this.script(input.sshHost, 'Restoring the previous settings', putBack(layout.envFilePrev, layout.envFile, progress.settingsSwapped)));
+      restored = folder && settings;
     }
-    await attempt('removed the temporary files', async () => {
-      await this.script(input.sshHost, 'Removing the temporary files', [layout.tarball, layout.extractDir, layout.taskXml, layout.envFileNew].map((p) => `Remove-Item -LiteralPath ${q(p)} -Recurse -Force -ErrorAction SilentlyContinue`).join('\n'));
-    });
+    await attempt('removed the temporary files', () => this.script(input.sshHost, 'Removing the temporary files', [layout.tarball, layout.extractDir, layout.taskXml, layout.envFileNew].map((p) => `Remove-Item -LiteralPath ${q(p)} -Recurse -Force -ErrorAction SilentlyContinue`).join('\n')));
     if (previous !== undefined) {
       if (previous.taskXml !== undefined) {
         const xml = previous.taskXml;
         await attempt('restored the previous task definition', () => this.registerXml(input.sshHost, layout, client, xml));
-        if (previous.wasRunning) await attempt('started the previous agent again', () => client.start(this.options.taskName));
+        if (previous.wasRunning && restored) await attempt('started the previous agent again', () => client.start(this.options.taskName));
+        if (previous.wasRunning && !restored) problems.push(`the previous agent was NOT started, because its folder or settings could not be put back; what is left of the previous install stays set aside as ${layout.envFilePrev} and ${layout.versionDirPrev} (when present)`);
       } else {
         await attempt('removed the new task', async () => {
           if ((await client.query(this.options.taskName)).exists) await client.delete(this.options.taskName);

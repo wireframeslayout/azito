@@ -10,7 +10,7 @@ import { powershellDialect } from '../../../shared/os/shellDialect';
 import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
 import { WindowsAgentDeployer, buildAgentEnvFile, windowsAgentLayout, type WindowsDeployInput, type WindowsFileTransfer, type WindowsSshExec } from './WindowsAgentDeployer';
-import { buildFirewallCommand, firewallRuleName, parseFirewallResult } from './windowsFirewall';
+import { checkFirewall, firewallRuleName } from './windowsFirewall';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 
@@ -209,11 +209,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
   });
 
   describe('the firewall script on the real PowerShell', () => {
-    const run = async (port: number, node = fwNode) => {
-      const out = await cmdExec('ci', buildFirewallCommand(port, node, BIND), 120_000);
-      expect(out.code, out.stderr).toBe(0);
-      return parseFirewallResult(out.stdout, out.stderr, out.code);
-    };
+    const run = (port: number, node = fwNode) => checkFirewall((command) => cmdExec('ci', command, 120_000), port, node, BIND);
     const track = (port: number): string => {
       const name = firewallRuleName(port);
       firewallRules.add(name);
@@ -354,6 +350,30 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       }
     });
 
+    it('the sweep ends a node.exe that has this install\'s --env-file argument and nothing that only mentions the folder', async () => {
+      const layout = layoutOf();
+      const script = path.join(os.tmpdir(), `azito-ci-decoy-${SUFFIX}.js`);
+      fs.writeFileSync(script, 'setTimeout(() => {}, 120000);');
+      const start = (...args: string[]): ChildProcess => spawn(host.nodePath!, [script, ...args], { stdio: 'ignore', windowsHide: true });
+      const alive = (child: ChildProcess): boolean => {
+        try { process.kill(child.pid!, 0); return true; } catch { return false; }
+      };
+      const lookalike = start(`--env-file=${layout.envFile}`); // the argument of this install: it is ended
+      const nested = start(`--env-file=${path.win32.join(layout.root, 'sub', 'agent.env')}`); // an install nested below this one
+      const mention = start(path.win32.join(layout.root, 'agent.log')); // only mentions the folder
+      const other = start(`--env-file=${layout.envFile}.other`); // a different file name
+      try {
+        await new Promise((r) => setTimeout(r, 1500));
+        await deployer.stop('ci', host);
+        for (let i = 0; i < 20 && alive(lookalike); i++) await new Promise((r) => setTimeout(r, 250));
+        expect(alive(lookalike)).toBe(false);
+        expect([alive(nested), alive(mention), alive(other)]).toEqual([true, true, true]);
+      } finally {
+        for (const child of [lookalike, nested, mention, other]) child.kill();
+        fs.rmSync(script, { force: true });
+      }
+    }, 120_000);
+
     it('node.exe --env-file=<settings> <entry> starts the real agent, which answers /health 200', async () => {
       const layout = layoutOf();
       direct = spawn(host.nodePath!, [`--env-file=${layout.envFile}`, layout.entry], { cwd: layout.versionDir, stdio: 'ignore', windowsHide: true });
@@ -384,7 +404,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       }
     }
 
-    it('starts the agent under conhost --headless (no window), restarts it, and leaves no process behind after /End', async (ctx) => {
+    it('starts the agent under conhost --headless (no window), restarts it, and leaves no process behind after the task\'s own /End', async (ctx) => {
       await deployer.start('ci', host);
       const started = await untilTaskSettled();
       if (started.skip) {
@@ -406,15 +426,15 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       await deployer.restart('ci', host);
       await waitForHealth(OPTIONS.port, version, 60_000);
 
-      // For the record (not asserted): what the Task Scheduler's own /End leaves behind. The deployer's stop sweeps the rest.
+      // The Task Scheduler's own /End (what the docs tell a person to run, and what its "End" button does) is enough: the agent
+      // follows its parent, the conhost the task runs, and ends within a few seconds. No sweep is involved here.
       await cmdExec('ci', `"${schtasksPath()}" /End /TN ${OPTIONS.taskName}`, 60_000);
-      await new Promise((r) => setTimeout(r, 3000));
-      console.log(`[WindowsAgentDeployer.windows.test] processes left 3s after the task's own /End: ${JSON.stringify(await agentProcesses(layoutOf().root))}`);
-
-      await deployer.stop('ci', host);
-      await waitForNoHealth(OPTIONS.port, 15_000);
-      // After stop() there is no agent process of this install: the conhost, and the node it started.
+      await waitForNoHealth(OPTIONS.port, 30_000);
+      for (let i = 0; i < 20 && (await agentProcesses(layoutOf().root)).length > 0; i++) await new Promise((r) => setTimeout(r, 500));
       expect(await agentProcesses(layoutOf().root)).toEqual([]);
+
+      // And the deployer's stop on an already stopped task changes nothing and succeeds.
+      await deployer.stop('ci', host);
     }, 300_000);
 
     it('a failed reinstall restores the previous install: files, settings, task definition, and the running agent', async (ctx) => {
