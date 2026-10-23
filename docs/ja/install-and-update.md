@@ -349,6 +349,19 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 手動で更新する場合は Servers → 対象サーバー → Setup → Agent Server の「Reinstall」を使用します。
 
+## Windows ホストをエージェントとして追加する（導入は未対応）
+
+Windows へのエージェント導入は開発中です（#369）。現時点では **preflight（事前確認）** だけを実行し、`unsupported_os: installing the agent on a Windows host is not supported yet` で止まります。転送もサーバー登録も行いません。ただし preflight で、その Windows ホストが前提を満たしているかは確認できます。
+
+| 前提 | 内容 |
+|---|---|
+| OpenSSH サーバー | Windows 側で有効化し、ハブから到達できること。既定シェルは **cmd.exe のままでよい**（PowerShell でも可）。ハブは先に OS を判定し、以後の確認は両方で同じに動く PowerShell スクリプトで行います |
+| Windows | Windows 10 / 11 の x64 のみ（ARM 版 Windows は理由付きで拒否） |
+| Node.js v24+ | SSH セッションの PATH にあること |
+| Tailscale | 導入済みでサインイン済みであること。PATH に無くても `%ProgramFiles%\Tailscale\tailscale.exe` を探します |
+
+OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo` で行い、どれにも当てはまらない応答は推測せずエラーにします。
+
 ## ロールバック
 
 ```bash

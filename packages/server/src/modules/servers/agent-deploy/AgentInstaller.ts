@@ -5,6 +5,8 @@ import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
+import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
@@ -59,6 +61,8 @@ interface PreflightInfo {
   hostProfile: HostProfile;
   /** Empty when the host has no tmux: not required, misao is the pane server this hub installs. */
   tmuxVersion: string;
+  /** Set for a Windows host (e.g. `Windows 11`): its preflight passed, but the install after it is not implemented yet. */
+  windowsVersion?: string;
 }
 
 const AGENT_PORT = 3002;
@@ -94,6 +98,10 @@ export class AgentInstaller {
     let preflight: PreflightInfo;
     try {
       preflight = await this.preflight(sshHost);
+      if (preflight.windowsVersion) {
+        // The Windows preflight passed; transferring, starting and registering the agent there are #369 A2 / A3. Nothing is stored for the host.
+        throw new Error(`${preflight.windowsVersion} x64, Node ${preflight.nodeVersion}, Tailscale ${preflight.tailscaleIp}: unsupported_os: installing the agent on a Windows host is not supported yet`);
+      }
       report('preflight', 'ok', `Node ${preflight.nodeVersion}, ${preflight.hostProfile.platform} ${preflight.hostProfile.arch}, ${preflight.tmuxVersion ? `tmux ${preflight.tmuxVersion}` : 'no tmux (optional)'}`);
     } catch (err) {
       const msg = (err as Error).message;
@@ -206,6 +214,31 @@ export class AgentInstaller {
   }
 
   private async preflight(sshHost: string): Promise<PreflightInfo> {
+    // The login shell of the target is unknown (sh, cmd.exe or PowerShell): the OS is read first, then the matching probes run.
+    const osProbe = await this.sshClient.execIsolated(sshHost, HOST_OS_PROBE_COMMAND);
+    if (parseHostOsProbe(osProbe.stdout).os === 'windows') return this.preflightWindows(sshHost);
+    return this.preflightPosix(sshHost);
+  }
+
+  /** One PowerShell script (EncodedCommand: the same under a cmd.exe and a PowerShell login shell) answers everything. */
+  private async preflightWindows(sshHost: string): Promise<PreflightInfo> {
+    const result = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+    const info = parseWindowsPreflight(result.stdout);
+    const missing = checkWindowsPreflight(info);
+    if (missing.length > 0) {
+      throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
+    }
+    // `missing` is empty here, so node and the Tailscale IP are present and the architecture is x64.
+    return {
+      tailscaleIp: info.tailscaleIp!,
+      nodeVersion: info.nodeVersion!,
+      hostProfile: { platform: 'win32', arch: 'x64' },
+      tmuxVersion: '',
+      windowsVersion: info.windowsVersion,
+    };
+  }
+
+  private async preflightPosix(sshHost: string): Promise<PreflightInfo> {
     const missing: string[] = [];
 
     const nodeResult = await this.sshClient.execIsolated(sshHost, 'node --version');
