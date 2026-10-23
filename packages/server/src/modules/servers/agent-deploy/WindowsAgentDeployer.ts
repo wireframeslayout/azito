@@ -206,7 +206,12 @@ export class WindowsAgentDeployer {
 
   private async verifySha256(sshHost: string, file: string, expected: string): Promise<void> {
     const q = powershellDialect.quote;
-    const out = await this.script(sshHost, 'Computing the SHA256 of the uploaded bundle', `(Get-FileHash -LiteralPath ${q(file)} -Algorithm SHA256).Hash.ToLower()`);
+    // .NET directly, not Get-FileHash: that cmdlet comes from a module, and a session whose PSModulePath belongs to another PowerShell (7) cannot load it.
+    const out = await this.script(sshHost, 'Computing the SHA256 of the uploaded bundle', [
+      `$stream = [System.IO.File]::OpenRead(${q(file)})`,
+      'try { $hash = [System.Security.Cryptography.SHA256]::Create().ComputeHash($stream) } finally { $stream.Dispose() }',
+      '[System.BitConverter]::ToString($hash).Replace(\'-\', \'\').ToLower()',
+    ].join('\n'));
     const actual = /\b[0-9a-f]{64}\b/.exec(out)?.[0];
     if (actual !== expected) {
       await this.script(sshHost, 'Removing the bundle', `Remove-Item -LiteralPath ${q(file)} -Force`).catch(() => undefined);

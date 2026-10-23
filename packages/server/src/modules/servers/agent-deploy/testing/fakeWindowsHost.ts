@@ -84,7 +84,7 @@ export class FakeWindowsHost {
     }
     if (script.includes('AZITO_RUN_BEGIN')) return this.schtasks(script);
     this.calls.push({ kind: 'script', text: script });
-    if (script.includes('Get-FileHash')) return { stdout: `${this.options.sha256}\r\n`, stderr: '', code: 0 };
+    if (script.includes('ComputeHash')) return { stdout: `${this.options.sha256}\r\n`, stderr: '', code: 0 };
     if (script.includes('ConvertTo-Json -Depth 4')) {
       const sid = 'S-1-5-21-1-2-3-1001';
       return { stdout: JSON.stringify({ currentSid: sid, ownerSid: sid, entries: [{ sid, name: 'PC\\dev', type: 'Allow', inherited: false }] }), stderr: '', code: 0 };

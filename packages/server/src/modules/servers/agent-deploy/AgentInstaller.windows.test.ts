@@ -65,7 +65,7 @@ describe('AgentInstaller on a Windows host', () => {
     const scripts = host.calls.filter((c) => c.kind === 'script').map((c) => c.text);
     expect(scripts[0]).toContain("New-Item -ItemType Directory -Force -Path 'C:\\Users\\dev\\.azito\\agent'");
     expect(scripts[0]).toContain('PurgeAccessRules'); // the folder is made owner-only before anything is put in it
-    expect(scripts.some((s) => s.includes("Get-FileHash -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\azito-agent-bundlehash1.tar.gz'"))).toBe(true);
+    expect(scripts.some((s) => s.includes("[System.IO.File]::OpenRead('C:\\Users\\dev\\.azito\\agent\\azito-agent-bundlehash1.tar.gz')"))).toBe(true);
     const extract = scripts.find((s) => s.includes('tar.exe'))!;
     expect(extract).toContain("$tar = 'C:\\Windows\\System32\\tar.exe'");
     expect(extract).toContain("$dest = 'C:\\Users\\dev\\.azito\\agent\\bundlehash1'");
