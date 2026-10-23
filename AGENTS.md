@@ -80,6 +80,12 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (`assertStageContents`) before tarring. Native modules are `external` in the bundle and copied in.
 - `scripts/run-hub.sh` becomes `run.sh` in the bundle. It resolves the host PATH (nvm/nodenv/Homebrew)
   and a UTF-8 locale, because systemd/launchd hand the service a minimal environment.
+- A Windows bundle (`--platform win32`, built on a Windows host) is a zip with `node.exe` and `run.ps1` (from `scripts/run-hub.ps1`) instead of
+  `node` / `run.sh`. `install.ps1` (repository root, a release asset listed in `SHA256SUMS`; not inside the bundle) installs it for the current user on
+  Windows PowerShell 5.1 into `<prefix>\hub\<version>\`, records the version in `<prefix>\hub\current.txt` (no `current` symlink on Windows), has the
+  bundled hub create `hub\.env` and `data\` through `azito-hub.cjs init-env` (so the owner-only ACL comes from `SecretFileGuard`), and writes
+  `<prefix>\bin\azito.cmd` (reads `current.txt`; `start` runs `run.ps1`; `stop` / `status` exit 1 until the Task Scheduler service lands). CI runs the whole
+  path on real `powershell.exe` in "Hub bundle (Windows)" (`scripts/smoke-install-win32.ts`).
 - Releases are cut by tagging `v*`; `.github/workflows/release.yml` builds linux-x64/arm64,
   darwin-arm64 and win32-x64 and publishes them with `SHA256SUMS` and `install.sh`. Tags containing a hyphen
   (`v0.3.0-rc1`) are published as pre-releases.

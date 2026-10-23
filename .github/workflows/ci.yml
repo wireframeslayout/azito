@@ -75,7 +75,7 @@ jobs:
         run: npx -w packages/server vitest run --project unit
 
   # Builds the Windows hub bundle (azito-hub-<ver>-win32-x64.zip) exactly as release.yml does, then boots it: extracts the zip and
-  # starts the bundled node.exe on azito-hub.cjs. No tag or release is involved, so a bundling or startup break on Windows
+  # starts the bundled node.exe on azito-hub.cjs, and installs it with install.ps1. No tag or release is involved, so a bundling or startup break on Windows
   # shows up on the pull request instead of at release time.
   hub-bundle-windows:
     name: Hub bundle (Windows)
@@ -99,6 +99,11 @@ jobs:
 
       - name: Smoke-test the Windows hub bundle
         run: npx -w packages/server tsx scripts/smoke-hub-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)"
+
+      # install.ps1 on the real Windows PowerShell 5.1 (not pwsh 7) with the zip just built, into a prefix with spaces and
+      # parentheses; then the installed `azito` command, a hub started through it, and the access rules of the secret files.
+      - name: Install the Windows hub bundle (install.ps1, azito.cmd, run.ps1)
+        run: npx -w packages/server tsx scripts/smoke-install-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
 
   # The integration tests that start a real misao daemon. They run on the very binary the hub ships (the version, URL and
   # sha256 pinned in packages/server/scripts/misaoAssets.ts), so a pin that does not start, or a protocol drift, fails here.

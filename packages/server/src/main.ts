@@ -24,6 +24,7 @@ import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
+import { initEnvCommand } from './cli/initEnvCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
 import { serializeRequestForLog } from './shared/redactUrlSecrets';
@@ -44,6 +45,11 @@ async function main(): Promise<void> {
 
   if (process.argv[2] === 'misao') {
     await misaoCommand(process.argv.slice(3), hostEnv, secretFileGuard);
+    return;
+  }
+
+  if (process.argv[2] === 'init-env') {
+    initEnvCommand(process.argv.slice(3), secretFileGuard);
     return;
   }
 
