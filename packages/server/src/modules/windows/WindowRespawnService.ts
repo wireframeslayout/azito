@@ -353,7 +353,7 @@ export class WindowRespawnService {
       // The window is re-created in the mux it lived in (its row's kind), not the server's default mux.
       const windowKind = windowKindOf(currentWin);
       const openName = windowKind === 'misao'
-        ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}` : 'win'))
+        ? (windowDisplayName(currentWin) ?? (task ? `task-${task.id}-w${windowId}` : `win-w${windowId}`))
         : windowPart;
 
       // Issue #29 review, 14th pass, Important finding 1: the per-server
@@ -376,7 +376,6 @@ export class WindowRespawnService {
       let createdViaNewSession = false;
       const {
         newName,
-        newLabel,
         windowEnv,
         tokenId,
         server: respawnServer,
@@ -463,10 +462,10 @@ export class WindowRespawnService {
           createdViaNewSession = !freshWorkspaceExists;
           if (!freshWorkspaceExists) {
             const opened = await createDriver.openWorkspace(fs, sessionName, { windowName: openName, exactName: true, extraEnv: env, kind: windowKind });
-            return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: openName };
+            return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
           }
           const opened = await createDriver.openWindow(fs, sessionName, openName, { exactName: true, extraEnv: env, kind: windowKind });
-          return { result: opened.result, windowName: opened.ref.window, ref: opened.ref, label: opened.windowName ?? openName };
+          return { result: opened.result, windowName: opened.ref.window, ref: opened.ref };
         };
 
         if (isPrimary) {
@@ -474,10 +473,10 @@ export class WindowRespawnService {
           // confirmOldWindowGone, against this same `freshServer` snapshot
           // (see the comment at the top of this lock callback).
           const created = await createRotatedWindowInLock(this.paneEnvService, freshServer, task!, 'respawn_create_failed', doCreate);
-          return { newName: created.windowName, newLabel: created.label, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: created.tokenId as number | null, server: created.server, ref: created.ref };
         } else if (task) {
           const created = await createSecondaryWindowInLock(this.paneEnvService, freshServer, task, doCreate);
-          return { newName: created.windowName, newLabel: created.label, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         } else {
           // Non-task window respawn — server-aware legacy default (Issue #29
           // review, Critical finding 1): withholds the token when the server
@@ -488,7 +487,7 @@ export class WindowRespawnService {
           // isolation lock as the primary/secondary branches, against the
           // freshly re-fetched `freshServer` row.
           const created = await createPlainWindowInLock(this.uiTokenEnvFn, freshServer, doCreate);
-          return { newName: created.windowName, newLabel: created.label, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
+          return { newName: created.windowName, windowEnv: created.env, tokenId: null as number | null, server: created.server, ref: created.ref };
         }
       });
       await sleep(createdViaNewSession ? 500 : 300);
@@ -503,7 +502,6 @@ export class WindowRespawnService {
         this.windowRepo.update(windowId, {
           tmuxTarget: dbTarget,
           muxRef: newRef,
-          ...(newRef.kind === 'misao' ? { label: newLabel ?? openName } : {}),
           ...(wake ? { sleeping: false } : {}),
         });
         if (task && isPrimary && task.tmuxWindow !== newRef.window) this.taskRepo.update(task.id, { tmuxWindow: newRef.window } as Partial<Task>);
