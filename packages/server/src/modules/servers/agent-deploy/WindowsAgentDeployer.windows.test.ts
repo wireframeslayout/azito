@@ -152,7 +152,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
    * "no rule" cases unreachable), and the rules this suite adds name this path only.
    */
   const fwDir = path.join(os.tmpdir(), `azito-ci-fw-${SUFFIX}`);
-  const fwNode = path.join(fwDir, 'node.exe');
+  // Long form: the firewall refuses an 8.3 short path (RUNNER~1) as a rule's program.
+  let fwNode = '';
 
   const layoutOf = (v = version) => windowsAgentLayout(host.home, OPTIONS, v);
   const schtasksPath = (): string => path.win32.join(host.systemRoot, 'System32', 'schtasks.exe');
@@ -160,7 +161,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
   beforeAll(async () => {
     OPTIONS.port = await freePort();
     fs.mkdirSync(fwDir, { recursive: true });
-    fs.copyFileSync(process.execPath, fwNode);
+    fs.copyFileSync(process.execPath, path.join(fwDir, 'node.exe'));
+    fwNode = path.join(fs.realpathSync.native(fwDir), 'node.exe');
     const bundler = new AgentBundler();
     await bundler.ensureBuild();
     version = bundler.getBundleHash();
@@ -225,6 +227,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       track(port);
       const first = await run(port);
       if (!first.elevated) ctx.skip('this session is not elevated: the rule cannot be added here');
+      console.log(`[WindowsAgentDeployer.windows.test] first firewall result: ${JSON.stringify(first)}`);
       expect(first).toMatchObject({ ruleFound: false, created: true, problem: null, blockedBy: [] });
       const second = await run(port);
       expect(second).toMatchObject({ ruleFound: true, created: false, blockedBy: [] });

@@ -44,6 +44,7 @@ $ours = @('${TAILNET_RANGE}', '${TAILNET_RANGE_READBACK}')
 $elevated = ([System.Security.Principal.WindowsPrincipal][System.Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)
 $found = $null
 $blocked = @()
+$allowedBy = @()
 $created = $false
 $problem = $null
 try {
@@ -67,7 +68,7 @@ try {
       $local = @($ad.LocalAddress | ForEach-Object { "$_" })
       $remoteOk = ($remote -contains 'Any') -or (@($remote | Where-Object { $ours -contains $_ }).Count -gt 0)
       $localOk = ($local -contains 'Any') -or ($local -contains $ip)
-      if (($portNamed -or $portAny) -and ($progNamed -or $progAny) -and $remoteOk -and $localOk) { $allow = $true }
+      if (($portNamed -or $portAny) -and ($progNamed -or $progAny) -and $remoteOk -and $localOk) { $allow = $true; $allowedBy += $r.DisplayName }
     }
   }
   $found = $allow
@@ -78,7 +79,7 @@ if ($found -eq $false -and $elevated -and $blocked.Count -eq 0) {
     $created = $true
   } catch { $problem = $_.Exception.Message }
 }
-$info = [ordered]@{ ruleFound = $found; elevated = $elevated; created = $created; problem = $problem; blockedBy = @($blocked) }
+$info = [ordered]@{ ruleFound = $found; elevated = $elevated; created = $created; problem = $problem; blockedBy = @($blocked); allowedBy = @($allowedBy) }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
 $json = ConvertTo-Json -InputObject $info -Compress
@@ -99,6 +100,8 @@ const resultSchema = z.object({
   problem: z.string().nullable(),
   /** DisplayNames of enabled inbound Block rules that stop the agent's port or program. */
   blockedBy: z.array(z.string()),
+  /** DisplayNames of the enabled inbound Allow rules that cover the agent (for the record). */
+  allowedBy: z.array(z.string()).optional(),
 });
 
 export type FirewallResult = z.infer<typeof resultSchema>;
