@@ -19,7 +19,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,
-    defaultMux: 'tmux' as const, muxRuntime: 'system',
+    defaultMux: 'tmux' as const, muxRuntime: 'system', hostProfile: null,
     createdAt: '2024-01-01',
     ...overrides,
   };

@@ -41,6 +41,8 @@ function makeOpts(servers: ServerConfig[]): ServersRouteOptions {
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',
+    harnessHash: 'testhash',
+    harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     serverIsolationMutex: new KeyedMutex(),
     scopedAuthEnabled: true,
     muxDriverRegistry,
