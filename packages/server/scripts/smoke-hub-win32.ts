@@ -1,4 +1,4 @@
-import { execFileSync, spawn } from 'child_process';
+import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -27,11 +27,12 @@ function freePort(): Promise<number> {
   });
 }
 
-async function waitForHealth(url: string, hasExited: () => boolean): Promise<Response> {
+async function waitForHealth(url: string, failure: () => Error | null): Promise<Response> {
   const deadline = Date.now() + STARTUP_TIMEOUT_MS;
   let lastError = 'no response yet';
   while (Date.now() < deadline) {
-    if (hasExited()) throw new Error('the hub exited before /api/health answered');
+    const failed = failure();
+    if (failed) throw failed;
     try {
       const res = await fetch(url);
       if (res.ok) return res;
@@ -49,31 +50,35 @@ async function main(): Promise<void> {
   if (!zip) throw new Error('usage: smoke-hub-win32.ts <azito-hub-*-win32-x64.zip>');
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-hub-smoke-'));
-  const bundle = path.join(work, 'bundle');
-  const dataDir = path.join(work, 'data');
-  fs.mkdirSync(bundle);
-  execFileSync(hostTar(), ['-xf', path.resolve(zip), '-C', bundle]);
-
-  const port = await freePort();
   let output = '';
+  let hub: ChildProcess | null = null;
+  let failure: Error | null = null;
   let exited = false;
-  const hub = spawn(path.join(bundle, 'node.exe'), ['azito-hub.cjs'], {
-    cwd: bundle,
-    env: { ...process.env, AZITO_DATA_DIR: dataDir, AZITO_BIND: '127.0.0.1', PORT: String(port) },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-  hub.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-  hub.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-  hub.on('exit', () => { exited = true; });
-
   try {
-    const res = await waitForHealth(`http://127.0.0.1:${port}/api/health`, () => exited);
+    const bundle = path.join(work, 'bundle');
+    fs.mkdirSync(bundle);
+    execFileSync(hostTar(), ['-xf', path.resolve(zip), '-C', bundle]);
+
+    const port = await freePort();
+    const child = spawn(path.join(bundle, 'node.exe'), ['azito-hub.cjs'], {
+      cwd: bundle,
+      env: { ...process.env, AZITO_DATA_DIR: path.join(work, 'data'), AZITO_BIND: '127.0.0.1', PORT: String(port) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    hub = child;
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    // A failed spawn (no node.exe, not executable) emits `error` and never `exit`: both end the wait.
+    child.on('error', (err) => { failure = new Error(`could not start node.exe: ${err.message}`); exited = true; });
+    child.on('exit', (code) => { failure ??= new Error(`the hub exited (code ${code}) before /api/health answered`); exited = true; });
+
+    const res = await waitForHealth(`http://127.0.0.1:${port}/api/health`, () => failure);
     console.log(`[smoke-hub] /api/health -> ${res.status} ${JSON.stringify(await res.json())}`);
   } catch (err) {
     console.error(`[smoke-hub] hub output:\n${output}`);
     throw err;
   } finally {
-    if (!exited) {
+    if (hub && !exited) {
       hub.kill();
       await new Promise((r) => setTimeout(r, 1000));
     }

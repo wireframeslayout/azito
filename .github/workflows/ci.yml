@@ -80,6 +80,7 @@ jobs:
   hub-bundle-windows:
     name: Hub bundle (Windows)
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         shell: bash

@@ -27,10 +27,6 @@ jobs:
             arch: x64
 
     runs-on: ${{ matrix.os }}
-    # The steps are bash on every runner (Git Bash on Windows), so one command line serves all of them.
-    defaults:
-      run:
-        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -41,12 +37,8 @@ jobs:
       - run: npm ci
 
       - name: Build hub bundle
-        run: |
-          npx -w packages/server tsx scripts/build-hub.ts \
-            --version ${{ github.ref_name }} \
-            --platform ${{ matrix.platform }} \
-            --arch ${{ matrix.arch }} \
-            --repo ${{ github.repository }}
+        # One line, so it runs the same in bash and in the Windows runner's default PowerShell.
+        run: npx -w packages/server tsx scripts/build-hub.ts --version ${{ github.ref_name }} --platform ${{ matrix.platform }} --arch ${{ matrix.arch }} --repo ${{ github.repository }}
 
       # Runs the bundled misao binary that fits this runner the way the installed service does (a mode-700 data dir, no node),
       # checks that server.info reports both versions and that a pane opens, and stops it — a broken or mismatched binary fails the release here.
@@ -71,6 +63,7 @@ jobs:
       # wait for /api/health and stop it. build-hub.ts has already checked the zip for data/ and the stage contents.
       - name: Smoke-test the Windows hub bundle
         if: matrix.platform == 'win32'
+        shell: bash
         run: npx -w packages/server tsx scripts/smoke-hub-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)"
 
       - name: Verify no data/ in tarball

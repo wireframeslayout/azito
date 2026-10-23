@@ -217,9 +217,11 @@ function copyRuntimeDeps(moduleName: string, nodeModulesDest: string, seen = new
 /** Files only a Unix bundle carries (the launcher script and the Node binary). B2 adds run.ps1 / install.ps1 / azito.cmd to the Windows one. */
 const UNIX_ONLY_FILES = ['run.sh', 'node'];
 
-/** node-pty's Windows files (conpty is the backend; winpty is the fallback for a Windows before 1809 and is not required). */
-const NODE_PTY_WIN32_FILES = ['conpty.node', 'conpty_console_list.node'];
-const NODE_PTY_WIN32_CONPTY_DLL_FILES = ['conpty/conpty.dll', 'conpty/OpenConsole.exe'];
+/**
+ * node-pty's Windows files (conpty is the backend; winpty is the fallback for a Windows before 1809 and is not required).
+ * The `.node` files and the `conpty/` folder beside them are one set: node-pty loads them from the same directory.
+ */
+const NODE_PTY_WIN32_FILES = ['conpty.node', 'conpty_console_list.node', 'conpty/conpty.dll', 'conpty/OpenConsole.exe'];
 
 function assertStageContents(platform: Args['platform']): void {
   const isWin32 = platform === 'win32';
@@ -288,16 +290,15 @@ function assertStageContents(platform: Args['platform']): void {
   }
 }
 
-/** node-pty's native files for Windows: each one in `build/Release` (a source build) or in `prebuilds/win32-x64` (the npm package's own). */
+/** node-pty's native files for Windows: one complete set in `build/Release` (a source build) or in `prebuilds/win32-x64` (the npm package's own). */
 function assertNodePtyWin32(): void {
   const root = path.join(STAGE, 'node_modules', 'node-pty');
-  const prebuilds = path.join(root, 'prebuilds', 'win32-x64');
-  const missing = [
-    ...NODE_PTY_WIN32_FILES.filter(f => !fs.existsSync(path.join(root, 'build', 'Release', f)) && !fs.existsSync(path.join(prebuilds, f))),
-    ...NODE_PTY_WIN32_CONPTY_DLL_FILES.filter(f => !fs.existsSync(path.join(prebuilds, f))),
-  ];
-  if (missing.length > 0) {
-    throw new Error(`Stage validation failed: node-pty Windows files are missing: ${missing.join(', ')}`);
+  const layouts = [path.join(root, 'build', 'Release'), path.join(root, 'prebuilds', 'win32-x64')];
+  const missingPerLayout = layouts.map(dir => NODE_PTY_WIN32_FILES.filter(f => !fs.existsSync(path.join(dir, f))));
+  if (missingPerLayout.every(missing => missing.length > 0)) {
+    throw new Error(
+      `Stage validation failed: node-pty has no complete Windows set (${layouts.map((dir, i) => `${path.relative(STAGE, dir)} lacks ${missingPerLayout[i].join(', ')}`).join('; ')})`,
+    );
   }
 }
 
@@ -470,11 +471,11 @@ async function main(): Promise<void> {
   // 14. Validate stage contents
   assertStageContents(args.platform);
 
-  // 15. Create the archive: a zip for Windows (tar.exe -a picks the format from the extension; Compress-Archive in
+  // 15. Create the archive (a zip lists the stage's top-level names, not `.`, so no entry is named `./...`): a zip for Windows (tar.exe -a picks the format from the extension; Compress-Archive in
   // PowerShell 5.1 writes backslash entry names that other unzippers mis-read), a tarball elsewhere.
   const tarballName = `azito-hub-${args.version}-${args.platform}-${args.arch}.${args.platform === 'win32' ? 'zip' : 'tar.gz'}`;
   if (args.platform === 'win32') {
-    execFileSync(hostTar(), ['-a', '-c', '-f', tarballName, '-C', 'stage', '.'], { cwd: DIST, timeout: 300000 });
+    execFileSync(hostTar(), ['-a', '-c', '-f', tarballName, '-C', 'stage', ...fs.readdirSync(STAGE)], { cwd: DIST, timeout: 300000 });
   } else {
     execSync(`tar czf "${tarballName}" -C stage .`, { cwd: DIST });
   }
