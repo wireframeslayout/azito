@@ -28,13 +28,10 @@ export function createServiceManager(host: ServiceHost, spec: ServiceSpec, run: 
 }
 
 /**
- * The service manager of the hub's own misao. On Windows the hub does not manage its misao yet (the Task Scheduler wiring of
- * the hub itself is done, misao's is #380 B3b): that stays `unsupported_os`, so the Setup row and `azito misao` say so instead of
- * writing a systemd unit for a Windows task.
+ * The service manager of the hub's own misao: the same managers as the hub's (systemd / launchd / the Task Scheduler), for the
+ * misao service. On Windows the task is registered by `MisaoWindowsInstaller` (see `misaoLocalWindows.ts`), which this manager only
+ * reads and starts; no unit template is ever rendered for it.
  */
 export function createMisaoServiceManager(host: ServiceHost, run: CommandRunner): ServiceManagerResult {
-  if (host.platform === 'win32') {
-    return { error: new HostProfileError('unsupported_os', 'Managing the hub\'s own misao on Windows (Task Scheduler) is not supported yet: only systemd (Linux) and launchd (macOS) are.') };
-  }
   return createServiceManager(host, MISAO_SERVICE, run);
 }

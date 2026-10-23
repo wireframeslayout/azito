@@ -8,6 +8,7 @@
 # a `current` symlink), creates <Prefix>\hub\.env and <Prefix>\data\, and puts the `azito` command in <Prefix>\bin\.
 # Unless -NoService is given, the hub is registered as a Task Scheduler task that starts at your logon (the counterpart of the
 # systemd / launchd service of install.sh), and started: `azito start|stop|status` operate it, and its log is <Prefix>\logs\hub.log.
+# The bundled misao (the pane server) is installed beside it as its own Task Scheduler task, through `azito misao install`.
 [CmdletBinding()]
 param(
     # Release tag to install (default: the latest release).
@@ -22,7 +23,7 @@ param(
     [switch]$Yes,
     # Do not add <Prefix>\bin to the user's PATH.
     [switch]$NoPath,
-    # Do not register the Task Scheduler task. Run the hub in the foreground with `azito run`, or register it later with `azito service install`.
+    # Do not register the Task Scheduler tasks (the hub's and misao's). Run the hub in the foreground with `azito run`, or register it later with `azito service install`.
     [switch]$NoService
 )
 
@@ -349,7 +350,7 @@ function Invoke-Install {
     if ($NoService) {
         Write-Host '  Service:      skip (-NoService; run the hub with `azito run`)'
     } else {
-        Write-Host "  Service:      Task Scheduler task 'AzitoHub' (starts at your logon)"
+        Write-Host "  Service:      Task Scheduler tasks 'AzitoHub' and 'AzitoMisao' (start at your logon)"
     }
     Write-Host ''
 
@@ -471,6 +472,18 @@ function Invoke-Install {
             # -Yes also lets the install replace a task that another install of this user registered (the command refuses without it).
             if ($Yes) { $installArgs += '--yes' }
             Invoke-Node $node $installArgs
+
+            # misao (the pane server) is its own service, separate from the hub: stopping it closes every pane, so a hub update or
+            # restart never touches it. Like install.sh, the bundled CLI unpacks it into <Prefix>\misao\<version>\, registers the task
+            # 'AzitoMisao', starts it and writes MISAO_SOCKET (the named pipe) into hub\.env, which the hub reads when it starts below.
+            # A failure is a warning: the hub is installed either way, and `azito misao install` repeats the step.
+            Write-Host 'Installing the misao service...'
+            try {
+                Invoke-Node $node @($hub, 'misao', 'install', '--prefix', $Prefix)
+            } catch {
+                Write-Warning "The misao service could not be installed (see the error above): $($_.Exception.Message)"
+                Write-Host '  AZITO is installed, but its panes need misao. Fix the problem and run: azito misao install'
+            }
         }
 
         # The pointer is written last, after every step that can fail: it is what marks the install as complete, so a run
@@ -494,9 +507,10 @@ function Invoke-Install {
     if ($NoService) {
         Write-Host '  The hub is not registered as a service (-NoService).'
         Write-Host '  Run:      azito run     (in this window; stop it with Ctrl+C)'
-        Write-Host '  Register: azito service install, then azito start'
+        Write-Host '  Register: azito service install, then azito start (and azito misao install for the panes)'
     } else {
         Write-Host '  The hub runs as the Task Scheduler task AzitoHub: it starts when you log on and restarts when it fails.'
+        Write-Host '  Its panes run on misao, the task AzitoMisao: azito misao status (a hub update or restart does not stop it).'
         Write-Host '  Start:   azito start     (stop: azito stop, state: azito status)'
         Write-Host "  Log:     $Prefix\logs\hub.log"
     }

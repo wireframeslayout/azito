@@ -80,7 +80,7 @@ describe('MisaoServiceService', () => {
   beforeEach(() => {
     // unix socket paths are limited to 107 bytes: keep the temp prefix short
     prefix = fs.mkdtempSync(path.join(os.tmpdir(), 'azm-'));
-    paths = resolveMisaoPaths(prefix);
+    paths = resolveMisaoPaths(prefix, undefined);
     fs.mkdirSync(path.join(prefix, 'hub'), { recursive: true });
     writeHubBundle(path.join(prefix, 'hub', 'current'));
     bundle = readMisaoBundle(path.join(prefix, 'hub', 'current'))!;

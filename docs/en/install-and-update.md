@@ -124,9 +124,13 @@ The CLI reads `current.txt` and runs the bundled hub:
 | `azito token show` / `token rotate` | The UI token (it is stored in `hub\.env`: `rotate` stops while it is set there, so change `AZITO_UI_TOKEN` in that file instead) |
 | `azito version` | The version in `current.txt` and the bundle's own |
 | `azito service status\|start\|stop\|restart\|reload\|install` | The same operations the Unix service has. `install` registers the task (install.ps1 calls it); registering the same definition again does nothing, and a different one is refused while the hub runs |
-| `azito misao ...` | Passed to the hub, which refuses it on Windows for now: `misao` currently stops at a check of the install prefix (it rejects the backslashes of a Windows path) until the hub's own misao lands (B3b) |
+| `azito misao status\|install\|update\|start` | The hub's own misao as the Task Scheduler task `AzitoMisao` (below and `misao.md`). `install.ps1` runs `install` for you; `update` ends every pane first |
 
-**Not supported yet (#380):** the hub's own misao (B3b), and in-app update/uninstall (#381).
+**Not supported yet (#380):** misao-only local servers (B4a), SSH / agent servers of a Windows hub (B4b), and in-app update/uninstall (#381).
+
+### misao on Windows
+
+Unless `-NoService` is given, `install.ps1` also installs the bundled misao (the pane server) after the hub's task, with the bundled hub: `azito misao install --prefix <prefix>` unpacks `misao.exe` and the licenses into `<prefix>\misao\<version>\` (sha256-checked against the bundle), registers the Task Scheduler task `AzitoMisao` (a logon task, `conhost.exe --headless`), starts it and writes `MISAO_SOCKET` (the named pipe) into `hub\.env`, which `run.ps1` loads when the hub starts. It is the installer an agent server gets, aimed at this machine, so a hub and a Windows agent on one machine share one daemon (one misao per user). Like on Unix, misao is **separate from the hub**: a hub update, `azito restart` and `azito stop` never stop it (stopping it closes every pane); only `azito misao update` (or the Setup row's button, after a confirmation) switches it. A failed misao install is a warning and `azito misao install` repeats it. Details: `misao.md`.
 
 ### The hub as a Task Scheduler task
 

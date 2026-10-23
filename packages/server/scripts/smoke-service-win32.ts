@@ -13,6 +13,7 @@ import * as path from 'path';
  */
 
 const TASK_NAME = 'AzitoHub';
+const MISAO_TASK_NAME = 'AzitoMisao';
 const PORT = 3001; // what init-env writes to hub\.env; install.ps1 starts the hub before any file can be edited
 const HEALTH_URL = `http://127.0.0.1:${PORT}/api/health`;
 const SYSTEM_ROOT = process.env.SystemRoot ?? '';
@@ -44,6 +45,17 @@ function azito(azitoCmd: string, args: string): Result {
 function schtasks(args: string[]): Result {
   const r = spawnSync(SCHTASKS, args, { encoding: 'utf-8', timeout: 60_000 });
   return { status: r.status, output: `${r.stdout}${r.stderr}` };
+}
+
+/** `misao stop` of the release install.ps1 put under `<prefix>\misao`, on the pipe hub\.env names (nothing is done when it was never installed). */
+function stopInstalledMisao(prefix: string): void {
+  const root = path.join(prefix, 'misao');
+  const envFile = path.join(prefix, 'hub', '.env');
+  if (!fs.existsSync(root) || !fs.existsSync(envFile)) return;
+  const pipe = /^\s*MISAO_SOCKET\s*=\s*(.*?)\s*$/m.exec(fs.readFileSync(envFile, 'utf-8'))?.[1];
+  const release = fs.readdirSync(root).find((name) => /^\d+\.\d+\.\d+$/.test(name));
+  if (!pipe || !release) return;
+  spawnSync(path.join(root, release, 'misao.exe'), ['stop'], { encoding: 'utf-8', timeout: 60_000, env: { ...process.env, MISAO_SOCKET: pipe } });
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -106,6 +118,7 @@ async function main(): Promise<void> {
   assert(version !== undefined, `not an azito-hub-<tag>-win32-x64.zip: ${zip}`);
   assert(powershell(['-Command', '$PSVersionTable.PSVersion.Major']).output.trim() === '5', 'install.ps1 must be exercised by Windows PowerShell 5.1');
   assert(schtasks(['/Query', '/TN', TASK_NAME]).status !== 0, `a task named ${TASK_NAME} already exists on this machine; this smoke test owns that name`);
+  assert(schtasks(['/Query', '/TN', MISAO_TASK_NAME]).status !== 0, `a task named ${MISAO_TASK_NAME} already exists on this machine; this smoke test owns that name`);
   assert((await healthStatus()) === null, `something already answers on ${HEALTH_URL}`);
 
   const work = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-service-smoke-'));
@@ -251,6 +264,11 @@ async function main(): Promise<void> {
     const deleted = schtasks(['/Delete', '/TN', TASK_NAME, '/F']);
     if (deleted.status !== 0 && schtasks(['/Query', '/TN', TASK_NAME]).status === 0) cleanupFailure = `could not delete the task: ${deleted.output.trim()}`;
     else if (schtasks(['/Query', '/TN', TASK_NAME]).status === 0) cleanupFailure = 'the task still exists after it was deleted';
+    // install.ps1 without -NoService also installed the bundled misao (its own task and daemon, which `azito stop` leaves running on purpose): take it down too.
+    stopInstalledMisao(prefix);
+    schtasks(['/End', '/TN', MISAO_TASK_NAME]);
+    schtasks(['/Delete', '/TN', MISAO_TASK_NAME, '/F']);
+    if (schtasks(['/Query', '/TN', MISAO_TASK_NAME]).status === 0) cleanupFailure = `could not delete the task ${MISAO_TASK_NAME}`;
     fs.rmSync(definitionCopy, { force: true });
     try {
       fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });

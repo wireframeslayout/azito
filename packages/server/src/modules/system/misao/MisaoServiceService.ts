@@ -11,6 +11,7 @@ import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/tra
 import { DuplicateLoadError, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
+import { taskXmlNamesRoot, type LocalMisaoWindows } from './misaoLocalWindows';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -19,9 +20,9 @@ export interface MisaoServiceDeps {
   pathsError?: string;
   /** Null for a hub that carries no misao (source checkout, or a release without one). */
   bundle: MisaoBundle | null;
-  /** Null on a host without systemd / launchd; `controllerError` then says why. */
+  /** Null on a host without systemd / launchd / the Task Scheduler; `controllerError` then says why. */
   controller: ServiceManager | null;
-  /** Why `controller` is null (Windows is not supported yet, an unknown OS): shown instead of a bare "unsupported platform". */
+  /** Why `controller` is null (an unknown OS): shown instead of a bare "unsupported platform". */
   controllerError?: string;
   env: NodeJS.ProcessEnv;
   /** Restricts the hub's `.env` (it holds tokens) when MISAO_SOCKET is written into it. */
@@ -32,11 +33,17 @@ export interface MisaoServiceDeps {
    * Absent in the CLI, which has no hub connection: the daemon is then judged by whether its socket accepts a connection.
    */
   hub?: { probeDaemon: () => Promise<MisaoDaemonInfo>; socketPath: string };
+  /**
+   * Windows only: the hub's own misao is installed, switched and rolled back by the same installer an agent server gets, aimed at
+   * this machine (see `misaoLocalWindows.ts`). Present exactly when the host is Windows; `controller` is then the Task Scheduler.
+   */
+  windows?: LocalMisaoWindows;
   /** How long a started daemon gets to open its socket. */
   readyTimeoutMs?: number;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
+const WINDOWS_VERSION_TEXT = /^\d+\.\d+\.\d+$/;
 
 function isSocketListening(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
@@ -81,12 +88,21 @@ export class MisaoServiceService {
     if (reason === 'invalid_prefix') throw new MisaoServiceError('not_managed', this.deps.pathsError!);
     if (reason === 'source_install') throw new MisaoServiceError('not_managed', 'This hub runs from a source checkout. It connects to MISAO_SOCKET (or the default socket) and does not install a service.');
     if (!bundle) throw new MisaoServiceError('not_managed', 'This hub carries no bundled misao, so it cannot install the service.');
-    if (!controller) throw new MisaoServiceError('not_managed', this.deps.controllerError ?? 'This host has neither systemd nor launchd, so the misao service cannot be managed.');
+    if (!controller) throw new MisaoServiceError('not_managed', this.deps.controllerError ?? 'This host has neither systemd, launchd nor the Task Scheduler, so the misao service cannot be managed.');
     return { bundle, controller };
   }
 
   installedVersion(): string | undefined {
     if (!this.deps.paths) return undefined;
+    if (this.deps.windows) {
+      // No link on Windows: `current` is a file holding the version (what the task's release is).
+      try {
+        const text = fs.readFileSync(this.paths.current, 'utf-8').trim();
+        return WINDOWS_VERSION_TEXT.test(text) ? text : undefined;
+      } catch {
+        return undefined;
+      }
+    }
     try {
       return path.basename(fs.readlinkSync(this.paths.current));
     } catch {
@@ -101,13 +117,20 @@ export class MisaoServiceService {
     return configured === this.paths.socket ? 'managed' : 'custom';
   }
 
+  /** systemd / launchd: the unit file exists. Windows: the task is registered (the installer registers it itself, so there is no definition copy to look for). */
+  private async isServiceInstalled(): Promise<boolean> {
+    const { windows, controller } = this.deps;
+    if (windows) return (await windows.tasks.query(windows.taskName)).exists;
+    return controller?.isInstalled() ?? false;
+  }
+
   async status(): Promise<MisaoServiceStatus> {
     const { bundle, controller, hub } = this.deps;
     const reason = this.unmanagedReason();
     const daemon: MisaoDaemonInfo = hub
       ? await hub.probeDaemon()
       : { reachable: this.deps.paths ? await isSocketListening(this.deps.paths.socket) : false };
-    const serviceInstalled = controller?.isInstalled() ?? false;
+    const serviceInstalled = await this.isServiceInstalled();
     const unmanagedDetail = this.deps.pathsError ?? (reason === 'unsupported_platform' ? this.deps.controllerError : undefined);
     const inspection = controller && serviceInstalled ? await controller.inspect() : undefined;
     const installedVersion = this.installedVersion();
@@ -149,6 +172,7 @@ export class MisaoServiceService {
 
   private async doInstall(opts: { replaceSocketSetting?: boolean }): Promise<MisaoServiceStatus> {
     const { bundle, controller } = this.requireManaged();
+    if (this.deps.windows) return this.installOnWindows(this.deps.windows, bundle, opts);
     await controller.loadedDomain();
     if (this.socketSetting() === 'custom' && !opts.replaceSocketSetting) {
       throw new MisaoServiceError('custom_socket', `MISAO_SOCKET in ${this.paths.hubEnvFile} points at another daemon (${readEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET')}). Installing the managed service would move the hub away from it; run \`azito misao install --replace-socket\` to do that on purpose.`);
@@ -175,6 +199,34 @@ export class MisaoServiceService {
       await this.pointHubAndStart(controller);
     }
     return this.status();
+  }
+
+  /**
+   * Windows: the installer an agent gets, on this machine. The same promises as above: a daemon of an older release that is
+   * running is left alone, a daemon AZITO did not install is refused. MISAO_SOCKET (the named pipe) is written once the daemon
+   * answers, so a failed install leaves the hub's `.env` as it was.
+   */
+  private async installOnWindows(windows: LocalMisaoWindows, bundle: MisaoBundle, opts: { replaceSocketSetting?: boolean }): Promise<MisaoServiceStatus> {
+    if (this.socketSetting() === 'custom' && !opts.replaceSocketSetting) {
+      throw new MisaoServiceError('custom_socket', `MISAO_SOCKET in ${this.paths.hubEnvFile} points at another daemon (${readEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET')}). Installing the managed service would move the hub away from it; run \`azito misao install --replace-socket\` to do that on purpose.`);
+    }
+    await this.refuseTaskOfAnotherRoot(windows, opts.replaceSocketSetting === true);
+    await windows.installer.install(windows.target, bundle, () => undefined);
+    upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket, this.deps.secretFileGuard);
+    return this.status();
+  }
+
+  /**
+   * The task name is one per user (an agent on this machine uses it too). A task that starts a misao from another folder is
+   * another install's: replacing it would leave that install without its daemon, so it takes `--replace-socket` (the one
+   * "move this hub to the managed misao on purpose" switch).
+   */
+  private async refuseTaskOfAnotherRoot(windows: LocalMisaoWindows, replace: boolean): Promise<void> {
+    if (replace || !(await windows.tasks.query(windows.taskName)).exists) return;
+    const xml = await windows.tasks.exportXml(windows.taskName);
+    if (!taskXmlNamesRoot(xml, this.paths.root)) {
+      throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" is registered for a misao in another folder, not ${this.paths.root}. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
+    }
   }
 
   /** Writes MISAO_SOCKET into the hub's `.env`, and starts the service when it is not running (never restarts a running one). */
@@ -233,7 +285,7 @@ export class MisaoServiceService {
   private async doStart(): Promise<MisaoServiceStatus> {
     const { controller } = this.requireManaged();
     await controller.loadedDomain();
-    if (!controller.isInstalled()) throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
+    if (!(await this.isServiceInstalled())) throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
     if ((await controller.state()) !== 'active') {
       await controller.start();
       await this.waitUntilListening();
@@ -254,8 +306,13 @@ export class MisaoServiceService {
     const { bundle, controller } = this.requireManaged();
     // A job loaded twice is refused before anything else (the same-version shortcut below and "already active" would otherwise report success).
     await controller.loadedDomain();
-    if (!controller.isInstalled() || !this.installedVersion()) {
+    if (!(await this.isServiceInstalled()) || !this.installedVersion()) {
       throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
+    }
+    // Windows: the installer's own stop / switch / start with its rollback (the same steps as an agent's update).
+    if (this.deps.windows) {
+      await this.deps.windows.installer.update(this.deps.windows.target, bundle, () => undefined);
+      return this.status();
     }
 
     // Already on the bundled version: nothing to switch, and stopping would close every pane for no reason.

@@ -113,7 +113,7 @@ Linux x86_64 / arm64 and macOS arm64) and sends the one that fits the agent's ow
 (Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). In practice the agent
 installer of this release accepts x86_64 hosts only, so an arm64 agent server is not supported yet; that is a separate matter from what the hub bundles. It is installed under
 `~/.azito/misao/<version>/` with `current` -> `<version>` and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background
-process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved. Installing on a Windows hub comes with the Windows hub support (until then a Windows hub reports the misao status `unsupported_platform` and install / update fail with `not_managed`). Building a release needs the `unzip` command to unpack the Windows build. Installing on a Windows agent is the next section.
+process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved. Installing on a Windows hub is the section "The hub's own misao on Windows" below. Building a release needs the `unzip` command to unpack the Windows build. Installing on a Windows agent is the next section.
 
 #### Installing on a Windows agent
 
@@ -133,6 +133,16 @@ placed in `%USERPROFILE%\.azito\misao\<version>\`. There is no symbolic link: th
 - **Panes** open the shell the agent reports (`%ComSpec%`, cmd.exe: misao's own default), without a command. A window that launches a worker (claude / codex) is #371 and is `unsupported_os` for now.
 - For trials, the task name and the folder can be changed with `AZITO_WIN_MISAO_TASK_NAME` / `AZITO_WIN_MISAO_DIR` on the hub (the same mechanism as `AZITO_WIN_AGENT_*`). The folder is written into the agent's settings file as `AZITO_MISAO_DIR`, only when it is not the default.
 - On a host with no logon session the task cannot start (last result `0x8004130f`); the install then fails with `daemon_not_ready` and removes the task and `current` it made.
+
+#### The hub's own misao on Windows
+
+A Windows hub installs its own misao with the **same installer an agent gets** (`MisaoWindowsInstaller`), aimed at the machine it runs on (`misaoLocalWindows.ts`: its commands, files, pipe probe and staging run in-process instead of through an agent). So there is one definition of the layout, the task and the stop / switch / start / roll-back steps, and the promises above hold unchanged: install never stops or switches a running daemon, update stops with `misao.exe stop`, switches, starts, and puts the previous release back on failure. A hub update, a hub restart and `azito stop` never touch the daemon.
+
+- **One misao per user.** The folder is `<prefix>\misao` (the default prefix `%USERPROFILE%\.azito` makes it `%USERPROFILE%\.azito\misao\<version>\misao.exe`, with the licenses), the task is `AzitoMisao`, the release is named by the file `<root>\current` and the pipe is the one of that folder (`\\.\pipe\misao-<user>-<hash of the folder>`). A Windows agent on the same machine uses the same folder, task and pipe, so the two share one daemon instead of fighting over the task name. A task that starts a misao from **another** folder (another prefix, another install) is refused, `azito misao install --replace-socket` takes it over on purpose.
+- **Prefix.** Spaces, parentheses and `&` are fine (`C:\Users\Foo Bar (Work)\.azito`); a quote, `%`, `!` and line breaks are refused, because `cmd.exe` expands them inside the task's quotes. The Unix checks are unchanged. A pipe has no length limit like a unix socket's 107 bytes.
+- **Connection.** `azito misao install` writes `MISAO_SOCKET=<pipe>` into `<prefix>\hub\.env` once the daemon answers; `run.ps1` loads that file before the hub starts, so the hub resolves the pipe from `.env` (the SDK's own default would be another folder's pipe). `GET /api/system/misao` shows `needsHubRestart` while the running hub still uses another one. For a new database, the local server defaults to misao when `MISAO_SOCKET` is set or the `AzitoMisao` task exists (`hasMisaoToRelyOn`).
+- **Commands.** `azito misao status|install|update|start` and the Setup row's buttons (`GET/POST /api/system/misao...`) work as on Unix; `serviceManager` is `taskscheduler`, and no systemd / launchd unit is ever written for a Windows host. `install.ps1` calls `azito misao install --prefix <prefix>` after registering the hub's task (not with `-NoService`, as `install.sh` does not with `--no-service`); a failure is a warning, and `azito misao install` repeats it.
+- **Panes.** Not yet: opening a window on a Windows hub's own misao is `unsupported_os` (PowerShell panes are #370 / #371), and the local server still offers tmux in the UI (B4a).
 
 - When you add an agent server (auto-install), misao is installed after the agent. A host without tmux no longer fails the preflight, and its
   default mux becomes misao. If only the misao step fails, the agent stays installed and the response carries `misaoError`.

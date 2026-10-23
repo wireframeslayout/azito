@@ -28,7 +28,7 @@ export interface MisaoWindowsInstallerOptions {
 }
 
 /** What the installer needs of an agent on Windows. */
-type WindowsTarget = Pick<MisaoInstallTarget, 'run' | 'files' | 'fetchMisaoStatus' | 'uploadMisaoFile'>;
+export type WindowsTarget = Pick<MisaoInstallTarget, 'run' | 'files' | 'fetchMisaoStatus' | 'uploadMisaoFile'>;
 
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;

@@ -111,6 +111,13 @@ jobs:
       - name: Run the Windows hub as a Task Scheduler task (install.ps1, azito start/stop/status)
         run: npx -w packages/server tsx scripts/smoke-service-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
 
+      # The hub's own misao, with the real schtasks.exe, the bundle's misao.exe and a named pipe: install.ps1 without -NoService also
+      # installs the bundled misao (task `AzitoMisao`, MISAO_SOCKET in hub\.env). Then `azito misao status`, the hub's connection to the
+      # daemon (/api/system/misao, the sessions listing), `azito stop` leaving misao running, a repeated install / update that restarts
+      # nothing, and `misao stop` + `azito misao start`. The tasks and the daemon are removed at the end.
+      - name: Run the hub's own misao on Windows (install.ps1, azito misao, named pipe)
+        run: npx -w packages/server tsx scripts/smoke-misao-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
+
   # The integration tests that start a real misao daemon. They run on the very binary the hub ships (the version, URL and
   # sha256 pinned in packages/server/scripts/misaoAssets.ts), so a pin that does not start, or a protocol drift, fails here.
   misao-integration:

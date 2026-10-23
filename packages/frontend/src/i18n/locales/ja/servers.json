@@ -267,7 +267,7 @@
     "unmanaged": {
       "sourceInstall": "ソース版のハブはサービスを入れません。MISAO_SOCKET か既定のソケットの misao に接続します。",
       "noBundledMisao": "このハブのリリースには misao が同梱されていません。",
-      "unsupportedPlatform": "systemd も launchd も無いため、misao のサービスは管理できません。",
+      "unsupportedPlatform": "systemd・launchd・タスクスケジューラのいずれも無いため、misao のサービスは管理できません。",
       "invalidPrefix": "インストール先のパスが長すぎて、misao のソケットを作れません。",
       "unknown": "このハブでは misao のサービスを管理できません。"
     },

@@ -136,7 +136,7 @@ describe.each([
 
   beforeEach(() => {
     prefix = fs.mkdtempSync(path.join(os.tmpdir(), 'azl-'));
-    paths = resolveMisaoPaths(prefix);
+    paths = resolveMisaoPaths(prefix, undefined);
     fs.mkdirSync(path.join(prefix, 'hub'), { recursive: true });
     writeHubBundle(path.join(prefix, 'hub', 'current'), '0.3.0', '#!/bin/sh\n# misao');
     emulator = new LaunchdEmulator(paths.socket);

@@ -136,6 +136,14 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   jobs are booted out before a definition changes, since a loaded job keeps its old one). `AgentInstaller.install` runs the install after the agent is healthy, and
   `POST /api/servers/:name/install-misao` (`system/misao/agentMisaoRoutes.ts`, operator only even in compat mode; `GET` = progress for both) runs it on demand.
   `AgentUpdater` never touches the daemon.
+  On a **Windows hub** (#380 B3b) `MisaoServiceService` hands install / update to the agent's `MisaoWindowsInstaller` aimed at the local machine
+  (`misao/misaoLocalWindows.ts`: in-process commands, `LocalFileOps`, pipe probe and `stageMisaoReleaseFile`), so there is one misao per user:
+  `<prefix>\misao\<version>\misao.exe`, the `current` file, the task `AzitoMisao` and the pipe of that folder, shared with a Windows agent on the same
+  machine (a task that starts a misao from another folder is refused without `--replace-socket`). `resolveMisaoPaths(prefix, windowsUser)` takes the
+  Windows branch (drive path; spaces, parentheses and `&` allowed; `"`, `%`, `!`, line breaks refused); the pipe is written to `hub\.env` as
+  `MISAO_SOCKET` after the daemon answers, and `run.ps1` loads it. `install.ps1` runs `azito misao install --prefix` after the hub's task (skipped with
+  `-NoService`; a failure is a warning). `hasMisaoToRelyOn` takes `windowsTaskDefined` (the Task Scheduler is asked in `main.ts`). No unit template is
+  rendered for Windows. Panes on the hub's own Windows misao stay `unsupported_os` until #370 / #371.
   **Windows agents** (#369 A3; `MisaoAgentInstaller` hands a `hostProfile.platform === 'win32'` target to `MisaoWindowsInstaller`, the Unix path is unchanged): the same upload route
   (the agent stores `misao` as `misao.exe`) puts the release in `%USERPROFILE%\.azito\misao\<version>\` (the root is made owner-only with `PROTECT_SCRIPT` first); there is no link — `<root>\current`
   is a file holding the version and the Task Scheduler task `AzitoMisao` (logon trigger, `misaoWindowsTask.ts`: `conhost.exe --headless cmd.exe /d /c ""<exe>" serve --socket "<pipe>" --data "<root>" >> "<log>" 2>&1"`,

@@ -124,9 +124,13 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 | `azito token show` / `token rotate` | UI トークン（`hub\.env` に保存。そこに設定されている間は `rotate` が中止するので、そのファイルの `AZITO_UI_TOKEN` を書き換える） |
 | `azito version` | `current.txt` の版と、配布物自身の版 |
 | `azito service status\|start\|stop\|restart\|reload\|install` | Unix のサービスと同じ操作。`install` はタスクを登録する（install.ps1 が呼ぶ）。同じ定義の再登録は何もせず、違う定義はハブが動いている間は拒否される |
-| `azito misao ...` | ハブに渡し、Windows ではいまは拒否される。`misao` は、ハブ自身の misao（B3b）が入るまでは導入先の検査（Windows パスのバックスラッシュを拒否する）で止まる |
+| `azito misao status\|install\|update\|start` | ハブ自身の misao をタスクスケジューラのタスク `AzitoMisao` として扱う（下と `misao.md`）。`install.ps1` が `install` を実行する。`update` は先にすべてのペインを終了する |
 
-**未対応（#380）:** ハブ自身の misao（B3b）、アプリ内の更新・アンインストール（#381）。
+**未対応（#380）:** misao だけで動く local サーバー（B4a）、Windows のハブからの SSH / エージェントサーバー（B4b）、アプリ内の更新・アンインストール（#381）。
+
+### Windows の misao
+
+`-NoService` を付けなければ、`install.ps1` はハブのタスクのあとに、同梱の misao（ペインサーバー）も入れます。同梱のハブで `azito misao install --prefix <prefix>` を実行し、`misao.exe` とライセンスを `<prefix>\misao\<version>\` に展開（同梱物の sha256 を照合）、タスクスケジューラのタスク `AzitoMisao`（ログオン時のタスク、`conhost.exe --headless`）を登録して起動し、`MISAO_SOCKET`（名前付きパイプ）を `hub\.env` に書きます。ハブの起動時に `run.ps1` がそれを読みます。エージェントサーバーに使うのと同じ導入処理を自分のマシンに向けたものなので、同じマシンのハブと Windows エージェントは 1 つのデーモンを共有します（1 ユーザーにつき 1 つの misao）。Unix と同じく misao は**ハブとは別**です。ハブの更新・`azito restart`・`azito stop` では止まりません（止めるとすべてのペインが閉じます）。切り替えは `azito misao update`（または Setup 行のボタン。確認あり）だけです。misao の導入に失敗しても警告で、`azito misao install` で繰り返せます。詳細は `misao.md`。
 
 ### タスクスケジューラのタスクとしてのハブ
 

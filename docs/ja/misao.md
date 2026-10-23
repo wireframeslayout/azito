@@ -114,7 +114,7 @@ macOS arm64 / x86_64）に合うものを送ります。合うものが無いホ
 （同梱するバイナリとは別の話です）。
 `~/.azito/misao/<version>/` に、`current` -> `<version>` で配置し、systemd のユーザー unit `azito-misao`（`KillMode=process`）として起動します。
 ユーザー systemd が無いホスト（macOS では常に）では、環境を空にしたバックグラウンドプロセスで起動します（再起動をまたいでは残りません）。
-Node.js も node-pty も使いません。Windows のハブへの導入は Windows のハブ対応で入ります（それまで Windows のハブでは misao の状態が `unsupported_platform`、install / update は `not_managed` で失敗します）。リリースのビルドにはこの zip を展開する `unzip` コマンドが必要です。Windows のエージェントへの導入は次の節です。
+Node.js も node-pty も使いません。Windows のハブへの導入は、下の「Windows のハブ自身の misao」の節です。リリースのビルドにはこの zip を展開する `unzip` コマンドが必要です。Windows のエージェントへの導入は次の節です。
 
 #### Windows のエージェントへの導入
 
@@ -135,6 +135,16 @@ Windows のエージェント（`x86_64-pc-windows-msvc`）には、同じくエ
 - **ペイン**は、エージェントが報告する `%ComSpec%`（cmd.exe。misao 自身の既定と同じ）で、コマンドを付けずに開きます。ワーカーの起動行（claude / codex）を載せた窓は #371 の範囲で、今は `unsupported_os` です。
 - 試験用に、タスク名とフォルダーは環境変数 `AZITO_WIN_MISAO_TASK_NAME` / `AZITO_WIN_MISAO_DIR`（ハブ側。A2 の `AZITO_WIN_AGENT_*` と同じ仕組み）で変えられます。フォルダーはエージェントの設定ファイルの `AZITO_MISAO_DIR` に書かれます（既定以外のときだけ）。
 - ログイン中のユーザーが居ないホスト（ログオンセッションが無い）では、タスクが起動せず（最後の結果が `0x8004130f`）、導入は `daemon_not_ready` で失敗して、作ったタスクと `current` を取り除きます。
+
+#### Windows のハブ自身の misao
+
+Windows のハブは、自分の misao を**エージェントと同じ導入処理**（`MisaoWindowsInstaller`）で入れます。違いは対象だけで、自分のマシンを相手にします（`misaoLocalWindows.ts`。コマンド・ファイル・パイプの確認・配置を、エージェント経由ではなくプロセス内で行う）。配置・タスク・停止 / 切り替え / 起動 / 巻き戻しの手順の定義が 1 つになり、上の約束はそのまま成り立ちます。install は動いているデーモンを止めも切り替えもせず、update は `misao.exe stop` で止めて切り替えて起動し、失敗したら前のリリースに戻します。ハブの更新・再起動・`azito stop` はデーモンに触れません。
+
+- **1 ユーザーにつき 1 つの misao。** 置き場所は `<prefix>\misao`（既定の prefix `%USERPROFILE%\.azito` なら `%USERPROFILE%\.azito\misao\<version>\misao.exe` とライセンス）、タスクは `AzitoMisao`、リリースはファイル `<root>\current`、パイプはそのフォルダのもの（`\\.\pipe\misao-<user>-<フォルダのハッシュ>`）です。同じマシンの Windows エージェントも同じフォルダ・タスク・パイプを使うので、タスク名を奪い合わず、デーモンは 1 つになります。**別のフォルダ**の misao を起動するタスク（別の prefix、別の導入）がある場合は拒否し、`azito misao install --replace-socket` で意図して引き継げます。
+- **prefix。** 空白・括弧・`&` は使えます（`C:\Users\Foo Bar (Work)\.azito`）。引用符・`%`・`!`・改行は、タスクの引用符の中でも `cmd.exe` が解釈するため拒否します。Unix の検査は変えていません。パイプには unix ソケットの 107 バイトのような長さ制限はありません。
+- **接続。** `azito misao install` は、デーモンが応答したあとに `<prefix>\hub\.env` へ `MISAO_SOCKET=<パイプ>` を書きます。`run.ps1` がハブの起動前にこのファイルを読むので、ハブは `.env` からパイプを決めます（SDK の既定は別のフォルダのパイプになります）。動いているハブが別のものを使っている間、`GET /api/system/misao` は `needsHubRestart` を返します。新しい DB では、`MISAO_SOCKET` があるか `AzitoMisao` タスクが登録済みなら、local サーバーの既定が misao になります（`hasMisaoToRelyOn`）。
+- **コマンド。** `azito misao status|install|update|start` と Setup 行のボタン（`GET/POST /api/system/misao...`）は Unix と同じに動きます。`serviceManager` は `taskscheduler` で、Windows に systemd / launchd の unit を書く経路はありません。`install.ps1` は、ハブのタスクの登録後に `azito misao install --prefix <prefix>` を呼びます（`-NoService` のときは呼びません。`install.sh` が `--no-service` で呼ばないのと同じ）。失敗は警告で、`azito misao install` で繰り返せます。
+- **ペイン。** まだです。Windows のハブ自身の misao で窓を開くと `unsupported_os` です（PowerShell のペインは #370 / #371）。local サーバーの UI には tmux の選択肢も残っています（B4a）。
 
 - エージェントサーバーの追加（自動インストール）では、エージェントのあとに misao を入れます。tmux が無いホストも preflight で止まらなくなり、
   その場合は既定の mux が misao になります。misao だけが失敗しても、エージェントは導入済みのまま、レスポンスの `misaoError` で伝えます。

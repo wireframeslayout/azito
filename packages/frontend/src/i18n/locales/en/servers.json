@@ -267,7 +267,7 @@
     "unmanaged": {
       "sourceInstall": "A source checkout does not install the service. It connects to the misao at MISAO_SOCKET or the default socket.",
       "noBundledMisao": "This hub release does not bundle misao.",
-      "unsupportedPlatform": "This host has neither systemd nor launchd, so the misao service cannot be managed.",
+      "unsupportedPlatform": "This host has neither systemd, launchd nor the Task Scheduler, so the misao service cannot be managed.",
       "invalidPrefix": "The install path is too long to create the misao socket.",
       "unknown": "This hub cannot manage the misao service."
     },

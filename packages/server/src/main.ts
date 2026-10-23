@@ -26,6 +26,7 @@ import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
+import { misaoWindowsTaskExists } from './modules/system/misao/misaoLocalWindows';
 import { runUpdate } from './modules/system/updateScript';
 import { serializeRequestForLog } from './shared/redactUrlSecrets';
 import { startHubExitWithParent, takeExitWithPid } from './app/hubExitWithParent';
@@ -111,9 +112,10 @@ async function main(): Promise<void> {
   }
 
   // A release install runs its panes on the bundled misao, so a new installation's local server starts on misao, but only
-  // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh sets both up).
+  // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh / install.ps1 set both up).
   // Otherwise, and for a source checkout (`npm run dev`), it starts on tmux.
-  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, hostEnv.homeDir, fs.existsSync);
+  const windowsTaskDefined = releaseInfo !== null && hostEnv.platform === 'win32' && await misaoWindowsTaskExists(hostEnv);
+  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, hostEnv.homeDir, fs.existsSync, windowsTaskDefined);
   const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux', secretFileGuard });
   const uiToken = resolveUiToken(paths.uiToken, secretFileGuard);
   const webhookToken = resolveWebhookToken(paths.webhookToken, secretFileGuard);
