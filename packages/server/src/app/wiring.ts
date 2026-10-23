@@ -115,7 +115,6 @@ import { UsageService } from '../modules/usage/UsageService';
 import { UpdateChannelResolver } from '../modules/system/UpdateChannelResolver';
 import { UpdateStateManager } from '../modules/system/UpdateStateManager';
 import { DeployModeDetector } from '../modules/system/DeployModeDetector';
-import { parseExitWithPid } from './hubExitWithParent';
 import { SystemUpdateService } from '../modules/system/SystemUpdateService';
 
 // ─── Module return types ───
@@ -580,10 +579,10 @@ function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard
   });
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): SystemUpdateModule {
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, launchedByTaskScheduler: boolean): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
-  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir, parseExitWithPid(process.env) !== undefined);
+  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir, launchedByTaskScheduler);
   const hubService = createServiceManager(hostEnv, HUB_SERVICE, runCommand);
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null);
   return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv, secretFileGuard) };
@@ -625,7 +624,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, launchedByTaskScheduler: boolean): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -706,7 +705,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard, launchedByTaskScheduler);
 
   return {
     uiToken,

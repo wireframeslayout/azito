@@ -18,9 +18,20 @@ export function parseExitWithPid(env: NodeJS.ProcessEnv): number | undefined {
   return Number(value);
 }
 
+/**
+ * Reads the setting once at the entry point and removes it from the environment, so that the hub's children (panes, workers, the
+ * browser, a hub started from a pane with `azito run`) do not inherit it and take themselves for a task-launched hub.
+ */
+export function takeExitWithPid(env: NodeJS.ProcessEnv): number | undefined {
+  const pid = parseExitWithPid(env);
+  delete env[EXIT_WITH_PID_ENV];
+  return pid;
+}
+
 export interface HubParentWatchDeps {
   hostEnv: Pick<HostEnv, 'platform' | 'systemRoot'>;
-  env: NodeJS.ProcessEnv;
+  /** The process to follow (from {@link takeExitWithPid}), or undefined when the hub was not started by the task. */
+  pid: number | undefined;
   /** Called once when the followed process is gone. */
   onGone: (reason: string) => void;
   warn: (message: string) => void;
@@ -35,7 +46,7 @@ export interface HubParentWatchDeps {
  * Returns undefined when nothing is to be followed.
  */
 export function startHubExitWithParent(deps: HubParentWatchDeps): ParentWatch | undefined {
-  const pid = parseExitWithPid(deps.env);
+  const pid = deps.pid;
   if (pid === undefined) return undefined;
   if (deps.hostEnv.platform !== 'win32') throw new Error(`${EXIT_WITH_PID_ENV} is only for the Windows service launch`);
   const systemRoot = deps.hostEnv.systemRoot;

@@ -104,7 +104,7 @@ zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止�
 <prefix>\hub\.env              設定（版のフォルダの外。更新で消えない）
 <prefix>\data\                 データベース・鍵・トークン
 <prefix>\bin\azito.cmd         CLI
-<prefix>\logs\hub.log         ハブの標準出力・標準エラーのすべて（journal に当たるもの）。約 10 MB で切り替わり、前のファイルは hub.log.1 に残る
+<prefix>\logs\hub.log         ハブの標準出力・標準エラーのすべて（journal に当たるもの）。ハブの起動時に 10 MB を超えていれば hub.log.1 に退避する
 ```
 
 `hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を、BOM の無い ASCII の 1 行で書きます。Windows PowerShell 5.1 の `Set-Content -Encoding UTF8` や `>` は BOM 付き、または UTF-16 で書くため、`azito` は読み取りを拒否します。次のように書いてください:
@@ -135,11 +135,11 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 - **あなたのログオン時**に起動します（ブート時ではありません）。あなたの権限（管理者権限なし）で動き、失敗すると 1 分おきに再起動します。ログオフ中はハブは動かず、再起動後はログオンが要ります
 - `conhost.exe --headless powershell.exe <ランチャー>` を実行するので、デスクトップにコンソール窓は出ません。ランチャーは起動のたびに `hub\current.txt` を読み、その版の `run.ps1 -Service` を実行します。つまり**定義に版は含まれず**、手動の更新は `current.txt` を切り替えて `azito service restart` するだけで済み、タスクの再登録は要りません
 - ハブの標準出力・標準エラーを `<prefix>\logs\hub.log` に書きます（`current.txt` が不正でランチャーが止まったときの理由もここ）。場所は `azito status` が表示します
-- タスクと一緒に終わります。タスクスケジューラの「終了」（`azito stop`、`schtasks /End /TN AzitoHub`）が終わらせるのは `conhost.exe` だけなので、`run.ps1 -Service` がその ID をハブに伝え（`AZITO_HUB_EXIT_WITH_PID`）、いなくなって数秒でハブが自分で終了します（Windows の agent が親に付き従うのと同じ仕組み）。`azito stop` は念のため、この導入の `azito-hub.cjs` を動かしている `node.exe`（同じユーザー、コマンドライン引数の完全一致、同じ生成時刻）も終わらせ、それ以外には触れません
+- タスクと一緒に終わります。タスクスケジューラの「終了」（`azito stop`、`schtasks /End /TN AzitoHub`）が終わらせるのは `conhost.exe` だけなので、`run.ps1 -Service` がその ID をハブに伝え（`AZITO_HUB_EXIT_WITH_PID`）、いなくなって数秒でハブが自分で終了します（Windows の agent が親に付き従うのと同じ仕組み）。`azito stop|restart|reload` は、タスクを終わらせる前にハブの `node.exe`（`<prefix>\hub\` 配下のどの版のフォルダーでもよい。同じユーザー、コマンドライン引数の完全一致）を特定し、最大 20 秒ハブが自分で終了するのを待ち、そのあとも同じプロセス（ID と生成時刻）のままのものだけを強制終了します（強制したときは警告します）。そのため `current.txt` を切り替えてからの restart でも旧版の終了を待ち、新版が旧版とポートで衝突することはありません。ほかの prefix、ほかのユーザー、それ以外のプロセスには触れません
 
 設定 › システムには、起動方式「Task Scheduler」と、アプリ内更新が使えない理由（#381）が表示されます。手動の更新は、新しい zip を `hub\<tag>` に展開し、tag を `current.txt` に（BOM の無い ASCII の 1 行で）書いて、`azito service restart` します。
 
-install.ps1 は `current.txt` を書く前にタスクを登録し、書いたあとに起動します。途中で失敗しても、もう一度実行すれば直ります。起動だけが失敗したときは、ファイルは導入済みなので `azito start` を実行してください。導入済みのハブにはインストーラは何もしません（`install.sh` と同じ）。別の prefix 用に登録され、しかも動いているタスクは置き換えません（`azito stop` するまで `azito service install` が拒否します）。タスクを手で消すには `schtasks /Delete /TN AzitoHub /F`（アンインストーラは #381）。
+install.ps1 は `current.txt` を書く前にタスクを登録し、書いたあとに起動します。途中で失敗しても、もう一度実行すれば直ります。起動だけが失敗したときは、ファイルは導入済みなので `azito start` を実行してください。導入済みのハブにはインストーラは何もしません（`install.sh` と同じ）。タスク名は固定なので 1 ユーザーに 1 つです。別の prefix 用に登録されたタスクは、`azito start|stop|restart|reload` が操作を拒否し、`azito service install` は `--yes` があるときだけ置き換えます（install.ps1 は `-Yes` のときに渡します）。動いているタスクは置き換えません。手で削除されたタスクは `azito service install` が登録し直します。手で消すには `schtasks /Delete /TN AzitoHub /F`（アンインストーラは #381。写し `%USERPROFILE%\.azito\service\AzitoHub.xml` だけが残ると `azito status` が警告します）。
 
 ## 手動インストール（tarball）
 

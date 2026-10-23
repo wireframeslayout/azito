@@ -101,6 +101,8 @@ async function main(): Promise<void> {
   const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
   
   let entryFragment = '';
+  let azito2 = '';
+  let cleanupFailure: string | undefined;
   const definitionCopy = path.join(os.homedir(), '.azito', 'service', `${TASK_NAME}.xml`);
 
   try {
@@ -141,6 +143,8 @@ async function main(): Promise<void> {
     assert(stop.status === 0, 'azito stop failed', stop.output);
     assert(hubNodePids(entryFragment).length === 0, 'azito stop must leave no hub node.exe', stop.output);
     assert((await healthStatus()) === null, '/api/health must not answer after azito stop');
+    assert(/shutting down gracefully/.test(readLog(logFile)), 'the hub must have shut down by itself (graceful), not been killed: azito stop waits for it', readLog(logFile));
+    assert(!/ended forcibly/.test(stop.output), 'azito stop must not have had to end the hub forcibly', stop.output);
     const stopped = azito(azitoCmd, 'status');
     assert(/service:\s+taskscheduler \((inactive|failed)\)/.test(stopped.output), 'azito status must show the task stopped', stopped.output);
 
@@ -161,16 +165,66 @@ async function main(): Promise<void> {
     await waitFor('/api/health after restart', async () => (await healthStatus()) === 200, 90_000, () => readLog(logFile));
     const restarted = hubNodePids(entryFragment);
     assert(restarted.length === 1, `exactly one hub node.exe after restart (found ${restarted.length})`);
-    azito(azitoCmd, 'stop');
-    assert(hubNodePids(entryFragment).length === 0, 'the final azito stop must leave no hub node.exe');
+    step('a restart after current.txt was switched to another version folder waits for the old version (no port conflict)');
+    const hubDir = path.join(prefix, 'hub');
+    const newVersion = 'v0.0.1-ci';
+    fs.cpSync(path.join(hubDir, version as string), path.join(hubDir, newVersion), { recursive: true });
+    fs.writeFileSync(path.join(hubDir, 'current.txt'), `${newVersion}\r\n`);
+    const logBefore = readLog(logFile).length;
+    const switched = azito(azitoCmd, 'service restart');
+    assert(switched.status === 0 && !/forcibly/.test(switched.output), 'azito service restart after the switch failed', switched.output);
+    await waitFor('/api/health after the switch', async () => (await healthStatus()) === 200, 90_000, () => readLog(logFile));
+    const newEntry = fs.realpathSync.native(path.join(hubDir, newVersion, 'azito-hub.cjs'));
+    assert(hubNodePids(entryFragment).length === 0, 'the old version must have ended');
+    assert(hubNodePids(newEntry).length === 1, 'exactly one hub of the new version must run');
+    assert(!/EADDRINUSE/.test(readLog(logFile).slice(logBefore)), 'the new version must not meet the old one on the port', readLog(logFile).slice(logBefore));
+    assert((await healthStatus()) === 200, '/api/health after the switch');
+    assert(azito(azitoCmd, 'stop').status === 0 && hubNodePids(newEntry).length === 0, 'azito stop must end the new version');
+    fs.writeFileSync(path.join(hubDir, 'current.txt'), `${version}\r\n`);
+
+    step('a task deleted by hand (its definition copy left) is registered again by azito service install');
+    assert(schtasks(['/Delete', '/TN', TASK_NAME, '/F']).status === 0, 'could not delete the task');
+    assert(fs.existsSync(definitionCopy), 'the definition copy stays after a delete by hand');
+    const missing = azito(azitoCmd, 'status');
+    assert(/not registered any more/.test(missing.output), 'azito status must say the task is gone', missing.output);
+    const noStart = azito(azitoCmd, 'start');
+    assert(noStart.status !== 0 && /azito service install/.test(noStart.output), 'azito start must say how to register the task again', noStart.output);
+    const reregistered = azito(azitoCmd, 'service install');
+    assert(reregistered.status === 0 && !/already registered/.test(reregistered.output), 'azito service install must register the task again', reregistered.output);
+    assert(schtasks(['/Query', '/TN', TASK_NAME]).status === 0, 'the task must exist again');
+    assert(azito(azitoCmd, 'start').status === 0, 'azito start after the re-registration');
+    await waitFor('/api/health after the re-registration', async () => (await healthStatus()) === 200, 90_000, () => readLog(logFile));
+    assert(azito(azitoCmd, 'stop').status === 0, 'azito stop');
+
+    step('a task registered for another install is not operated from this one, and is replaced only with --yes');
+    const prefix2 = path.join(work, 'Second (Prefix)', '.azito');
+    const second = powershell(['-File', installPs1, '-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix2, '-Yes', '-NoPath', '-NoService']);
+    assert(second.status === 0, 'the second install failed', second.output);
+    azito2 = path.join(prefix2, 'bin', 'azito.cmd');
+    for (const command of ['start', 'stop', 'service restart']) {
+      const refused = azito(azito2, command);
+      assert(refused.status !== 0 && /belongs to another install/.test(refused.output), `azito ${command} of another install must be refused`, refused.output);
+    }
+    const noYes = azito(azito2, 'service install');
+    assert(noYes.status !== 0 && /--yes/.test(noYes.output), 'replacing another install\'s task needs --yes', noYes.output);
+    const replaced = azito(azito2, 'service install --yes');
+    assert(replaced.status === 0 && /replacing the task registered for/.test(replaced.output), 'service install --yes must replace it and say so', replaced.output);
+    const old = azito(azitoCmd, 'start');
+    assert(old.status !== 0 && /belongs to another install/.test(old.output), 'the first install must now be refused', old.output);
+    assert(azito(azito2, 'start').status === 0, 'the second install can start its task');
+    await waitFor('/api/health of the second install', async () => (await healthStatus()) === 200, 90_000, () => readLog(path.join(prefix2, 'logs', 'hub.log')));
+    assert(azito(azito2, 'stop').status === 0, 'azito stop of the second install');
+    assert((await healthStatus()) === null, 'nothing must answer after the stop');
   } catch (err) {
     console.error(`[smoke-service] hub.log:\n${readLog(logFile)}`);
     throw err;
   } finally {
     step('cleanup: stop and delete the task');
-    if (fs.existsSync(azitoCmd)) azito(azitoCmd, 'stop');
+    for (const cmd of [azitoCmd, azito2]) if (cmd !== '' && fs.existsSync(cmd)) azito(cmd, 'stop');
+    schtasks(['/End', '/TN', TASK_NAME]);
     const deleted = schtasks(['/Delete', '/TN', TASK_NAME, '/F']);
-    if (deleted.status !== 0) console.warn(`[smoke-service] could not delete the task: ${deleted.output.trim()}`);
+    if (deleted.status !== 0 && schtasks(['/Query', '/TN', TASK_NAME]).status === 0) cleanupFailure = `could not delete the task: ${deleted.output.trim()}`;
+    else if (schtasks(['/Query', '/TN', TASK_NAME]).status === 0) cleanupFailure = 'the task still exists after it was deleted';
     fs.rmSync(definitionCopy, { force: true });
     try {
       fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
@@ -178,6 +232,8 @@ async function main(): Promise<void> {
       console.warn(`[smoke-service] could not remove ${work}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
+  // A task left behind on the machine is a failure of the test, not a warning.
+  if (cleanupFailure) throw new Error(cleanupFailure);
   step('ok');
 }
 

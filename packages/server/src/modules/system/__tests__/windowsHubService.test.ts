@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
-import { buildHubLauncherScript, buildHubTaskXml, endHubProcesses, hubWindowsLayout, resolveWindowsUserId } from '../windowsHubService';
+import { buildHubLauncherScript, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, registeredHubPrefix, resolveWindowsUserId, samePrefix } from '../windowsHubService';
 
 const PREFIX = 'C:\\Users\\Foo Bar (Work)\\.azito';
 
@@ -59,6 +59,13 @@ describe('buildHubLauncherScript', () => {
     expect(script).toContain('AppendAllText($logFile');
   });
 
+  it('logs a run.ps1 that throws or exits with a code, instead of failing silently', () => {
+    expect(script).toContain('& $run -Service -LogFile $logFile');
+    expect(script).toContain('} catch {\n  Write-LauncherLog $_.Exception.Message\n  exit 1');
+    expect(script).toContain('exited with code $code');
+    expect(script.trimEnd().endsWith('exit $code')).toBe(true);
+  });
+
   it('quotes a prefix that contains an apostrophe', () => {
     const quoted = buildHubLauncherScript(hubWindowsLayout("C:\\Users\\O'Neil\\.azito"));
     expect(quoted).toContain("$pointer = 'C:\\Users\\O''Neil\\.azito\\hub\\current.txt'");
@@ -76,23 +83,62 @@ describe('resolveWindowsUserId', () => {
   });
 });
 
-describe('endHubProcesses', () => {
-  const result = (exitCode: number, stderr = ''): CommandResult => ({ exitCode, signal: null, stdout: '', stderr });
+const scriptOf = (spec: CommandSpec): string => Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
+const result = (exitCode: number, stdout = '', stderr = ''): CommandResult => ({ exitCode, signal: null, stdout, stderr });
 
-  it('runs one PowerShell sweep for node.exe with the entry file as the exact argument, never ending itself', async () => {
-    const run = vi.fn(async (_spec: CommandSpec) => result(0));
-    await endHubProcesses(run, 'C:\\Windows', `${PREFIX}\\hub\\v0.12.0\\azito-hub.cjs`, 4321);
-    const spec = run.mock.calls[0][0];
-    expect(spec.file).toBe('C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
-    const script = Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
-    expect(script).toContain("Name = 'node.exe'");
-    expect(script).toContain("$envArgument = 'C:\\Users\\Foo Bar (Work)\\.azito\\hub\\v0.12.0\\azito-hub.cjs'");
-    expect(script).toContain('$_.ProcessId -ne 4321');
-    expect(script).not.toContain("'conhost.exe'");
+describe('registeredHubPrefix / samePrefix', () => {
+  it('reads the prefix back from a generated definition, so a task of another install can be told apart', () => {
+    const xml = buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout("C:\\Users\\O'Neil (Work)\\.azito") });
+    expect(registeredHubPrefix(xml)).toBe("C:\\Users\\O'Neil (Work)\\.azito");
   });
 
-  it('fails with the script\'s own message when a process would not end', async () => {
-    const run = vi.fn(async () => result(1, 'An hub process did not end: 9'));
-    await expect(endHubProcesses(run, 'C:\\Windows', 'C:\\x\\azito-hub.cjs', 1)).rejects.toThrow(/did not end: 9/);
+  it('is undefined for a definition that is not ours', () => {
+    expect(registeredHubPrefix('<Task></Task>')).toBeUndefined();
+  });
+
+  it('ignores case and a trailing separator, and nothing else', () => {
+    expect(samePrefix('C:\\Users\\Me\\.azito\\', 'c:\\users\\me\\.AZITO')).toBe(true);
+    expect(samePrefix('C:\\Users\\Me\\.azito', 'C:\\Users\\Me\\.azito2')).toBe(false);
+  });
+});
+
+describe('findHubProcesses', () => {
+  it('lists node.exe of this user with an azito-hub.cjs of any version under the hub folder, as the given and the real path, never itself', async () => {
+    const run = vi.fn(async (_spec: CommandSpec) => result(0, '4321 133000000000000000\r\nnoise\r\n77 5\r\n'));
+    const found = await findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`, 'D:\\real\\.azito\\hub'], 999);
+    expect(found).toEqual([{ pid: 4321, created: '133000000000000000' }, { pid: 77, created: '5' }]);
+    const script = scriptOf(run.mock.calls[0][0]);
+    expect(script).toContain("Name = 'node.exe'");
+    expect(script).toContain("[regex]::Escape('C:\\Users\\Foo Bar (Work)\\.azito\\hub\\') + '|' + [regex]::Escape('D:\\real\\.azito\\hub\\')");
+    expect(script).toContain('$_.ProcessId -ne 999');
+    expect(script).toContain('Test-Mine');
+  });
+
+  it('fails with the script\'s own message', async () => {
+    await expect(findHubProcesses(async () => result(1, '', 'boom'), 'C:\\Windows', [`${PREFIX}\\hub`], 1)).rejects.toThrow(/Looking for the hub processes failed.*boom/);
+  });
+});
+
+describe('endHubProcesses', () => {
+  it('does nothing, and starts no PowerShell, when nothing was running', async () => {
+    const run = vi.fn(async () => result(0));
+    expect(await endHubProcesses(run, 'C:\\Windows', [], 1000)).toEqual([]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it('waits for the grace period before it ends anything, and only ends the same process (id and creation time)', async () => {
+    const run = vi.fn(async (_spec: CommandSpec) => result(0, 'forced 4321\r\n'));
+    const forced = await endHubProcesses(run, 'C:\\Windows', [{ pid: 4321, created: '133000000000000000' }], 20_000);
+    expect(forced).toEqual([4321]);
+    const script = scriptOf(run.mock.calls[0][0]);
+    expect(script).toContain('Id = 4321; Created = 133000000000000000');
+    expect(script).toContain('AddMilliseconds(20000)');
+    expect(script.indexOf('AddMilliseconds(20000)')).toBeLessThan(script.indexOf('Stop-Process'));
+    expect(script).toContain('$p.CreationDate.ToFileTimeUtc() -eq $_.Created');
+  });
+
+  it('fails when a process would not end', async () => {
+    const run = vi.fn(async () => result(1, '', 'A hub process did not end: 9'));
+    await expect(endHubProcesses(run, 'C:\\Windows', [{ pid: 9, created: '1' }], 10)).rejects.toThrow(/did not end: 9/);
   });
 });

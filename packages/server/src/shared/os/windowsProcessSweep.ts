@@ -12,8 +12,6 @@ export interface ProcessSweepInput {
   label: string;
   /** Also end the `conhost.exe` that started such a process (the task runs the program under `conhost.exe --headless`). */
   endParentConhost: boolean;
-  /** A process id that is never ended even when it matches: the process running this very sweep (the hub's own `azito service stop` names the same program file). */
-  excludePid?: number;
 }
 
 /**
@@ -28,14 +26,13 @@ export interface ProcessSweepInput {
  */
 export function buildEndProcessesScript(input: ProcessSweepInput): string {
   const q = powershellDialect.quote;
-  const exclusion = input.excludePid === undefined ? '' : ` -and $_.ProcessId -ne ${Math.trunc(input.excludePid)}`;
   return [
     `$envArgument = ${q(input.argument)}`,
     "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
     '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
     'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
     'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
-    `function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = ${q(input.image)}" | Where-Object { (Test-Argument $_) -and (Test-Mine $_)${exclusion} }) }`,
+    `function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = ${q(input.image)}" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }`,
     'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
     '$targets = @()',
     'foreach ($node in Get-AgentNodes) {',

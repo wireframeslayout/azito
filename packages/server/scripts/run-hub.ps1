@@ -76,11 +76,17 @@ $env:NODE_PATH = (Join-Path $bundle 'node_modules') + $(if ($env:NODE_PATH) { ';
 # Service mode. The hub runs under cmd.exe so that the shell does the redirection: everything it writes (and a crash's last words)
 # lands in one file in the bytes it wrote, UTF-8. The command line is built here as one string and every path reaches cmd
 # through an environment variable, so a prefix with spaces, parentheses or & needs no quoting beyond the surrounding quotes.
-# A log over 10 MB is moved aside (one previous file is kept) before the hub starts.
+# A log over 10 MB is moved aside (one previous file is kept) when the hub starts; if that fails it is reported in the log and the hub starts anyway.
 function Start-HubService([string]$Node, [string]$Entry, [string]$Log) {
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Log) | Out-Null
-    if ((Test-Path -LiteralPath $Log -PathType Leaf) -and ((Get-Item -LiteralPath $Log).Length -gt 10MB)) {
-        Move-Item -LiteralPath $Log -Destination "$Log.1" -Force
+    # Rotation is best effort: a log that another program holds open cannot be moved, and that must not keep the hub from starting.
+    $rotationFailure = $null
+    try {
+        if ((Test-Path -LiteralPath $Log -PathType Leaf) -and ((Get-Item -LiteralPath $Log).Length -gt 10MB)) {
+            Move-Item -LiteralPath $Log -Destination "$Log.1" -Force
+        }
+    } catch {
+        $rotationFailure = $_.Exception.Message
     }
     $info = New-Object System.Diagnostics.ProcessStartInfo
     $info.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
@@ -97,6 +103,9 @@ function Start-HubService([string]$Node, [string]$Entry, [string]$Log) {
         $info.EnvironmentVariables['AZITO_HUB_EXIT_WITH_PID'] = [string]$parent.ProcessId
     } else {
         [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: not started under conhost.exe, so the hub will not follow a parent process`r`n")
+    }
+    if ($rotationFailure) {
+        [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: could not move the log over 10 MB aside, so it keeps growing: $rotationFailure`r`n")
     }
     $process = [System.Diagnostics.Process]::Start($info)
     $process.WaitForExit()

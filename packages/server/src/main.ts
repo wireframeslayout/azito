@@ -28,7 +28,7 @@ import { initEnvCommand } from './cli/initEnvCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
 import { serializeRequestForLog } from './shared/redactUrlSecrets';
-import { startHubExitWithParent } from './app/hubExitWithParent';
+import { startHubExitWithParent, takeExitWithPid } from './app/hubExitWithParent';
 
 // ─── Graceful shutdown ───
 
@@ -139,7 +139,9 @@ async function main(): Promise<void> {
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
-  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken, hostEnv, secretFileGuard);
+  // Read once here (and removed from the environment, so that no child inherits it): the process a task-launched hub follows.
+  const exitWithPid = takeExitWithPid(process.env);
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken, hostEnv, secretFileGuard, exitWithPid !== undefined);
   const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);
@@ -174,7 +176,7 @@ async function main(): Promise<void> {
   // conhost: `run.ps1 -Service` names it in AZITO_HUB_EXIT_WITH_PID, and the hub shuts down when it is gone.
   startHubExitWithParent({
     hostEnv,
-    env: process.env,
+    pid: exitWithPid,
     onGone: (reason) => {
       app.log.info(`${reason}: shutting down`);
       shutdown('SIGTERM');

@@ -467,7 +467,10 @@ function Invoke-Install {
         # reads current.txt each time it starts, so it does not name this version.
         if (-not $NoService) {
             Write-Host 'Registering the Task Scheduler task...'
-            Invoke-Node $node @($hub, 'service', 'install')
+            $installArgs = @($hub, 'service', 'install')
+            # -Yes also lets the install replace a task that another install of this user registered (the command refuses without it).
+            if ($Yes) { $installArgs += '--yes' }
+            Invoke-Node $node $installArgs
         }
 
         # The pointer is written last, after every step that can fail: it is what marks the install as complete, so a run

@@ -122,7 +122,7 @@ export default function SystemSection() {
         <SectionRow label={t('system.status')}>
           <Chip tone={statusTone(status.status)}>{STATUS_KEYS[status.status] ? t(STATUS_KEYS[status.status]) : status.status}</Chip>
         </SectionRow>
-        {status.deployMode !== 'source' && (
+        {(status.deployMode === 'systemd' || status.deployMode === 'launchd') && (
           <SectionRow label={t('system.devChannel')}>
             <label className="toggle">
               <input
