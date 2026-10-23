@@ -1,3 +1,4 @@
+import { redactSecretText } from '../../../shared/redactSecretText';
 /**
  * The first step of the SSH preflight: which kind of host is this? The login shell of an SSH target is POSIX sh (Linux / macOS),
  * cmd.exe (Windows OpenSSH's default) or PowerShell (Windows with the default shell changed), and nothing about it is known
@@ -42,13 +43,13 @@ export function parseHostOsProbe(output: string, stderr = '', code: number | nul
   const answer = match?.[1].trim();
   const loginShell = answer === undefined ? undefined : SHELL_PATTERNS.find(([, pattern]) => pattern.test(answer))?.[0];
   if (!loginShell) {
-    throw new Error(`Could not tell the host's OS: the OS probe answered neither as sh, cmd.exe nor PowerShell (got: ${output.trim() || 'nothing'}${diagnostics(stderr, code)}).`);
+    throw new Error(`Could not tell the host's OS: the OS probe answered neither as sh, cmd.exe nor PowerShell (got: ${redactSecretText(output.trim()) || 'nothing'}${diagnostics(stderr, code)}).`);
   }
   return { os: loginShell === 'sh' ? 'posix' : 'windows', loginShell };
 }
 
 /** What the command printed to stderr (the start of it) and its exit code, for an error message: a failed shell says why only there. */
 export function diagnostics(stderr: string, code: number | null): string {
-  const err = stderr.trim().slice(0, 300);
+  const err = redactSecretText(stderr.trim()).slice(0, 300);
   return `${err ? `; stderr: ${err}` : ''}${code === null ? '' : `; exit code ${code}`}`;
 }

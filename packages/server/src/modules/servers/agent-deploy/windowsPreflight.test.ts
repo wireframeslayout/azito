@@ -75,6 +75,8 @@ describe('parseWindowsPreflight', () => {
   it('is an error when the markers are missing, the JSON is broken or a field is missing', () => {
     expect(() => parseWindowsPreflight('')).toThrow(/no result between the markers/);
     expect(() => parseWindowsPreflight('', 'Get-CimInstance : boom\n', 1)).toThrow(/got: nothing; stderr: Get-CimInstance : boom; exit code 1/);
+    expect(() => parseWindowsPreflight('', '$env:AZITO_TOKEN = "s3cret-value"', 1)).toThrow(/AZITO_TOKEN = \[REDACTED\]/);
+    expect(() => parseWindowsPreflight('set API_KEY=s3cret-value', '', 0)).toThrow(/API_KEY=\[REDACTED\]/);
     expect(() => parseWindowsPreflight(`${BEGIN}\n{broken\n${END}`)).toThrow(/not JSON/);
     expect(() => parseWindowsPreflight(`${BEGIN}\n{"arch":"X64"}\n${END}`)).toThrow(/unexpected result/);
     expect(() => parseWindowsPreflight(`${END}\n${BEGIN}`)).toThrow(/no result between the markers/);

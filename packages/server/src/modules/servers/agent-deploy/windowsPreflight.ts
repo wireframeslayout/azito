@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { powershellDialect } from '../../../shared/os/shellDialect';
+import { redactSecretText } from '../../../shared/redactSecretText';
 import { diagnostics } from './hostOsProbe';
 
 const BEGIN_MARKER = '<<AZITO_PREFLIGHT_BEGIN>>';
@@ -82,7 +83,7 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
   const begin = text.indexOf(BEGIN_MARKER);
   const end = begin < 0 ? -1 : text.indexOf(END_MARKER, begin + BEGIN_MARKER.length);
   if (begin < 0 || end < 0) {
-    throw new Error(`Could not read the Windows preflight (no result between the markers; got: ${output.trim().slice(0, 300) || 'nothing'}${diagnostics(stderr, code)}).`);
+    throw new Error(`Could not read the Windows preflight (no result between the markers; got: ${redactSecretText(output.trim()).slice(0, 300) || 'nothing'}${diagnostics(stderr, code)}).`);
   }
   let json: unknown;
   try {

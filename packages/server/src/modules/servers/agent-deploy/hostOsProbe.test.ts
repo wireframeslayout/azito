@@ -29,6 +29,8 @@ describe('parseHostOsProbe (the output of the OS probe, one fixed example per lo
     expect(() => parseHostOsProbe('command not found: echo')).toThrow(/command not found: echo/);
     expect(() => parseHostOsProbe('AZITO_OS:something else')).toThrow(/neither as sh, cmd\.exe nor PowerShell/);
     expect(() => parseHostOsProbe('', 'sh: 1: boom\n', 2)).toThrow(/got: nothing; stderr: sh: 1: boom; exit code 2/);
+    expect(() => parseHostOsProbe('', 'export AZITO_TOKEN=s3cret-value\nboom', 1)).toThrow(/AZITO_TOKEN=\[REDACTED\]/);
+    expect(() => parseHostOsProbe('', 'export AZITO_TOKEN=s3cret-value', 1)).not.toThrow(/s3cret/);
   });
 });
 
