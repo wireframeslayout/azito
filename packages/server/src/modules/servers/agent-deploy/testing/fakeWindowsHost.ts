@@ -25,6 +25,8 @@ export interface FakeWindowsHostOptions {
   runResult?: number;
   /** A script containing this text fails with this stderr. */
   failScript?: { containing: string; stderr: string };
+  /** A script containing this text prints this on stdout (and succeeds). */
+  scriptOutput?: { containing: string; stdout: string };
 }
 
 export interface RecordedCall {
@@ -70,6 +72,11 @@ export class FakeWindowsHost {
     if (failing && script.includes(failing.containing)) {
       this.calls.push({ kind: 'script', text: script });
       return { stdout: '', stderr: failing.stderr, code: 1 };
+    }
+    const scripted = this.options.scriptOutput;
+    if (scripted && script.includes(scripted.containing)) {
+      this.calls.push({ kind: 'script', text: script });
+      return { stdout: scripted.stdout, stderr: '', code: 0 };
     }
     if (script.includes('AZITO_PREFLIGHT_BEGIN')) {
       this.calls.push({ kind: 'preflight', text: script });

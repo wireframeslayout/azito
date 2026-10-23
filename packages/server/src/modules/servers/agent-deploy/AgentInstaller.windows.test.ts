@@ -283,6 +283,35 @@ describe('AgentInstaller on a Windows host', () => {
       }
     });
 
+    it('judges the previous install by what it put back: a new version folder that cannot be removed does not stop the previous agent', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('401'); }));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+      try {
+        const { installer, host } = make({ existingTask: 'running', scriptOutput: { containing: "Move-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\bundlehash1.prev'", stdout: 'CLEANUP_FAILED The process cannot access the file' } });
+        const pending = installer.install('user@win');
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await pending;
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('could not remove the new version folder this deploy created (The process cannot access the file); the previous install itself is not affected');
+        expect(result.error).toContain('started the previous agent again');
+        expect(result.error).not.toContain('NOT started');
+        expect(host.taskState).toBe('running');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('reports a previous install that could not be removed after a good install as a warning that says what to delete', async () => {
+      const { installer } = make({ existingTask: 'running', failScript: { containing: "if (Test-Path -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev') { Remove-Item", stderr: 'Access is denied' } });
+      const steps: InstallProgress[] = [];
+      const result = await installer.install('user@win', (p) => steps.push(p));
+      expect(result.success).toBe(true);
+      const health = steps.find((s) => s.step === 'health' && s.status === 'ok')!;
+      expect(health.message).toContain('WARNING: the previous install could not be removed');
+      expect(health.message).toContain('The next install on this host stops while C:\\Users\\dev\\.azito\\agent\\agent.env.prev');
+      expect(health.message).toContain('delete them by hand');
+    });
+
     it('stops before anything is changed while an earlier reinstall left its previous install set aside', async () => {
       const { installer, host } = make({ existingTask: 'running', failScript: { containing: "-Filter '*.prev'", stderr: 'An earlier reinstall left its previous install set aside and it was neither put back nor removed: C:\\Users\\dev\\.azito\\agent\\agent.env.prev.' } });
       const result = await installer.install('user@win');

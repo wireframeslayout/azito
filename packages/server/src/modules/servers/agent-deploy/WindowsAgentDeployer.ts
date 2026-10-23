@@ -298,7 +298,12 @@ export class WindowsAgentDeployer {
    * Ends the `node.exe` processes of this install and nothing else: one of them has the argument `--env-file=<this install's
    * agent.env>` exactly (a token of the command line, so the `--env-file` of an install nested below this one, or a program that
    * merely mentions the folder, does not match) and is owned by the user this session runs as (the SID is compared; an elevated
-   * session does not reach other users' processes). The `conhost.exe` above such a node is ended with it.
+   * session does not reach other users' processes).
+   *
+   * The `conhost.exe` above such a node is ended with it, but a process id can be reused once its process has ended, so a parent
+   * is taken only if it is a conhost.exe of the same user, created no later than the node, and has the same `--env-file` argument
+   * (the task hands its arguments to the conhost, so they are in its command line). A process is identified by its id AND its
+   * creation time: the time is checked again just before it is ended, and "has it ended?" asks the same question.
    */
   private async endStrayProcesses(sshHost: string, envFile: string): Promise<void> {
     const q = powershellDialect.quote;
@@ -307,18 +312,22 @@ export class WindowsAgentDeployer {
       "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
       '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
       'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
-      'function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pattern) -and (Test-Mine $_) }) }',
+      'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
+      'function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }',
+      'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
       '$targets = @()',
       'foreach ($node in Get-AgentNodes) {',
-      '  $targets += $node.ProcessId',
+      '  $targets += [pscustomobject]@{ Id = $node.ProcessId; Created = $node.CreationDate }',
       '  $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($node.ParentProcessId)"',
-      "  if ($parent -and $parent.Name -eq 'conhost.exe' -and (Test-Mine $parent)) { $targets += $parent.ProcessId }",
+      "  if ($parent -and $parent.Name -eq 'conhost.exe' -and $parent.CreationDate -le $node.CreationDate -and (Test-Argument $parent) -and (Test-Mine $parent)) {",
+      '    $targets += [pscustomobject]@{ Id = $parent.ProcessId; Created = $parent.CreationDate }',
+      '  }',
       '}',
-      'foreach ($id in $targets) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue }',
-      'function Get-Alive { @($targets | Where-Object { Get-Process -Id $_ -ErrorAction SilentlyContinue }) }',
+      'foreach ($target in $targets) { if (Get-Same $target) { Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue } }',
+      'function Get-Alive { @($targets | Where-Object { Get-Same $_ }) }',
       'for ($i = 0; $i -lt 20 -and (Get-Alive).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }',
       '$left = Get-Alive',
-      'if ($left.Count -gt 0) { throw "An agent process did not end: $($left -join \', \')" }',
+      'if ($left.Count -gt 0) { throw "An agent process did not end: $(($left | ForEach-Object { $_.Id }) -join \', \')" }',
     ].join('\n'), QUICK_MS);
   }
 
@@ -449,20 +458,26 @@ export class WindowsAgentDeployer {
         return false;
       }
     };
-    // Put `aside` back at `place`; when nothing was set aside but this deploy created `place`, remove it.
+    // Put `aside` back at `place`. When nothing was set aside but this deploy created `place`, remove it: failing to do THAT is
+    // reported (it prints CLEANUP_FAILED) but is not a failure to restore the previous install.
     const putBack = (aside: string, place: string, created: boolean): string => [
       `if (Test-Path -LiteralPath ${q(aside)}) {`,
       `  if (Test-Path -LiteralPath ${q(place)}) { Remove-Item -LiteralPath ${q(place)} -Recurse -Force }`,
       `  Move-Item -LiteralPath ${q(aside)} -Destination ${q(place)}`,
-      created ? `} elseif (Test-Path -LiteralPath ${q(place)}) { Remove-Item -LiteralPath ${q(place)} -Recurse -Force }` : '}',
+      created ? `} elseif (Test-Path -LiteralPath ${q(place)}) {\n  try { Remove-Item -LiteralPath ${q(place)} -Recurse -Force } catch { Write-Output ('CLEANUP_FAILED ' + $_.Exception.Message) }\n}` : '}',
     ].join('\n');
+    const putBackAttempt = (what: string, label: string, aside: string, place: string, created: boolean): Promise<boolean> => attempt(what, async () => {
+      const out = await this.script(input.sshHost, label, putBack(aside, place, created));
+      const failed = /CLEANUP_FAILED (.*)/.exec(out);
+      if (failed) problems.push(`could not remove the new ${what.replace('restored the ', '')} this deploy created (${failed[1]!.trim()}); the previous install itself is not affected`);
+    });
 
     // Nothing was touched before the capture: only the temporary files are removed.
     let restored = false;
     if (previous !== undefined) {
       await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.envFile));
-      const folder = await attempt('restored the version folder', () => this.script(input.sshHost, 'Restoring the previous version folder', putBack(layout.versionDirPrev, layout.versionDir, progress.versionCreated)));
-      const settings = await attempt('restored the settings', () => this.script(input.sshHost, 'Restoring the previous settings', putBack(layout.envFilePrev, layout.envFile, progress.settingsSwapped)));
+      const folder = await putBackAttempt('restored the version folder', 'Restoring the previous version folder', layout.versionDirPrev, layout.versionDir, progress.versionCreated);
+      const settings = await putBackAttempt('restored the settings', 'Restoring the previous settings', layout.envFilePrev, layout.envFile, progress.settingsSwapped);
       restored = folder && settings;
     }
     await attempt('removed the temporary files', () => this.script(input.sshHost, 'Removing the temporary files', [layout.tarball, layout.extractDir, layout.taskXml, layout.envFileNew].map((p) => `Remove-Item -LiteralPath ${q(p)} -Recurse -Force -ErrorAction SilentlyContinue`).join('\n')));

@@ -29,6 +29,7 @@ import fileOpsRoutes from './fileOpsRoutes';
 import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
+import { processExists, readWindowsProcessCreation, startParentWatch } from './parentWatch';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
@@ -108,6 +109,7 @@ function describeMisaoHost(hostEnv: HostEnv): AgentMisaoHost {
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
 const PARENT_WATCH_INTERVAL_MS = 3000;
+const PARENT_VERIFY_INTERVAL_MS = 30_000;
 
 // ─── Bootstrap ───
 
@@ -319,16 +321,19 @@ async function main(): Promise<void> {
   // that conhost: the agent would be left running with a valid token. Its settings ask it to follow its parent, so when the
   // parent is gone it shuts down. Only when asked: a `node azito-agent.cjs` started by hand has no such setting.
   if (hostEnv.platform === 'win32' && process.env.AZITO_AGENT_EXIT_WITH_PARENT === '1') {
-    const parentPid = process.ppid;
-    const watch = setInterval(() => {
-      try {
-        process.kill(parentPid, 0);
-      } catch (err) {
-        // EPERM = the parent exists but is not ours to signal: it is alive. Anything else (ESRCH) = gone.
-        if ((err as NodeJS.ErrnoException).code !== 'EPERM') shutdown(`parent process ${parentPid} is gone`);
-      }
-    }, PARENT_WATCH_INTERVAL_MS);
-    watch.unref();
+    const systemRoot = hostEnv.systemRoot;
+    // The parent's creation time is read once now and again every 30 s, so that a process id handed to another process after the
+    // parent ended is noticed (the 3 s probe alone would take it for the parent). If it cannot be read, only the existence of
+    // the pid is watched: then the worst case is an agent that stays up (the hub's stop sweeps it), never one that ends early.
+    void startParentWatch({
+      pid: process.ppid,
+      aliveIntervalMs: PARENT_WATCH_INTERVAL_MS,
+      verifyIntervalMs: PARENT_VERIFY_INTERVAL_MS,
+      isAlive: processExists,
+      readCreation: (pid) => (systemRoot ? readWindowsProcessCreation(systemRoot, pid) : Promise.resolve(null)),
+      onGone: shutdown,
+      onUnverifiable: (message) => app.log.warn(message),
+    });
   }
 
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is

@@ -386,7 +386,7 @@ OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo
 | 操作 | 方法 |
 |---|---|
 | 再起動 | ハブが agent に届かないとき、タスクを再起動します（`schtasks /End` のあと `/Run`）。または Setup の行の「Reinstall」 |
-| 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`、またはタスクスケジューラの「終了」。agent はタスクが動かす `conhost.exe` に付き従い、それがいなくなって数秒で終わります（手で `node azito-agent.cjs` を起動したものは別です）。次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
+| 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`、またはタスクスケジューラの「終了」。agent はタスクが動かす `conhost.exe` に付き従い、それがいなくなって数秒で終わります（手で `node azito-agent.cjs` を起動したものは別です）。そのとき Windows が親のプロセス ID を別のプロセスに再利用していても、親の作成時刻を比べて約 30 秒以内に気づきます。それでも残る場合は、Setup の行から停止してください（ハブは `--env-file` の引数で agent を終わらせます）。次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
 | 削除（#372 まで） | `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は `Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` |
 
 本物の agent の隣で 2 つ目を試すときは、ハブの環境変数 `AZITO_WIN_AGENT_TASK_NAME`、`AZITO_WIN_AGENT_DIR`（ユーザーのホーム直下のフォルダー）、`AZITO_WIN_AGENT_PORT` を設定します。既定は `AzitoAgent`、`.azito\agent`、`3002` です。これは試験用です。サーバーごとには保存されないので、これらを付けずに起動したハブは既定のタスクを探します（使われているときはハブのログに 1 行出ます）。その一時ハブだけで使ってください。

@@ -224,8 +224,9 @@ export class AgentInstaller {
       report('health', 'error', msg);
       return failed(msg);
     }
-    const leftovers = await deployment.commit().then(() => '', (e: unknown) => ` (the previous install could not be removed: ${(e as Error).message})`);
-    report('health', 'ok', `Agent healthy${leftovers}`);
+    const layout = windowsAgentLayout(host.home, this.windowsAgent, version);
+    const leftovers = await deployment.commit().then(() => '', (e: unknown) => ` WARNING: the previous install could not be removed (${(e as Error).message}). The next install on this host stops while ${layout.envFilePrev} or any other *.prev in ${layout.root} exists: once the agent works, delete them by hand.`);
+    report('health', 'ok', `Agent healthy.${leftovers}`);
 
     // misao on a Windows agent is #369 A3. Reported like a misao that could not be installed: the agent stays installed and healthy.
     const misaoError = 'unsupported_os: installing misao on a Windows agent is not supported yet (planned for the next release)';
