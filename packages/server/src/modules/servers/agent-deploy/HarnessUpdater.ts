@@ -61,6 +61,13 @@ export class HarnessUpdater {
       // The update reads and installs the harness with POSIX shell strings; a Windows agent cannot run them.
       if (server.hostProfile?.platform === 'win32') {
         this.logger.info(`${server.name}: skipped (Windows agent; the harness auto-update runs POSIX commands)`);
+        const r: HarnessUpdateResult = {
+          name: server.name, status: 'skipped',
+          message: 'Windows agent: harness auto-update runs POSIX commands',
+          at: new Date().toISOString(),
+        };
+        this.lastResults.set(server.name, r);
+        results.push(r);
         continue;
       }
       results.push(await this.checkAndUpdate(server));
