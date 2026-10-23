@@ -1,10 +1,9 @@
 import type { IWorktreeService, WorktreeInfo, WorktreeEntry } from './IWorktreeService';
-import type { IServerTransport, ExecResult } from '../servers/transport/ServerTransport';
+import type { IServerTransport } from '../servers/transport/ServerTransport';
 
 import { assertSafePath, assertSafeBranch, assertNotOptionLike } from './assertSafeGitArgs';
 import { parseWorktreePorcelain } from './parseWorktreePorcelain';
 import { combinedOutput, runGit } from './runGit';
-import { RemotePathResolver } from './PathContainment';
 
 export class RemoteWorktreeService implements IWorktreeService {
   constructor(private transport: IServerTransport) {}
@@ -36,14 +35,13 @@ export class RemoteWorktreeService implements IWorktreeService {
     const worktreePath = `${dir}/.worktrees/task-${taskId}`;
     assertNotOptionLike(worktreePath, 'worktreePath');
 
-    await this.exec(`mkdir -p ${dir}/.worktrees`);
+    await this.transport.files().create(`${dir}/.worktrees`, 'directory', { recursive: true });
 
-    const checkResult = await this.exec(`test -d ${worktreePath} && echo exists || echo no`);
-    if (checkResult.stdout.trim() === 'exists') {
+    if ((await this.transport.files().stat(worktreePath))?.kind === 'directory') {
       const removed = await runGit(this.transport, dir, ['worktree', 'remove', worktreePath, '--force']);
       if (removed.exitCode !== 0) {
         await runGit(this.transport, dir, ['worktree', 'prune']);
-        try { await this.exec(`rm -rf ${worktreePath}`); } catch {}
+        try { await this.transport.files().remove(worktreePath); } catch {}
       }
     }
 
@@ -93,8 +91,7 @@ export class RemoteWorktreeService implements IWorktreeService {
   async exists(worktreePath: string): Promise<boolean> {
     assertSafePath(worktreePath, 'worktreePath');
     try {
-      const result = await this.exec(`test -d ${await this.absolute(worktreePath)} && echo yes || echo no`);
-      return result.stdout.trim() === 'yes';
+      return (await this.transport.files().stat(await this.absolute(worktreePath)))?.kind === 'directory';
     } catch {
       return false;
     }
@@ -157,7 +154,7 @@ export class RemoteWorktreeService implements IWorktreeService {
    */
   private async absolute(target: string): Promise<string> {
     if (target !== '~' && !target.startsWith('~/')) return target;
-    const resolved = await new RemotePathResolver(this.transport).resolveRealPath(target);
+    const resolved = await this.transport.files().realpath(target);
     assertSafePath(resolved, 'resolved path');
     return resolved;
   }
@@ -166,10 +163,5 @@ export class RemoteWorktreeService implements IWorktreeService {
     if (result.exitCode !== 0) {
       throw new Error(`git worktree add failed: ${combinedOutput(result)}`);
     }
-  }
-
-  /** The file operations of this service (mkdir / test / rm) still go through the shell until IFileOps (#379 P7). */
-  private exec(command: string): Promise<ExecResult> {
-    return this.transport.exec(command);
   }
 }

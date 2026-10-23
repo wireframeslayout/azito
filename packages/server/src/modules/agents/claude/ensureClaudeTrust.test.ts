@@ -1,25 +1,26 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
+import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import { ensureClaudeTrust } from './ensureClaudeTrust';
 
 let fakeHome: string;
 
-vi.mock('os', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('os')>();
-  return { ...actual, homedir: () => fakeHome };
-});
+/** A transport whose host is this machine with `fakeHome` as its home directory: the file operations are the real ones. */
+function transportWithHome(homeDir: string): IServerTransport {
+  const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir }));
+  return { files: () => ops } as unknown as IServerTransport;
+}
 
-const transportStub = {} as IServerTransport;
 const configPath = (): string => join(fakeHome, '.claude.json');
 const readConfig = (): { projects: Record<string, Record<string, unknown>> } =>
   JSON.parse(readFileSync(configPath(), 'utf8'));
 
-describe('ensureClaudeTrust (local)', () => {
+describe('ensureClaudeTrust', () => {
   beforeEach(() => {
-    fakeHome = mkdtempSync(join(tmpdir(), 'claude-trust-'));
+    fakeHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-trust-')));
   });
   afterEach(() => {
     rmSync(fakeHome, { recursive: true, force: true });
@@ -27,7 +28,7 @@ describe('ensureClaudeTrust (local)', () => {
 
   it('registers trust for a new project', async () => {
     writeFileSync(configPath(), JSON.stringify({ projects: {} }));
-    expect(await ensureClaudeTrust('local', transportStub, '/wt')).toEqual({ action: 'registered' });
+    expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'registered' });
     expect(readConfig().projects['/wt']).toEqual({ hasTrustDialogAccepted: true });
     expect(readdirSync(fakeHome)).toEqual(['.claude.json']);
   });
@@ -35,18 +36,18 @@ describe('ensureClaudeTrust (local)', () => {
   it('returns already_trusted without rewriting', async () => {
     const original = JSON.stringify({ projects: { '/wt': { hasTrustDialogAccepted: true } } });
     writeFileSync(configPath(), original);
-    expect(await ensureClaudeTrust('local', transportStub, '/wt')).toEqual({ action: 'already_trusted' });
+    expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'already_trusted' });
     expect(readFileSync(configPath(), 'utf8')).toBe(original);
   });
 
   it('returns failed for invalid JSON', async () => {
     writeFileSync(configPath(), '{not json');
-    const result = await ensureClaudeTrust('local', transportStub, '/wt');
+    const result = await ensureClaudeTrust(transportWithHome(fakeHome), '/wt');
     expect(result.action).toBe('failed');
   });
 
   it('returns skipped when the file does not exist', async () => {
-    expect(await ensureClaudeTrust('local', transportStub, '/wt')).toEqual({
+    expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({
       action: 'skipped',
       reason: '~/.claude.json not found',
     });
@@ -56,7 +57,7 @@ describe('ensureClaudeTrust (local)', () => {
   it.skipIf(process.platform === 'win32')('preserves file permissions after write', async () => {
     writeFileSync(configPath(), JSON.stringify({ projects: {} }), { mode: 0o600 });
     chmodSync(configPath(), 0o600);
-    await ensureClaudeTrust('local', transportStub, '/wt');
+    await ensureClaudeTrust(transportWithHome(fakeHome), '/wt');
     const mode = statSync(configPath()).mode & 0o777;
     expect(mode).toBe(0o600);
   });
@@ -69,41 +70,39 @@ describe('ensureClaudeTrust (local)', () => {
         projects: { '/wt': { allowedTools: ['Bash'], hasTrustDialogAccepted: false }, '/other': { x: 1 } },
       }),
     );
-    expect(await ensureClaudeTrust('local', transportStub, '/wt')).toEqual({ action: 'registered' });
+    expect(await ensureClaudeTrust(transportWithHome(fakeHome), '/wt')).toEqual({ action: 'registered' });
     const config = readConfig() as unknown as { numStartups: number; projects: Record<string, unknown> };
     expect(config.numStartups).toBe(3);
     expect(config.projects['/other']).toEqual({ x: 1 });
     expect(config.projects['/wt']).toEqual({ allowedTools: ['Bash'], hasTrustDialogAccepted: true });
   });
-});
 
-describe('ensureClaudeTrust (remote)', () => {
-  function transportWithStdout(stdout: string): { transport: IServerTransport; exec: ReturnType<typeof vi.fn> } {
-    const exec = vi.fn().mockResolvedValue({ stdout, stderr: '', code: 0 });
-    return { transport: { exec } as unknown as IServerTransport, exec };
-  }
-
-  it('runs node with the shell-quoted path and reports registered', async () => {
-    const { transport, exec } = transportWithStdout('REGISTERED\n');
-    expect(await ensureClaudeTrust('ssh', transport, "/home/u/it's wt")).toEqual({ action: 'registered' });
-    const command = exec.mock.calls[0][0] as string;
-    expect(command).toContain('node -e ');
-    expect(command).toContain("'/home/u/it'\\''s wt'");
-    expect(command).toContain('hasTrustDialogAccepted');
+  it('keeps both registrations when two projects register at the same time', async () => {
+    writeFileSync(configPath(), JSON.stringify({ projects: {} }));
+    const transport = transportWithHome(fakeHome);
+    const results = await Promise.all(['/a', '/b', '/c'].map((p) => ensureClaudeTrust(transport, p)));
+    expect(results.map((r) => r.action)).toEqual(['registered', 'registered', 'registered']);
+    expect(Object.keys(readConfig().projects).sort()).toEqual(['/a', '/b', '/c']);
   });
 
-  it('reports already_trusted', async () => {
-    const { transport } = transportWithStdout('TRUSTED\n');
-    expect(await ensureClaudeTrust('ssh', transport, '/wt')).toEqual({ action: 'already_trusted' });
-  });
-
-  it('returns skipped when remote JSON is missing or invalid', async () => {
-    const { transport } = transportWithStdout('NOJSON\n');
-    expect((await ensureClaudeTrust('agent', transport, '/wt')).action).toBe('skipped');
-  });
-
-  it('returns failed on unexpected output', async () => {
-    const { transport } = transportWithStdout('node: command not found');
-    expect((await ensureClaudeTrust('ssh', transport, '/wt')).action).toBe('failed');
+  it('does not overwrite a file that changed after it was read', async () => {
+    writeFileSync(configPath(), JSON.stringify({ projects: {} }));
+    const real = transportWithHome(fakeHome).files();
+    const racing = {
+      files: () => ({
+        ...real,
+        platform: real.platform,
+        realpath: real.realpath.bind(real),
+        read: async (...args: Parameters<typeof real.read>) => {
+          const content = await real.read(...args);
+          writeFileSync(configPath(), JSON.stringify({ projects: { '/theirs': {} } }));
+          return content;
+        },
+        write: real.write.bind(real),
+      }),
+    } as unknown as IServerTransport;
+    const result = await ensureClaudeTrust(racing, '/wt');
+    expect(result.action).toBe('failed');
+    expect(readConfig().projects).toEqual({ '/theirs': {} });
   });
 });

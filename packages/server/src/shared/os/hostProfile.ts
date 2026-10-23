@@ -74,6 +74,6 @@ export function assertPosixHost(profile: HostProfile | null, serverLabel: string
 }
 
 /** The separator of a host's PATH. A null profile (a Unix agent registered before the OS was recorded) uses `:`. */
-export function pathDelimiterFor(profile: HostProfile | null): ':' | ';' {
+export function pathDelimiterFor(profile: { platform: HostPlatform; arch?: HostArch } | null): ':' | ';' {
   return profile?.platform === 'win32' ? ';' : ':';
 }

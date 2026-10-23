@@ -12,7 +12,7 @@ import type { IMuxClient } from '../tmux/IMuxClient';
 import { createRotatedWindow, ensureSessionWithLock, rollbackWindowReference, runExclusiveForTask, ServerSnapshotMismatchError, type ServerIsolationLock } from './execution/WindowRotation';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import type { WorktreeServiceFactory } from '../git/WorktreeServiceFactory';
-import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
+import { assertDirectoryContained } from '../git/PathContainment';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { IContentExtractor } from '../llm/ContentExtractor';
 import type { IExecutionLogRepository } from './ExecutionLog';
@@ -108,7 +108,6 @@ export interface TaskRestoreDeps {
 }
 
 export class TaskRestoreService {
-  private readonly pathResolverFactory = new PathResolverFactory();
 
   constructor(private deps: TaskRestoreDeps) {}
 
@@ -417,12 +416,11 @@ export class TaskRestoreService {
       let worktreeBranch: string | null = null;
 
       if (task.workingDirectory && allowedRoot) {
-        const transportForCheck = transportFactory.getTransport(server);
         // Resolved (symlink-free) path is what gets used below, not the
         // original task.workingDirectory — closes the same TOCTOU window
         // ExecuteTaskUseCase closes (Issue #27 review finding 2).
         workingDir = await assertDirectoryContained(
-          this.pathResolverFactory, server.type, transportForCheck, { target: task.workingDirectory, allowedRoot }, 'task working directory',
+          transportFactory.getFileOps(server), { target: task.workingDirectory, allowedRoot }, 'task working directory',
         );
         effectiveDir = workingDir;
       }
@@ -613,7 +611,7 @@ export class TaskRestoreService {
 
         if (allowedRoot) {
           const resolvedWtPath = await assertDirectoryContained(
-            this.pathResolverFactory, server.type, transport, { target: worktreePath, allowedRoot }, 'worktree path',
+            transportFactory.getFileOps(server), { target: worktreePath, allowedRoot }, 'worktree path',
           );
           worktreePath = resolvedWtPath;
           effectiveDir = resolvedWtPath;

@@ -1,26 +1,27 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import { GitDiffService, SAFE_HASH } from './GitDiffService';
-import type { IServerTransport, ExecResult } from '../servers/transport/ServerTransport';
+import type { IServerTransport } from '../servers/transport/ServerTransport';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import type { CommandResult, CommandSpec } from '../../shared/exec/commandSpec';
 import { argvOfShellLine, argvOfSpec, failed, ok, specText } from '../../shared/exec/testing/commandTesting';
 
 type GitResponder = (spec: CommandSpec, index: number) => CommandResult;
-type ExecResponder = (command: string, index: number) => ExecResult;
 
-const execOk = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
-
-/** git goes through `run`; the untracked-file reads (wc / head / cat) still through `exec`. Calls are recorded in order. */
-function makeService(onGit: GitResponder = () => ok(), onExec: ExecResponder = () => execOk()) {
+/** git goes through `run`; an untracked file is read through the host's file operations (here the real ones, on this machine). */
+function makeService(onGit: GitResponder = () => ok()) {
   const gitCalls: CommandSpec[] = [];
-  const execCalls: string[] = [];
+  const files = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
   const transport = {
     run: async (spec: CommandSpec) => onGit(spec, gitCalls.push(spec)),
-    exec: async (command: string) => onExec(command, execCalls.push(command)),
+    files: () => files,
   } as unknown as IServerTransport;
   const factory = { getTransport: () => transport } as unknown as TransportFactory;
-  return { service: new GitDiffService(factory), gitCalls, execCalls, gitTexts: () => gitCalls.map(specText) };
+  return { service: new GitDiffService(factory), gitCalls, gitTexts: () => gitCalls.map(specText) };
 }
 
 const srv = { name: 'test', type: 'local' } as ServerConfig;
@@ -184,36 +185,66 @@ describe('GitDiffService.getDiff with scope=uncommitted', () => {
     expect(result.headBranch).toBe('HEAD');
   });
 
-  it('synthesizes untracked file diffs', async () => {
-    const execAnswers = ['25', '0', 'const x = 1;\nexport default x;\n'];
-    const { service, execCalls } = makeService(uncommittedAnswers(['', '', '', '?? newfile.ts\n', 'main']), (_c, i) => execOk(execAnswers[i - 1] ?? ''));
+  describe('untracked files', () => {
+    let repo: string;
+    beforeEach(() => {
+      repo = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-gitdiff-')));
+    });
+    afterEach(() => {
+      rmSync(repo, { recursive: true, force: true });
+    });
 
-    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
-    const untracked = result.files.filter((f) => f.group === 'untracked');
-    expect(untracked).toHaveLength(1);
-    expect(untracked[0].file).toBe('newfile.ts');
-    expect(untracked[0].status).toBe('A');
-    expect(untracked[0].additions).toBe(2);
-    expect(untracked[0].isBinary).toBe(false);
-    expect(execCalls).toHaveLength(3);
-  });
+    const untrackedOf = async (porcelain: string) => {
+      const { service } = makeService(uncommittedAnswers(['', '', '', porcelain, 'main']));
+      return service.getDiff(srv, repo, '', undefined, { scope: 'uncommitted' });
+    };
 
-  it('marks binary untracked files', async () => {
-    const execAnswers = ['5000', '3'];
-    const { service } = makeService(uncommittedAnswers(['', '', '', '?? image.png\n', 'main']), (_c, i) => execOk(execAnswers[i - 1] ?? ''));
+    it('synthesizes untracked file diffs', async () => {
+      writeFileSync(path.join(repo, 'newfile.ts'), 'const x = 1;\nexport default x;\n');
+      const result = await untrackedOf('?? newfile.ts\n');
+      const untracked = result.files.filter((f) => f.group === 'untracked');
+      expect(untracked).toHaveLength(1);
+      expect(untracked[0].file).toBe('newfile.ts');
+      expect(untracked[0].status).toBe('A');
+      expect(untracked[0].additions).toBe(2);
+      expect(untracked[0].isBinary).toBe(false);
+      expect(untracked[0].hunks[0].lines.map((l) => l.content)).toEqual(['const x = 1;', 'export default x;']);
+    });
 
-    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
-    const untracked = result.files.filter((f) => f.group === 'untracked');
-    expect(untracked).toHaveLength(1);
-    expect(untracked[0].isBinary).toBe(true);
-  });
+    it('marks binary untracked files (a NUL byte in the first 8KB)', async () => {
+      writeFileSync(path.join(repo, 'image.png'), Buffer.from([0x89, 0x50, 0, 0x47]));
+      const untracked = (await untrackedOf('?? image.png\n')).files.filter((f) => f.group === 'untracked');
+      expect(untracked).toHaveLength(1);
+      expect(untracked[0].isBinary).toBe(true);
+    });
 
-  it('truncates when too many untracked files', async () => {
-    const untrackedLines = Array.from({ length: 60 }, (_, i) => `?? file${i}.ts`).join('\n') + '\n';
-    const { service } = makeService(uncommittedAnswers(['', '', '', untrackedLines, 'main']), () => execOk('10'));
+    it('lists a file over the size limit without its content', async () => {
+      writeFileSync(path.join(repo, 'big.log'), 'x\n'.repeat(60_000));
+      const untracked = (await untrackedOf('?? big.log\n')).files.filter((f) => f.group === 'untracked');
+      expect(untracked).toEqual([expect.objectContaining({ file: 'big.log', additions: 0, hunks: [], isBinary: false })]);
+    });
 
-    const result = await service.getDiff(srv, '/repo', '', undefined, { scope: 'uncommitted' });
-    expect(result.truncated).toBe(true);
+    it('reads a file in a subdirectory and with a name hostile to a shell', async () => {
+      const odd = "sub dir/it's $(id).txt";
+      mkdirSync(path.join(repo, 'sub dir'));
+      writeFileSync(path.join(repo, odd), 'one\n');
+      const untracked = (await untrackedOf(`?? "${odd}"\n`)).files.filter((f) => f.group === 'untracked');
+      expect(untracked.map((f) => f.additions)).toEqual([1]);
+    });
+
+    it('leaves out a path that is gone since git status, and says the result is truncated', async () => {
+      const result = await untrackedOf('?? vanished.ts\n');
+      expect(result.files.filter((f) => f.group === 'untracked')).toEqual([]);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('truncates when too many untracked files', async () => {
+      const untrackedLines = Array.from({ length: 60 }, (_, i) => `?? file${i}.ts`).join('\n') + '\n';
+      for (let i = 0; i < 60; i++) writeFileSync(path.join(repo, `file${i}.ts`), 'x\n');
+      const result = await untrackedOf(untrackedLines);
+      expect(result.truncated).toBe(true);
+      expect(result.files.filter((f) => f.group === 'untracked')).toHaveLength(50);
+    });
   });
 
   it('throws when the diff against HEAD fails', async () => {

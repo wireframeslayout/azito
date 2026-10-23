@@ -15,7 +15,7 @@ import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSec
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { parsePsOutput, argsContainSessionId } from '../transcripts/agentProcessDetection';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
-import { PathResolverFactory, assertDirectoryContained } from '../git/PathContainment';
+import { assertDirectoryContained } from '../git/PathContainment';
 import { shellQuote } from '../../shared/shellQuote';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
@@ -94,7 +94,6 @@ interface SupervisionContext {
 }
 
 export class WindowRespawnService {
-  private readonly pathResolverFactory = new PathResolverFactory();
 
   constructor(
     private windowRepo: IWindowRepository,
@@ -1042,8 +1041,7 @@ export class WindowRespawnService {
    */
   private async resolveContainedCwd(server: ServerConfig, cwd: string, allowedRoot: string | null, label: string): Promise<string> {
     if (!allowedRoot) return cwd;
-    const transport = this.transportFactory.getTransport(server);
-    return assertDirectoryContained(this.pathResolverFactory, server.type, transport, { target: cwd, allowedRoot }, label);
+    return assertDirectoryContained(this.transportFactory.getFileOps(server), { target: cwd, allowedRoot }, label);
   }
 
   /**

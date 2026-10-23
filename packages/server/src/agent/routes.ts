@@ -1,44 +1,12 @@
 import type { FastifyPluginCallback } from 'fastify';
 import type { EventEmitter } from 'node:events';
 import { execFile } from 'child_process';
-import * as fs from 'fs';
-import * as path from 'path';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import type { MuxRuntime } from '../modules/servers/Server';
 import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
 import { HostProfileError, assertPosixHost, type HostProfile } from '../shared/os/hostProfile';
 import { commandSpecSchema } from '../shared/exec/commandSpec';
 import { AGENT_RUN_PATH, runToResponse } from '../shared/exec/runWire';
-const EXT_LANG: Record<string, string> = {
-  '.ts': 'typescript', '.tsx': 'typescript',
-  '.js': 'javascript', '.jsx': 'javascript',
-  '.json': 'json', '.css': 'css', '.html': 'html',
-  '.md': 'markdown', '.py': 'python',
-  '.sh': 'shell', '.bash': 'shell',
-  '.yml': 'yaml', '.yaml': 'yaml',
-  '.sql': 'sql', '.toml': 'toml',
-};
-
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.ico', '.bmp']);
-
-const IMAGE_MIME: Record<string, string> = {
-  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif', '.svg': 'image/svg+xml', '.webp': 'image/webp',
-  '.ico': 'image/x-icon', '.bmp': 'image/bmp',
-};
-
-const BINARY_EXTS = new Set([
-  '.woff', '.woff2', '.ttf', '.eot', '.otf',
-  '.zip', '.tar', '.gz', '.bz2', '.7z', '.rar',
-  '.exe', '.dll', '.so', '.dylib', '.o', '.a',
-  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
-  '.mp3', '.mp4', '.avi', '.mov', '.wav', '.flac',
-  '.wasm', '.class', '.pyc',
-]);
-
-const MAX_FILE_SIZE = 500 * 1024;
-const MAX_IMAGE_SIZE = 5 * 1024 * 1024;
-
 import type { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { openBrowserTab } from '../modules/browser/openBrowserTab';
 
@@ -154,118 +122,6 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
       throw err;
     }
   });
-
-  // ── GET /api/files ──
-  fastify.get<{ Querystring: { path?: string; showHidden?: string } }>(
-    '/api/files',
-    async (request, reply) => {
-      const dirPath = (request.query.path || '').trim();
-      if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
-      const showHidden = request.query.showHidden === 'true';
-
-      try {
-        const items = fs.readdirSync(dirPath, { withFileTypes: true });
-        const entries = items
-          .filter((item) => showHidden || !item.name.startsWith('.'))
-          .map((item) => {
-            const fullPath = path.join(dirPath, item.name);
-            const isDir = item.isDirectory();
-            const entry: Record<string, unknown> = {
-              name: item.name,
-              type: isDir ? 'directory' : 'file',
-              path: fullPath,
-            };
-            if (!isDir) {
-              try { entry.size = fs.statSync(fullPath).size; } catch { /* ignore */ }
-            }
-            return entry;
-          })
-          .sort((a, b) => {
-            if (a.type !== b.type) return a.type === 'directory' ? -1 : 1;
-            return (a.name as string).localeCompare(b.name as string);
-          });
-        return entries;
-      } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
-      }
-    },
-  );
-
-  // ── GET /api/files/content ──
-  fastify.get<{ Querystring: { path?: string } }>(
-    '/api/files/content',
-    async (request, reply) => {
-      const filePath = (request.query.path || '').trim();
-      if (!filePath) return reply.status(400).send({ error: 'path query parameter required' });
-
-      const ext = path.extname(filePath).toLowerCase();
-
-      if (IMAGE_EXTS.has(ext)) {
-        const mimeType = IMAGE_MIME[ext] || 'application/octet-stream';
-        try {
-          const stat = fs.statSync(filePath);
-          if (stat.size > MAX_IMAGE_SIZE) {
-            return reply.status(400).send({ error: `Image too large (${Math.round(stat.size / 1024)}KB). Maximum is 5MB.` });
-          }
-          const buf = fs.readFileSync(filePath);
-          return { type: 'image', mimeType, base64: buf.toString('base64'), path: filePath, size: stat.size };
-        } catch (err: unknown) {
-          return reply.status(500).send({ error: (err as Error).message });
-        }
-      }
-
-      if (BINARY_EXTS.has(ext)) {
-        return reply.status(400).send({ error: 'Binary file cannot be displayed' });
-      }
-
-      const language = EXT_LANG[ext] || 'text';
-
-      try {
-        const stat = fs.statSync(filePath);
-        if (stat.size > MAX_FILE_SIZE) {
-          return reply.status(400).send({ error: `File too large (${Math.round(stat.size / 1024)}KB). Maximum is 500KB.` });
-        }
-        const content = fs.readFileSync(filePath, 'utf-8');
-        if (content.includes('\0')) {
-          return reply.status(400).send({ error: 'Binary file cannot be displayed' });
-        }
-        return { content, path: filePath, size: stat.size, language };
-      } catch (err: unknown) {
-        return reply.status(500).send({ error: (err as Error).message });
-      }
-    },
-  );
-
-  // ── GET /api/directories ──
-  fastify.get<{ Querystring: { path?: string } }>(
-    '/api/directories',
-    async (request) => {
-      const inputPath = (request.query.path || '').trim();
-
-      try {
-        let dir: string;
-        let prefix: string;
-
-        if (inputPath.endsWith('/')) {
-          dir = inputPath;
-          prefix = '';
-        } else {
-          dir = path.dirname(inputPath);
-          prefix = path.basename(inputPath).toLowerCase();
-        }
-
-        const items = fs.readdirSync(dir, { withFileTypes: true });
-        return items
-          .filter(item => item.isDirectory())
-          .filter(item => !item.name.startsWith('.'))
-          .filter(item => !prefix || item.name.toLowerCase().startsWith(prefix))
-          .map(item => path.join(dir, item.name))
-          .slice(0, 20);
-      } catch {
-        return [];
-      }
-    },
-  );
 
   // ── GET /api/browser/targets ──
   fastify.get('/api/browser/targets', async (_request, reply) => {

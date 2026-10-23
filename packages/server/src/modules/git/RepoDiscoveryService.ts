@@ -1,7 +1,8 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import { parseRemoteUrl, normalizeRemoteUrl, type ParsedRemote, type RepositoryProvider } from './parseRemoteUrl';
-import { shellQuote } from '../../shared/shellQuote';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
+import { pathApiFor } from '../../shared/os/hostPath';
 import { CommandSpawnError, type CommandResult } from '../../shared/exec/commandSpec';
 import { runGit } from './runGit';
 import { sanitizeDiscoveredRemoteUrl } from './sanitizeDiscoveredRemoteUrl';
@@ -92,17 +93,9 @@ export class RepoDiscoveryService {
    * candidate shape `discover()` accepts.
    */
   async checkPathStatus(server: ServerConfig, path: string): Promise<PathStatus> {
-    const safePath = shellQuote(path);
-    const cmd = `if [ -e ${safePath} ]; then echo EXISTS; if [ -e ${safePath}/.git ]; then echo ISGIT; fi; fi`;
-    const result = await this.transportFactory.getTransport(server).exec(cmd);
-    if (result.code !== 0) {
-      throw new Error(`Path status check failed for '${path}' (exit code ${result.code})`);
-    }
-    const lines = result.stdout.split('\n').map((l) => l.trim());
-    return {
-      exists: lines.includes('EXISTS'),
-      isGitRepository: lines.includes('ISGIT'),
-    };
+    const files = this.transportFactory.getTransport(server).files();
+    if ((await files.stat(path)) === null) return { exists: false, isGitRepository: false };
+    return { exists: true, isGitRepository: (await files.stat(pathApiFor(files.platform).join(path, '.git'))) !== null };
   }
 
   /**
@@ -115,36 +108,21 @@ export class RepoDiscoveryService {
    * Important finding 5).
    */
   async discover(server: ServerConfig, workingDirectory: string, depth = 3): Promise<DiscoveredRepo[]> {
-    const safeDir = shellQuote(workingDirectory);
     // `.git` can be a directory (a normal clone) or a file (a worktree, or
     // most submodules — it holds a `gitdir: <path>` pointer instead).
-    // Restricting to `-type d` silently excluded both (Important finding 3).
+    // Restricting to directories silently excluded both (Important finding 3).
     //
-    // Excluding ALL hidden directories (`-not -path '*/.*/*'`) also
-    // silently excluded every worktree, because AZITO itself creates task
-    // worktrees under a hidden `.worktrees/` directory — e.g.
-    // `.worktrees/task-1/.git` never matched, defeating the -type f fix
-    // above for the exact case it exists to catch (Issue #19 later review
-    // round, Important finding). The exclusion is narrowed to what
-    // actually should not be scanned: `node_modules`, and the *contents*
-    // of an already-found `.git` directory (its internals, e.g.
-    // `.git/modules/**`, are not themselves repositories to report, and
-    // descending into them would just add noise/duplicates) — the `.git`
-    // entry itself is still matched by `-name .git`; only paths inside it
-    // (its internals) are excluded.
-    const findCmd = `find ${safeDir} -maxdepth ${depth + 1} \\( -type d -o -type f \\) -name .git -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null`;
+    // Excluding ALL hidden directories also silently excluded every
+    // worktree, because AZITO itself creates task worktrees under a hidden
+    // `.worktrees/` directory — e.g. `.worktrees/task-1/.git` never matched
+    // (Issue #19 later review round, Important finding). The scan skips only
+    // what should not be scanned: `node_modules`, and the *contents* of an
+    // already-found `.git` directory (its internals, e.g. `.git/modules/**`,
+    // are not themselves repositories to report) — the `.git` entry itself
+    // is still found.
     const transport = this.transportFactory.getTransport(server);
-    // The scan itself is a shell `find` (a file operation), so it stays on exec until IFileOps (#379 P7).
-    const findResult = await transport.exec(findCmd);
-    if (findResult.code !== 0) {
-      throw new Error(`Repository scan failed while searching '${workingDirectory}' (exit code ${findResult.code})`);
-    }
-
-    const candidateDirs = findResult.stdout
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.length > 0 && l.endsWith('/.git') && !/[\x00-\x1f]/.test(l))
-      .map((l) => l.replace(/\/\.git$/, ''));
+    const candidateDirs = (await findGitEntryParents(transport.files(), workingDirectory, depth + 1))
+      .filter((dir) => dir.length > 0 && !/[\x00-\x1f]/.test(dir));
 
     if (candidateDirs.length === 0) return [];
 
@@ -178,6 +156,34 @@ export class RepoDiscoveryService {
 
     return dedupeByAbsolutePath(toDiscoveredRepos(inspected, workingDirectory));
   }
+}
+
+/**
+ * The directories that hold a `.git` entry (a directory or a regular file; not a link) at most `maxDepth` levels below `root`
+ * (its children are level 1), in listing order. `node_modules` is not entered, nor is a `.git` directory. A directory the
+ * host cannot list fails the whole scan: a scan that could not run must not read as one that found nothing.
+ */
+async function findGitEntryParents(files: IFileOps, root: string, maxDepth: number): Promise<string[]> {
+  const separator = pathApiFor(files.platform).sep;
+  const found: string[] = [];
+  const scan = async (dir: string, level: number): Promise<void> => {
+    let entries;
+    try {
+      entries = await files.list(dir);
+    } catch (err) {
+      if (err instanceof FileOpsError) throw new Error(`Repository scan failed while searching '${root}' (${err.message})`);
+      throw err;
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git') {
+        if (entry.kind === 'directory' || entry.kind === 'file') found.push(dir);
+      } else if (entry.kind === 'directory' && entry.name !== 'node_modules' && level < maxDepth) {
+        await scan(/[\\/]$/.test(dir) ? dir + entry.name : dir + separator + entry.name, level + 1);
+      }
+    }
+  };
+  await scan(root, 1);
+  return found;
 }
 
 function relativize(base: string, full: string): string {

@@ -4,9 +4,14 @@ import { createHash } from 'crypto';
 import Fastify from 'fastify';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import path from 'path';
-import { sanitizeFileName, fileBrowseRoutes } from './routes';
+import { sanitizeFileName, fileBrowseRoutes, isGitDirectoryName } from './routes';
 import storageRoutes from './routes';
-import { isPathContained } from '../git/PathContainment';
+import { isHostPathContained } from '../../shared/os/hostPath';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+
+const localOps = (dir: string): LocalFileOps => new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: dir }));
+
+const isPathContained = (pair: { target: string; allowedRoot: string }): boolean => isHostPathContained(process.platform === 'win32' ? 'win32' : 'linux', pair);
 import type { IServerRepository } from '../servers/Server';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -173,7 +178,7 @@ describe('PUT /api/servers/:name/files/content — baseMtime/baseHash enforcemen
       serverRepo: serverRepo as IServerRepository,
       tmux: {} as any,
       projectServerRepo: projectServerRepo as IProjectServerRepository,
-      transportFactory: {} as any,
+      transportFactory: { getFileOps: () => localOps(tmpDir) } as any,
       searchService: {} as any,
     });
     await app.ready();
@@ -345,5 +350,72 @@ describe('storage /raw and /url routes — presigned URL usage', () => {
     const res = await app.inject({ method: 'GET', url: '/api/projects/1/storage/img.png/raw' });
     expect(res.statusCode).toBe(502);
     expect(res.json()).toEqual({ error: 'signing failed' });
+  });
+});
+
+describe('DELETE /api/servers/:name/files — what can be deleted', () => {
+  let base: string;
+  let root: string;
+  let app: ReturnType<typeof Fastify>;
+
+  beforeEach(async () => {
+    base = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'azito-delete-test-')));
+    root = path.join(base, 'root');
+    fs.mkdirSync(path.join(root, 'sub'), { recursive: true });
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.writeFileSync(path.join(base, 'sibling.txt'), 'keep');
+    fs.writeFileSync(path.join(root, 'sub', 'a.txt'), 'x');
+
+    app = Fastify();
+    app.register(fileBrowseRoutes, {
+      serverRepo: { findByName: () => ({ name: 'test-local', type: 'local' }) } as unknown as IServerRepository,
+      projectServerRepo: { find: () => ({ workingDirectory: root }) } as unknown as IProjectServerRepository,
+      transportFactory: { getFileOps: () => localOps(base) } as any,
+      searchService: {} as any,
+    } as any);
+    await app.ready();
+  });
+  afterEach(async () => {
+    await app.close();
+    fs.rmSync(base, { recursive: true, force: true });
+  });
+
+  const del = (p: string) => app.inject({ method: 'DELETE', url: '/api/servers/test-local/files', payload: { projectId: 1, path: p } });
+
+  it('deletes a file under the root', async () => {
+    expect((await del(path.join(root, 'sub', 'a.txt'))).statusCode).toBe(200);
+    expect(fs.existsSync(path.join(root, 'sub', 'a.txt'))).toBe(false);
+  });
+
+  it.each([
+    ['the root\'s parent', (r: string) => `${r}${path.sep}..`],
+    ['the root\'s parent through a subdirectory', (r: string) => [r, 'sub', '..', '..'].join(path.sep)],
+    ['.git through a "." segment', (r: string) => [r, '.git', '.'].join(path.sep)],
+    ['the root through a "." segment', (r: string) => `${r}${path.sep}.`],
+  ])('answers 400 for %s and deletes nothing', async (_label, build) => {
+    const res = await del(build(root));
+    expect(res.statusCode).toBe(400);
+    expect(fs.readdirSync(base).sort()).toEqual(['root', 'sibling.txt']);
+    expect(fs.existsSync(path.join(root, '.git'))).toBe(true);
+    expect(fs.existsSync(path.join(root, 'sub', 'a.txt'))).toBe(true);
+  });
+
+  it('answers 400 for the root itself and for the version-control directory', async () => {
+    expect((await del(root)).statusCode).toBe(400);
+    expect((await del(path.join(root, '.git'))).statusCode).toBe(400);
+    expect(fs.existsSync(path.join(root, '.git'))).toBe(true);
+  });
+});
+
+describe('isGitDirectoryName', () => {
+  it('is exact on Linux and folds case on darwin and win32, where win32 also ignores trailing dots and spaces', () => {
+    expect(isGitDirectoryName('linux', '.git')).toBe(true);
+    expect(isGitDirectoryName('linux', '.GIT')).toBe(false);
+    expect(isGitDirectoryName('darwin', '.GIT')).toBe(true);
+    expect(isGitDirectoryName('darwin', '.git.')).toBe(false);
+    expect(isGitDirectoryName('win32', '.GIT')).toBe(true);
+    expect(isGitDirectoryName('win32', '.git.')).toBe(true);
+    expect(isGitDirectoryName('win32', '.git. ')).toBe(true);
+    expect(isGitDirectoryName('win32', '.gitignore')).toBe(false);
   });
 });

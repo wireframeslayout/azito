@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { execSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, realpathSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { RepoDiscoveryService, toDiscoveryResponse } from './RepoDiscoveryService';
@@ -9,6 +8,8 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import { CommandSpawnError, CommandTimeoutError, type CommandResult, type CommandSpec } from '../../shared/exec/commandSpec';
 import { argvOfShellLine, argvOfSpec, failed, ok } from '../../shared/exec/testing/commandTesting';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 
 function makeServer(): ServerConfig {
   return {
@@ -24,25 +25,55 @@ function makeServer(): ServerConfig {
   } as unknown as ServerConfig;
 }
 
-type ExecAnswer = { stdout: string; stderr: string; code: number };
-
 /**
- * `find` and the path check are shell file operations (exec); every git command goes through `run`. Calls are recorded in order.
+ * A host's file tree for the scan: `paths` ending in "/" are directories, the others regular files (every ancestor directory
+ * exists). `listFails` makes listing fail the way the host says (a FileOpsError, or any other error for a transport failure).
  */
+function treeOps(paths: string[], listFails?: Error): IFileOps {
+  const children = new Map<string, Map<string, 'file' | 'directory'>>();
+  const add = (dir: string, name: string, kind: 'file' | 'directory'): void => {
+    if (!children.has(dir)) children.set(dir, new Map());
+    children.get(dir)!.set(name, kind);
+  };
+  for (const entry of paths) {
+    const parts = entry.split('/').filter(Boolean);
+    parts.forEach((name, i) => {
+      const dir = '/' + parts.slice(0, i).join('/');
+      const isLast = i === parts.length - 1;
+      const kind = isLast && !entry.endsWith('/') ? 'file' : 'directory';
+      add(dir, name, kind);
+      if (kind === 'directory' && !children.has('/' + parts.slice(0, i + 1).join('/'))) children.set('/' + parts.slice(0, i + 1).join('/'), new Map());
+    });
+  }
+  return {
+    platform: 'linux',
+    list: async (dir: string) => {
+      if (listFails) throw listFails;
+      const entries = children.get(dir.length > 1 ? dir.replace(/\/$/, '') : dir);
+      if (!entries) throw new FileOpsError('NOT_FOUND', `ENOENT: no such file or directory, scandir '${dir}'`);
+      return [...entries].map(([name, kind]) => ({ name, kind }));
+    },
+    stat: async (p: string) => {
+      const parts = p.split('/').filter(Boolean);
+      const parent = '/' + parts.slice(0, -1).join('/');
+      const kind = children.get(parent)?.get(parts[parts.length - 1]);
+      return kind ? { kind, size: 0, mtimeMs: 0, mode: 0o644 } : null;
+    },
+  } as unknown as IFileOps;
+}
+
+/** The file scan goes through the host's file operations; every git command goes through `run`. Calls are recorded in order. */
 function makeTransportFactory(
-  exec: (cmd: string) => Promise<ExecAnswer>,
+  files: IFileOps,
   git: (spec: CommandSpec) => CommandResult | Promise<CommandResult> = () => ok(),
 ) {
   const gitSpecs: CommandSpec[] = [];
   const transport = {
-    exec: vi.fn((cmd: string) => exec(cmd)),
+    files: () => files,
     run: vi.fn(async (spec: CommandSpec) => { gitSpecs.push(spec); return git(spec); }),
   };
   return { factory: { getTransport: () => transport } as unknown as TransportFactory, gitSpecs };
 }
-
-const findAnswer = (stdout: string): ExecAnswer => ({ stdout, stderr: '', code: 0 });
-const noExec = async (): Promise<ExecAnswer> => { throw new Error('exec should not have been called'); };
 
 /** Answers `git --version`, then per candidate directory (`-C <dir>`) the toplevel and the remotes. */
 function gitFor(repos: Record<string, { toplevel?: string; remotes?: string[]; remoteFails?: boolean }>) {
@@ -61,11 +92,8 @@ describe('RepoDiscoveryService', () => {
   it('detects a repository whose .git is a file (worktree), resolving its own toplevel', async () => {
     const wt = '/work/main-repo/.worktrees/feature-x';
     const { factory, gitSpecs } = makeTransportFactory(
-      async (cmd) => {
-        expect(cmd.startsWith('find')).toBe(true);
-        // A worktree's .git is a regular file, found via -type f.
-        return findAnswer(`${wt}/.git\n`);
-      },
+      // A worktree's .git is a regular file.
+      treeOps([`${wt}/.git`]),
       gitFor({
         [wt]: {
           toplevel: wt,
@@ -91,7 +119,7 @@ describe('RepoDiscoveryService', () => {
 
   it('dedupes when multiple candidates resolve to the same toplevel', async () => {
     const { factory } = makeTransportFactory(
-      async () => findAnswer('/work/repo/.git\n/work/repo/sub/.git\n'),
+      treeOps(['/work/repo/.git/', '/work/repo/sub/.git/']),
       gitFor({
         '/work/repo': { toplevel: '/work/repo', remotes: ['origin\tgit@github.com:acme/widgets.git (fetch)'] },
         '/work/repo/sub': { toplevel: '/work/repo', remotes: ['origin\tgit@github.com:acme/widgets.git (fetch)'] },
@@ -102,19 +130,19 @@ describe('RepoDiscoveryService', () => {
     expect(repos).toHaveLength(1);
   });
 
-  it('propagates a find failure as an error instead of an empty result', async () => {
-    const { factory } = makeTransportFactory(async () => ({ stdout: '', stderr: 'find: /work: Permission denied', code: 1 }));
+  it('propagates a listing failure as an error instead of an empty result', async () => {
+    const { factory } = makeTransportFactory(treeOps([], new FileOpsError('PERMISSION_DENIED', "EACCES: permission denied, scandir '/work'")));
     await expect(new RepoDiscoveryService(factory).discover(makeServer(), '/work')).rejects.toThrow(/scan failed/i);
   });
 
-  it('propagates a transport-level rejection from the find step', async () => {
-    const { factory } = makeTransportFactory(async () => { throw new Error('ssh connection lost'); });
+  it('propagates a transport-level rejection from the scan', async () => {
+    const { factory } = makeTransportFactory(treeOps([], new Error('ssh connection lost')));
     await expect(new RepoDiscoveryService(factory).discover(makeServer(), '/work')).rejects.toThrow(/ssh connection lost/);
   });
 
   it('propagates a nonzero `git --version` precheck as an error instead of an empty result (Issue #19 review round 2/3, Important finding 1)', async () => {
     const { factory, gitSpecs } = makeTransportFactory(
-      async () => findAnswer('/work/repo/.git\n'),
+      treeOps(['/work/repo/.git/']),
       () => failed(127, 'git: command not found'),
     );
     await expect(new RepoDiscoveryService(factory).discover(makeServer(), '/work')).rejects.toThrow(/remote lookup failed.*exit code 127/i);
@@ -123,7 +151,7 @@ describe('RepoDiscoveryService', () => {
 
   it('reports a git that cannot be started as the same unusable-git failure', async () => {
     const { factory } = makeTransportFactory(
-      async () => findAnswer('/work/repo/.git\n'),
+      treeOps(['/work/repo/.git/']),
       () => { throw new CommandSpawnError('ENOENT', 'spawn git ENOENT'); },
     );
     await expect(new RepoDiscoveryService(factory).discover(makeServer(), '/work')).rejects.toThrow(/'git' is not usable.*spawn git ENOENT/);
@@ -131,7 +159,7 @@ describe('RepoDiscoveryService', () => {
 
   it('propagates a failure to run a candidate\'s git (timeout, transport) instead of dropping the candidate', async () => {
     const { factory } = makeTransportFactory(
-      async () => findAnswer('/work/repo/.git\n'),
+      treeOps(['/work/repo/.git/']),
       (spec) => {
         if (spec.args[0] === '--version') return ok('git version 2.43.0');
         throw new CommandTimeoutError(15_000, '', '');
@@ -142,13 +170,13 @@ describe('RepoDiscoveryService', () => {
 
   describe('a broken candidate does not depend on its position (Issue #19 review round 3, Important finding 1)', () => {
     // A single broken/unreadable candidate (rev-parse exits non-zero) is dropped while every other candidate is still
-    // returned, wherever it falls in `find`'s filesystem-dependent order.
+    // returned, wherever it falls in the listing's filesystem-dependent order.
     function makeBrokenFactory(brokenPosition: 'first' | 'last') {
       const paths = brokenPosition === 'first'
-        ? '/work/broken-repo/.git\n/work/good-repo/.git\n'
-        : '/work/good-repo/.git\n/work/broken-repo/.git\n';
+        ? ['/work/broken-repo/.git/', '/work/good-repo/.git/']
+        : ['/work/good-repo/.git/', '/work/broken-repo/.git/'];
       return makeTransportFactory(
-        async () => findAnswer(paths),
+        treeOps(paths),
         gitFor({
           '/work/good-repo': { toplevel: '/work/good-repo', remotes: ['origin\thttps://github.com/acme/widgets.git (fetch)'] },
           '/work/broken-repo': {},
@@ -169,19 +197,19 @@ describe('RepoDiscoveryService', () => {
 
   it('keeps a repository whose remote listing fails, with no remotes', async () => {
     const { factory } = makeTransportFactory(
-      async () => findAnswer('/work/repo/.git\n'),
+      treeOps(['/work/repo/.git/']),
       gitFor({ '/work/repo': { toplevel: '/work/repo', remoteFails: true } }),
     );
     const repos = await new RepoDiscoveryService(factory).discover(makeServer(), '/work');
     expect(repos).toEqual([{ relativePath: 'repo', absolutePath: '/work/repo', remotes: [] }]);
   });
 
-  it('keeps the order of find\'s output and inspects only a bounded number of candidates at once', async () => {
+  it('keeps the order of the listing and inspects only a bounded number of candidates at once', async () => {
     const dirs = Array.from({ length: 20 }, (_, i) => `/work/r${String(i).padStart(2, '0')}`);
     let inFlight = 0;
     let maxInFlight = 0;
     const { factory } = makeTransportFactory(
-      async () => findAnswer(dirs.map((d) => `${d}/.git`).join('\n') + '\n'),
+      treeOps(dirs.map((d) => `${d}/.git/`)),
       async (spec) => {
         if (spec.args[0] === '--version') return ok('git version 2.43.0');
         inFlight++;
@@ -198,7 +226,7 @@ describe('RepoDiscoveryService', () => {
   });
 
   it('returns an empty list when no .git entries are found', async () => {
-    const { factory, gitSpecs } = makeTransportFactory(async () => findAnswer(''));
+    const { factory, gitSpecs } = makeTransportFactory(treeOps(['/work/'], undefined));
     expect(await new RepoDiscoveryService(factory).discover(makeServer(), '/work')).toEqual([]);
     expect(gitSpecs).toHaveLength(0);
   });
@@ -207,7 +235,7 @@ describe('RepoDiscoveryService', () => {
   it.skipIf(process.platform === 'win32')('runs the same argv as the old shell strings', async () => {
     const dir = "/work/it's here";
     const { factory, gitSpecs } = makeTransportFactory(
-      async () => findAnswer(`${dir}/.git\n`),
+      treeOps([`${dir}/.git/`]),
       gitFor({ [dir]: { toplevel: dir } }),
     );
     await new RepoDiscoveryService(factory).discover(makeServer(), '/work');
@@ -219,110 +247,88 @@ describe('RepoDiscoveryService', () => {
     ].map(argvOfShellLine));
   });
 
-  it('is never given a shell batch: no exec call carries git', async () => {
-    const execCalls: string[] = [];
-    const { factory } = makeTransportFactory(
-      async (cmd) => { execCalls.push(cmd); return findAnswer('/work/repo/.git\n'); },
-      gitFor({ '/work/repo': { toplevel: '/work/repo' } }),
-    );
-    await new RepoDiscoveryService(factory).discover(makeServer(), '/work');
-    expect(execCalls).toHaveLength(1);
-    expect(execCalls[0].startsWith('find')).toBe(true);
-  });
-
-  describe('find command against a real filesystem fixture (Issue #19 later review round)', () => {
+  describe('the scan against a real filesystem fixture (Issue #19 later review round)', () => {
     let fixtureRoot: string;
 
     afterEach(() => {
       if (fixtureRoot) rmSync(fixtureRoot, { recursive: true, force: true });
     });
 
+    const files = () => new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
+
     /**
-     * Excluding all hidden directories (a blanket "*" then "." then "*"
-     * path pattern) silently excluded AZITO's own task worktrees, which
-     * live under a hidden
-     * `.worktrees/` directory — the previous exclusion made `find` never
-     * see `.worktrees/task-1/.git` (a file, per a real worktree). This
-     * test runs the ACTUAL `find` command the service builds (not a
-     * mocked `tmux.execCommand`) against a real temp-directory fixture,
-     * so a regression back to the over-broad hidden-directory exclusion
-     * is caught even if every other test in this file keeps mocking
-     * `execCommand`.
+     * Excluding all hidden directories silently excluded AZITO's own task worktrees, which live under a hidden `.worktrees/`
+     * directory — a scan that never saw `.worktrees/task-1/.git` (a file, per a real worktree). This runs the real scan against
+     * a real temp-directory fixture, so a regression back to the over-broad hidden-directory exclusion is caught even though
+     * every other test in this file lists a scripted tree.
      */
-    // Windows では動かない: /bin/bash で find を実行する前提
-    it.skipIf(process.platform === 'win32')('finds both a normal repo and a worktree .git under a hidden directory', async () => {
-      fixtureRoot = mkdtempSync(join(tmpdir(), 'azito-repo-discovery-'));
+    // Windows では動かない: git の toplevel を '/' で始まる絶対パスとしか読まない POSIX 前提（toDiscoveredRepos）。ファイルの走査自体は両 OS で同じ
+    it.skipIf(process.platform === 'win32')('finds both a normal repo and a worktree .git under a hidden directory, and skips node_modules and the inside of .git', async () => {
+      fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
 
       // Normal clone: repo/.git is a directory.
       mkdirSync(join(fixtureRoot, 'repo', '.git'), { recursive: true });
 
-      // AZITO-style task worktree: .worktrees/task-1/.git is a FILE
-      // (a `gitdir: ...` pointer), under the hidden `.worktrees/` dir.
+      // AZITO-style task worktree: .worktrees/task-1/.git is a FILE (a `gitdir: ...` pointer), under the hidden `.worktrees/` dir.
       mkdirSync(join(fixtureRoot, '.worktrees', 'task-1'), { recursive: true });
       writeFileSync(join(fixtureRoot, '.worktrees', 'task-1', '.git'), 'gitdir: ../../.git/worktrees/task-1\n');
 
-      // Should still be excluded: node_modules, and the contents of an
-      // already-matched .git directory (its internals are not
-      // themselves a repository to report).
+      // Still excluded: node_modules, and the contents of an already-found .git directory.
       mkdirSync(join(fixtureRoot, 'node_modules', 'somepkg', '.git'), { recursive: true });
       mkdirSync(join(fixtureRoot, 'repo', '.git', 'modules', 'sub', '.git'), { recursive: true });
 
-      let capturedFindCmd = '';
-      const tf = {
-        getTransport: () => ({
-          exec: vi.fn(async (cmd: string) => {
-            capturedFindCmd = cmd;
-            const stdout = execSync(cmd, { shell: '/bin/bash' }).toString();
-            return { stdout, stderr: '', code: 0 };
-          }),
-          // The candidates are not inspected here (only the find command is under test): every git command exits 1.
-          run: vi.fn(async (spec: CommandSpec) => (spec.args[0] === '--version' ? ok('git version 2.43.0') : failed(128))),
-        }),
-      } as unknown as TransportFactory;
+      const { factory, gitSpecs } = makeTransportFactory(files(), (spec) => {
+        if (spec.args[0] === '--version') return ok('git version 2.43.0');
+        return spec.args[2] === 'rev-parse' ? ok(`${spec.args[1]}\n`) : ok('');
+      });
+      const repos = await new RepoDiscoveryService(factory).discover(makeServer(), fixtureRoot);
 
-      const service = new RepoDiscoveryService(tf);
-      await service.discover(makeServer(), fixtureRoot);
+      expect(repos.map((r) => r.absolutePath).sort()).toEqual([join(fixtureRoot, '.worktrees', 'task-1'), join(fixtureRoot, 'repo')].sort());
+      expect(gitSpecs.some((s) => s.args.some((a) => a.includes('node_modules')))).toBe(false);
+    });
 
-      expect(capturedFindCmd).toContain('find ');
-      const findOnly = execSync(capturedFindCmd, { shell: '/bin/bash' }).toString();
-      const foundPaths = findOnly.split('\n').map((l) => l.trim()).filter(Boolean);
+    // Windows では動かない: 同上（toDiscoveredRepos が '/' 始まりだけを受け付ける）
+    it.skipIf(process.platform === 'win32')('does not look deeper than depth + 1 levels', async () => {
+      fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
+      mkdirSync(join(fixtureRoot, 'a', 'b', 'c', 'd', '.git'), { recursive: true }); // .git at level 5
+      mkdirSync(join(fixtureRoot, 'a', 'b', 'c', '.git'), { recursive: true }); // .git at level 4: within depth 3 + 1
+      const { factory } = makeTransportFactory(files(), (spec) => (spec.args[0] === '--version' ? ok('git version 2.43.0') : spec.args[2] === 'rev-parse' ? ok(`${spec.args[1]}\n`) : ok('')));
+      const repos = await new RepoDiscoveryService(factory).discover(makeServer(), fixtureRoot, 3);
+      expect(repos.map((r) => r.absolutePath)).toEqual([join(fixtureRoot, 'a', 'b', 'c')]);
+    });
 
-      expect(foundPaths).toContain(join(fixtureRoot, 'repo', '.git'));
-      expect(foundPaths).toContain(join(fixtureRoot, '.worktrees', 'task-1', '.git'));
-      expect(foundPaths.some((p) => p.includes('node_modules'))).toBe(false);
-      expect(foundPaths.some((p) => p.includes('/.git/modules/'))).toBe(false);
+    it('fails the scan when the working directory does not exist', async () => {
+      fixtureRoot = realpathSync.native(mkdtempSync(join(tmpdir(), 'azito-repo-discovery-')));
+      const { factory } = makeTransportFactory(files());
+      await expect(new RepoDiscoveryService(factory).discover(makeServer(), join(fixtureRoot, 'missing'))).rejects.toThrow(/scan failed/i);
     });
   });
 
   describe('checkPathStatus', () => {
     it('reports exists:false without an error for a path that does not exist', async () => {
-      const service = new RepoDiscoveryService(makeTransportFactory(async () => ({ stdout: '', stderr: '', code: 0 })).factory);
+      const service = new RepoDiscoveryService(makeTransportFactory(treeOps(['/work/'])).factory);
 
-      const status = await service.checkPathStatus(makeServer(), '/does/not/exist');
-
-      expect(status).toEqual({ exists: false, isGitRepository: false });
+      expect(await service.checkPathStatus(makeServer(), '/does/not/exist')).toEqual({ exists: false, isGitRepository: false });
     });
 
     it('reports exists:true, isGitRepository:false for an existing non-git directory', async () => {
-      const service = new RepoDiscoveryService(makeTransportFactory(async () => ({ stdout: 'EXISTS\n', stderr: '', code: 0 })).factory);
+      const service = new RepoDiscoveryService(makeTransportFactory(treeOps(['/work/plain-dir/'])).factory);
 
-      const status = await service.checkPathStatus(makeServer(), '/work/plain-dir');
-
-      expect(status).toEqual({ exists: true, isGitRepository: false });
+      expect(await service.checkPathStatus(makeServer(), '/work/plain-dir')).toEqual({ exists: true, isGitRepository: false });
     });
 
-    it('reports exists:true, isGitRepository:true when the path itself has a .git entry', async () => {
-      const service = new RepoDiscoveryService(makeTransportFactory(async () => ({ stdout: 'EXISTS\nISGIT\n', stderr: '', code: 0 })).factory);
+    it('reports exists:true, isGitRepository:true when the path itself has a .git entry (a directory or a file)', async () => {
+      const service = new RepoDiscoveryService(makeTransportFactory(treeOps(['/work/repo/.git/', '/work/worktree/.git'])).factory);
 
-      const status = await service.checkPathStatus(makeServer(), '/work/repo');
-
-      expect(status).toEqual({ exists: true, isGitRepository: true });
+      expect(await service.checkPathStatus(makeServer(), '/work/repo')).toEqual({ exists: true, isGitRepository: true });
+      expect(await service.checkPathStatus(makeServer(), '/work/worktree')).toEqual({ exists: true, isGitRepository: true });
     });
 
-    it('throws (does not silently report exists:false) on a transport-level failure', async () => {
-      const service = new RepoDiscoveryService(makeTransportFactory(async () => ({ stdout: '', stderr: 'boom', code: 1 })).factory);
+    it('throws (does not silently report exists:false) when the host cannot be asked', async () => {
+      const failing = { platform: 'linux', stat: async () => { throw new Error('boom'); } } as unknown as IFileOps;
+      const service = new RepoDiscoveryService(makeTransportFactory(failing).factory);
 
-      await expect(service.checkPathStatus(makeServer(), '/work')).rejects.toThrow(/Path status check failed/);
+      await expect(service.checkPathStatus(makeServer(), '/work')).rejects.toThrow('boom');
     });
   });
 

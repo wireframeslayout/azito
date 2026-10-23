@@ -52,7 +52,7 @@ describe('GET /api/servers/:name/git/worktrees', () => {
         if (spec.args[0] === 'worktree') return ok('worktree /home/u/ws/repo\nHEAD abc\nbranch refs/heads/main\n\nworktree /home/u/ws/repo/.worktrees/task-3\nHEAD def\nbranch refs/heads/task/3-x\n\n');
         return ok(' M a.ts\n');
       },
-      exec: async (command: string) => ({ stdout: command.startsWith('cd -- "$HOME"') ? '/home/u/ws/repo\n' : '', stderr: '', code: 0 }),
+      files: () => ({ realpath: async (p: string) => (p === '~/ws/repo' ? '/home/u/ws/repo' : p) }),
     };
     const app = Fastify();
     await app.register(gitRoutes, {

@@ -1,8 +1,11 @@
-import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'fs';
-import { homedir } from 'os';
-import { join } from 'path';
+import { createHash } from 'crypto';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
-import { shellQuote } from '../../../shared/shellQuote';
+import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
+import { pathApiFor } from '../../../shared/os/hostPath';
+import { KeyedMutex } from '../../../shared/keyedMutex';
+
+/** Two projects registering at once would each read the same file and the later write would drop the earlier registration. */
+const configLocks = new KeyedMutex();
 
 export type EnsureClaudeTrustResult =
   | { action: 'registered' }
@@ -10,25 +13,31 @@ export type EnsureClaudeTrustResult =
   | { action: 'skipped'; reason: string }
   | { action: 'failed'; reason: string };
 
-const REMOTE_TIMEOUT_MS = 10_000;
+/**
+ * Marks `projectPath` as trusted in the server host's `~/.claude.json`, so Claude Code does not stop at its trust dialog.
+ * The file is read and replaced through the host's file operations: the replace is atomic and keeps the file's permission bits
+ * (the file holds credentials), and it is refused if the file changed between the read and the write.
+ */
+export async function ensureClaudeTrust(transport: IServerTransport, projectPath: string): Promise<EnsureClaudeTrustResult> {
+  const ops = transport.files();
+  const configPath = pathApiFor(ops.platform).join(await ops.realpath('~'), '.claude.json');
+  // The whole read, update and save of one config file is one step for this process; the write's own check
+  // (the hash of what was read) is the guard against anything else that changes the file.
+  return configLocks.withLock(configPath, () => registerTrust(ops, configPath, projectPath));
+}
 
-const REMOTE_SCRIPT = [
-  'const fs=require("fs"),p=require("os").homedir()+"/.claude.json",dir=process.argv[1];',
-  'let d;try{d=JSON.parse(fs.readFileSync(p,"utf8"))}catch{console.log("NOJSON");process.exit(2)}',
-  'if(!d.projects)d.projects={};',
-  'if(d.projects[dir]&&d.projects[dir].hasTrustDialogAccepted){console.log("TRUSTED");process.exit(0)}',
-  'd.projects[dir]=Object.assign({},d.projects[dir],{hasTrustDialogAccepted:true});',
-  'const m=fs.statSync(p).mode&0o777,tmp=p+".tmp."+process.pid;',
-  'fs.writeFileSync(tmp,JSON.stringify(d,null,2),{mode:m});fs.renameSync(tmp,p);console.log("REGISTERED")',
-].join('');
-
-function ensureLocalClaudeTrust(projectPath: string): EnsureClaudeTrustResult {
-  const configPath = join(homedir(), '.claude.json');
-  if (!existsSync(configPath)) return { action: 'skipped', reason: '~/.claude.json not found' };
+async function registerTrust(ops: IFileOps, configPath: string, projectPath: string): Promise<EnsureClaudeTrustResult> {
+  let raw: Buffer;
+  try {
+    raw = (await ops.read(configPath)).data;
+  } catch (err) {
+    if (err instanceof FileOpsError && err.code === 'NOT_FOUND') return { action: 'skipped', reason: '~/.claude.json not found' };
+    throw err;
+  }
 
   let config: { projects?: Record<string, Record<string, unknown>> };
   try {
-    config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config = JSON.parse(raw.toString('utf8'));
   } catch (err) {
     return { action: 'failed', reason: `~/.claude.json is not valid JSON: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -40,38 +49,13 @@ function ensureLocalClaudeTrust(projectPath: string): EnsureClaudeTrustResult {
     ...config,
     projects: { ...config.projects, [projectPath]: { ...existing, hasTrustDialogAccepted: true } },
   };
-  const originalMode = statSync(configPath).mode & 0o777;
-  const tmpPath = `${configPath}.tmp.${process.pid}`;
   try {
-    writeFileSync(tmpPath, JSON.stringify(updated, null, 2), { mode: originalMode });
-    renameSync(tmpPath, configPath);
+    await ops.write(configPath, Buffer.from(JSON.stringify(updated, null, 2), 'utf8'), {
+      expect: { sha256: createHash('sha256').update(raw).digest('hex') },
+    });
   } catch (err) {
-    try { unlinkSync(tmpPath); } catch {}
-    return { action: 'failed', reason: `atomic write failed: ${err instanceof Error ? err.message : String(err)}` };
+    if (err instanceof FileOpsError) return { action: 'failed', reason: `atomic write failed: ${err.message}` };
+    throw err;
   }
   return { action: 'registered' };
-}
-
-async function ensureRemoteClaudeTrust(
-  transport: IServerTransport,
-  projectPath: string,
-): Promise<EnsureClaudeTrustResult> {
-  const result = await transport.exec(
-    `node -e ${shellQuote(REMOTE_SCRIPT)} ${shellQuote(projectPath)}`,
-    REMOTE_TIMEOUT_MS,
-  );
-  const output = result.stdout;
-  if (output.includes('REGISTERED')) return { action: 'registered' };
-  if (output.includes('TRUSTED')) return { action: 'already_trusted' };
-  if (output.includes('NOJSON')) return { action: 'skipped', reason: '~/.claude.json missing or invalid on remote' };
-  return { action: 'failed', reason: `remote trust registration failed: ${output.trim() || result.stderr || `exit ${result.code}`}` };
-}
-
-export async function ensureClaudeTrust(
-  serverType: string,
-  transport: IServerTransport,
-  projectPath: string,
-): Promise<EnsureClaudeTrustResult> {
-  if (serverType === 'local') return ensureLocalClaudeTrust(projectPath);
-  return ensureRemoteClaudeTrust(transport, projectPath);
 }

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { RemoteWorktreeService } from './RemoteWorktreeService';
-import type { IServerTransport, ExecResult } from '../servers/transport/ServerTransport';
+import type { IServerTransport } from '../servers/transport/ServerTransport';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 import type { CommandResult, CommandSpec } from '../../shared/exec/commandSpec';
 import { CommandSpawnError } from '../../shared/exec/commandSpec';
 import { argvOfShellLine, argvOfSpec, failed, ok, specText } from '../../shared/exec/testing/commandTesting';
@@ -8,28 +9,50 @@ import { argvOfShellLine, argvOfSpec, failed, ok, specText } from '../../shared/
 const WD = '/home/user/project';
 const WT = `${WD}/.worktrees/task-1`;
 
-type ExecResponder = (command: string) => ExecResult | Promise<ExecResult>;
 type GitResponder = (spec: CommandSpec) => CommandResult | Promise<CommandResult>;
 
-/** git goes through `run`, the file operations (mkdir / test / rm) still through `exec`. Both are recorded in order. */
-function setup(onGit: GitResponder = () => ok(), onExec: ExecResponder = defaultExec()) {
-  const gitCalls: CommandSpec[] = [];
-  const execCalls: string[] = [];
-  const transport = {
-    run: async (spec: CommandSpec) => { gitCalls.push(spec); return onGit(spec); },
-    exec: async (command: string) => { execCalls.push(command); return onExec(command); },
-  } as unknown as IServerTransport;
-  return { svc: new RemoteWorktreeService(transport), gitCalls, execCalls, gitTexts: () => gitCalls.map(specText) };
+/** What the host's file operations say about a path (is there a directory?), and how it resolves `~`. */
+interface FilesModel {
+  /** Whether `path` is a directory, given how many times it has been asked about (the default: not before the worktree is created, there after). */
+  isDirectory: (path: string, asked: number) => boolean;
+  /** The home directory `~` resolves to; undefined: the host cannot resolve it. */
+  home: string | undefined;
+  /** A path the host cannot resolve (it is gone). */
+  unresolvable: (path: string) => boolean;
 }
 
-const execOk = (stdout = ''): ExecResult => ({ stdout, stderr: '', code: 0 });
+const defaultFiles = (): FilesModel => ({ isDirectory: (_p, asked) => asked > 0, home: undefined, unresolvable: () => false });
 
-/** The stale-worktree check says "no"; the check after creation says "yes". */
-function defaultExec(): ExecResponder {
-  return (command) => {
-    if (!command.startsWith('test -d')) return execOk();
-    return execOk(command.includes('echo exists') ? 'no\n' : 'yes\n');
-  };
+function fakeFiles(model: FilesModel, calls: string[]): IFileOps {
+  const asked = new Map<string, number>();
+  return {
+    platform: 'linux',
+    create: async (p: string) => { calls.push(`create ${p}`); return { created: true }; },
+    remove: async (p: string) => { calls.push(`remove ${p}`); },
+    stat: async (p: string) => {
+      calls.push(`stat ${p}`);
+      const n = asked.get(p) ?? 0;
+      asked.set(p, n + 1);
+      return model.isDirectory(p, n) ? { kind: 'directory', size: 0, mtimeMs: 0, mode: 0o755 } : null;
+    },
+    realpath: async (p: string) => {
+      calls.push(`realpath ${p}`);
+      if (model.unresolvable(p) || ((p === '~' || p.startsWith('~/')) && model.home === undefined)) throw new FileOpsError('NOT_FOUND', `realpath failed for '${p}'`);
+      return p === '~' || p.startsWith('~/') ? `${model.home}${p.slice(1)}` : p;
+    },
+  } as unknown as IFileOps;
+}
+
+/** git goes through `run`, the file operations (mkdir / test / rm / realpath) through the host's `files()`. Both are recorded in order. */
+function setup(onGit: GitResponder = () => ok(), files: Partial<FilesModel> = {}) {
+  const gitCalls: CommandSpec[] = [];
+  const fileCalls: string[] = [];
+  const hostFiles = fakeFiles({ ...defaultFiles(), ...files }, fileCalls);
+  const transport = {
+    run: async (spec: CommandSpec) => { gitCalls.push(spec); return onGit(spec); },
+    files: () => hostFiles,
+  } as unknown as IServerTransport;
+  return { svc: new RemoteWorktreeService(transport), gitCalls, fileCalls, gitTexts: () => gitCalls.map(specText) };
 }
 
 describe('RemoteWorktreeService', () => {
@@ -60,12 +83,12 @@ describe('RemoteWorktreeService', () => {
   });
 
   describe('create', () => {
-    it('creates the worktree with the file operations on exec and git on run', async () => {
-      const { svc, gitTexts, execCalls } = setup();
+    it('creates the worktree with the file operations on the host and git on run', async () => {
+      const { svc, gitTexts, fileCalls } = setup();
       const result = await svc.create(WD, 42, 'my-task', 'main');
 
       expect(result).toEqual({ path: `${WD}/.worktrees/task-42`, branch: 'task/42-my-task' });
-      expect(execCalls[0]).toBe(`mkdir -p ${WD}/.worktrees`);
+      expect(fileCalls[0]).toBe(`create ${WD}/.worktrees`);
       expect(gitTexts()).toEqual([
         'git branch -D task/42-my-task',
         `git worktree add -b task/42-my-task ${WD}/.worktrees/task-42 main`,
@@ -73,29 +96,21 @@ describe('RemoteWorktreeService', () => {
     });
 
     it('removes a stale worktree if the path exists, and falls back to prune and rm when removal fails', async () => {
-      let tests = 0;
-      const { svc, gitTexts, execCalls } = setup(
+      const { svc, gitTexts, fileCalls } = setup(
         (spec) => (spec.args[1] === 'remove' ? failed(128, 'fatal: not a worktree') : ok()),
-        (command) => {
-          if (command.startsWith('test -d')) return execOk(++tests === 1 ? 'exists\n' : 'yes\n');
-          return execOk();
-        },
+        { isDirectory: () => true },
       );
       await svc.create(WD, 1, 'slug', 'main');
 
       expect(gitTexts().slice(0, 2)).toEqual([`git worktree remove ${WT} --force`, 'git worktree prune']);
-      expect(execCalls).toContain(`rm -rf ${WT}`);
+      expect(fileCalls).toContain(`remove ${WT}`);
     });
 
     it('does not prune or rm when the stale worktree was removed', async () => {
-      let tests = 0;
-      const { svc, gitTexts, execCalls } = setup(() => ok(), (command) => {
-        if (command.startsWith('test -d')) return execOk(++tests === 1 ? 'exists\n' : 'yes\n');
-        return execOk();
-      });
+      const { svc, gitTexts, fileCalls } = setup(() => ok(), { isDirectory: () => true });
       await svc.create(WD, 1, 'slug', 'main');
       expect(gitTexts()).not.toContain('git worktree prune');
-      expect(execCalls.some((c) => c.startsWith('rm -rf'))).toBe(false);
+      expect(fileCalls.some((c) => c.startsWith('remove'))).toBe(false);
     });
 
     it('uses -b when branchName is specified and neither the local nor the remote branch exists', async () => {
@@ -158,7 +173,7 @@ describe('RemoteWorktreeService', () => {
     });
 
     it('throws when worktree directory does not exist after creation', async () => {
-      const { svc } = setup(() => ok(), (command) => execOk(command.startsWith('test -d') ? 'no\n' : ''));
+      const { svc } = setup(() => ok(), { isDirectory: () => false });
       await expect(svc.create(WD, 1, 'slug', 'main')).rejects.toThrow('Worktree directory not found after creation');
     });
 
@@ -170,17 +185,17 @@ describe('RemoteWorktreeService', () => {
 
   describe('exists', () => {
     it('returns true when directory exists', async () => {
-      const { svc } = setup(undefined, () => execOk('yes\n'));
+      const { svc } = setup(undefined, { isDirectory: () => true });
       expect(await svc.exists(WT)).toBe(true);
     });
 
     it('returns false when directory does not exist', async () => {
-      const { svc } = setup(undefined, () => execOk('no\n'));
+      const { svc } = setup(undefined, { isDirectory: () => false });
       expect(await svc.exists(WT)).toBe(false);
     });
 
     it('returns false on transport error', async () => {
-      const { svc } = setup(undefined, () => { throw new Error('connection failed'); });
+      const { svc } = setup(undefined, { isDirectory: () => { throw new Error('connection failed'); } });
       expect(await svc.exists(WT)).toBe(false);
     });
   });
@@ -264,7 +279,7 @@ describe('RemoteWorktreeService', () => {
     });
 
     it('allows valid paths and branch names', async () => {
-      expect(await setup(undefined, () => execOk('no\n')).svc.exists('/home/user-1/my_project/path.name')).toBe(false);
+      expect(await setup(undefined, { isDirectory: () => false }).svc.exists('/home/user-1/my_project/path.name')).toBe(false);
       expect(await setup(() => ok('')).svc.getBranch(WD)).toBeNull();
     });
 
@@ -302,32 +317,26 @@ describe('RemoteWorktreeService', () => {
     const TILDE_DIR = '~/ws/repo';
     const REAL_DIR = `${HOME}/ws/repo`;
 
-    /** `cd -- "$HOME"'/ws/repo' && pwd -P` (the path resolver) answers like a host whose home is /home/u. */
-    const resolverExec = (rest: ExecResponder = defaultExec()): ExecResponder => (command) => {
-      if (command.startsWith('cd -- "$HOME"')) return execOk(`${HOME}${command.match(/'([^']*)' && pwd -P$/)![1]}\n`);
-      return rest(command);
-    };
-
     it('resolves it against the target host before listing: git runs in the absolute directory', async () => {
-      const { svc, gitCalls, execCalls } = setup(() => ok('worktree /home/u/ws/repo\nHEAD abc\nbranch refs/heads/main\n\n'), resolverExec());
+      const { svc, gitCalls, fileCalls } = setup(() => ok('worktree /home/u/ws/repo\nHEAD abc\nbranch refs/heads/main\n\n'), { home: HOME });
       await svc.list(TILDE_DIR);
-      expect(execCalls[0]).toBe(`cd -- "$HOME"'/ws/repo' && pwd -P`);
+      expect(fileCalls[0]).toBe(`realpath ${TILDE_DIR}`);
       expect(gitCalls[0].cwd).toBe(REAL_DIR);
     });
 
     it('creates the worktree under the resolved directory, and returns its absolute path', async () => {
-      const { svc, gitCalls, execCalls } = setup(() => ok(), resolverExec());
+      const { svc, gitCalls, fileCalls } = setup(() => ok(), { home: HOME });
       const result = await svc.create(TILDE_DIR, 5, 'slug', 'main');
 
       expect(result.path).toBe(`${REAL_DIR}/.worktrees/task-5`);
-      expect(execCalls).toContain(`mkdir -p ${REAL_DIR}/.worktrees`);
+      expect(fileCalls).toContain(`create ${REAL_DIR}/.worktrees`);
       expect(gitCalls.every((c) => c.cwd === REAL_DIR)).toBe(true);
       expect(gitCalls.at(-1)!.args).toEqual(['worktree', 'add', '-b', 'task/5-slug', `${REAL_DIR}/.worktrees/task-5`, 'main']);
-      expect(JSON.stringify([gitCalls, execCalls.filter((c) => !c.startsWith('cd -- "$HOME"'))])).not.toContain('~');
+      expect(JSON.stringify([gitCalls, fileCalls.filter((c) => !c.startsWith('realpath'))])).not.toContain('~');
     });
 
     it('resolves the worktree path too for remove, getBranch, getDiff and exists', async () => {
-      const { svc, gitCalls } = setup(() => ok('b\n'), resolverExec(() => execOk('yes\n')));
+      const { svc, gitCalls } = setup(() => ok('b\n'), { home: HOME, isDirectory: () => true });
       const worktree = '~/ws/repo/.worktrees/task-1';
       await svc.remove(TILDE_DIR, worktree);
       await svc.getBranch(worktree);
@@ -345,10 +354,7 @@ describe('RemoteWorktreeService', () => {
     });
 
     it('still prunes when a stored ~ worktree path cannot be resolved because the directory is already gone', async () => {
-      const gone: ExecResponder = (command) => (command.includes('.worktrees')
-        ? { stdout: '', stderr: 'cd: no such file or directory', code: 1 }
-        : resolverExec()(command));
-      const { svc, gitCalls } = setup(() => failed(128, 'fatal: not a working tree'), gone);
+      const { svc, gitCalls } = setup(() => failed(128, 'fatal: not a working tree'), { home: HOME, unresolvable: (p) => p.includes('.worktrees') });
       await svc.remove(TILDE_DIR, '~/ws/repo/.worktrees/task-9');
       expect(gitCalls.map((c) => [c.args, c.cwd])).toEqual([
         [['worktree', 'remove', `${REAL_DIR}/.worktrees/task-9`, '--force'], REAL_DIR],
@@ -357,22 +363,22 @@ describe('RemoteWorktreeService', () => {
     });
 
     it('fails, rather than running git in a directory named "~", when the host cannot resolve it', async () => {
-      const { svc, gitCalls } = setup(() => ok(), (command) => (command.startsWith('cd -- "$HOME"') ? { stdout: '', stderr: 'no such directory', code: 1 } : execOk()));
+      const { svc, gitCalls } = setup(() => ok(), { home: undefined });
       await expect(svc.list(TILDE_DIR)).rejects.toThrow(/realpath failed/);
       expect(gitCalls).toHaveLength(0);
     });
 
     it('leaves an absolute directory alone (no resolution round trip)', async () => {
-      const { svc, execCalls } = setup(() => ok('worktree /w\nHEAD a\nbranch refs/heads/main\n\n'));
+      const { svc, fileCalls } = setup(() => ok('worktree /w\nHEAD a\nbranch refs/heads/main\n\n'));
       await svc.list('/w');
-      expect(execCalls).toHaveLength(0);
+      expect(fileCalls).toHaveLength(0);
     });
   });
 
   // Each migrated call is pinned to what the old shell string became: the argv a real sh makes of the old `git ...` part equals the new args.
   describe.skipIf(process.platform === 'win32')('argv is the same as the old shell strings', () => {
     it('matches every git command of the old implementation', async () => {
-      const { svc, gitCalls } = setup(() => ok('a'.repeat(40)), (command) => execOk(command.startsWith('test -d') ? (command.includes('echo yes') ? 'yes\n' : 'exists\n') : ''));
+      const { svc, gitCalls } = setup(() => ok('a'.repeat(40)), { isDirectory: () => true });
       await svc.create(WD, 1, 'slug', 'main', 'feature/x');
       await svc.remove(WD, WT);
       await svc.getBranch(WT);

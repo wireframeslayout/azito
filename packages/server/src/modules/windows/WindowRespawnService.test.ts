@@ -6,6 +6,10 @@ import * as path from 'path';
 import { WindowRespawnService, buildRespawnManifestInput } from './WindowRespawnService';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+
+// Containment resolves real paths through the host's file operations: here the real ones, on this machine.
+const hostFiles = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: tmpdir() }));
 import { resolveExecutionManifest, hashExecutionManifest } from '../tasks/execution/ExecutionManifest';
 import * as detectDefaultBranchModule from '../git/detectDefaultBranch';
 import type { Window, IWindowRepository } from './Window';
@@ -139,8 +143,8 @@ function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'fi
   return { find: vi.fn(() => null), findByProject: vi.fn(() => []) };
 }
 
-function defaultTransportFactory(): Pick<TransportFactory, 'getTransport'> {
-  return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
+function defaultTransportFactory(): Pick<TransportFactory, 'getTransport' | 'getFileOps'> {
+  return { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps'>;
 }
 
 // resolveExecutionManifest() (Issue #328 fifth-round review) needs a
@@ -158,7 +162,7 @@ function buildService(opts: {
   unit?: Unit | null;
   projectServerRepo?: Pick<IProjectServerRepository, 'find' | 'findByProject'>;
   projectRepo?: Pick<IProjectRepository, 'findById'>;
-  transportFactory?: Pick<TransportFactory, 'getTransport'>;
+  transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps'>;
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
@@ -998,7 +1002,7 @@ describe('WindowRespawnService.respawn — rollback on pane-restore failure (Iss
 });
 
 describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
-  // Containment resolves real paths via fs.realpath (LocalPathResolver), so
+  // Containment resolves real paths through the host's file operations, so
   // these fixtures need to exist on disk — a literal string like '/work'
   // would make every check fail closed with "Cannot verify ... (ENOENT)".
   let rootDir: string;
@@ -1008,14 +1012,12 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
   }
 
-  function makeTransportFactory(): Pick<TransportFactory, 'getTransport'> {
-    // Only exercised for non-local server types; local respawns resolve via
-    // fs.realpath directly and never touch the transport.
-    return { getTransport: vi.fn(() => ({})) } as unknown as Pick<TransportFactory, 'getTransport'>;
+  function makeTransportFactory(): Pick<TransportFactory, 'getTransport' | 'getFileOps'> {
+    return { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps'>;
   }
 
   beforeEach(() => {
-    rootDir = realpathSync(mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-')));
+    rootDir = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-window-respawn-')));
   });
 
   afterEach(() => {
@@ -2071,8 +2073,9 @@ function buildServiceWithProcessDetection(opts: {
     ? vi.fn(async () => { throw new Error('ps failed'); })
     : vi.fn(async () => ({ stdout: opts.psOutput ?? '', stderr: '', code: 0 }));
 
-  const transportFactory: Pick<TransportFactory, 'getTransport'> = {
+  const transportFactory: Pick<TransportFactory, 'getTransport' | 'getFileOps'> = {
     getTransport: vi.fn(() => ({ exec })) as any,
+    getFileOps: vi.fn(() => hostFiles),
   };
 
   const result = buildService({

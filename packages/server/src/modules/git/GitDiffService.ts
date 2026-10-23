@@ -2,7 +2,8 @@ import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { parseUnifiedDiff, unquoteGitPath, type FileDiff } from './DiffParser';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
-import { shellQuote } from '../../shared/shellQuote';
+import { FileOpsError } from '../../shared/fs/fileOps';
+import { pathApiFor } from '../../shared/os/hostPath';
 import type { CommandResult } from '../../shared/exec/commandSpec';
 import { runGit, combinedOutput } from './runGit';
 
@@ -211,32 +212,31 @@ export class GitDiffService {
     dirPath: string,
     filePath: string,
   ): Promise<FileDiff | null> {
-    const safeDir = shellQuote(dirPath);
-    const safePath = shellQuote(filePath);
+    const ops = transport.files();
+    const target = pathApiFor(ops.platform).join(dirPath, filePath);
 
-    // Check file size and binary status
-    const statResult = await transport.exec(
-      `cd ${safeDir} && wc -c < ${safePath} 2>/dev/null`,
-    );
-    const fileSize = parseInt(stripTerminalArtifacts(statResult.stdout).trim(), 10);
-    if (isNaN(fileSize) || fileSize > MAX_UNTRACKED_FILE_SIZE) {
-      return fileSize > MAX_UNTRACKED_FILE_SIZE
-        ? { file: filePath, status: 'A', additions: 0, deletions: 0, hunks: [], isBinary: false, group: 'untracked' }
-        : null;
+    // A path that is not a readable regular file (gone since `git status`, a directory) has no diff to show.
+    const stat = await ops.stat(target);
+    if (stat?.kind !== 'file') return null;
+    if (stat.size > MAX_UNTRACKED_FILE_SIZE) {
+      return { file: filePath, status: 'A', additions: 0, deletions: 0, hunks: [], isBinary: false, group: 'untracked' };
     }
 
-    // Check if binary (NUL byte in first 8KB)
-    const headResult = await transport.exec(
-      `cd ${safeDir} && head -c 8192 ${safePath} | tr -cd '\\0' | wc -c`,
-    );
-    const nulCount = parseInt(stripTerminalArtifacts(headResult.stdout).trim(), 10);
-    if (nulCount > 0) {
+    let data: Buffer;
+    try {
+      data = (await ops.read(target, { maxBytes: MAX_UNTRACKED_FILE_SIZE })).data;
+    } catch (err) {
+      if (err instanceof FileOpsError && (err.code === 'NOT_FOUND' || err.code === 'NOT_A_FILE' || err.code === 'TOO_LARGE')) return null;
+      throw err;
+    }
+
+    // Binary: a NUL byte in the first 8KB.
+    if (data.subarray(0, 8192).includes(0)) {
       return { file: filePath, status: 'A', additions: 0, deletions: 0, hunks: [], isBinary: true, group: 'untracked' };
     }
 
-    // Read file content and synthesize diff
-    const catResult = await transport.exec(`cd ${safeDir} && cat ${safePath}`);
-    const content = stripTerminalArtifacts(catResult.stdout);
+    // Synthesize the diff from the content
+    const content = stripTerminalArtifacts(data.toString('utf-8'));
     const lines = content.split('\n');
     // Remove trailing empty line from final newline
     if (lines.length > 0 && lines[lines.length - 1] === '') lines.pop();

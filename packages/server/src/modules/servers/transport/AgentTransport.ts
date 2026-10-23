@@ -19,6 +19,9 @@ import { CommandOutputLimitError, CommandSpawnError, type CommandResult, type Co
 import { truncateUtf8 } from '../../../shared/exec/utf8';
 import { toPosixCommandLine } from '../../../shared/exec/posixCommandLine';
 import { AGENT_RUN_PATH, responseToResult } from '../../../shared/exec/runWire';
+import { AGENT_FILE_OPS_PATH, RemoteFileOps, type FileOpRequest } from '../../../shared/fs/fileOpsWire';
+import type { IFileOps } from '../../../shared/fs/fileOps';
+import { ShellFileOps } from './ShellFileOps';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
@@ -33,6 +36,8 @@ const HTTP_SLACK_MS = 5_000;
 const TRANSCRIPT_TIMEOUT_MS = 10_000;
 /** One release file over a tailnet link: seconds in practice, with room for a slow one. */
 const MISAO_UPLOAD_TIMEOUT_MS = 120_000;
+/** One file operation (a read or write of up to the size limit) over a tailnet link. */
+const FILE_OPS_TIMEOUT_MS = 60_000;
 
 function classifyFetchError(err: unknown): AgentUnreachableReason | null {
   if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) return 'timeout';
@@ -101,6 +106,7 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   private wsBaseUrl: string;
   private authHeader: string;
   private useLegacyMuxRoute = false;
+  private fileOps: IFileOps | null = null;
 
   private token: string;
 
@@ -150,6 +156,30 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
     }, spec.timeoutMs + HTTP_SLACK_MS);
     if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_RUN_PATH} failed (${status}): ${text}`);
     return responseToResult(JSON.parse(text));
+  }
+
+  /**
+   * The agent's file operations. The route is chosen here, once, from what is recorded of the host, like `run`: an agent
+   * whose host is recorded has `POST /api/fileops` (it ships with `GET /api/host`, which is what recorded it); an unrecorded
+   * one predates both, so its files are reached with shell commands (`ShellFileOps`). A failing route is never retried
+   * through the other.
+   */
+  files(): IFileOps {
+    if (this.hostProfile === null) return (this.fileOps ??= new ShellFileOps(this));
+    const platform = this.hostProfile.platform;
+    return (this.fileOps ??= new RemoteFileOps(platform, (request) => this.sendFileOp(request)));
+  }
+
+  /** Performs one file operation on the agent's host (`POST /api/fileops`) and returns the response body, which says how it ended (see `RemoteFileOps`). */
+  private async sendFileOp(request: FileOpRequest): Promise<unknown> {
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(AGENT_FILE_OPS_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: this.authHeader },
+      body: JSON.stringify(request),
+    }, FILE_OPS_TIMEOUT_MS);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_FILE_OPS_PATH} failed (${status}): ${text}`);
+    return JSON.parse(text);
   }
 
   /** The run of an agent without `/api/run`: the quoted command line through `exec`. See `toPosixCommandLine` for what a shell cannot report. */
