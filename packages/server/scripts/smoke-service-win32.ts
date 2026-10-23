@@ -93,7 +93,9 @@ function hubNodePids(entryFragment: string): number[] {
 function ancestorsOf(pid: number): Array<{ pid: number; name: string }> {
   const script = [
     `$id = ${pid}`,
-    'while ($id) { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"; if (-not $p) { break }; "$($p.ProcessId) $($p.Name)"; $id = $p.ParentProcessId }',
+    // A parent id can name a pid that was reused by a descendant (the parent is long gone): stop at a repeat and after a few hops.
+    '$seen = @{}',
+    'while ($id -and -not $seen.ContainsKey($id) -and $seen.Count -lt 12) { $seen[$id] = $true; $p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"; if (-not $p) { break }; "$($p.ProcessId) $($p.Name)"; $id = $p.ParentProcessId }',
   ].join('\n');
   const r = powershell(['-Command', script]);
   return r.output.split(/\r?\n/).map((l) => /^(\d+) (\S+)$/.exec(l.trim())).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ pid: Number(m[1]), name: m[2] }));
