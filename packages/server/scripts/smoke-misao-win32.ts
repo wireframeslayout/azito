@@ -104,15 +104,17 @@ function envValue(envFile: string, key: string): string | undefined {
   return undefined;
 }
 
-/** The text of everything a terminal WebSocket sent, as far as it got within `timeoutMs`; resolves as soon as `until` matches. */
+/** Types `input` into a terminal WebSocket once it has sent its first frame; resolves with everything received as soon as `until` matches after that. */
 function terminalRoundTrip(url: string, input: string, until: RegExp, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     const socket = new WebSocket(url);
     let received = '';
     const timer = setTimeout(() => { socket.close(); reject(new Error(`the terminal did not answer ${until} within ${timeoutMs / 1000}s\n${received}`)); }, timeoutMs);
-    socket.addEventListener('open', () => socket.send(input));
+    // The hub reads input only once the pane is attached, and the first thing it sends is the pane's screen: type after that.
+    let typed = false;
     socket.addEventListener('message', (event) => {
       received += String(event.data);
+      if (!typed) { typed = true; socket.send(input); return; }
       if (until.test(received)) { clearTimeout(timer); socket.close(); resolve(received); }
     });
     socket.addEventListener('close', (event) => {
