@@ -26,6 +26,7 @@ import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
+import { misaoWindowsTaskExists } from './modules/system/misao/misaoLocalWindows';
 import { runUpdate } from './modules/system/updateScript';
 import { serializeRequestForLog } from './shared/redactUrlSecrets';
 import { startHubExitWithParent, takeExitWithPid } from './app/hubExitWithParent';
@@ -111,9 +112,20 @@ async function main(): Promise<void> {
   }
 
   // A release install runs its panes on the bundled misao, so a new installation's local server starts on misao, but only
-  // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh sets both up).
+  // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh / install.ps1 set both up).
   // Otherwise, and for a source checkout (`npm run dev`), it starts on tmux.
-  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, hostEnv.homeDir, fs.existsSync);
+  // The Task Scheduler is asked only when nothing cheaper answers (MISAO_SOCKET unset: install.ps1 sets it, so a normal install never asks),
+  // and a failed question is logged and counts as "no misao to rely on" (the tmux default of a fresh database): the Task Scheduler is not
+  // a dependency of starting the hub, and this answer only picks the default of a database that does not exist yet.
+  let windowsTaskDefined = false;
+  if (releaseInfo !== null && hostEnv.platform === 'win32' && !process.env.MISAO_SOCKET) {
+    try {
+      windowsTaskDefined = await misaoWindowsTaskExists(hostEnv);
+    } catch (err) {
+      console.warn(`[azito] Could not ask the Task Scheduler whether the misao task exists, so a new database starts on tmux: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, hostEnv.homeDir, fs.existsSync, windowsTaskDefined);
   const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux', secretFileGuard });
   const uiToken = resolveUiToken(paths.uiToken, secretFileGuard);
   const webhookToken = resolveWebhookToken(paths.webhookToken, secretFileGuard);

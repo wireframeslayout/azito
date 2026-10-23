@@ -34,7 +34,8 @@ import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createMisaoServiceManager, createServiceManager } from '../modules/system/createServiceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
-import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { misaoWindowsUserOf, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { createLocalMisaoWindows } from '../modules/system/misao/misaoLocalWindows';
 import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
@@ -556,10 +557,11 @@ function buildExecuteTaskUseCase(
 function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): MisaoServiceService {
   const bundleRoot = getBundleRoot();
   const prefix = resolveInstallPrefix(bundleRoot);
+  const windowsUser = misaoWindowsUserOf(hostEnv.platform);
   let paths: MisaoPaths | null = null;
   let pathsError: string | undefined;
   try {
-    paths = prefix ? resolveMisaoPaths(prefix) : null;
+    paths = prefix ? resolveMisaoPaths(prefix, windowsUser) : null;
   } catch (err) {
     // A prefix too long for the daemon's socket must not stop a hub that already runs from it: report it on the misao row.
     pathsError = err instanceof Error ? err.message : String(err);
@@ -575,6 +577,7 @@ function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard
     env: process.env,
     homeDir: hostEnv.homeDir,
     secretFileGuard,
+    ...(windowsUser && paths ? { windows: createLocalMisaoWindows(hostEnv, paths, windowsUser.userName, process.env) } : {}),
     hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
   });
 }

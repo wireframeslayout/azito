@@ -54,7 +54,8 @@ export interface AgentMisaoWindowsHost {
 }
 
 /**
- * The managed pipe of a Windows host: `\\.\pipe\misao-<user>-<sha256(root, lower case)[0:16]>`, the name @misao/sdk's
+ * The managed pipe of a Windows host (a pure function of the strings it gets; `misaoRoot` must already be in its real spelling, which
+ * the host that owns the folder resolved once at its entry point: see `resolveRealPath`): `\\.\pipe\misao-<user>-<sha256(root, lower case)[0:16]>`, the name @misao/sdk's
  * `resolveSocketPath` gives for `MISAO_DIR=<root>` (a test keeps the two in step), so the `misao` CLI run with that MISAO_DIR
  * reaches the same daemon.
  */
@@ -185,4 +186,32 @@ export async function readMisaoSocketStatus(socket: AgentMisaoSocket, host: Agen
   }
   const installedVersion = readInstalledVersion(host);
   return { socketPath: socket.path, socketPresent, ...(installedVersion ? { installedVersion } : {}), host };
+}
+
+/** Where an upload of `version` is staged: next to the final `<root>/<version>` directory, which the installer moves it to. */
+export function misaoStagingDir(host: AgentMisaoHost, version: string): string {
+  const pathApi = host.platform === 'win32' ? path.win32 : path;
+  return pathApi.join(misaoRootOf(host), `${version}.upload`);
+}
+
+/**
+ * Writes one release file into `<misao folder>/<version>.upload/` (through a `.part` file renamed into place) and nothing
+ * else, whatever the caller passes: the agent's upload route and the hub's own install both stage through this.
+ */
+export function stageMisaoReleaseFile(host: AgentMisaoHost, version: string, name: MisaoReleaseFile, data: Buffer): void {
+  const windows = host.platform === 'win32';
+  const pathApi = windows ? path.win32 : path;
+  const root = misaoRootOf(host);
+  // Modes mean nothing on Windows (its folders are protected by the installer's ACL step), and chmod there only toggles read-only.
+  fs.mkdirSync(root, { recursive: true, ...(windows ? {} : { mode: 0o700 }) });
+  // mkdir's mode is masked by the umask and ignored for an existing directory; the daemon refuses anything but 700.
+  if (!windows) fs.chmodSync(root, 0o700);
+  const stage = misaoStagingDir(host, version);
+  fs.mkdirSync(stage, { recursive: true, ...(windows ? {} : { mode: 0o700 }) });
+
+  const target = pathApi.join(stage, misaoFileNameOn(host.platform, name));
+  const partial = `${target}.part`;
+  fs.writeFileSync(partial, data, windows ? {} : { mode: MISAO_RELEASE_FILES[name] });
+  if (!windows) fs.chmodSync(partial, MISAO_RELEASE_FILES[name]);
+  fs.renameSync(partial, target);
 }

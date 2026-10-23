@@ -30,15 +30,47 @@ describe('the misao task', () => {
       .toBe(`--headless C:\\Windows\\System32\\cmd.exe /d /c ""${ROOT}\\0.3.0\\misao.exe" serve --socket "${PIPE}" --data "${ROOT}" >> "${ROOT}\\misao.log" 2>&1"`);
   });
 
-  it('quotes a system folder with a space, and keeps a home folder with a space inside the cmd quotes', () => {
-    const spaced = misaoWindowsLayout({ misaoRoot: 'C:\\Users\\Dev User\\.azito\\misao' }, '0.3.0', 'AzitoMisao');
-    const line = misaoTaskArguments({ systemRoot: 'D:\\Win dows', layout: spaced, pipe: windowsMisaoPipe(spaced.root, 'Dev User') });
-    expect(line.startsWith('--headless "D:\\Win dows\\System32\\cmd.exe" /d /c ""C:\\Users\\Dev User\\.azito\\misao\\0.3.0\\misao.exe" serve')).toBe(true);
+  it.each([
+    ['a space', 'C:\\Users\\Dev User\\.azito\\misao'],
+    ['a space and parentheses', 'C:\\Users\\Foo Bar (Work)\\.azito\\misao'],
+    ['parentheses', 'C:\\Users\\Foo(Work)\\misao'],
+    ['an ampersand', 'C:\\Users\\A&B\\misao'],
+    ['a percent sign', 'C:\\Users\\100%\\misao'],
+    ['an exclamation mark', 'C:\\Users\\hi!\\misao'],
+  ])('a folder with %s goes through the launcher script: conhost.exe re-reads a command line with such a path wrongly on a real Windows, so no path is in the command line', (_name, root) => {
+    const odd = misaoWindowsLayout({ misaoRoot: root }, '0.3.0', 'AzitoMisao');
+    const pipe = windowsMisaoPipe(odd.root, 'dev');
+    const line = misaoTaskArguments({ systemRoot: 'C:\\Windows', layout: odd, pipe });
+    expect(line.startsWith('--headless C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ')).toBe(true);
+    expect(line).not.toContain(root);
+    const script = Buffer.from(line.split(' ').pop()!, 'base64').toString('utf16le');
+    expect(script).toContain("$info.FileName = 'C:\\Windows\\System32\\cmd.exe'");
+    expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_EXE'] = '${odd.exe}'`);
+    expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_ROOT'] = '${odd.root}'`);
+    expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_LOG'] = '${odd.logFile}'`);
+    expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_PIPE'] = '${pipe}'`);
+    expect(script).toContain('/d /v:off /s /c ""%AZITO_MISAO_EXE%" serve --socket "%AZITO_MISAO_PIPE%" --data "%AZITO_MISAO_ROOT%" >>"%AZITO_MISAO_LOG%" 2>&1"');
+    expect(script).toContain('exit $process.ExitCode');
   });
 
-  it.each(['100%', 'a"b', 'a!b', 'a\nb'])('refuses a folder with %j instead of writing something cmd.exe would read differently', (name) => {
+  it.each(['a"b', 'a\nb'])('refuses a folder with %j in either form, instead of writing something cmd.exe would read differently', (name) => {
     const bad = misaoWindowsLayout({ misaoRoot: `C:\\Users\\${name}\\misao` }, '0.3.0', 'AzitoMisao');
     expect(() => misaoTaskArguments({ systemRoot: 'C:\\Windows', layout: bad, pipe: PIPE })).toThrow(/cannot be written to the misao task/);
+  });
+
+  it('doubles a single quote in a path inside the launcher script', () => {
+    const odd = misaoWindowsLayout({ misaoRoot: "C:\\Users\\O'Neil\\misao" }, '0.3.0', 'AzitoMisao');
+    const script = Buffer.from(misaoTaskArguments({ systemRoot: 'C:\\Windows', layout: odd, pipe: windowsMisaoPipe(odd.root, 'dev') }).split(' ').pop()!, 'base64').toString('utf16le');
+    expect(script).toContain("'C:\\Users\\O''Neil\\misao'");
+  });
+
+  it('keeps the plain form for a system folder or a home folder of plain characters (8.3 names too)', () => {
+    const plain = misaoWindowsLayout({ misaoRoot: 'C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\x\\misao' }, '0.3.0', 'AzitoMisao');
+    expect(misaoTaskArguments({ systemRoot: 'D:\\Windows', layout: plain, pipe: windowsMisaoPipe(plain.root, 'dev') }).startsWith('--headless D:\\Windows\\System32\\cmd.exe /d /c ""C:\\Users\\RUNNER~1')).toBe(true);
+  });
+
+  it('a system folder with a space goes through the launcher too', () => {
+    expect(misaoTaskArguments({ systemRoot: 'D:\\Win dows', layout, pipe: PIPE }).startsWith('--headless "D:\\Win dows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile')).toBe(true);
   });
 
   it('starts at the user\'s logon, works in the home folder, and restarts after a failure', () => {

@@ -4,16 +4,18 @@ import type { MisaoServiceStatus } from '@azito/shared';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
 import { runCommand } from '../modules/system/serviceManager';
-import { createMisaoServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
+import type { HostEnv } from '../shared/os/hostEnv';
+import { createMisaoServiceManager } from '../modules/system/createServiceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoServiceError } from '../modules/system/misao/MisaoServiceError';
-import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { misaoWindowsUserOf, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths, type MisaoWindowsUser } from '../modules/system/misao/misaoPaths';
+import { createLocalMisaoWindows } from '../modules/system/misao/misaoLocalWindows';
 
 const USAGE = `Usage: azito misao <command> [options]
 
 Commands:
   status    Show the misao service, the bundled release and the daemon
-  install   Install the bundled misao as the azito-misao service and start it
+  install   Install the bundled misao as the azito-misao service (a Task Scheduler task on Windows) and start it
             (a running daemon is left alone; --replace-socket overwrites a MISAO_SOCKET
             in the hub .env that points at another daemon)
   update    Switch the service to the bundled misao. Stops the daemon first:
@@ -50,9 +52,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 /** The path rules (absolute prefix, socket length) are the caller's input to fix, so they are usage errors here. */
-function pathsOrUsageError(prefix: string): MisaoPaths {
+function pathsOrUsageError(prefix: string, windowsUser: MisaoWindowsUser | undefined): MisaoPaths {
   try {
-    return resolveMisaoPaths(prefix);
+    return resolveMisaoPaths(prefix, windowsUser);
   } catch (err) {
     throw new MisaoServiceError('usage', err instanceof Error ? err.message : String(err));
   }
@@ -78,11 +80,11 @@ function printStatus(status: MisaoServiceStatus): void {
   console.log(lines.join('\n'));
   if (!status.managed) console.log(`note: this hub cannot manage the service (${status.unmanagedReason}).`);
   if (status.updateAvailable) console.log('note: the running misao is not the bundled release. `azito misao update` switches it (closes every pane).');
-  if (status.needsHubRestart) console.log('note: restart the hub so it connects to the managed socket: systemctl --user restart azito (panes are not affected).');
+  if (status.needsHubRestart) console.log(`note: restart the hub so it connects to the managed socket: ${status.serviceManager === 'taskscheduler' ? 'azito service restart' : 'systemctl --user restart azito'} (panes are not affected).`);
 }
 
 /** `azito misao ...`: install, update, start and inspect the AZITO-managed misao service from the bundled hub. */
-export async function misaoCommand(argv: string[], host: ServiceHost, secretFileGuard: SecretFileGuard): Promise<void> {
+export async function misaoCommand(argv: string[], host: HostEnv, secretFileGuard: SecretFileGuard): Promise<void> {
   try {
     const args = parseArgs(argv);
     if (!args.command || !['status', 'install', 'update', 'start'].includes(args.command)) {
@@ -94,14 +96,17 @@ export async function misaoCommand(argv: string[], host: ServiceHost, secretFile
     const bundleRoot = getBundleRoot();
     const prefix = args.prefix ?? resolveInstallPrefix(bundleRoot);
     const serviceManager = createMisaoServiceManager(host, runCommand);
+    const windowsUser = misaoWindowsUserOf(host.platform);
+    const paths = prefix ? pathsOrUsageError(prefix, windowsUser) : null;
     const service = new MisaoServiceService({
-      paths: prefix ? pathsOrUsageError(prefix) : null,
+      paths,
       bundle: readMisaoBundle(bundleRoot),
       controller: 'manager' in serviceManager ? serviceManager.manager : null,
       ...('error' in serviceManager ? { controllerError: serviceManager.error.message } : {}),
       env: process.env,
       homeDir: host.homeDir,
       secretFileGuard,
+      ...(windowsUser && paths ? { windows: createLocalMisaoWindows(host, paths, windowsUser.userName, process.env) } : {}),
     });
 
     if (args.command === 'status') {

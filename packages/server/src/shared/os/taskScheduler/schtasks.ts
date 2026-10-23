@@ -62,57 +62,35 @@ export type TaskScheduleState =
   | { exists: true; running: boolean; failed: boolean; lastResult: number };
 
 /**
- * Parses CSV records (RFC 4180 as schtasks writes them: every field quoted, `""` for a quote, a field may span lines
- * because the task description can).
+ * The first `count` fields of every row of schtasks' CSV (every field quoted, `""` for a quote). Only the leading columns are
+ * read, on purpose: they are the ones this client needs (task name, last result) and the ones schtasks quotes properly. Later
+ * columns are not RFC 4180: "Task To Run" holds the command line with its quotes as they are (not doubled) and cut at a fixed
+ * length, so a task whose command line has quotes (the misao task's) leaves a quote open and a whole-file CSV parser swallows
+ * the rest. A line that does not start with a quoted field (the continuation of a multi-line description) is skipped.
  */
-export function parseCsvRecords(text: string): string[][] {
-  const records: string[][] = [];
-  let record: string[] = [];
-  let field = '';
-  let inQuotes = false;
-  let fieldStarted = false;
-  const endField = (): void => {
-    record.push(field);
-    field = '';
-    fieldStarted = false;
-  };
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]!;
-    if (inQuotes) {
-      if (ch === '"') {
-        if (text[i + 1] === '"') {
-          field += '"';
-          i++;
+export function parseLeadingFields(text: string, count: number): string[][] {
+  const rows: string[][] = [];
+  for (const line of text.split(/\r\n|\n|\r/)) {
+    const fields: string[] = [];
+    let i = 0;
+    while (fields.length < count && line[i] === '"') {
+      let field = '';
+      i++;
+      for (; i < line.length; i++) {
+        if (line[i] === '"') {
+          if (line[i + 1] === '"') { field += '"'; i++; } else break;
         } else {
-          inQuotes = false;
+          field += line[i];
         }
-      } else {
-        field += ch;
       }
-    } else if (ch === '"') {
-      inQuotes = true;
-      fieldStarted = true;
-    } else if (ch === ',') {
-      endField();
-      fieldStarted = true;
-    } else if (ch === '\n' || ch === '\r') {
-      if (ch === '\r' && text[i + 1] === '\n') i++;
-      if (fieldStarted || field !== '' || record.length > 0) {
-        endField();
-        records.push(record);
-        record = [];
-      }
-    } else {
-      field += ch;
-      fieldStarted = true;
+      if (line[i] !== '"') { fields.length = 0; break; }
+      fields.push(field);
+      i++;
+      if (line[i] === ',') i++;
     }
+    if (fields.length > 0) rows.push(fields);
   }
-  if (inQuotes) throw new Error('schtasks CSV output ended inside a quoted field');
-  if (fieldStarted || field !== '' || record.length > 0) {
-    endField();
-    records.push(record);
-  }
-  return records;
+  return rows;
 }
 
 /** `schtasks /Query /FO CSV /NH /V` columns: HostName, TaskName, Next Run Time, Status, Logon Mode, Last Run Time, Last Result. */
@@ -244,7 +222,7 @@ export class SchtasksClient {
       throw await this.errorOf('query', taskName, result);
     }
     const stdout = csvText(result.stdout);
-    const row = parseCsvRecords(stdout).find((fields) => sameTaskName(fields[TASK_NAME_COLUMN] ?? '', taskName));
+    const row = parseLeadingFields(stdout, LAST_RESULT_COLUMN + 1).find((fields) => sameTaskName(fields[TASK_NAME_COLUMN] ?? '', taskName));
     const lastResult = row ? parseLastResult(row[LAST_RESULT_COLUMN]) : undefined;
     if (lastResult === undefined) throw new Error(`Cannot read the last result of the task "${taskName}" from schtasks output: ${stdout.trim().slice(0, 500)}`);
     return { exists: true, running: lastResult === SCHED_S_TASK_RUNNING, failed: !NOT_A_FAILURE.has(lastResult) && lastResult !== SCHED_S_TASK_RUNNING, lastResult };
@@ -254,7 +232,7 @@ export class SchtasksClient {
   private async listTaskNames(): Promise<string[]> {
     const result = await this.run(this.spec(['/Query', '/FO', 'CSV', '/NH']));
     if (result.exitCode !== 0) throw await this.errorOf('query', '*', result);
-    return parseCsvRecords(csvText(result.stdout)).map((fields) => fields[0] ?? '');
+    return parseLeadingFields(csvText(result.stdout), 1).map((fields) => fields[0] ?? '');
   }
 }
 

@@ -4,7 +4,7 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { buildCommandSpec } from '../../exec/commandSpec';
 import { fakeRunTransport, failed, ok, specText } from '../../exec/testing/commandTesting';
-import { SchtasksClient, SchtasksError, parseCsvRecords, type CommandSpecRunner, rawRunnerOf } from './schtasks';
+import { SchtasksClient, SchtasksError, parseLeadingFields, type CommandSpecRunner, rawRunnerOf } from './schtasks';
 import { rawFromText } from './testing/liveTask';
 import { decodeTaskXml } from './taskDefinition';
 
@@ -210,16 +210,25 @@ describe('SchtasksClient output decoding (OEM code page)', () => {
   });
 });
 
-describe('parseCsvRecords', () => {
-  it('reads quoted fields with commas, doubled quotes and line breaks', () => {
-    expect(parseCsvRecords('"a,b","c ""d""","e\r\nf"\r\n"g","","h"\r\n')).toEqual([['a,b', 'c "d"', 'e\r\nf'], ['g', '', 'h']]);
+describe('parseLeadingFields', () => {
+  it('reads the leading quoted fields of each row, with commas and doubled quotes inside them', () => {
+    expect(parseLeadingFields('"a,b","c ""d""","e"\r\n"g","","h"\r\n', 2)).toEqual([['a,b', 'c "d"'], ['g', '']]);
   });
 
-  it('keeps an empty final field and ignores blank lines', () => {
-    expect(parseCsvRecords('"a",\r\n\r\n"b"')).toEqual([['a', ''], ['b']]);
+  it('returns fewer fields for a row with fewer columns, and skips blank lines and lines that start with no quoted field', () => {
+    expect(parseLeadingFields('"a"\r\n\r\ncontinued description","x"\r\n"b","c"', 3)).toEqual([['a'], ['b', 'c']]);
   });
 
-  it('refuses a quote that is never closed', () => {
-    expect(() => parseCsvRecords('"a')).toThrow(/quoted field/);
+  it('does not read past the leading columns: a later column with unescaped quotes (the misao task\'s command line, cut) cannot swallow the next rows', () => {
+    const misao = '"PC","\\AzitoMisao","N/A","Running","Interactive only","N/A","267009","me","conhost.exe --headless cmd.exe /d /c ""C:\\x\\misao.exe" serve --socket "\\\\.\\pipe\\p" --da","C:\\home"\r\n';
+    const next = '"PC","\\Other","N/A","Ready","Interactive only","N/A","0","me","a","b"\r\n';
+    expect(parseLeadingFields(misao + next, 7)).toEqual([
+      ['PC', '\\AzitoMisao', 'N/A', 'Running', 'Interactive only', 'N/A', '267009'],
+      ['PC', '\\Other', 'N/A', 'Ready', 'Interactive only', 'N/A', '0'],
+    ]);
+  });
+
+  it('drops a row whose field is never closed', () => {
+    expect(parseLeadingFields('"a', 2)).toEqual([]);
   });
 });

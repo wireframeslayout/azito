@@ -4,7 +4,8 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import Fastify, { type FastifyInstance } from 'fastify';
-import misaoRoutes, { misaoStagingDir } from './misaoRoutes';
+import misaoRoutes from './misaoRoutes';
+import { misaoStagingDir } from '../modules/servers/transport/agentMisaoSocket';
 import type { AgentMisaoHost } from '../modules/servers/transport/agentMisaoSocket';
 
 describe('agent misao routes', () => {

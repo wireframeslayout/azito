@@ -6,6 +6,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { resolveCurrentHostEnv, type HostEnv } from '../shared/os/hostEnv';
+import { resolveRealPath } from '../shared/os/realPath';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
 import { LocalTransport } from '../modules/servers/transport/LocalTransport';
 import type { MuxRuntime } from '../modules/servers/Server';
@@ -106,7 +107,8 @@ function describeWindowsMisaoHost(hostEnv: HostEnv): AgentMisaoWindowsHost {
   return {
     systemRoot: hostEnv.systemRoot,
     userName: os.userInfo().username,
-    misaoRoot: path.win32.join(hostEnv.homeDir, parseHomeRelativeDir(process.env.AZITO_MISAO_DIR || MISAO_WINDOWS_DIR, 'AZITO_MISAO_DIR')),
+    // In its real spelling (8.3 names expanded), resolved here once: the pipe name and the task's paths are made from what is reported.
+    misaoRoot: resolveRealPath(path.win32.join(hostEnv.homeDir, parseHomeRelativeDir(process.env.AZITO_MISAO_DIR || MISAO_WINDOWS_DIR, 'AZITO_MISAO_DIR'))),
   };
 }
 

@@ -1,8 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import * as crypto from 'crypto';
-import * as fs from 'fs';
-import * as path from 'path';
-import { MISAO_RELEASE_FILES, misaoFileNameOn, misaoRootOf, readMisaoSocketStatus, type AgentMisaoHost, type AgentMisaoSocket, type MisaoReleaseFile } from '../modules/servers/transport/agentMisaoSocket';
+import { MISAO_RELEASE_FILES, readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost, type AgentMisaoSocket, type MisaoReleaseFile } from '../modules/servers/transport/agentMisaoSocket';
 
 export type MisaoUploadName = MisaoReleaseFile;
 
@@ -19,12 +17,6 @@ export interface MisaoRoutesOptions {
 
 function isUploadName(value: unknown): value is MisaoUploadName {
   return typeof value === 'string' && Object.hasOwn(MISAO_RELEASE_FILES, value);
-}
-
-/** Where an upload of `version` is staged: next to the final `<root>/<version>` directory, which the hub's installer moves it to. */
-export function misaoStagingDir(host: AgentMisaoHost, version: string): string {
-  const pathApi = host.platform === 'win32' ? path.win32 : path;
-  return pathApi.join(misaoRootOf(host), `${version}.upload`);
 }
 
 /**
@@ -49,21 +41,7 @@ const misaoRoutes: FastifyPluginCallback<MisaoRoutesOptions> = (fastify, opts, d
     if (!isUploadName(name)) return reply.status(400).send({ error: `name must be one of ${Object.keys(MISAO_RELEASE_FILES).join(', ')}` });
     if (!Buffer.isBuffer(request.body)) return reply.status(415).send({ error: 'body must be application/octet-stream' });
 
-    const windows = host.platform === 'win32';
-    const pathApi = windows ? path.win32 : path;
-    const root = misaoRootOf(host);
-    // Modes mean nothing on Windows (its folders are protected by the installer's ACL step), and chmod there only toggles read-only.
-    fs.mkdirSync(root, { recursive: true, ...(windows ? {} : { mode: 0o700 }) });
-    // mkdir's mode is masked by the umask and ignored for an existing directory; the daemon refuses anything but 700.
-    if (!windows) fs.chmodSync(root, 0o700);
-    const stage = misaoStagingDir(host, version);
-    fs.mkdirSync(stage, { recursive: true, ...(windows ? {} : { mode: 0o700 }) });
-
-    const target = pathApi.join(stage, misaoFileNameOn(host.platform, name));
-    const partial = `${target}.part`;
-    fs.writeFileSync(partial, request.body, windows ? {} : { mode: MISAO_RELEASE_FILES[name] });
-    if (!windows) fs.chmodSync(partial, MISAO_RELEASE_FILES[name]);
-    fs.renameSync(partial, target);
+    stageMisaoReleaseFile(host, version, name, request.body);
     return { name, size: request.body.length, sha256: crypto.createHash('sha256').update(request.body).digest('hex') };
   });
 

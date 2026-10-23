@@ -18,12 +18,9 @@ describe('createServiceManager', () => {
 });
 
 describe('createMisaoServiceManager', () => {
-  it('is the same manager as the hub gets on Linux and macOS', () => {
+  it('is the hub\'s kind of manager on every OS: systemd, launchd and the Task Scheduler (Windows is no longer unsupported_os)', () => {
     expect(createMisaoServiceManager(host('linux'), run)).toMatchObject({ manager: { kind: 'systemd' } });
     expect(createMisaoServiceManager(host('darwin'), run)).toMatchObject({ manager: { kind: 'launchd' } });
-  });
-
-  it('keeps the hub\'s own misao unsupported on Windows until B3b, with the reason', () => {
-    expect(createMisaoServiceManager(host('win32'), run)).toMatchObject({ error: { code: 'unsupported_os', message: expect.stringContaining('misao') } });
+    expect(createMisaoServiceManager(host('win32'), run)).toMatchObject({ manager: { kind: 'taskscheduler', templateName: undefined } });
   });
 });

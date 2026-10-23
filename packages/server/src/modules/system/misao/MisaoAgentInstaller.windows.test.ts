@@ -290,7 +290,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
     });
 
     it('is refused for a folder the task cannot hold, before anything is changed', async () => {
-      const root = 'C:\\Users\\100%\\misao';
+      const root = 'C:\\Users\\a"b\\misao';
       const agent = new FakeWindowsAgent(bundle, { status: { socketPath: windowsMisaoPipe(root, 'dev'), host: { ...HOST, windows: { ...HOST.windows!, misaoRoot: root } } } });
       await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'unsupported_host' });
       expect(agent.uploads).toEqual([]);
