@@ -1,4 +1,4 @@
-import type { MuxDriverKind } from '@azito/shared';
+import { hostFeatureSupport, type MuxDriverKind } from '@azito/shared';
 import type { SqliteDatabase } from '../../shared/db/Database';
 import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime, ServerMeta } from './Server';
@@ -46,7 +46,11 @@ export class SqliteServerRepository implements IServerRepository {
   private updateIsolationVerificationStmt;
   private updateIsolationFailureStmt;
 
-  constructor(private db: SqliteDatabase) {
+  /**
+   * `hubHost` is the hub's own OS (null: unknown), stamped on every local server as its `hostProfile` so that one place
+   * (`hostFeatureSupport`) decides what the server's host can do. It is never stored.
+   */
+  constructor(private db: SqliteDatabase, private hubHost: HostProfile | null = null) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
     this.getStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE name = ? AND type IN ('local', 'agent')`);
     this.addStmt = db.prepare('INSERT INTO servers (name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux, host_platform, host_arch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
@@ -207,18 +211,21 @@ export class SqliteServerRepository implements IServerRepository {
   }
 
   private toEntity(row: Record<string, unknown>): ServerConfig {
+    const hostProfile = row.type === 'local' ? this.hubHost : parseStoredHostProfile(row.host_platform, row.host_arch);
+    // A host without tmux (Windows) runs misao whatever the row says: a stored 'tmux' is not an initial value there.
+    const storedDefaultMux = parseStoredDefaultMux(row.default_mux);
     return {
       name: row.name as string,
       type: row.type as ServerConfig['type'],
       host: (row.host as string) ?? null,
-      // A local server's host is the hub itself, derived from its HostEnv: whatever a local row holds is not used.
-      hostProfile: row.type === 'local' ? null : parseStoredHostProfile(row.host_platform, row.host_arch),
+      // A local server's host is the hub itself (given at construction): whatever a local row holds is not used.
+      hostProfile,
       agentPort: (row.agent_port as number) ?? null,
       agentToken: open(row.agent_token as string | null),
       agentVersion: (row.agent_version as string) ?? null,
       sshHost: (row.ssh_host as string) ?? null,
       muxRuntime: parseStoredMuxRuntime(row.mux_runtime),
-      defaultMux: parseStoredDefaultMux(row.default_mux),
+      defaultMux: storedDefaultMux === 'tmux' && !hostFeatureSupport(hostProfile, 'tmux').available ? 'misao' : storedDefaultMux,
       sshHostFingerprint: (row.ssh_host_fingerprint as string) ?? null,
       isolationIntent: (row.isolation_intent as number) === 1,
       isolationVerifiedAt: (row.isolation_verified_at as string) ?? null,

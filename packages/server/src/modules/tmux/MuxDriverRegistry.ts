@@ -9,7 +9,7 @@ const MUX_DRIVER_KINDS: readonly MuxDriverKind[] = ['tmux', 'misao'];
 export type MuxDriverAvailability = { available: true } | { available: false; reason: MuxDriverUnavailableReason };
 
 /** What a driver probe looks at. Both are optional: callers that only know the kind skip type/server-dependent probe checks. */
-export type MuxProbeTarget = Partial<Pick<ServerConfig, 'type' | 'name'>>;
+export type MuxProbeTarget = Partial<Pick<ServerConfig, 'type' | 'name' | 'hostProfile'>>;
 
 /** A server as the registry sees it: its default mux kind plus the probe target fields. */
 export type MuxServerRef = Pick<ServerConfig, 'defaultMux'> & MuxProbeTarget;

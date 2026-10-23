@@ -1,4 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
+import { assertHostFeature } from '../../shared/os/hostFeature';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
@@ -436,6 +437,8 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(win.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      // A host that cannot yet run a worker command in a pane (Windows, #371) is refused as unsupported_os.
+      assertHostFeature(opts.transportFactory.hostProfileFor(srv), 'workerLaunch', 'Launching an agent in a window');
 
       const body = request.body as Record<string, unknown>;
       const command = (body['command'] as string | undefined)?.trim();

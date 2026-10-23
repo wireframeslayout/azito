@@ -36,6 +36,7 @@ import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal'
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { assertPosixHost } from '../../shared/os/hostProfile';
+import { assertHostFeature } from '../../shared/os/hostFeature';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
 import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
@@ -492,6 +493,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       };
       const muxInput = parseMuxInput({ defaultMux: putDefaultMux, muxRuntime: putMuxRuntime });
       if (!muxInput.ok) return reply.status(400).send({ error: muxInput.error });
+      // A host without tmux (Windows) cannot be switched to it: answered with the reason (501 unsupported_os), like the other tmux operations.
+      if (muxInput.defaultMux === 'tmux') assertHostFeature(transportFactory.hostProfileFor(srv), 'tmux', 'Using tmux');
       const effectiveMuxRuntime = muxInput.muxRuntime ?? srv.muxRuntime;
       const effectiveDefaultMux = muxInput.defaultMux ?? srv.defaultMux;
       // Issue #29 review, Important finding 2: isolationIntent must be an
@@ -1286,6 +1289,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!tmuxInstaller) return reply.status(501).send({ error: 'Tmux installer not available' });
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      // First, so a host without tmux gets its reason (501 unsupported_os) rather than a hint about the runtime setting.
+      assertPosixHost(transportFactory.hostProfileFor(srv), `server "${srv.name}"`, 'installing tmux');
       if (srv.muxRuntime !== 'managed') return reply.status(400).send({ error: 'Only managed mode supports tmux installation' });
       const transport = transportFactory.getTransport(srv);
       const result = await tmuxInstaller.install(transport);

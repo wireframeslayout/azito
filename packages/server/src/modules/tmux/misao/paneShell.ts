@@ -19,12 +19,20 @@ export type PaneShellResolver = () => Promise<PaneShell>;
 const POSIX_COMMAND_ARGS = ['-lc'] as const;
 
 /**
- * The hub's own misao: the hub's shell, as before. A Windows hub (PowerShell panes are not implemented) is `unsupported_os`,
- * and a hub on an unknown OS is refused with that reason: the hub's Unix shell would be passed to a host that has none.
+ * The hub's own misao: the hub's shell, as before. A Windows hub's shell is its command interpreter (`%ComSpec%`, the same
+ * as a Windows agent's): a pane is opened bare, and running a command in it is `unsupported_os` until PowerShell panes
+ * and worker launch exist (#371). A hub on an unknown OS is refused with that reason: the hub's Unix shell would be
+ * passed to a host that has none.
+ * `shell` is what the entry point found for this OS (`$SHELL`; `%ComSpec%` on Windows, null when it is not set).
  */
-export function hubPaneShell(shell: string, hubHost: HubHostProfile): PaneShellResolver {
+export function hubPaneShell(shell: string | null, hubHost: HubHostProfile): PaneShellResolver {
   return async () => {
-    if (requireHubHostProfile(hubHost).platform === 'win32') throw windowsNotSupported('this hub');
+    const host = requireHubHostProfile(hubHost);
+    if (host.platform === 'win32') {
+      if (shell === null) throw new Error('the hub has no default shell (%ComSpec% is not set for the hub), so a misao pane cannot be started.');
+      return { shell, commandArgs: null };
+    }
+    if (shell === null) throw new Error('the hub has no default shell, so a misao pane cannot be started.');
     return { shell, commandArgs: POSIX_COMMAND_ARGS };
   };
 }
@@ -59,7 +67,10 @@ export function agentPaneShell(
       if (!warnedOutdated) log.warn(`[misao] agent server ${server.name} cannot report its host (agent_outdated): its panes use the hub's shell. Update the agent to use its own.`);
       warnedOutdated = true;
       try {
-        return await legacyShell();
+        const hubShell = await legacyShell();
+        // A Windows hub's cmd.exe is not a shell an agent of unknown OS has: that agent is a Unix one from before the OS was kept.
+        if (hubShell.commandArgs === null) throw new HostProfileError('unsupported_os', `this hub's shell is Windows' command interpreter`);
+        return hubShell;
       } catch (hubErr) {
         if (!(hubErr instanceof HostProfileError)) throw hubErr;
         throw new HostProfileError(hubErr.code, `agent server ${server.name} cannot report its host (agent_outdated), so its panes would use this hub's shell, which cannot start one (${hubErr.message}). Update the agent.`);

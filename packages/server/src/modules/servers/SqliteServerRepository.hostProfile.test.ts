@@ -56,4 +56,26 @@ describe('SqliteServerRepository (host profile)', () => {
     db.prepare("INSERT INTO servers (name, type, host_platform, host_arch) VALUES ('half', 'agent', 'linux', NULL)").run();
     expect(() => repo.findByName('half')).toThrow(/Both must be set or both NULL/);
   });
+
+  describe('a hub that stamps its own host on local servers', () => {
+    const win32 = { platform: 'win32' as const, arch: 'x64' as const };
+    const linux = { platform: 'linux' as const, arch: 'x64' as const };
+
+    it("gives a local server the hub's profile and never reads the row for it", () => {
+      db.prepare("INSERT INTO servers (name, type, host_platform, host_arch) VALUES ('local', 'local', 'linux', 'arm64')").run();
+      expect(new SqliteServerRepository(db as unknown as SqliteDatabase, win32).findByName('local')?.hostProfile).toEqual(win32);
+    });
+
+    it('runs a stored tmux default as misao on a Windows hub (no tmux there), without touching the row', () => {
+      db.prepare("INSERT INTO servers (name, type, default_mux) VALUES ('local', 'local', 'tmux')").run();
+      expect(new SqliteServerRepository(db as unknown as SqliteDatabase, win32).findByName('local')?.defaultMux).toBe('misao');
+      expect((db.prepare("SELECT default_mux FROM servers WHERE name = 'local'").get() as { default_mux: string }).default_mux).toBe('tmux');
+    });
+
+    it('keeps the stored default on a Unix hub, and on a hub whose OS is unknown', () => {
+      db.prepare("INSERT INTO servers (name, type, default_mux) VALUES ('local', 'local', 'tmux')").run();
+      expect(new SqliteServerRepository(db as unknown as SqliteDatabase, linux).findByName('local')?.defaultMux).toBe('tmux');
+      expect(new SqliteServerRepository(db as unknown as SqliteDatabase, null).findByName('local')?.defaultMux).toBe('tmux');
+    });
+  });
 });

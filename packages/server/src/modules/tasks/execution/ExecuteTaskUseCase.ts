@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { assertHostFeature } from '../../../shared/os/hostFeature';
 import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
@@ -733,6 +734,8 @@ export class ExecuteTaskUseCase {
 
     const serverAtStart = this.serverRepo.findByName(serverName);
     if (!serverAtStart) throw new Error('Server not found');
+    // Before anything is created: a host that cannot yet start a worker in a pane (Windows, #371) is refused as unsupported_os.
+    assertHostFeature(this.transportFactory.hostProfileFor(serverAtStart), 'taskExecution', 'Running a task');
     // `let`, not `const`: reassigned below (ensureSessionWithLock,
     // createRotatedWindow) to whatever fresher row the isolation lock
     // re-read — explicitly typed `ServerConfig` (not inferred from
