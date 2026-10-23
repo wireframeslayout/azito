@@ -283,7 +283,8 @@ describe('TaskRestoreService', () => {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
-  it('restores an archived task: creates session, window, worktree, window row, updates status', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('restores an archived task: creates session, window, worktree, window row, updates status', async () => {
     const task = makeTask({ serverName: 'test-server' });
 
     const result = await service.restore(task, log);
@@ -468,7 +469,8 @@ describe('TaskRestoreService', () => {
     }
   });
 
-  it('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('accepts a child directory named "..cache" (regression: isPathContained must not over-reject)', async () => {
     const dotDotCacheDir = path.join(rootDir, '..cache');
     mkdirSync(dotDotCacheDir);
     const task = makeTask({ serverName: 'test-server', workingDirectory: dotDotCacheDir });
@@ -489,7 +491,8 @@ describe('TaskRestoreService', () => {
     expect(result.worktreePath).toBe(path.join(dotDotCacheDir, '.worktrees', 'task-1'));
   });
 
-  it('uses the resolved worktree path (not the pre-check value) for persistence — TOCTOU-safe (Issue #27)', async () => {
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('uses the resolved worktree path (not the pre-check value) for persistence — TOCTOU-safe (Issue #27)', async () => {
     const task = makeTask({ serverName: 'test-server' });
 
     const result = await service.restore(task, log);
@@ -1128,7 +1131,8 @@ describe('TaskRestoreService', () => {
       expect(result.worktreePath).toBe(worktreeDir);
     });
 
-    it('does NOT run fetch distribution for a plain local, non-distribute_code server', async () => {
+    // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+    it.skipIf(process.platform === 'win32')('does NOT run fetch distribution for a plain local, non-distribute_code server', async () => {
       const fetchDistributionService = mockFetchDistributionService();
       deps = makeDeps({ ...deps, fetchDistributionService });
       service = new TaskRestoreService(deps);

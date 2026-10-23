@@ -1512,7 +1512,8 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
   // boot_id resolves `same_host` to 'pass' regardless of hostname/uid — so a
   // run where every other check is also clean reaches `verified: true`
   // overall and persists via `updateIsolationVerification`.
-  it('runs the probe for an isolated agent server and persists verification via transportFactory.getTransport when every check (including same_host) passes', async () => {
+  // Windows では動かない: process.getuid が Windows に無く、同一ホスト検査（same_host）が unknown になる前提
+  it.skipIf(process.platform === 'win32')('runs the probe for an isolated agent server and persists verification via transportFactory.getTransport when every check (including same_host) passes', async () => {
     const exec = vi.fn(async (cmd: string) => {
       if (cmd.startsWith('hostname;')) return { stdout: 'remote-host\n9999\n', stderr: '', code: 0 };
       if (cmd.includes('/proc/sys/kernel/random/boot_id')) return FAKE_REMOTE_BOOT_ID_RESPONSE;

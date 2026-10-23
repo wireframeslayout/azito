@@ -5,7 +5,8 @@ describe('LocalWorktreeService', () => {
   const svc = new LocalWorktreeService();
 
   describe('list()', () => {
-    it('returns empty array for non-git directory', async () => {
+    // Windows では動かない: 存在しない POSIX パスを cwd に使う前提（spawnSync git ENOENT）
+    it.skipIf(process.platform === 'win32')('returns empty array for non-git directory', async () => {
       const tmpDir = '/tmp';
       const result = await svc.list(tmpDir);
       expect(result).toEqual([]);

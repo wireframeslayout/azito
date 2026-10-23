@@ -52,7 +52,8 @@ describe('ensureClaudeTrust (local)', () => {
     });
   });
 
-  it('preserves file permissions after write', async () => {
+  // Windows では動かない: mode 前提（Windows には POSIX の mode が無い）
+  it.skipIf(process.platform === 'win32')('preserves file permissions after write', async () => {
     writeFileSync(configPath(), JSON.stringify({ projects: {} }), { mode: 0o600 });
     chmodSync(configPath(), 0o600);
     await ensureClaudeTrust('local', transportStub, '/wt');

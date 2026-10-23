@@ -288,7 +288,8 @@ function makeExecutable(filePath: string): void {
   fs.chmodSync(filePath, 0o755);
 }
 
-describe('findChromiumBinaryCommand', () => {
+// Windows では動かない: /bin/sh でスクリプトを実行する前提（spawn /bin/sh ENOENT）
+describe.skipIf(process.platform === 'win32')('findChromiumBinaryCommand', () => {
   it('finds the macOS binary inside a bundle whose name contains spaces', async () => {
     // Playwright ships "Google Chrome for Testing.app", not "Chromium.app", and
     // those spaces are why this cannot be `ls -d <glob> | head -1`.

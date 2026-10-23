@@ -1417,7 +1417,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     // treated as "empty" at three separate points (readdirSync, statSync,
     // readFileSync) — fail-open. It must now propagate instead, so a
     // digest is never computed from a partially-read tree.
-    it('a scripts/ directory that cannot be listed (permission denied) makes digest computation throw, not silently digest as empty', () => {
+    // Windows では動かない: chmod 000 で読めなくする前提（Windows には POSIX の mode が無い）
+    it.skipIf(process.platform === 'win32')('a scripts/ directory that cannot be listed (permission denied) makes digest computation throw, not silently digest as empty', () => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
       const scriptsDir = path.join(dir, 'scripts');
       fs.mkdirSync(scriptsDir);
@@ -1432,7 +1433,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
       }
     });
 
-    it('a file under scripts/ that cannot be read (permission denied) makes digest computation throw, not silently digest as empty content', () => {
+    // Windows では動かない: chmod 000 で読めなくする前提（Windows には POSIX の mode が無い）
+    it.skipIf(process.platform === 'win32')('a file under scripts/ that cannot be read (permission denied) makes digest computation throw, not silently digest as empty content', () => {
       dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-'));
       const scriptsDir = path.join(dir, 'scripts');
       fs.mkdirSync(scriptsDir);
@@ -1547,7 +1549,8 @@ describe('resolveExecutionManifest / hashExecutionManifest', () => {
     }
   });
 
-  it("an unreadable Sidekick script for an untrusted task makes resolveExecutionManifest() throw (Issue #328 twelfth-round review, fix 1) instead of resolving a partial digest — the resolvePhaseSidekick tolerant catch must not swallow this", () => {
+  // Windows では動かない: chmod 000 で読めなくする前提（Windows には POSIX の mode が無い）
+  it.skipIf(process.platform === 'win32')("an unreadable Sidekick script for an untrusted task makes resolveExecutionManifest() throw (Issue #328 twelfth-round review, fix 1) instead of resolving a partial digest — the resolvePhaseSidekick tolerant catch must not swallow this", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekick-digest-manifest-unreadable-'));
     const scriptPath = path.join(dir, 'scripts', 'push.sh');
     try {

@@ -13,16 +13,16 @@ interface McpSettingsFile {
   mcpServers?: Record<string, McpServerEnv>;
 }
 
-function operatorEnvPath(): string {
-  return path.join(process.env.HOME || '', '.azito', 'operator.env');
+function operatorEnvPath(homeDir: string): string {
+  return path.join(homeDir, '.azito', 'operator.env');
 }
 
 // operator.env は `KEY=value` を1行1エントリで持つ（harness/setup.sh が
 // printf %q で書き出す形式）。ローテート後は AZITO_UI_TOKEN 行だけを
 // 書き換える。新トークンは crypto.randomBytes(32).toString('hex') で
 // 常に英数字のみなのでシェルクォートは不要（生値のまま書いてよい）。
-function updateOperatorEnvToken(newToken: string): boolean {
-  const filePath = operatorEnvPath();
+function updateOperatorEnvToken(newToken: string, homeDir: string): boolean {
+  const filePath = operatorEnvPath(homeDir);
   if (!fs.existsSync(filePath)) return false;
   const content = fs.readFileSync(filePath, 'utf-8');
   const lines = content.split('\n');
@@ -49,15 +49,15 @@ function updateOperatorEnvToken(newToken: string): boolean {
   return updated;
 }
 
-function mcpSettingsPath(): string {
-  return path.join(process.env.HOME || '', '.claude', 'settings.json');
+function mcpSettingsPath(homeDir: string): string {
+  return path.join(homeDir, '.claude', 'settings.json');
 }
 
 // ~/.claude/settings.json の mcpServers['azt-mcp'].env.AZITO_UI_TOKEN を
 // 更新する。ファイルが無い/JSON として読めない/azt-mcp が未登録/トークンが
 // 未設定のいずれの場合も何もしない（新規登録は harness/setup.sh の役割）。
-function updateMcpSettingsToken(newToken: string): boolean {
-  const filePath = mcpSettingsPath();
+function updateMcpSettingsToken(newToken: string, homeDir: string): boolean {
+  const filePath = mcpSettingsPath(homeDir);
   if (!fs.existsSync(filePath)) return false;
 
   let settings: McpSettingsFile;
@@ -76,7 +76,7 @@ function updateMcpSettingsToken(newToken: string): boolean {
   return true;
 }
 
-export async function tokenCommand(args: string[]): Promise<void> {
+export async function tokenCommand(args: string[], homeDir: string): Promise<void> {
   const subcommand = args[0];
 
   if (subcommand === 'show') {
@@ -139,11 +139,11 @@ export async function tokenCommand(args: string[]): Promise<void> {
     // 再配置しない（全権トークンをタスク実行プロセスが source するファイルに
     // 置かない、という配布分離の方針。設計 §9/§12）。ローカルにある operator.env
     // と MCP settings（人間が操作する経路）だけを更新する。
-    if (updateOperatorEnvToken(newToken)) {
-      console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath()}`);
+    if (updateOperatorEnvToken(newToken, homeDir)) {
+      console.log(`Updated AZITO_UI_TOKEN in ${operatorEnvPath(homeDir)}`);
     }
-    if (updateMcpSettingsToken(newToken)) {
-      console.log(`Updated AZITO_UI_TOKEN in ${mcpSettingsPath()}`);
+    if (updateMcpSettingsToken(newToken, homeDir)) {
+      console.log(`Updated AZITO_UI_TOKEN in ${mcpSettingsPath(homeDir)}`);
     }
 
     if (process.stdout.isTTY) {

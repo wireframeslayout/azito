@@ -169,7 +169,8 @@ describe('sidekicksRoutes', () => {
     expect(fs.existsSync(path.join(userDir, 'planning-default', 'SKILL.md'))).toBe(true);
   });
 
-  it('PUT /api/sidekicks/:name accepts scripts and writes them under scripts/', async () => {
+  // Windows では動かない: mode 755 前提（Windows には POSIX の mode が無い）
+  it.skipIf(process.platform === 'win32')('PUT /api/sidekicks/:name accepts scripts and writes them under scripts/', async () => {
     writePackage(builtinDir, 'planning-default');
     const res = await app.inject({
       method: 'PUT',

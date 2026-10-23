@@ -7,7 +7,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { UpdateStateManager, type UpdateState, type UpdateStep } from './UpdateStateManager';
 import { computeLocalSha256, assertNoTraversal, readSha256FromSumsFile } from '../servers/agent-deploy/integrityVerifier';
-import { isServiceManager, restartService, type ServiceManager } from './serviceControl';
+import { isServiceManagerKind, restartService, type ServiceManagerKind } from './serviceControl';
 
 const execFileAsync = promisify(execFile);
 
@@ -18,7 +18,7 @@ interface UpdateArgs {
   tarballUrl: string;
   sha256sumsUrl: string;
   oldVersion: string;
-  serviceManager: ServiceManager;
+  serviceManager: ServiceManagerKind;
 }
 
 const HEALTH_CHECK_TIMEOUT_MS = 30_000;
@@ -37,7 +37,7 @@ function parseArgs(argv: string[]): UpdateArgs {
       case '--old-version': args.oldVersion = argv[++i]; break;
       case '--service-manager': {
         const value = argv[++i];
-        if (!isServiceManager(value)) throw new Error(`Unknown --service-manager: ${value}`);
+        if (!isServiceManagerKind(value)) throw new Error(`Unknown --service-manager: ${value}`);
         args.serviceManager = value;
         break;
       }
@@ -192,7 +192,7 @@ function safeReadlink(linkPath: string): string | null {
   }
 }
 
-async function rollback(currentLink: string, oldTarget: string, manager: ServiceManager): Promise<void> {
+async function rollback(currentLink: string, oldTarget: string, manager: ServiceManagerKind): Promise<void> {
   try {
     fs.symlinkSync(oldTarget, `${currentLink}.tmp`);
     fs.renameSync(`${currentLink}.tmp`, currentLink);

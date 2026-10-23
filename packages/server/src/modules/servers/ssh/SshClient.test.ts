@@ -15,7 +15,7 @@ function createClient(): SshClient {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'));
   const configPath = path.join(dir, 'config');
   fs.writeFileSync(configPath, CONFIG_TEXT, 'utf8');
-  return new SshClient(undefined, configPath);
+  return new SshClient(os.homedir(), undefined, configPath);
 }
 
 describe('SshClient.resolveHost (user@host form)', () => {
@@ -61,7 +61,7 @@ describe('SshClient config reload on mtime change', () => {
     const configPath = path.join(tmpDir, 'config');
     writeConfig(configPath, 'Host srv1\n  HostName 10.0.0.1\n');
 
-    const client = new SshClient(undefined, configPath);
+    const client = new SshClient(os.homedir(), undefined, configPath);
     const r1 = client.resolveHost('user@srv1');
     expect(r1.host).toBe('10.0.0.1');
 
@@ -82,7 +82,7 @@ describe('SshClient config reload on mtime change', () => {
     const pinned = new Date('2020-01-01T00:00:00Z');
     fs.utimesSync(configPath, pinned, pinned);
 
-    const client = new SshClient(undefined, configPath);
+    const client = new SshClient(os.homedir(), undefined, configPath);
     client.resolveHost('user@srv1');
 
     // Overwrite content but restore the same mtime
@@ -97,7 +97,7 @@ describe('SshClient config reload on mtime change', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'));
     const configPath = path.join(tmpDir, 'nonexistent');
 
-    const client = new SshClient(undefined, configPath);
+    const client = new SshClient(os.homedir(), undefined, configPath);
     const resolved = client.resolveHost('user@somehost');
     expect(resolved.host).toBe('somehost');
     expect(resolved.port).toBe(22);
@@ -107,7 +107,7 @@ describe('SshClient config reload on mtime change', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'));
     const configPath = path.join(tmpDir, 'config');
 
-    const client = new SshClient(undefined, configPath);
+    const client = new SshClient(os.homedir(), undefined, configPath);
     const r1 = client.resolveHost('user@srv1');
     expect(r1.host).toBe('srv1');
 

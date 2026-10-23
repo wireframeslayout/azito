@@ -56,6 +56,24 @@ jobs:
       - name: Server unit tests
         run: npx -w packages/server vitest run
 
+  # Windows 対応（#373）の土台。tmux / POSIX シェル / mode 600 などに依存してまだ通らないテストファイルは
+  # packages/server/vitest.windowsExclude.ts で理由付きで外している。対応が進むたびにそのリストを減らす。
+  windows-unit:
+    name: Unit tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Server unit tests
+        run: npx -w packages/server vitest run --project unit
+
   # The integration tests that start a real misao daemon. They run on the very binary the hub ships (the version, URL and
   # sha256 pinned in packages/server/scripts/misaoAssets.ts), so a pin that does not start, or a protocol drift, fails here.
   misao-integration:

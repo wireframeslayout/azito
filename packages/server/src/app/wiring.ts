@@ -6,7 +6,7 @@
 
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
-import * as os from 'os';
+import type { HostEnv } from '../shared/os/hostEnv';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
@@ -239,15 +239,15 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
-  const sshClient = new SshClient(fingerprintStore);
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
+  const sshClient = new SshClient(hostEnv.homeDir, fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
-  const transportFactory = new TransportFactory(publicUrl);
+  const transportFactory = new TransportFactory(publicUrl, hostEnv.homeDir);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
@@ -534,7 +534,7 @@ function buildExecuteTaskUseCase(
   );
 }
 
-function buildMisaoService(misao: MisaoHandle): MisaoServiceService {
+function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform): MisaoServiceService {
   const bundleRoot = getBundleRoot();
   const prefix = resolveInstallPrefix(bundleRoot);
   let paths: MisaoPaths | null = null;
@@ -550,18 +550,18 @@ function buildMisaoService(misao: MisaoHandle): MisaoServiceService {
     paths,
     ...(pathsError ? { pathsError } : {}),
     bundle: readMisaoBundle(bundleRoot),
-    controller: createMisaoServiceController(process.platform, runCommand),
+    controller: createMisaoServiceController(platform, runCommand),
     env: process.env,
     hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
   });
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle): SystemUpdateModule {
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog);
-  const deployModeDetector = new DeployModeDetector();
+  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
-  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao) };
+  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv.platform) };
 }
 
 function buildAgentActivityMonitor(
@@ -597,7 +597,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -608,7 +608,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
 
   const repos = buildRepositories(db);
   const misaoRuntime = await resolveMisaoRuntimeForHub(
-    { env: process.env, homeDir: os.homedir(), shell: process.env.SHELL || '/bin/bash' },
+    { env: process.env, homeDir: hostEnv.homeDir, shell: process.env.SHELL || '/bin/bash' },
     repos.serverRepo.findAll().some((s) => s.type === 'local' && s.defaultMux === 'misao'),
     console,
   );
@@ -648,7 +648,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
   const harnessUpdater = new HarnessUpdater(
@@ -674,7 +674,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv);
 
   return {
     uiToken,

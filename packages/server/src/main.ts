@@ -1,5 +1,4 @@
 import fs from 'fs';
-import os from 'os';
 import Fastify from 'fastify';
 
 import { resolveDataDir, getLegacyPaths } from './shared/dataDir';
@@ -18,6 +17,7 @@ import { recoverInterruptedIsolationCleanup } from './modules/servers/recoverInt
 import { writeHubCanary } from './modules/servers/hubCanary';
 import { AgentEventStream } from './modules/servers/transport/AgentEventStream';
 import { invalidateSessionCache } from './modules/tmux/routes/sessions';
+import { resolveCurrentHostEnv } from './shared/os/hostEnv';
 import { tokenCommand } from './cli/tokenCommand';
 import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
@@ -32,13 +32,14 @@ const SHUTDOWN_HARD_CAP_MS = 8000;
 // ─── Bootstrap ───
 
 async function main(): Promise<void> {
+  const hostEnv = resolveCurrentHostEnv();
   if (process.argv[2] === 'token') {
-    await tokenCommand(process.argv.slice(3));
+    await tokenCommand(process.argv.slice(3), hostEnv.homeDir);
     return;
   }
 
   if (process.argv[2] === 'misao') {
-    await misaoCommand(process.argv.slice(3));
+    await misaoCommand(process.argv.slice(3), hostEnv.platform);
     return;
   }
 
@@ -57,7 +58,7 @@ async function main(): Promise<void> {
     const doctorPaths = resolveDataDir();
     migrateDataIfNeeded(doctorPaths, getLegacyPaths());
     initSecretBox(doctorPaths.masterKey);
-    await authDoctorCommand();
+    await authDoctorCommand(hostEnv.homeDir);
     return;
   }
 
@@ -96,7 +97,7 @@ async function main(): Promise<void> {
   // A release install runs its panes on the bundled misao, so a new installation's local server starts on misao, but only
   // when there is a misao to rely on (the managed service is defined, or MISAO_SOCKET is set; install.sh sets both up).
   // Otherwise, and for a source checkout (`npm run dev`), it starts on tmux.
-  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, os.homedir(), fs.existsSync);
+  const hasMisao = releaseInfo !== null && hasMisaoToRelyOn(process.env, hostEnv.homeDir, fs.existsSync);
   const db = openDatabase(paths.db, { freshLocalDefaultMux: hasMisao ? 'misao' : 'tmux' });
   const uiToken = resolveUiToken(paths.uiToken);
   const webhookToken = resolveWebhookToken(paths.webhookToken);
@@ -122,7 +123,7 @@ async function main(): Promise<void> {
   const publicUrl = await resolvePublicUrl(PORT, HOST);
 
   const localUrl = `http://127.0.0.1:${PORT}`;
-  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken);
+  const wiring = await buildWiring(db, publicUrl, localUrl, paths, uiToken, webhookToken, hostEnv);
   const { tmuxHookManager, agentEventStreams, misaoPaneStates } = await buildServer(app, wiring, PORT);
 
   app.log.info(`Public URL: ${publicUrl}`);

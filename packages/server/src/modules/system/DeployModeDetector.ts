@@ -1,9 +1,8 @@
 import fs from 'fs';
-import os from 'os';
 import path from 'path';
 import { execFileSync } from 'child_process';
 import { isReleaseMode } from '../../shared/releaseInfo';
-import type { ServiceManager } from './serviceControl';
+import type { ServiceManagerKind } from './serviceControl';
 
 export type DeployMode = 'systemd' | 'launchd' | 'source';
 
@@ -27,6 +26,8 @@ export class DeployModeDetector {
   // GET /api/system/update/status don't re-spawn `systemctl` on every request.
   private cached: DeployMode | null = null;
 
+  constructor(private homeDir: string) {}
+
   detect(): DeployMode {
     if (this.cached) return this.cached;
     this.cached = this.detectUncached();
@@ -37,7 +38,7 @@ export class DeployModeDetector {
     if (!isReleaseMode()) return 'source';
 
     if (process.platform === 'darwin') {
-      const plistPath = path.join(os.homedir(), LAUNCHD_PLIST_PATH);
+      const plistPath = path.join(this.homeDir, LAUNCHD_PLIST_PATH);
       if (fs.existsSync(plistPath)) return 'launchd';
     }
 
@@ -51,7 +52,7 @@ export class DeployModeDetector {
   }
 
   /** The service manager to restart through, or null when there is none. */
-  serviceManager(): ServiceManager | null {
+  serviceManager(): ServiceManagerKind | null {
     const mode = this.detect();
     return mode === 'source' ? null : mode;
   }

@@ -1,3 +1,4 @@
+import os from 'os';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFileSync } from 'child_process';
 import { TaskPaneEnvironmentService } from './TaskPaneEnvironmentService';
@@ -77,7 +78,7 @@ describe('TaskPaneEnvironmentService x real tmux: session-env leak', () => {
     const { env } = paneEnvService.buildEnvForNewWindow(task, LOCAL_SERVER);
     expect(env.AZITO_UI_TOKEN).toBe('');
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1');
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', os.homedir());
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     const { windowName } = await tmuxClient.createWindow(LOCAL_SERVER, SESSION, 'task-window', { exactName: true, extraEnv: env });
     const target = `${SESSION}:${windowName}`;

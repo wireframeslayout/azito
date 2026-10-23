@@ -24,7 +24,7 @@ describe('findAzitoctlEnvFiles', () => {
   });
 
   it('returns [] when ~/.azito does not exist', () => {
-    expect(findAzitoctlEnvFiles()).toEqual([]);
+    expect(findAzitoctlEnvFiles(fakeHome)).toEqual([]);
   });
 
   it('finds the unprefixed azitoctl.env', () => {
@@ -32,7 +32,7 @@ describe('findAzitoctlEnvFiles', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'azitoctl.env'), '');
 
-    expect(findAzitoctlEnvFiles()).toEqual([path.join(dir, 'azitoctl.env')]);
+    expect(findAzitoctlEnvFiles(fakeHome)).toEqual([path.join(dir, 'azitoctl.env')]);
   });
 
   it('finds a simple-prefixed azitoctl-<prefix>.env', () => {
@@ -40,7 +40,7 @@ describe('findAzitoctlEnvFiles', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'azitoctl-prod.env'), '');
 
-    expect(findAzitoctlEnvFiles()).toEqual([path.join(dir, 'azitoctl-prod.env')]);
+    expect(findAzitoctlEnvFiles(fakeHome)).toEqual([path.join(dir, 'azitoctl-prod.env')]);
   });
 
   // Phase C round-4 review (Important finding): harness/setup.sh's --prefix
@@ -56,7 +56,7 @@ describe('findAzitoctlEnvFiles', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'azitoctl-prod.eu.env'), '');
 
-    expect(findAzitoctlEnvFiles()).toEqual([path.join(dir, 'azitoctl-prod.eu.env')]);
+    expect(findAzitoctlEnvFiles(fakeHome)).toEqual([path.join(dir, 'azitoctl-prod.eu.env')]);
   });
 
   it('finds multiple azitoctl*.env files, including a mix of unprefixed, simple, and dotted prefixes', () => {
@@ -65,7 +65,7 @@ describe('findAzitoctlEnvFiles', () => {
     const names = ['azitoctl.env', 'azitoctl-prod.env', 'azitoctl-prod.eu.env', 'azitoctl-a.b.c.env'];
     for (const name of names) fs.writeFileSync(path.join(dir, name), '');
 
-    const found = findAzitoctlEnvFiles().map((f) => path.basename(f)).sort();
+    const found = findAzitoctlEnvFiles(fakeHome).map((f) => path.basename(f)).sort();
     expect(found).toEqual([...names].sort());
   });
 
@@ -76,6 +76,6 @@ describe('findAzitoctlEnvFiles', () => {
     fs.writeFileSync(path.join(dir, 'operator.env'), '');
     fs.writeFileSync(path.join(dir, 'not-azitoctl.env'), '');
 
-    expect(findAzitoctlEnvFiles()).toEqual([]);
+    expect(findAzitoctlEnvFiles(fakeHome)).toEqual([]);
   });
 });

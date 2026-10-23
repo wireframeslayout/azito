@@ -227,7 +227,8 @@ describe('RepoDiscoveryService', () => {
      * is caught even if every other test in this file keeps mocking
      * `execCommand`.
      */
-    it('finds both a normal repo and a worktree .git under a hidden directory', async () => {
+    // Windows では動かない: /bin/bash で find を実行する前提
+    it.skipIf(process.platform === 'win32')('finds both a normal repo and a worktree .git under a hidden directory', async () => {
       fixtureRoot = mkdtempSync(join(tmpdir(), 'azito-repo-discovery-'));
 
       // Normal clone: repo/.git is a directory.

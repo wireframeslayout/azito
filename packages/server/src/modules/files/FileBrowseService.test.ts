@@ -62,7 +62,8 @@ describe('FileBrowseService shell quoting', () => {
     expect(statCmd).toContain("'/tmp/test'\\''file.txt'");
   });
 
-  it('rejects non-regular files on local server', async () => {
+  // Windows では動かない: POSIX 前提（FIFO 等の特殊ファイルを作る）
+  it.skipIf(process.platform === 'win32')('rejects non-regular files on local server', async () => {
     const svc = new FileBrowseService({} as any);
     const srv = { type: 'local', name: 'local' };
 
@@ -371,7 +372,8 @@ describe('FileBrowseService.writeFileContent', () => {
   // O_NOFOLLOW so a symlink swapped in at the save target between the
   // route's containment check and this write cannot redirect the write to
   // wherever the symlink points.
-  it('refuses to write through a symlink (O_NOFOLLOW)', async () => {
+  // Windows では動かない: O_NOFOLLOW / シンボリックリンク前提（P7 の封じ込めで扱う）
+  it.skipIf(process.platform === 'win32')('refuses to write through a symlink (O_NOFOLLOW)', async () => {
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
     const outsideFile = path.join(outsideDir, 'secret.txt');
     fs.writeFileSync(outsideFile, 'original outside content');
@@ -406,7 +408,8 @@ describe('FileBrowseService.resolveExistingTargetRealPath', () => {
   // symlink pointing outside workingDirectory. This resolves the target's
   // real path so the route can re-verify containment on it (see
   // PathContainment.isPathContained usage in routes.ts).
-  it('resolves a symlinked target to its real (outside) path', async () => {
+  // Windows では動かない: シンボリックリンク作成に権限が要る（P7 の封じ込めで扱う）
+  it.skipIf(process.platform === 'win32')('resolves a symlinked target to its real (outside) path', async () => {
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-outside-'));
     const outsideFile = path.join(outsideDir, 'secret.txt');
     fs.writeFileSync(outsideFile, 'secret');
