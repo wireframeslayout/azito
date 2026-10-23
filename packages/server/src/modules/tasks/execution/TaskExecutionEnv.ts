@@ -1,3 +1,4 @@
+import { pickTaskExecutionServer } from '@azito/shared';
 import type { Task } from '../Task';
 import type { ProjectDetail } from '../../projects/Project';
 import type { IProjectServerRepository, ProjectServer } from '../../projects/ProjectServer';
@@ -21,8 +22,7 @@ export function resolveTaskServerName(
   projectServerRepo: IProjectServerRepository,
 ): string | null {
   if (task.serverName) return task.serverName;
-  const servers = projectServerRepo.findByProject(task.projectId);
-  return servers.length === 1 ? servers[0].serverName : null;
+  return pickTaskExecutionServer(null, projectServerRepo.findByProject(task.projectId).map((s) => s.serverName));
 }
 
 /**

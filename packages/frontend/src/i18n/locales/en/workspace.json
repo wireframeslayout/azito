@@ -72,6 +72,7 @@
     "pinTab": "Pin tab",
     "unpinTab": "Unpin tab",
     "closeTab": "Close tab",
+    "addAgentBlocked": "Add {{label}} to {{serverName}} (unavailable: {{reason}})",
     "addAgentToServer": "Add {{label}} to {{serverName}}",
     "addAgent": "Add {{label}}",
     "failedLoadAgents": "Failed to load agents: {{error}}",

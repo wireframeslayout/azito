@@ -7,7 +7,7 @@ import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
 import { StatusDot } from '../StatusBadge';
-import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice, DocsLink } from '../ui';
+import { MiniTabBar, IconButton, Button, BlockedActionButton, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice, DocsLink } from '../ui';
 import type { MiniTab } from '../ui';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import TaskRefBadges from '../TaskRefBadges';
@@ -1628,7 +1628,7 @@ export default function TaskPanel({
   // disabled 表現（opacity/cursor）にする。既存のインライン条件判定（デスクトップ側と同一）を
   // enabled/disabled の真偽値へ切り出し、無効時は no-op にして誤クリックでも副作用を起こさない。
   // A task on a host that cannot run tasks yet (a Windows agent) keeps its Execute entry, closed, with the reason.
-  const executeBlockReason = hostFeatureBlock(task.serverName, 'taskExecution');
+  const executeBlockReason = hostFeatureBlock(task.executionServerName, 'taskExecution');
   const canExecuteTask = !!(hasUnit && unit && task.status === 'open' && !executeBlockReason);
   const canStopTask = !!(task.status === 'in_progress' && hasUnit && unit);
   const handleExecuteTask = () => { if (canExecuteTask && unit) executeTask(task.id, unit.id); };
@@ -1674,7 +1674,7 @@ export default function TaskPanel({
           }
           actions={
             <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-              {hasUnit && unit && task.status === 'open' && <Button variant="primary" size="sm" disabled={!!executeBlockReason} title={executeBlockReason ?? undefined} onClick={() => executeTask(task.id, unit.id)}>{t('actions.execute')}</Button>}
+              {hasUnit && unit && task.status === 'open' && <BlockedActionButton variant="primary" size="sm" blockedReason={executeBlockReason} reasonDisplay="inline" onClick={() => executeTask(task.id, unit.id)}>{t('actions.execute')}</BlockedActionButton>}
               {task.status === 'in_progress' && hasUnit && unit && <Button variant="danger" size="sm" onClick={() => stopTask(unit.id)}>{t('actions.stop')}</Button>}
               <button
                 onClick={(e) => moreMenu.show(e, [
@@ -2144,6 +2144,7 @@ export default function TaskPanel({
           actions={taskDetailMenuActions}
           onExecute={handleExecuteTask}
           canExecute={canExecuteTask}
+          executeBlockedReason={executeBlockReason}
           onStop={handleStopTask}
           canStop={canStopTask}
           diffPath={diffPath}

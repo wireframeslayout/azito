@@ -1,5 +1,6 @@
 import type { MuxDriverKind, MuxPaneProcessState, MuxRef, MuxRuntime } from '@azito/shared';
 import type { PhaseConfigEntryLike } from '../../lib/taskPhases';
+import type { HostProfile } from '../../lib/hostProfile';
 
 export type SidebarMode = 'windows' | 'tasks' | 'files' | 'repos' | 'storage' | 'settings';
 
@@ -85,6 +86,8 @@ export interface RunningOperation {
 export interface Task {
   id: number; title: string; description?: string; status: string; currentPhase?: string | null; projectId: number;
   unitId: number | null; serverName?: string | null;
+  /** Where the task would run, as the hub resolves it (`serverName`, else the project's only server); null: not known. Host features are judged by this. */
+  executionServerName?: string | null;
   priority: number; tmuxWindow?: string;
   selfReviewMaxAttempts?: number;
   selfReviewCount?: number;
@@ -156,6 +159,8 @@ export interface Server {
   type: string;
   host?: string;
   defaultMux: MuxDriverKind;
+  /** The OS / architecture of the server's host; null / absent: not recorded (a Unix agent from before it was kept). */
+  hostProfile?: HostProfile | null;
   /** Old names of servers merged into this one (migration 079); saved tabs are re-pointed. TODO(#313): remove after one release. */
   aliases?: string[];
   muxRuntime?: MuxRuntime;

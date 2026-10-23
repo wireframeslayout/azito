@@ -14,6 +14,8 @@ import { findSessionByKey, sessionKindOf, windowTargetSelectOptions } from '../l
 import { muxCreateFailureText, muxKindSelectModel } from '../lib/muxKindChoice';
 import { useMisaoInstallOffer } from './useMisaoInstallOffer';
 import { useMuxKindAvailability } from './useMuxKindAvailability';
+import { useHostFeatureBlock } from './useHostFeatureBlock';
+import { workerLaunchBlock } from '../lib/workerLaunch';
 
 /** 409 insufficient_resources レスポンス（api() はステータスを返さないため body のマーカーで判定する） */
 export function isInsufficientResources(res: unknown): res is { error: string; resources: ResourceStatus } {
@@ -110,6 +112,7 @@ export function useAddWindowModal(
   const { t } = useTranslation('workspace');
   const { agents: agentDefs, loading: agentDefsLoading, error: agentDefsError } = useAgentDefinitions('worker');
   const { showToast } = useToast();
+  const hostFeatureBlock = useHostFeatureBlock();
   const withMisaoInstall = useMisaoInstallOffer();
   const { statuses } = useServerStatuses();
   const isServerOffline = useCallback((name: string) => statuses[name]?.status === 'offline', [statuses]);
@@ -262,6 +265,9 @@ export function useAddWindowModal(
 
   const handleAddWindow = useCallback(async function perform(force = false) {
     if (addWindowLoading) return;
+    // The one gate for the Add Window form and the quick add: refused before anything is created on the host.
+    const launchBlock = workerLaunchBlock({ mode: awMode, serverName: awServer, agent: awAgent }, hostFeatureBlock);
+    if (launchBlock) return showToast(launchBlock);
     if (awMode === 'existing') {
       if (!awTarget) return showToast(t('addWindow.selectWindowError'));
     } else if (awMode === 'session') {
@@ -412,7 +418,7 @@ export function useAddWindowModal(
     } finally {
       setAddWindowLoading(false);
     }
-  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall]);
+  }, [projectId, awEffectiveProjectId, awMode, awServer, awTarget, awLabel, awSelectedSession, awNewSession, awNewWindowName, awNewCommand, awWorkDir, awAgent, awAgentModel, awSessionData, muxKindModel, agentPresets, project, refreshWorkspace, refreshSessions, addWindowLoading, awTaskId, onConnect, onTaskWindowAdded, launchAgent, showToast, t, closeQuickAddWindow, withMisaoInstall, hostFeatureBlock]);
 
   return {
     // State

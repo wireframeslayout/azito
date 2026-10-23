@@ -47,7 +47,7 @@ function makeTask(id: number): Task {
   } as Task;
 }
 
-function makeOpts(tasks: Task[], findByTaskIds = vi.fn(() => new Map())): TasksRouteOptions {
+function makeOpts(tasks: Task[], findByTaskIds = vi.fn(() => new Map()), projectServers: string[] = []): TasksRouteOptions {
   return {
     taskRepo: {
       findAll: vi.fn(() => tasks),
@@ -59,6 +59,9 @@ function makeOpts(tasks: Task[], findByTaskIds = vi.fn(() => new Map())): TasksR
     windowRepo: {
       findByTask: vi.fn(() => []),
       findByTaskIds,
+    },
+    projectServerRepo: {
+      findByProject: vi.fn(() => projectServers.map((serverName) => ({ serverName }))),
     },
   } as unknown as TasksRouteOptions;
 }
@@ -106,3 +109,40 @@ describe('GET /api/tasks payload', () => {
     expect(opts.windowRepo.findByTask).not.toHaveBeenCalled();
   });
 });
+
+describe('GET /api/tasks executionServerName', () => {
+  it('is the task\'s own server when it has one', async () => {
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts([makeTask(1)], undefined, ['other']));
+    const [item] = (await app.inject({ method: 'GET', url: '/api/tasks' })).json() as Record<string, unknown>[];
+    expect(item.executionServerName).toBe('test-server');
+  });
+
+  it('is the project\'s only server when the task names none (the rule execution itself uses)', async () => {
+    const task = { ...makeTask(1), serverName: null } as unknown as Task;
+    const app = Fastify();
+    await app.register(tasksRoutes, makeOpts([task], undefined, ['win-box']));
+    const [item] = (await app.inject({ method: 'GET', url: '/api/tasks' })).json() as Record<string, unknown>[];
+    expect(item.executionServerName).toBe('win-box');
+  });
+
+  it('is null when the project has two servers (ambiguous) or none', async () => {
+    const task = { ...makeTask(1), serverName: null } as unknown as Task;
+    const two = Fastify();
+    await two.register(tasksRoutes, makeOpts([task], undefined, ['a', 'b']));
+    expect(((await two.inject({ method: 'GET', url: '/api/tasks' })).json() as Record<string, unknown>[])[0].executionServerName).toBeNull();
+    const none = Fastify();
+    await none.register(tasksRoutes, makeOpts([task], undefined, []));
+    expect(((await none.inject({ method: 'GET', url: '/api/tasks' })).json() as Record<string, unknown>[])[0].executionServerName).toBeNull();
+  });
+
+  it('looks a project\'s servers up once for all its tasks', async () => {
+    const tasks = [1, 2, 3].map((id) => ({ ...makeTask(id), serverName: null }) as unknown as Task);
+    const opts = makeOpts(tasks, undefined, ['win-box']);
+    const app = Fastify();
+    await app.register(tasksRoutes, opts);
+    await app.inject({ method: 'GET', url: '/api/tasks' });
+    expect(opts.projectServerRepo.findByProject).toHaveBeenCalledTimes(1);
+  });
+});
+

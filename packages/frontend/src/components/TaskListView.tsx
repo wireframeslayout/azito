@@ -6,7 +6,7 @@ import { useGlobalFocus } from '../hooks/useGlobalFocus';
 import TaskKanbanBoard from './TaskKanbanBoard';
 import { EmptyState } from './ui';
 import TaskRefBadges from './TaskRefBadges';
-import { Button } from './ui';
+import { Button, BlockedActionButton } from './ui';
 import { Icon } from './ui/Icon';
 import { useTranslation } from 'react-i18next';
 import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
@@ -19,8 +19,8 @@ interface Task {
   currentPhase?: string | null;
   projectId: number;
   unitId: number | null;
-  /** The server the task runs on, when known (a Windows host cannot run tasks yet). */
-  serverName?: string | null;
+  /** Where the task would run, as the hub resolves it (its own server, else the project's only one); null: not known. */
+  executionServerName?: string | null;
   priority: number;
   createdAt: string;
   sourceRef?: string | null;
@@ -211,7 +211,7 @@ export default function TaskListView({
                     <td style={{ color: 'var(--text-dim)' }}>{timeAgo(task.createdAt)}</td>
                     <td>
                       {task.status === 'open' && (
-                        <Button variant="primary" size="sm" disabled={!!executeBlockReason(task.serverName, 'taskExecution')} title={executeBlockReason(task.serverName, 'taskExecution') ?? undefined} onClick={(e) => { e.stopPropagation(); onExecute(task.id, task.unitId); }}>{t('common:actions.execute')}</Button>
+                        <BlockedActionButton variant="primary" size="sm" blockedReason={executeBlockReason(task.executionServerName, 'taskExecution')} onClick={(e) => { e.stopPropagation(); onExecute(task.id, task.unitId); }}>{t('common:actions.execute')}</BlockedActionButton>
                       )}
                       {task.status === 'in_progress' && (
                         <Button variant="danger" size="sm" onClick={(e) => { e.stopPropagation(); onStop(task.id); }}>{t('common:actions.stop')}</Button>

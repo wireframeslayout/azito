@@ -7,9 +7,10 @@ import MuxKindField from '../workspace/MuxKindField';
 import { FormInput, Button } from '../ui';
 import { useMuxKindAvailability } from '../../hooks/useMuxKindAvailability';
 import { muxKindSelectModel } from '../../lib/muxKindChoice';
+import type { HostProfile } from '../../lib/hostProfile';
 
 interface CreateSessionModalProps {
-  server: { name: string; type: string; defaultMux: MuxDriverKind };
+  server: { name: string; type: string; defaultMux: MuxDriverKind; hostProfile?: HostProfile | null };
   onClose: () => void;
   /** Creates the session in `kind`. Resolves with an error text to show, or null when it succeeded (the parent then closes the modal). */
   onCreate: (name: string, kind: MuxDriverKind) => Promise<string | null>;

@@ -76,6 +76,8 @@ interface WorkspaceSidebarContentProps {
   onWindowFocus?: (windowId: number) => void;
 }
 
+const SEARCH_BLOCKED_NOTICE_ID = 'file-search-blocked-reason';
+
 export default function WorkspaceSidebarContent({
   sidebarMode,
   project,
@@ -223,13 +225,12 @@ export default function WorkspaceSidebarContent({
               );
             }
             const effectiveRoot = selectedWorktreePath ?? rootPath;
-            const filesBlockedReason = hostFeatureBlock(selectedFileServer, 'files');
-            const gitBlockedReason = hostFeatureBlock(selectedFileServer, 'git');
+            const searchBlockedReason = hostFeatureBlock(selectedFileServer, 'fileSearch');
             return (
               <>
                 <FileSidebarHeader
-                  filesBlockedReason={filesBlockedReason}
-                  gitBlockedReason={gitBlockedReason}
+                  searchBlockedReason={searchBlockedReason}
+                  searchBlockedReasonId={SEARCH_BLOCKED_NOTICE_ID}
                   onSearch={() => setFilesView(filesView === 'search' ? 'tree' : 'search')}
                   onDiff={() => { onOpenDiff(selectedFileServer, effectiveRoot); if (mobile) onCloseMobileSidebar(); }}
                   onRefresh={handleRefresh}
@@ -239,12 +240,12 @@ export default function WorkspaceSidebarContent({
                   allServerNames={projectServers.map((s) => s.serverName)}
                   onSelectServer={onSelectFileServer}
                 />
-                {filesBlockedReason && (
-                  <div style={{ padding: '0 12px 8px', flexShrink: 0 }}>
-                    <Notice tone="info">{filesBlockedReason}</Notice>
+                {searchBlockedReason && (
+                  <div id={SEARCH_BLOCKED_NOTICE_ID} style={{ padding: '0 12px 8px', flexShrink: 0 }}>
+                    <Notice tone="info">{searchBlockedReason}</Notice>
                   </div>
                 )}
-                {!filesBlockedReason && project && (
+                {project && (
                   <RootSwitcher
                     serverName={selectedFileServer}
                     projectId={project.id}
@@ -253,13 +254,13 @@ export default function WorkspaceSidebarContent({
                     onWorktreeChange={setCurrentWorktree}
                   />
                 )}
-                {!filesBlockedReason && <PathBreadcrumb path={effectiveRoot} />}
-                {!filesBlockedReason && currentWorktree?.orphaned && (
+                <PathBreadcrumb path={effectiveRoot} />
+                {currentWorktree?.orphaned && (
                   <div style={{ padding: '0 12px 4px', flexShrink: 0 }}>
                     <Notice tone="warning">{tf('rootSwitcher.orphanedNotice')}</Notice>
                   </div>
                 )}
-                {filesBlockedReason ? null : filesView === 'search' && project ? (
+                {filesView === 'search' && project && !searchBlockedReason ? (
                   <FileSearchPanel
                     serverName={selectedFileServer}
                     projectId={project.id}

@@ -745,7 +745,7 @@ function WorkspaceInner() {
   const executeTask = useCallback(async function perform(taskId: number, unitId: number | null, force = false) {
     if (!unitId) { showToast(t('workspace:toast.noUnit')); return; }
     // Closed before the confirmation, with the reason: a task on a host that cannot run tasks yet (the entry points are disabled too).
-    const blockReason = hostFeatureBlock((allTasks.find((x) => x.id === taskId) ?? tasks.find((x) => x.id === taskId))?.serverName, 'taskExecution');
+    const blockReason = hostFeatureBlock((allTasks.find((x) => x.id === taskId) ?? tasks.find((x) => x.id === taskId))?.executionServerName, 'taskExecution');
     if (blockReason) { showToast(blockReason); return; }
     if (!force) {
       const ok = await confirm({ title: t('workspace:toast.startExecution'), message: t('workspace:toast.startConfirm') });

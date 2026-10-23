@@ -35,6 +35,8 @@ interface TaskDetailMenuProps {
    * canExecute=false のうえで no-op な onExecute を渡す（Issue #338 T1）。 */
   onExecute: () => void;
   canExecute: boolean;
+  /** Why Execute is closed on the task's host (a Windows agent); null / absent: not closed that way. Shown under the buttons, and Execute stays focusable and points at it. */
+  executeBlockedReason?: string | null;
   /** プライマリアクション行「停止」。onExecute と同様の契約。 */
   onStop: () => void;
   canStop: boolean;
@@ -321,7 +323,7 @@ function ActionRow({ icon, label, value, onClick, danger }: {
  * （常時ポーリングはしない — 開くたび最新化されれば十分）。
  */
 export default function TaskDetailMenu({
-  open, onClose, task, unitName, hasUnit, actions, onExecute, canExecute, onStop, canStop,
+  open, onClose, task, unitName, hasUnit, actions, onExecute, canExecute, executeBlockedReason, onStop, canStop,
   diffPath, diffServerName, browserCount, browserTabLabel,
   onStatusChange, onOpenDescription, onOpenUnit, onOpenCommits, onOpenDiff, onOpenBrowser, onDeleteBrowser,
   isPinned, onTogglePin, onCloseTab, windows, focusedWindowTarget, onSelectWindow, onLongPressWindow, onDeleteWindow, onOpenAddWindow, onAddBrowser,
@@ -427,8 +429,10 @@ export default function TaskDetailMenu({
             <div style={{ display: 'flex', gap: 'var(--space-2)', padding: '8px 16px 4px' }}>
               <button
                 type="button"
-                onClick={() => { onClose(); onExecute(); }}
-                disabled={!canExecute}
+                onClick={() => { if (executeBlockedReason) return; onClose(); onExecute(); }}
+                disabled={!canExecute && !executeBlockedReason}
+                aria-disabled={executeBlockedReason ? true : undefined}
+                aria-describedby={executeBlockedReason ? 'task-execute-blocked-reason' : undefined}
                 style={{
                   flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                   padding: '12px', borderRadius: 'var(--radius-md)', border: 'none',
@@ -456,6 +460,11 @@ export default function TaskDetailMenu({
                 {t('actions.stop')}
               </button>
             </div>
+            {executeBlockedReason && (
+              <div id="task-execute-blocked-reason" role="status" style={{ padding: '4px 16px 0', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+                {executeBlockedReason}
+              </div>
+            )}
 
             {hasWindowsSection && (
               <>
