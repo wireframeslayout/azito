@@ -2,25 +2,26 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 import type { DataPaths, LegacyPaths } from './dataDir';
+import type { SecretFileGuard } from './os/secretFileGuard';
 
 function exists(p: string): boolean {
   return fs.existsSync(p);
 }
 
-function copyFileSecure(src: string, dest: string): void {
+function copyFileSecure(src: string, dest: string, guard: SecretFileGuard): void {
   fs.copyFileSync(src, dest);
-  fs.chmodSync(dest, 0o600);
+  guard.protectFile(dest);
 }
 
-function copyDirRecursiveSecure(src: string, dest: string): void {
-  fs.mkdirSync(dest, { recursive: true, mode: 0o700 });
+function copyDirRecursiveSecure(src: string, dest: string, guard: SecretFileGuard): void {
+  guard.ensureProtectedDir(dest);
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDirRecursiveSecure(srcPath, destPath);
+      copyDirRecursiveSecure(srcPath, destPath, guard);
     } else {
-      copyFileSecure(srcPath, destPath);
+      copyFileSecure(srcPath, destPath, guard);
     }
   }
 }
@@ -35,7 +36,7 @@ function removeFiles(filePaths: string[]): void {
   }
 }
 
-export function migrateDataIfNeeded(paths: DataPaths, legacy: LegacyPaths): void {
+export function migrateDataIfNeeded(paths: DataPaths, legacy: LegacyPaths, guard: SecretFileGuard): void {
   if (paths.db === legacy.db && paths.masterKey === legacy.masterKey) return;
 
   const newDbExists = exists(paths.db);
@@ -74,7 +75,7 @@ export function migrateDataIfNeeded(paths: DataPaths, legacy: LegacyPaths): void
 
   const stagingDir = path.join(paths.dir, `.migrating-${process.pid}`);
   try {
-    fs.mkdirSync(stagingDir, { recursive: true, mode: 0o700 });
+    guard.ensureProtectedDir(stagingDir);
 
     let sourceDb: InstanceType<typeof Database> | null = null;
     try {
@@ -104,25 +105,25 @@ export function migrateDataIfNeeded(paths: DataPaths, legacy: LegacyPaths): void
     }
 
     try {
-      copyFileSecure(legacy.db, path.join(stagingDir, 'data.db'));
+      copyFileSecure(legacy.db, path.join(stagingDir, 'data.db'), guard);
       for (const suffix of ['-wal', '-shm']) {
         const src = `${legacy.db}${suffix}`;
         if (exists(src)) {
-          copyFileSecure(src, path.join(stagingDir, `data.db${suffix}`));
+          copyFileSecure(src, path.join(stagingDir, `data.db${suffix}`), guard);
         }
       }
 
-      copyFileSecure(legacy.masterKey, path.join(stagingDir, 'master.key'));
+      copyFileSecure(legacy.masterKey, path.join(stagingDir, 'master.key'), guard);
 
       if (exists(legacy.vapidKeys)) {
-        copyFileSecure(legacy.vapidKeys, path.join(stagingDir, 'vapid-keys.json'));
+        copyFileSecure(legacy.vapidKeys, path.join(stagingDir, 'vapid-keys.json'), guard);
         console.log(`[data-migration]   vapid-keys.json copied`);
       } else {
         console.warn(`[data-migration]   vapid-keys.json not found at ${legacy.vapidKeys} (will be regenerated)`);
       }
 
       if (exists(legacy.browserProfile)) {
-        copyDirRecursiveSecure(legacy.browserProfile, path.join(stagingDir, 'browser-profile'));
+        copyDirRecursiveSecure(legacy.browserProfile, path.join(stagingDir, 'browser-profile'), guard);
         console.log(`[data-migration]   browser-profile/ copied`);
       } else {
         console.warn(`[data-migration]   browser-profile/ not found at ${legacy.browserProfile} (will be recreated on use)`);

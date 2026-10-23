@@ -11,6 +11,7 @@ import { MisaoServiceError } from './MisaoServiceError';
 import type { MisaoServiceController } from './MisaoServiceController';
 import { resolveMisaoPaths, type MisaoPaths } from './misaoPaths';
 import { readEnvValue } from '../../../shared/envFile';
+import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
 const writeHubBundle = (root: string, version: string = BUNDLED_VERSION): void => writeBundle(root, version, `#!/bin/sh\n# misao ${version}`);
 
@@ -65,7 +66,7 @@ describe('MisaoServiceService', () => {
   let controller: FakeController;
 
   const newService = (overrides: Partial<ConstructorParameters<typeof MisaoServiceService>[0]> = {}): MisaoServiceService => new MisaoServiceService({
-    paths, bundle, controller, env: { PATH: '/usr/bin:/custom/bin' }, homeDir: prefix, readyTimeoutMs: 2_000, ...overrides,
+    paths, bundle, controller, env: { PATH: '/usr/bin:/custom/bin' }, secretFileGuard: createSecretFileGuard(process.platform, process.env), homeDir: prefix, readyTimeoutMs: 2_000, ...overrides,
   });
 
   beforeEach(() => {

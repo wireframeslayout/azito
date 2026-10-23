@@ -8,6 +8,9 @@ import { resolveServerEnvPath } from '../shared/envFile';
 import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { tokenCommand } from './tokenCommand';
 import { authDoctorCommand } from './authDoctorCommand';
+import { createSecretFileGuard } from '../shared/os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 // A real release layout, nothing mocked: <prefix>/hub/<version>/ (the bundle), <prefix>/hub/current -> <version>,
 // <prefix>/hub/.env (written by install.sh, loaded by run.sh).
@@ -62,30 +65,30 @@ describe('release layout (hub/<version>, hub/current symlink, parent .env)', () 
     fs.writeFileSync(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN=parent-token\n');
     fs.writeFileSync(path.join(bundleDir, '.env'), 'AZITO_UI_TOKEN=bundle-token\n');
     expect(resolveServerEnvPath()).toBe(path.join(hubDir, '.env'));
-    expect(resolveCurrentUiToken()).toEqual({ token: 'parent-token', source: path.join(hubDir, '.env') });
+    expect(resolveCurrentUiToken(secretFileGuard)).toEqual({ token: 'parent-token', source: path.join(hubDir, '.env') });
   });
 
   it('falls back to the bundle .env when the parent has none', () => {
     fs.writeFileSync(path.join(bundleDir, '.env'), 'AZITO_UI_TOKEN=bundle-token\n');
     expect(resolveServerEnvPath()).toBe(path.join(hubDir, 'current', '.env'));
-    expect(resolveCurrentUiToken()?.token).toBe('bundle-token');
+    expect(resolveCurrentUiToken(secretFileGuard)?.token).toBe('bundle-token');
   });
 
   it('token show prints the token from the parent .env', async () => {
     fs.writeFileSync(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN=parent-token\n');
-    await tokenCommand(['show'], tmpDir);
+    await tokenCommand(['show'], tmpDir, secretFileGuard);
     expect(console.log).toHaveBeenCalledWith('parent-token');
   });
 
   it('token rotate reports the parent .env as the source and leaves the token file alone', async () => {
     fs.writeFileSync(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN=parent-token\n');
-    await expect(tokenCommand(['rotate'], tmpDir)).rejects.toThrow('process.exit');
+    await expect(tokenCommand(['rotate'], tmpDir, secretFileGuard)).rejects.toThrow('process.exit');
     expect(errorOutput()).toContain(path.join(hubDir, '.env'));
     expect(fs.existsSync(path.join(tmpDir, '.azito', 'data', 'ui-token'))).toBe(false);
   });
 
   it('token show names the parent .env when no .env exists, and announces the data dir once', async () => {
-    await expect(tokenCommand(['show'], tmpDir)).rejects.toThrow('process.exit');
+    await expect(tokenCommand(['show'], tmpDir, secretFileGuard)).rejects.toThrow('process.exit');
     expect(errorOutput()).toContain(`Set AZITO_UI_TOKEN in ${path.join(hubDir, '.env')}`);
     const notices = vi.mocked(console.log).mock.calls.filter(([m]) => String(m).startsWith('AZITO_DATA_DIR not set'));
     expect(notices).toHaveLength(1);
@@ -98,7 +101,7 @@ describe('release layout (hub/<version>, hub/current symlink, parent .env)', () 
       path.join(tmpDir, '.claude', 'settings.json'),
       JSON.stringify({ mcpServers: { 'azt-mcp': { env: { AZITO_UI_TOKEN: 'parent-token' } } } }),
     );
-    await authDoctorCommand(tmpDir);
+    await authDoctorCommand(tmpDir, secretFileGuard);
     const out = vi.mocked(console.log).mock.calls.map(([m]) => String(m)).join('\n');
     expect(out).toContain(`一致元: ${path.join(hubDir, '.env')}`);
   });

@@ -1,13 +1,14 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import type { SecretFileGuard } from './os/secretFileGuard';
 
-function resolvePersistedToken(envVar: string, filePath: string): string {
+function resolvePersistedToken(envVar: string, filePath: string, guard: SecretFileGuard): string {
   const envToken = process.env[envVar];
   if (envToken) return envToken;
 
   if (fs.existsSync(filePath)) {
-    try { fs.chmodSync(filePath, 0o600); } catch {}
+    guard.repairFile(filePath);
     const token = fs.readFileSync(filePath, 'utf-8').trim();
     if (token) {
       console.log(`[${path.basename(filePath)}] Using persisted token at ${filePath}`);
@@ -17,8 +18,7 @@ function resolvePersistedToken(envVar: string, filePath: string): string {
 
   const tag = path.basename(filePath);
   const token = crypto.randomBytes(32).toString('hex');
-  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, token, { mode: 0o600 });
+  guard.writeSecretFile(filePath, token);
 
   if (process.stdout.isTTY) {
     console.log(`[${tag}] Generated new token: ${token}`);
@@ -30,10 +30,10 @@ function resolvePersistedToken(envVar: string, filePath: string): string {
   return token;
 }
 
-export function resolveUiToken(tokenPath: string): string {
-  return resolvePersistedToken('AZITO_UI_TOKEN', tokenPath);
+export function resolveUiToken(tokenPath: string, guard: SecretFileGuard): string {
+  return resolvePersistedToken('AZITO_UI_TOKEN', tokenPath, guard);
 }
 
-export function resolveWebhookToken(tokenPath: string): string {
-  return resolvePersistedToken('AZITO_WEBHOOK_TOKEN', tokenPath);
+export function resolveWebhookToken(tokenPath: string, guard: SecretFileGuard): string {
+  return resolvePersistedToken('AZITO_WEBHOOK_TOKEN', tokenPath, guard);
 }

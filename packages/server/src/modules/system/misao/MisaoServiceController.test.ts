@@ -5,6 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LaunchdMisaoController, SystemdMisaoController, type CommandResult, type CommandRunner } from './MisaoServiceController';
 import { buildServicePath, hasMisaoToRelyOn, resolveInstallPrefix, resolveMisaoPaths } from './misaoPaths';
 import { readEnvValue, upsertEnvValue } from '../../../shared/envFile';
+import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 function recorder(results: Record<string, Partial<CommandResult>> = {}): { run: CommandRunner; calls: string[] } {
   const calls: string[] = [];
@@ -140,29 +143,28 @@ describe('upsertEnvValue', () => {
   beforeEach(() => { dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aze-')); });
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }));
 
-  // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
-  it.skipIf(process.platform === 'win32')('tightens an existing file that was more permissive to mode 600', () => {
+  it('tightens an existing file that was more permissive to owner-only', () => {
     const file = path.join(dir, '.env');
     fs.writeFileSync(file, 'A=1\n', { mode: 0o644 });
-    upsertEnvValue(file, 'MISAO_SOCKET', '/s');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(secretFileGuard.inspect(file, 'file').ok).toBe(false);
+    upsertEnvValue(file, 'MISAO_SOCKET', '/s', secretFileGuard);
+    expect(secretFileGuard.inspect(file, 'file')).toEqual({ ok: true });
   });
 
-  // Windows では動かない: mode 600 前提（P2 の SecretFileGuard で扱う）
-  it.skipIf(process.platform === 'win32')('creates a missing file with mode 600', () => {
+  it('creates a missing file restricted to the owner', () => {
     const file = path.join(dir, 'hub', '.env');
-    upsertEnvValue(file, 'MISAO_SOCKET', '/s');
+    upsertEnvValue(file, 'MISAO_SOCKET', '/s', secretFileGuard);
     expect(fs.readFileSync(file, 'utf-8')).toBe('MISAO_SOCKET=/s\n');
-    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(secretFileGuard.inspect(file, 'file')).toEqual({ ok: true });
   });
 
   it('replaces an existing assignment in place and appends otherwise, keeping other lines and comments', () => {
     const file = path.join(dir, '.env');
     fs.writeFileSync(file, '# c\nA=1\nMISAO_SOCKET=/old\nB=2\n');
-    upsertEnvValue(file, 'MISAO_SOCKET', '/new');
+    upsertEnvValue(file, 'MISAO_SOCKET', '/new', secretFileGuard);
     expect(fs.readFileSync(file, 'utf-8')).toBe('# c\nA=1\nMISAO_SOCKET=/new\nB=2\n');
 
-    upsertEnvValue(file, 'C', '3');
+    upsertEnvValue(file, 'C', '3', secretFileGuard);
     expect(fs.readFileSync(file, 'utf-8')).toBe('# c\nA=1\nMISAO_SOCKET=/new\nB=2\nC=3\n');
     expect(readEnvValue(file, 'C')).toBe('3');
   });

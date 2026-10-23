@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { isReleaseMode, resolveRoot } from './releaseInfo';
+import type { SecretFileGuard } from './os/secretFileGuard';
 
 export interface DataPaths {
   dir: string;
@@ -25,13 +26,12 @@ export function _resetReleaseDefaultNotice(): void {
   announcedReleaseDefault = false;
 }
 
-export function resolveDataDir(): DataPaths {
+export function resolveDataDir(guard: SecretFileGuard): DataPaths {
   const explicitDir = process.env.AZITO_DATA_DIR;
 
   if (explicitDir) {
     const dir = path.resolve(explicitDir);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    try { fs.chmodSync(dir, 0o700); } catch {}
+    guard.ensureProtectedDir(dir);
 
     const sidekicks = process.env.AZITO_SIDEKICKS_DIR
       ? path.resolve(process.env.AZITO_SIDEKICKS_DIR)
@@ -54,8 +54,7 @@ export function resolveDataDir(): DataPaths {
 
   if (isReleaseMode()) {
     const dir = path.join(os.homedir(), '.azito', 'data');
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    try { fs.chmodSync(dir, 0o700); } catch {}
+    guard.ensureProtectedDir(dir);
 
     if (!announcedReleaseDefault) {
       announcedReleaseDefault = true;
@@ -83,6 +82,7 @@ export function resolveDataDir(): DataPaths {
 
   const repoRoot = resolveRoot();
   const dataSubdir = path.join(repoRoot, 'data');
+  guard.ensureProtectedDir(dataSubdir);
   const sidekicks = process.env.AZITO_SIDEKICKS_DIR
     ? path.resolve(process.env.AZITO_SIDEKICKS_DIR)
     : path.join(dataSubdir, 'sidekicks');

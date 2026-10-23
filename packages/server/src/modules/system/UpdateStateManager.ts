@@ -1,4 +1,5 @@
 import fs from 'fs';
+import type { SecretFileGuard } from '../../shared/os/secretFileGuard';
 
 export type UpdateStep = 'download' | 'verify' | 'extract' | 'smoke-test' | 'switch' | 'restart' | 'health-check';
 export type UpdateRunStatus = 'running' | 'success' | 'failed';
@@ -30,7 +31,7 @@ const LOG_TAIL_DEFAULT = 200;
  * present with status "running" (see SystemUpdateService).
  */
 export class UpdateStateManager {
-  constructor(private statePath: string, private logPath: string) {}
+  constructor(private statePath: string, private logPath: string, private guard: SecretFileGuard) {}
 
   read(): UpdateState | null {
     try {
@@ -42,7 +43,7 @@ export class UpdateStateManager {
   }
 
   write(state: UpdateState): void {
-    fs.writeFileSync(this.statePath, JSON.stringify(state, null, 2), { mode: 0o600 });
+    this.guard.writeSecretFile(this.statePath, JSON.stringify(state, null, 2));
   }
 
   clear(): void {
@@ -55,7 +56,7 @@ export class UpdateStateManager {
 
   appendLog(line: string): void {
     const timestamp = new Date().toISOString();
-    fs.appendFileSync(this.logPath, `[${timestamp}] ${line}\n`, { mode: 0o600 });
+    this.guard.appendSecretFile(this.logPath, `[${timestamp}] ${line}\n`);
   }
 
   readLog(tailLines: number = LOG_TAIL_DEFAULT): string[] {

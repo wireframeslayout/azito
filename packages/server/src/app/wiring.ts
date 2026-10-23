@@ -7,6 +7,7 @@
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
 import type { HostEnv } from '../shared/os/hostEnv';
+import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
@@ -534,7 +535,7 @@ function buildExecuteTaskUseCase(
   );
 }
 
-function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform): MisaoServiceService {
+function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform, secretFileGuard: SecretFileGuard): MisaoServiceService {
   const bundleRoot = getBundleRoot();
   const prefix = resolveInstallPrefix(bundleRoot);
   let paths: MisaoPaths | null = null;
@@ -552,16 +553,17 @@ function buildMisaoService(misao: MisaoHandle, platform: NodeJS.Platform): Misao
     bundle: readMisaoBundle(bundleRoot),
     controller: createMisaoServiceController(platform, runCommand),
     env: process.env,
+    secretFileGuard,
     hub: { probeDaemon: () => probeMisaoDaemon(misao.connection), socketPath: misao.socketPath },
   });
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv): SystemUpdateModule {
-  const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel);
-  const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog);
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): SystemUpdateModule {
+  const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
+  const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
   const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo);
-  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv.platform) };
+  return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv.platform, secretFileGuard) };
 }
 
 function buildAgentActivityMonitor(
@@ -597,7 +599,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -674,7 +676,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard);
 
   return {
     uiToken,

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import { resolveDataDir } from './dataDir';
 import { readEnvValue, resolveServerEnvPath } from './envFile';
+import type { SecretFileGuard } from './os/secretFileGuard';
 
 export interface CurrentUiToken {
   token: string;
@@ -13,7 +14,7 @@ export interface CurrentUiToken {
 // server applies (see main.ts's resolveUiToken call). Used by both
 // `azito token show` and `azito auth doctor` — extracted here so the two
 // commands can't drift on what "the current token" means.
-export function resolveCurrentUiToken(): CurrentUiToken | null {
+export function resolveCurrentUiToken(guard: SecretFileGuard): CurrentUiToken | null {
   const envToken = process.env.AZITO_UI_TOKEN;
   if (envToken) return { token: envToken, source: 'env' };
 
@@ -21,7 +22,7 @@ export function resolveCurrentUiToken(): CurrentUiToken | null {
   const dotenvToken = readEnvValue(envFilePath, 'AZITO_UI_TOKEN');
   if (dotenvToken) return { token: dotenvToken, source: envFilePath };
 
-  const paths = resolveDataDir();
+  const paths = resolveDataDir(guard);
   if (fs.existsSync(paths.uiToken)) {
     const fileToken = fs.readFileSync(paths.uiToken, 'utf-8').trim();
     if (fileToken) return { token: fileToken, source: paths.uiToken };

@@ -8,6 +8,7 @@ import { LaunchdMisaoController, type CommandRunner } from './MisaoServiceContro
 import { MisaoServiceService } from './MisaoServiceService';
 import { resolveMisaoPaths, type MisaoPaths } from './misaoPaths';
 import { writeHubBundle } from './misaoBundleFixture';
+import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 
 const LEGACY_PLIST = '<plist>/old/node /old/misao/current/misao.mjs</plist>';
 
@@ -83,6 +84,7 @@ describe('MisaoServiceService with launchd, which keeps the definition of a load
     bundle: readMisaoBundle(path.join(prefix, 'hub', 'current')),
     controller,
     env: { PATH: '/usr/bin' },
+    secretFileGuard: createSecretFileGuard(process.platform, process.env),
     homeDir: prefix,
     readyTimeoutMs: 400,
   });

@@ -6,6 +6,9 @@ import path from 'path';
 import os from 'os';
 import type { DataPaths, LegacyPaths } from './dataDir';
 import { migrateDataIfNeeded } from './dataMigration';
+import { createSecretFileGuard } from './os/secretFileGuard';
+
+const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
 function createLegacyLayout(dir: string): { legacyPaths: LegacyPaths; sealedValue: string } {
   const dataSubdir = path.join(dir, 'data');
@@ -84,7 +87,7 @@ describe('migrateDataIfNeeded', () => {
     fs.mkdirSync(newDir, { recursive: true, mode: 0o700 });
     const newPaths = makeDataPaths(newDir);
 
-    migrateDataIfNeeded(newPaths, legacyPaths);
+    migrateDataIfNeeded(newPaths, legacyPaths, secretFileGuard);
 
     expect(fs.existsSync(newPaths.db)).toBe(true);
     expect(fs.existsSync(newPaths.masterKey)).toBe(true);
@@ -118,7 +121,7 @@ describe('migrateDataIfNeeded', () => {
 
     fs.writeFileSync(newPaths.db, 'dummy');
 
-    expect(() => migrateDataIfNeeded(newPaths, legacyPaths)).toThrow('process.exit called');
+    expect(() => migrateDataIfNeeded(newPaths, legacyPaths, secretFileGuard)).toThrow('process.exit called');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -133,7 +136,7 @@ describe('migrateDataIfNeeded', () => {
 
     fs.writeFileSync(newPaths.masterKey, 'dummy');
 
-    expect(() => migrateDataIfNeeded(newPaths, legacyPaths)).toThrow('process.exit called');
+    expect(() => migrateDataIfNeeded(newPaths, legacyPaths, secretFileGuard)).toThrow('process.exit called');
     expect(exitSpy).toHaveBeenCalledWith(1);
   });
 
@@ -156,7 +159,7 @@ describe('migrateDataIfNeeded', () => {
       origRenameSync(src as string, dest as string);
     });
 
-    expect(() => migrateDataIfNeeded(newPaths, legacyPaths)).toThrow('process.exit called');
+    expect(() => migrateDataIfNeeded(newPaths, legacyPaths, secretFileGuard)).toThrow('process.exit called');
 
     expect(fs.existsSync(newPaths.db)).toBe(false);
     expect(fs.existsSync(newPaths.masterKey)).toBe(false);
@@ -183,7 +186,7 @@ describe('migrateDataIfNeeded', () => {
       updateChannel: path.join(legacyDir, 'data', 'update-channel.json'),
     };
 
-    migrateDataIfNeeded(samePaths, legacyPaths);
+    migrateDataIfNeeded(samePaths, legacyPaths, secretFileGuard);
     expect(exitSpy).not.toHaveBeenCalled();
   });
 });

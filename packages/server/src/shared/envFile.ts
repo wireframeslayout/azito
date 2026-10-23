@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { isReleaseMode, resolveRoot } from './releaseInfo';
+import type { SecretFileGuard } from './os/secretFileGuard';
 
 export function readEnvValue(filePath: string, key: string): string | undefined {
   if (!fs.existsSync(filePath)) return undefined;
@@ -32,11 +33,10 @@ export function readEnvValue(filePath: string, key: string): string | undefined 
  * Sets `KEY=value` in an env file: replaces the existing assignment in place, otherwise appends one (creating the
  * file with mode 600 when it does not exist). Other lines, comments included, are kept as they are.
  */
-export function upsertEnvValue(filePath: string, key: string, value: string): void {
+export function upsertEnvValue(filePath: string, key: string, value: string, guard: SecretFileGuard): void {
   const line = `${key}=${value}`;
   if (!fs.existsSync(filePath)) {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, `${line}\n`, { mode: 0o600 });
+    guard.writeSecretFile(filePath, `${line}\n`);
     return;
   }
   const lines = fs.readFileSync(filePath, 'utf-8').split('\n');
@@ -48,9 +48,8 @@ export function upsertEnvValue(filePath: string, key: string, value: string): vo
     if (lines[lines.length - 1] === '') lines.pop();
     lines.push(line, '');
   }
-  fs.writeFileSync(filePath, lines.join('\n'));
-  // The file holds secrets (tokens): writeFileSync keeps an existing file's mode, so tighten one that was looser.
-  fs.chmodSync(filePath, 0o600);
+  // The file holds secrets (tokens): the guard tightens an existing file that was looser, before the new content goes in.
+  guard.writeSecretFile(filePath, lines.join('\n'));
 }
 
 /**

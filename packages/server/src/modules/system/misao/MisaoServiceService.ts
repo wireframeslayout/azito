@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import type { MisaoDaemonInfo, MisaoServiceStatus, MisaoSocketSetting, MisaoUnmanagedReason } from '@azito/shared';
 import { readEnvValue, upsertEnvValue } from '../../../shared/envFile';
+import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { bundleFilesFor, sha256File, type MisaoBundle, type MisaoTargetFiles } from './MisaoBundle';
 import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
@@ -21,6 +22,8 @@ export interface MisaoServiceDeps {
   /** Null on a host without systemd / launchd. */
   controller: MisaoServiceController | null;
   env: NodeJS.ProcessEnv;
+  /** Restricts the hub's `.env` (it holds tokens) when MISAO_SOCKET is written into it. */
+  secretFileGuard: SecretFileGuard;
   homeDir?: string;
   /**
    * What the running hub knows about the daemon (its `server.info`), and the socket its driver connects to.
@@ -169,7 +172,7 @@ export class MisaoServiceService {
 
   /** Writes MISAO_SOCKET into the hub's `.env`, and starts the service when it is not running (never restarts a running one). */
   private async pointHubAndStart(controller: MisaoServiceController): Promise<void> {
-    upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket);
+    upsertEnvValue(this.paths.hubEnvFile, 'MISAO_SOCKET', this.paths.socket, this.deps.secretFileGuard);
     if ((await controller.state()) !== 'active') {
       await controller.start();
       await this.waitUntilListening();
