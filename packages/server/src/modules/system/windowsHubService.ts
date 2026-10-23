@@ -101,15 +101,35 @@ function hubTaskExec(systemRoot: string, layout: HubWindowsLayout): TaskExec {
 }
 
 /**
+ * The one action of a task, read as structure: there must be exactly one `<Actions>` with exactly one `<Exec>` in it and nothing else
+ * (no second Exec, no ComHandler, SendEmail, ShowMessage or any other element, no text). A task with more actions than the one this
+ * code generates would run more than the hub, so it is not ours.
+ */
+function singleExec(xml: string): TaskExec | undefined {
+  const withoutComments = xml.replace(/<!--[\s\S]*?-->/g, '');
+  const actions = [...withoutComments.matchAll(/<Actions\b[^>]*>([\s\S]*?)<\/Actions>/g)];
+  if (actions.length !== 1) return undefined;
+  const inner = actions[0][1];
+  const execs = [...inner.matchAll(/<Exec\b[^>]*>([\s\S]*?)<\/Exec>/g)];
+  if (execs.length !== 1) return undefined;
+  if (inner.replace(/<Exec\b[^>]*>[\s\S]*?<\/Exec>/, '').trim() !== '') return undefined;
+  const body = execs[0][1];
+  const command = /<Command>([\s\S]*?)<\/Command>/.exec(body)?.[1];
+  if (command === undefined) return undefined;
+  const argumentsLine = /<Arguments>([\s\S]*?)<\/Arguments>/.exec(body)?.[1] ?? '';
+  return { command: unescapeXml(command), argumentsLine: unescapeXml(argumentsLine) };
+}
+
+/**
  * Which install a REGISTERED task (the XML the Task Scheduler gives back for it, not our copy) belongs to. The prefix is read from
  * the launcher's `$hubRoot`, and the task is recognised only when its action (program and arguments) is exactly what this code
  * generates for that prefix: a line that merely looks like ours, or an action somebody edited, is `undefined` (unknown).
  */
 export function inspectRegisteredHub(xml: string, systemRoot: string): { prefix: string } | undefined {
-  const exec = /<Exec>\s*<Command>([\s\S]*?)<\/Command>\s*(?:<Arguments>([\s\S]*?)<\/Arguments>)?/.exec(xml);
-  if (!exec) return undefined;
-  const command = unescapeXml(exec[1]);
-  const argumentsLine = unescapeXml(exec[2] ?? '');
+  const exec = singleExec(xml);
+  if (exec === undefined) return undefined;
+  const command = exec.command;
+  const argumentsLine = exec.argumentsLine;
   const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(argumentsLine)?.[1];
   if (!encoded) return undefined;
   const hubRoot = HUB_ROOT_LINE.exec(Buffer.from(encoded, 'base64').toString('utf16le'))?.[1];
@@ -184,7 +204,8 @@ const FORCE_WAIT_MS = 10_000;
 const PROCESS_PREAMBLE = [
   "$ProgressPreference = 'SilentlyContinue'",
   '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-  'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
+  // $true: the process is this user's; $false: another user's; $null: the owner could not be read (never taken for "not mine").
+  'function Get-IsMine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $null } }',
 ];
 
 /**
@@ -197,11 +218,29 @@ const PROCESS_PREAMBLE = [
 export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubRoots: readonly string[], excludePid: number): Promise<HubProcess[]> {
   const q = powershellDialect.quote;
   const alternatives = hubRoots.map((root) => `[regex]::Escape(${q(`${root.replace(/[\\/]+$/, '')}\\`)})`).join(" + '|' + ");
+  // Per candidate: the Process is opened FIRST (the handle keeps its id from being handed to another process), THEN the command line,
+  // owner and creation date of that id are read, and the creation date must agree with the opened process's start time (WMI keeps
+  // microseconds, a start time 100 ns: 1 ms of slack). What is recorded is that verified start time.
+  // "Gone" (no such process by the time it is read) and "another user's" are skipped; a hub process of THIS user that cannot be
+  // opened or read is an error naming its id. This user's own processes are always openable, so that should not happen: it means
+  // something is wrong (a protected process, a changed security setup) and the stop must not claim success.
   const script = [
     ...PROCESS_PREAMBLE,
     `$roots = ${alternatives}`,
     "$pattern = '(^|[\\s\"])(' + $roots + ')[^\\\\\"\\s]+\\\\azito-hub\\.cjs([\\s\"]|$)'",
-    `Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ProcessId -ne ${Math.trunc(excludePid)} -and $_.CommandLine -and ($_.CommandLine -match $pattern) -and (Test-Mine $_) } | ForEach-Object { $started = try { (Get-Process -Id $_.ProcessId -ErrorAction Stop).StartTime.ToFileTimeUtc() } catch { $null }; if ($started) { "$($_.ProcessId) $started" } }`,
+    `foreach ($p in @(Get-Process -Name node -ErrorAction SilentlyContinue)) {`,
+    `  if ($p.Id -eq ${Math.trunc(excludePid)}) { continue }`,
+    '  $openError = $null',
+    '  try { $null = $p.Handle; $started = $p.StartTime } catch { $openError = $_.Exception.Message }',
+    '  $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"',
+    '  if (-not $cim -or -not $cim.CommandLine -or $cim.CommandLine -notmatch $pattern) { continue }',
+    '  $mine = Get-IsMine $cim',
+    '  if ($mine -eq $false) { continue }',
+    '  if ($null -eq $mine) { throw "Cannot tell whose hub process $($p.Id) is (its owner could not be read)" }',
+    '  if ($openError) { throw "Cannot open hub process $($p.Id) to verify it: $openError" }',
+    '  if ([Math]::Abs($cim.CreationDate.ToFileTimeUtc() - $started.ToFileTimeUtc()) -gt 10000) { throw "Hub process $($p.Id) is not the process that was read (the start time differs)" }',
+    '  "$($p.Id) $($started.ToFileTimeUtc())"',
+    '}',
   ].join('\n');
   const result = await runPowershell(run, systemRoot, script, 'Looking for the hub processes');
   return result.stdout.split(/\r?\n/).map((line) => /^(\d+) (\d+)$/.exec(line.trim())).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ pid: Number(m[1]), created: m[2] }));
@@ -216,8 +255,9 @@ export async function endHubProcesses(run: SpecRunner, systemRoot: string, targe
   if (targets.length === 0) return [];
   const list = targets.map((t) => `[pscustomobject]@{ Id = ${Math.trunc(t.pid)}; Created = ${BigInt(t.created)} }`).join(', ');
   // Each target is opened as a Process object, which holds a handle: while it is open its id cannot be handed to another process. The
-  // start time is checked on that very object, and `Kill()` ends that very object, never an id. A process that is not the one found
-  // before (another start time), or cannot be opened, is left alone.
+  // start time is checked on that very object, and `Kill()` ends that very object, never an id. A process that is gone, or is not the
+  // one found before (another start time), is left alone; one that exists but cannot be opened to be checked is an error naming its
+  // id (these are this user's own processes, which are always openable, so that means something is wrong).
   const script = [
     ...PROCESS_PREAMBLE,
     `$targets = @(${list})`,
@@ -226,9 +266,15 @@ export async function endHubProcesses(run: SpecRunner, systemRoot: string, targe
     '  if (-not $p) { return $null }',
     '  try {',
     '    $null = $p.Handle',
-    '    if (-not $p.HasExited -and $p.StartTime.ToFileTimeUtc() -eq $target.Created) { return $p }',
-    '  } catch { }',
-    '  return $null',
+    '    $exited = $p.HasExited',
+    '    $started = $p.StartTime.ToFileTimeUtc()',
+    '  } catch {',
+    '    $reason = $_.Exception.Message',
+    '    if (-not (Get-Process -Id $target.Id -ErrorAction SilentlyContinue)) { return $null }',
+    '    throw "Cannot open hub process $($target.Id) to verify it: $reason"',
+    '  }',
+    '  if ($exited -or $started -ne $target.Created) { return $null }',
+    '  return $p',
     '}',
     '$procs = @($targets | ForEach-Object { Open-Target $_ } | Where-Object { $_ })',
     'function Get-Alive { @($procs | Where-Object { -not $_.HasExited }) }',

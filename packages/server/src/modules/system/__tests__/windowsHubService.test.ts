@@ -108,6 +108,27 @@ describe('inspectRegisteredHub / samePrefix', () => {
     expect(inspectRegisteredHub(xml, 'D:\\Windows')).toBeUndefined();
   });
 
+  it('is unknown when the task has any other action than the one generated Exec', () => {
+    const xml = generated(PREFIX);
+    const extras = [
+      '<Exec><Command>C:\\Windows\\System32\\cmd.exe</Command></Exec>',
+      '<ComHandler><ClassId>{00000000-0000-0000-0000-000000000000}</ClassId></ComHandler>',
+      '<SendEmail><Server>x</Server></SendEmail>',
+      '<ShowMessage><Title>t</Title><Body>b</Body></ShowMessage>',
+    ];
+    for (const extra of extras) {
+      expect(inspectRegisteredHub(xml.replace('</Actions>', `${extra}</Actions>`), 'C:\\Windows')).toBeUndefined();
+      expect(inspectRegisteredHub(xml.replace(/<Actions\b[^>]*>/, (m) => `${m}${extra}`), 'C:\\Windows')).toBeUndefined();
+    }
+  });
+
+  it('is unknown with a second Actions element or stray text in Actions, and still known with comments around', () => {
+    const xml = generated(PREFIX);
+    expect(inspectRegisteredHub(xml.replace('</Actions>', 'text</Actions>'), 'C:\\Windows')).toBeUndefined();
+    expect(inspectRegisteredHub(xml.replace('</Actions>', '</Actions><Actions Context="Author"><Exec><Command>x</Command></Exec></Actions>'), 'C:\\Windows')).toBeUndefined();
+    expect(inspectRegisteredHub(xml.replace('</Actions>', '<!-- note --></Actions>'), 'C:\\Windows')).toEqual({ prefix: PREFIX });
+  });
+
   it('ignores case and a trailing separator, and nothing else', () => {
     expect(samePrefix('C:\\Users\\Me\\.azito\\', 'c:\\users\\me\\.AZITO')).toBe(true);
     expect(samePrefix('C:\\Users\\Me\\.azito', 'C:\\Users\\Me\\.azito2')).toBe(false);
@@ -120,11 +141,16 @@ describe('findHubProcesses', () => {
     const found = await findHubProcesses(run, 'C:\\Windows', [`${PREFIX}\\hub`, 'D:\\real\\.azito\\hub'], 999);
     expect(found).toEqual([{ pid: 4321, created: '133000000000000000' }, { pid: 77, created: '5' }]);
     const script = scriptOf(run.mock.calls[0][0]);
-    expect(script).toContain("Name = 'node.exe'");
     expect(script).toContain("[regex]::Escape('C:\\Users\\Foo Bar (Work)\\.azito\\hub\\') + '|' + [regex]::Escape('D:\\real\\.azito\\hub\\')");
-    expect(script).toContain('$_.ProcessId -ne 999');
-    expect(script).toContain('Test-Mine');
-    expect(script).toContain('(Get-Process -Id $_.ProcessId -ErrorAction Stop).StartTime.ToFileTimeUtc()');
+    expect(script).toContain('if ($p.Id -eq 999) { continue }');
+    // Opened first (the handle pins the id), then the command line / owner / creation date of that id are read and cross-checked.
+    expect(script.indexOf('$null = $p.Handle')).toBeLessThan(script.indexOf('Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"'));
+    expect(script).toContain('Get-Process -Name node');
+    expect(script).toContain('$cim.CreationDate.ToFileTimeUtc() - $started.ToFileTimeUtc()');
+    // Gone and another user's are skipped; this user's own process that cannot be verified is an error with its id.
+    expect(script).toContain('if ($mine -eq $false) { continue }');
+    expect(script).toContain('throw "Cannot open hub process $($p.Id) to verify it: $openError"');
+    expect(script).toContain('throw "Cannot tell whose hub process $($p.Id) is');
   });
 
   it('fails with the script\'s own message', async () => {
@@ -149,7 +175,9 @@ describe('endHubProcesses', () => {
     expect(script.indexOf('AddMilliseconds(20000)')).toBeLessThan(script.indexOf('.Kill()'));
     // The Process object holds a handle ($p.Handle), the start time is read from it, and it is the one that is killed.
     expect(script).toContain('$null = $p.Handle');
-    expect(script).toContain('$p.StartTime.ToFileTimeUtc() -eq $target.Created');
+    expect(script).toContain('$started -ne $target.Created');
+    // Gone or another process: left alone. Exists but cannot be opened to be checked: an error with the id, never "gone".
+    expect(script).toContain('throw "Cannot open hub process $($target.Id) to verify it: $reason"');
     expect(script).toContain('$p.Kill()');
     expect(script).not.toContain('Stop-Process');
     // A single process comes back unwrapped, and a PowerShell 5.1 object has no .Count: every count goes through @().
