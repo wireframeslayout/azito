@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildTaskXml, decodeTaskXml, encodeTaskXml, escapeXml, type TaskDefinitionInput } from './taskDefinition';
+import { MAX_RESTART_INTERVAL_MINUTES, buildTaskXml, decodeTaskXml, encodeTaskXml, escapeXml, type TaskDefinitionInput } from './taskDefinition';
 
 const INPUT: TaskDefinitionInput = {
   userId: 'DESKTOP-1\\alice',
@@ -63,6 +63,11 @@ const EXPECTED = [
   '',
 ].join('\r\n');
 
+/** What an XML 1.0 parser makes of element text: end-of-line normalization of the raw text first, then references. */
+function parseXmlText(raw: string): string {
+  return raw.replace(/\r\n?/g, '\n').replace(/&#x([0-9A-Fa-f]+);/g, (_m, hex: string) => String.fromCodePoint(parseInt(hex, 16))).replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+}
+
 describe('buildTaskXml', () => {
   it('builds the logon-trigger, least-privilege, restart-on-failure task', () => {
     expect(buildTaskXml(INPUT)).toBe(EXPECTED);
@@ -89,6 +94,20 @@ describe('buildTaskXml', () => {
     expect(xml).toContain('<WorkingDirectory>D:\\作業 場所</WorkingDirectory>');
   });
 
+  it('accepts the 31-day interval and a valid surrogate pair', () => {
+    const xml = buildTaskXml({ ...INPUT, args: ['😀'], restartOnFailure: { intervalMinutes: MAX_RESTART_INTERVAL_MINUTES, count: 1 } });
+    expect(MAX_RESTART_INTERVAL_MINUTES).toBe(44640);
+    expect(xml).toContain('<Interval>PT44640M</Interval>');
+    expect(xml).toContain('<Arguments>😀</Arguments>');
+  });
+
+  it('writes a CR in an argument as a character reference, which an XML parser reads back as a CR', () => {
+    const xml = buildTaskXml({ ...INPUT, args: ['a\r\nb\rc'] });
+    const written = /<Arguments>([\s\S]*?)<\/Arguments>/.exec(xml)![1]!;
+    expect(written).toBe('"a&#xD;\nb&#xD;c"');
+    expect(parseXmlText(written)).toBe('"a\r\nb\rc"');
+  });
+
   it('writes no Arguments text for no arguments', () => {
     expect(buildTaskXml({ ...INPUT, args: [] })).toContain('<Arguments></Arguments>');
   });
@@ -102,12 +121,15 @@ describe('buildTaskXml', () => {
     ['an empty user', { userId: ' ' }, /userId/],
     ['a restart interval under a minute', { restartOnFailure: { intervalMinutes: 0, count: 3 } }, /intervalMinutes/],
     ['a fractional restart interval', { restartOnFailure: { intervalMinutes: 1.5, count: 3 } }, /intervalMinutes/],
+    ['an interval over 31 days', { restartOnFailure: { intervalMinutes: MAX_RESTART_INTERVAL_MINUTES + 1, count: 3 } }, /intervalMinutes/],
     ['no restarts', { restartOnFailure: { intervalMinutes: 1, count: 0 } }, /count/],
     ['too many restarts', { restartOnFailure: { intervalMinutes: 1, count: 1000 } }, /count/],
     ['a control character in the description', { description: 'a\u0001b' }, /control character/],
     ['a % in the executable', { executable: 'C:\\100%\\x.exe' }, /executable must not contain "%"/],
     ['a %VAR% in an argument', { args: ['ok', '%PATH%'] }, /args\[1\] must not contain "%"/],
     ['a % in the working directory', { workingDirectory: 'C:\\%TEMP%' }, /workingDirectory must not contain/],
+    ['a lone high surrogate', { args: ['a\uD800b'] }, /unpaired surrogate/],
+    ['a lone low surrogate', { description: '\uDC00' }, /unpaired surrogate/],
     ['a NUL in an argument', { args: ['a\0b'] }, /NUL/],
   ] satisfies [string, Partial<TaskDefinitionInput>, RegExp][])('rejects %s', (_name, patch, message) => {
     expect(() => buildTaskXml({ ...INPUT, ...patch })).toThrow(message);

@@ -1,5 +1,9 @@
 import { spawnSync } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { describe, expect, it } from 'vitest';
+import { buildTaskXml, encodeTaskXml } from './taskDefinition';
 import { joinWindowsArgs, quoteWindowsArg } from './windowsCommandLine';
 
 /**
@@ -19,5 +23,24 @@ describe.skipIf(process.platform !== 'win32')('joinWindowsArgs against a real pr
     const result = spawnSync(process.execPath, [commandLine], { encoding: 'utf-8', windowsVerbatimArguments: true });
     expect(result.status, result.stderr).toBe(0);
     expect(JSON.parse(Buffer.from(result.stdout, 'base64').toString('utf-8'))).toEqual(CASES);
+  });
+
+  it('keeps the arguments through a real XML parser (PowerShell [xml]), CR and LF included', () => {
+    const args = ['a\rb', 'c\r\nd', 'e\nf', '<&>', ...CASES];
+    const xml = buildTaskXml({
+      userId: 'PC\\me', description: 'd', executable: 'C:\\x\\y.exe', args, workingDirectory: 'C:\\x', restartOnFailure: { intervalMinutes: 1, count: 1 },
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-xml-'));
+    try {
+      const file = path.join(dir, 'task.xml');
+      fs.writeFileSync(file, encodeTaskXml(xml));
+      const script = '$x = New-Object System.Xml.XmlDocument; $x.Load($env:AZITO_XML); ' +
+        '[Console]::Out.Write([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($x.Task.Actions.Exec.Arguments)))';
+      const result = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf-8', env: { ...process.env, AZITO_XML: file } });
+      expect(result.status, result.stderr).toBe(0);
+      expect(Buffer.from(result.stdout, 'base64').toString('utf-8')).toBe(joinWindowsArgs(args));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

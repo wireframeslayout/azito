@@ -2,6 +2,8 @@ import { joinWindowsArgs } from './windowsCommandLine';
 
 /** Task Scheduler's minimum restart interval is 1 minute. */
 export const MIN_RESTART_INTERVAL_MINUTES = 1;
+/** The schema's upper bound of RestartOnFailure/Interval: 31 days. */
+export const MAX_RESTART_INTERVAL_MINUTES = 31 * 24 * 60;
 export const MAX_RESTART_COUNT = 999;
 
 export interface TaskDefinitionInput {
@@ -22,10 +24,15 @@ export interface TaskDefinitionInput {
 /** Characters XML 1.0 cannot carry at all (not even escaped). Tab, LF and CR are allowed. */
 const XML_FORBIDDEN = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/;
 
-/** The one XML escape. Every value lands in element text (never an attribute), where only `&`, `<` and `>` need it. Throws for a character that XML 1.0 cannot represent. */
+/** A high surrogate without a low one after it, or a low one without a high one before it (not a character at all in XML). */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/** The one XML escape. Every value lands in element text (never an attribute), where `&`, `<`, `>` and CR need it. Throws for a character that XML 1.0 cannot represent. */
 export function escapeXml(value: string): string {
   if (XML_FORBIDDEN.test(value)) throw new Error('The value contains a control character that cannot be written in the task XML');
-  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  if (LONE_SURROGATE.test(value)) throw new Error('The value contains an unpaired surrogate, which is not a character in XML');
+  // A raw CR is read back as LF (XML end-of-line handling); a character reference survives.
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\r/g, '&#xD;');
 }
 
 /** `C:\dir` / `C:/dir` or a UNC path. A rooted path without a drive (`\dir`) depends on the current drive, so it is refused. */
@@ -54,8 +61,8 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
   if (input.userId.trim() === '') throw new Error('userId must not be empty');
   assertWindowsAbsolutePath(input.executable, 'executable');
   assertWindowsAbsolutePath(input.workingDirectory, 'workingDirectory');
-  if (!Number.isInteger(restartOnFailure.intervalMinutes) || restartOnFailure.intervalMinutes < MIN_RESTART_INTERVAL_MINUTES) {
-    throw new Error(`restartOnFailure.intervalMinutes must be a whole number of at least ${MIN_RESTART_INTERVAL_MINUTES}`);
+  if (!Number.isInteger(restartOnFailure.intervalMinutes) || restartOnFailure.intervalMinutes < MIN_RESTART_INTERVAL_MINUTES || restartOnFailure.intervalMinutes > MAX_RESTART_INTERVAL_MINUTES) {
+    throw new Error(`restartOnFailure.intervalMinutes must be a whole number from ${MIN_RESTART_INTERVAL_MINUTES} to ${MAX_RESTART_INTERVAL_MINUTES}`);
   }
   if (!Number.isInteger(restartOnFailure.count) || restartOnFailure.count < 1 || restartOnFailure.count > MAX_RESTART_COUNT) {
     throw new Error(`restartOnFailure.count must be a whole number from 1 to ${MAX_RESTART_COUNT}`);

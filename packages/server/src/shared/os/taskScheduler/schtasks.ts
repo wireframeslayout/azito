@@ -2,10 +2,29 @@ import fs from 'fs';
 import * as path from 'path';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../exec/commandSpec';
 import type { HostEnv } from '../hostEnv';
+import { decodeOemOutput, describeUndecodable, parseOemCodePage } from './oemOutput';
 import { encodeTaskXml } from './taskDefinition';
 
-/** Runs one command without a shell (production: `runCommandSpec(spec, runHostOf(hostEnv))`). */
-export type CommandSpecRunner = (spec: CommandSpec) => Promise<CommandResult>;
+/** A finished command with its output as bytes (the OEM code page is decoded here, not by the runner). */
+export interface RawCommandResult {
+  exitCode: number;
+  stdout: Buffer;
+  stderr: Buffer;
+}
+
+/** Runs one command without a shell and returns its output untouched. Production: `rawRunnerOf(spec => runCommandSpec(spec, { ...runHostOf(host), rawOutput: true }))`. */
+export type CommandSpecRunner = (spec: CommandSpec) => Promise<RawCommandResult>;
+
+/** Adapts `runCommandSpec(..., { rawOutput: true })`. A result without the bytes means the runner was not asked for them: an error, not a UTF-8 guess. */
+export function rawRunnerOf(run: (spec: CommandSpec) => Promise<CommandResult>): CommandSpecRunner {
+  return async (spec) => {
+    const result = await run(spec);
+    if (result.stdoutBytes === undefined || result.stderrBytes === undefined) {
+      throw new Error('The command runner did not return raw output (run it with rawOutput: true)');
+    }
+    return { exitCode: result.exitCode, stdout: result.stdoutBytes, stderr: result.stderrBytes };
+  };
+}
 
 /** A name that is the same in every code page: schtasks prints and parses names in the OEM code page, which Node does not decode. */
 const TASK_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
@@ -23,12 +42,11 @@ const SCHTASKS_OUTPUT_BYTES = 4 * 1024 * 1024;
 export type SchtasksOperation = 'create' | 'run' | 'end' | 'delete' | 'query';
 
 /**
- * schtasks ran and failed (exit code, and what it printed to stderr). `detail` is in the Windows display language and in the
- * OEM code page, which `runCommandSpec` decodes as UTF-8: it can be garbled on a non-English Windows (e.g. CP932), so the
- * exit code is the reliable part. Decoding by the console code page is left to the wiring (#380 B3).
+ * schtasks ran and failed. `detail` is what it printed, decoded from the OEM code page (in the Windows display language);
+ * when that cannot be decoded `detail` says so with the bytes in hex, and `rawDetail` always holds the bytes as written.
  */
 export class SchtasksError extends Error {
-  constructor(readonly operation: SchtasksOperation, readonly taskName: string, readonly exitCode: number, readonly detail: string) {
+  constructor(readonly operation: SchtasksOperation, readonly taskName: string, readonly exitCode: number, readonly detail: string, readonly rawDetail: Buffer) {
     super(`schtasks /${operation} of the task "${taskName}" failed (exit ${exitCode})${detail ? `: ${detail}` : ''}`);
     this.name = 'SchtasksError';
   }
@@ -110,14 +128,38 @@ const LAST_RESULT_COLUMN = 6;
  */
 export class SchtasksClient {
   private readonly schtasksPath: string;
+  private readonly regPath: string;
   private readonly tmpDir: string;
+  private oemCodePage: Promise<number> | undefined;
 
   constructor(private readonly run: CommandSpecRunner, host: Pick<HostEnv, 'systemRoot' | 'tmpDir'>) {
     if (host.systemRoot === undefined || host.systemRoot === '') {
       throw new Error('Cannot find schtasks.exe: %SystemRoot% is not set');
     }
     this.schtasksPath = path.win32.join(host.systemRoot, 'System32', 'schtasks.exe');
+    this.regPath = path.win32.join(host.systemRoot, 'System32', 'reg.exe');
     this.tmpDir = host.tmpDir;
+  }
+
+  /** The OEM code page, read once from the registry (`reg query` prints ASCII only) and remembered. */
+  private readOemCodePage(): Promise<number> {
+    this.oemCodePage ??= (async () => {
+      const spec = buildCommandSpec(this.regPath, ['query', 'HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage', '/v', 'OEMCP'], { timeoutMs: SCHTASKS_TIMEOUT_MS, maxOutputBytes: SCHTASKS_OUTPUT_BYTES });
+      const result = await this.run(spec);
+      if (result.exitCode !== 0) throw new Error(`Cannot read the OEM code page: reg query failed (exit ${result.exitCode})`);
+      return parseOemCodePage(result.stdout.toString('ascii'));
+    })();
+    // A failed read must be tried again next time, not remembered.
+    this.oemCodePage.catch(() => { this.oemCodePage = undefined; });
+    return this.oemCodePage;
+  }
+
+  /** A failed run as an error: stderr (or stdout) decoded from the OEM code page, bytes kept. */
+  private async errorOf(operation: SchtasksOperation, taskName: string, result: RawCommandResult): Promise<SchtasksError> {
+    const raw = result.stderr.length > 0 ? result.stderr : result.stdout;
+    const decoded = await decodeOemOutput(raw, () => this.readOemCodePage());
+    const detail = decoded.ok ? decoded.text.trim() : describeUndecodable(raw, decoded.reason);
+    return new SchtasksError(operation, taskName, result.exitCode, detail, raw);
   }
 
   private static assertTaskName(name: string): void {
@@ -128,10 +170,9 @@ export class SchtasksClient {
     return buildCommandSpec(this.schtasksPath, args, { timeoutMs: SCHTASKS_TIMEOUT_MS, maxOutputBytes: SCHTASKS_OUTPUT_BYTES });
   }
 
-  private async mustSucceed(operation: SchtasksOperation, taskName: string, args: string[]): Promise<CommandResult> {
+  private async mustSucceed(operation: SchtasksOperation, taskName: string, args: string[]): Promise<void> {
     const result = await this.run(this.spec(args));
-    if (result.exitCode !== 0) throw new SchtasksError(operation, taskName, result.exitCode, (result.stderr || result.stdout).trim());
-    return result;
+    if (result.exitCode !== 0) throw await this.errorOf(operation, taskName, result);
   }
 
   /** Registers the task, replacing one of the same name (`/F`). The XML goes through a private temporary directory that is removed afterwards. */
@@ -168,21 +209,36 @@ export class SchtasksClient {
     const result = await this.run(this.spec(['/Query', '/TN', taskName, '/FO', 'CSV', '/NH', '/V']));
     if (result.exitCode !== 0) {
       // Exit 1 is both "no such task" and "access denied": the task list tells them apart without reading the message.
-      if (!(await this.listTaskNames()).includes(`\\${taskName}`)) return { exists: false };
-      throw new SchtasksError('query', taskName, result.exitCode, (result.stderr || result.stdout).trim());
+      if (!(await this.listTaskNames()).some((name) => sameTaskName(name, taskName))) return { exists: false };
+      throw await this.errorOf('query', taskName, result);
     }
-    const row = parseCsvRecords(result.stdout).find((fields) => fields[TASK_NAME_COLUMN] === `\\${taskName}`);
+    const stdout = csvText(result.stdout);
+    const row = parseCsvRecords(stdout).find((fields) => sameTaskName(fields[TASK_NAME_COLUMN] ?? '', taskName));
     const lastResult = row ? parseLastResult(row[LAST_RESULT_COLUMN]) : undefined;
-    if (lastResult === undefined) throw new Error(`Cannot read the last result of the task "${taskName}" from schtasks output: ${result.stdout.trim().slice(0, 500)}`);
+    if (lastResult === undefined) throw new Error(`Cannot read the last result of the task "${taskName}" from schtasks output: ${stdout.trim().slice(0, 500)}`);
     return { exists: true, running: lastResult === SCHED_S_TASK_RUNNING, failed: !NOT_A_FAILURE.has(lastResult) && lastResult !== SCHED_S_TASK_RUNNING, lastResult };
   }
 
   /** `/Query /FO CSV /NH` (without `/V`) has the task name in the first column. */
   private async listTaskNames(): Promise<string[]> {
     const result = await this.run(this.spec(['/Query', '/FO', 'CSV', '/NH']));
-    if (result.exitCode !== 0) throw new SchtasksError('query', '*', result.exitCode, (result.stderr || result.stdout).trim());
-    return parseCsvRecords(result.stdout).map((fields) => fields[0] ?? '');
+    if (result.exitCode !== 0) throw await this.errorOf('query', '*', result);
+    return parseCsvRecords(csvText(result.stdout)).map((fields) => fields[0] ?? '');
   }
+}
+
+/**
+ * The CSV only has to be split into records and fields, and the columns read are the task name and a number (both ASCII). In
+ * the OEM code pages that matter (CP932 and the other multi-byte ones) no second byte is `"`, `,` or a line break, so reading
+ * the bytes one-to-one (latin1) keeps the structure exact whatever the translated columns (Status) contain.
+ */
+function csvText(bytes: Buffer): string {
+  return bytes.toString('latin1');
+}
+
+/** Task Scheduler names are case-insensitive (`\\AzitoHub` is found by `azitohub`); the row prints a leading backslash. */
+function sameTaskName(listed: string, taskName: string): boolean {
+  return listed.toLowerCase() === `\\${taskName}`.toLowerCase();
 }
 
 function parseLastResult(value: string | undefined): number | undefined {

@@ -4,6 +4,7 @@ import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { fakeRunTransport, failed, ok } from '../../../shared/exec/testing/commandTesting';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
+import { rawFromText } from '../../../shared/os/taskScheduler/testing/liveTask';
 import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { HUB_SERVICE, createServiceManager } from '../serviceManager';
 import { createWindowsServiceManager } from '../windowsServiceManager';
@@ -48,7 +49,7 @@ function fakeScheduler(initial: { registered: boolean; running: boolean; lastRes
     return failed(1, `unexpected ${verb}`);
   };
   const transport = fakeRunTransport(respond);
-  const manager = createWindowsServiceManager({ homeDir: home, tmpDir: home, systemRoot: 'C:\\Windows' }, HUB_SERVICE, transport.run, TIMING);
+  const manager = createWindowsServiceManager({ homeDir: home, tmpDir: home, systemRoot: 'C:\\Windows' }, HUB_SERVICE, rawFromText(transport.run), TIMING);
   return { manager, state, verbs, specs: transport.specs };
 }
 

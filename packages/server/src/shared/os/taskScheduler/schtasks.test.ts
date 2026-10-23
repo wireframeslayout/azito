@@ -2,8 +2,10 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildCommandSpec } from '../../exec/commandSpec';
 import { fakeRunTransport, failed, ok, specText } from '../../exec/testing/commandTesting';
-import { SchtasksClient, SchtasksError, parseCsvRecords } from './schtasks';
+import { SchtasksClient, SchtasksError, parseCsvRecords, type CommandSpecRunner, rawRunnerOf } from './schtasks';
+import { rawFromText } from './testing/liveTask';
 import { decodeTaskXml } from './taskDefinition';
 
 const SCHTASKS = 'C:\\Windows\\System32\\schtasks.exe';
@@ -23,12 +25,12 @@ function verboseRow(name: string, lastResult: string): string {
 
 function client(respond?: Parameters<typeof fakeRunTransport>[0]): { client: SchtasksClient; specs: ReturnType<typeof fakeRunTransport>['specs'] } {
   const transport = fakeRunTransport(respond);
-  return { client: new SchtasksClient(transport.run, { systemRoot: 'C:\\Windows', tmpDir }), specs: transport.specs };
+  return { client: new SchtasksClient(rawFromText(transport.run), { systemRoot: 'C:\\Windows', tmpDir }), specs: transport.specs };
 }
 
 describe('SchtasksClient', () => {
   it('needs %SystemRoot% (no PATH lookup of schtasks.exe)', () => {
-    expect(() => new SchtasksClient(fakeRunTransport().run, { systemRoot: undefined, tmpDir })).toThrow(/SystemRoot/);
+    expect(() => new SchtasksClient(rawFromText(fakeRunTransport().run), { systemRoot: undefined, tmpDir })).toThrow(/SystemRoot/);
   });
 
   it('rejects a task name that is not plain ASCII (schtasks speaks the OEM code page)', async () => {
@@ -94,6 +96,13 @@ describe('SchtasksClient', () => {
       expect(await c.query('AzitoTest')).toMatchObject({ exists: true, running: false, failed: isFailed });
     });
 
+    it('matches the task name without regard to case (Task Scheduler names are case-insensitive)', async () => {
+      const found = client(() => ok(verboseRow('AzitoHub', '0')));
+      expect(await found.client.query('azitohub')).toMatchObject({ exists: true, lastResult: 0 });
+      const listed = client((spec) => (spec.args.includes('/TN') ? failed(1, 'denied') : ok('"\\AzitoHub","N/A","Ready"\r\n')));
+      await expect(listed.client.query('AZITOHUB')).rejects.toMatchObject({ operation: 'query' });
+    });
+
     it('skips rows of other tasks and takes the one by name', async () => {
       const { client: c } = client(() => ok(verboseRow('Other', '1') + verboseRow('AzitoTest', '0')));
       expect(await c.query('AzitoTest')).toMatchObject({ lastResult: 0 });
@@ -114,6 +123,72 @@ describe('SchtasksClient', () => {
       const { client: c } = client(() => ok('"PC","\\AzitoTest","N/A","Ready","x","y","not a number"\r\n'));
       await expect(c.query('AzitoTest')).rejects.toThrow(/last result/);
     });
+  });
+});
+
+/** A runner that answers by command: `reg` with the OEM code page, schtasks with the given bytes. */
+function oemClient(codePage: number | 'unreadable', stderr: Buffer): { client: SchtasksClient; regCalls: () => number } {
+  let regCalls = 0;
+  const run: CommandSpecRunner = async (spec) => {
+    if (spec.file.endsWith('reg.exe')) {
+      regCalls++;
+      if (codePage === 'unreadable') return { exitCode: 1, stdout: Buffer.alloc(0), stderr: Buffer.alloc(0) };
+      return { exitCode: 0, stdout: Buffer.from(`\r\nHKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage\r\n    OEMCP    REG_SZ    ${codePage}\r\n\r\n`), stderr: Buffer.alloc(0) };
+    }
+    return { exitCode: 1, stdout: Buffer.alloc(0), stderr };
+  };
+  return { client: new SchtasksClient(run, { systemRoot: 'C:\\Windows', tmpDir }), regCalls: () => regCalls };
+}
+
+// "エラー: 指定されたファイルが見つかりません。" in CP932.
+const CP932_ERROR = Buffer.from('8347838981 5b3a20'.replace(' ', ''), 'hex');
+
+describe('SchtasksClient output decoding (OEM code page)', () => {
+  it('reads a CP932 error message, asking the registry once', async () => {
+    const { client: c, regCalls } = oemClient(932, CP932_ERROR);
+    const first = await c.start('AzitoTest').catch((e: unknown) => e);
+    expect(first).toBeInstanceOf(SchtasksError);
+    expect((first as SchtasksError).detail).toBe('エラー:');
+    expect((first as SchtasksError).rawDetail).toEqual(CP932_ERROR);
+    await c.stop('AzitoTest').catch(() => undefined);
+    expect(regCalls()).toBe(1);
+  });
+
+  it('does not read the registry for ASCII output', async () => {
+    const { client: c, regCalls } = oemClient(932, Buffer.from('ERROR: Access is denied.'));
+    await expect(c.start('AzitoTest')).rejects.toMatchObject({ detail: 'ERROR: Access is denied.' });
+    expect(regCalls()).toBe(0);
+  });
+
+  it('keeps the bytes, and says so, for a code page without a decoder (never UTF-8 by guess)', async () => {
+    const { client: c } = oemClient(437, Buffer.from([0x82, 0x41]));
+    const err = (await c.start('AzitoTest').catch((e: unknown) => e)) as SchtasksError;
+    expect(err.detail).toBe('[undecodable output: the OEM code page 437 has no decoder; bytes 8241]');
+    expect(err.rawDetail).toEqual(Buffer.from([0x82, 0x41]));
+  });
+
+  it('says so when the bytes are not valid in the code page', async () => {
+    const { client: c } = oemClient(932, Buffer.from([0x81]));
+    await expect(c.start('AzitoTest')).rejects.toMatchObject({ detail: expect.stringContaining('not valid shift_jis (OEM code page 932); bytes 81') });
+  });
+
+  it('fails with the registry problem when the code page cannot be read, and tries again next time', async () => {
+    const { client: c, regCalls } = oemClient('unreadable', CP932_ERROR);
+    await expect(c.start('AzitoTest')).rejects.toThrow(/OEM code page/);
+    await expect(c.start('AzitoTest')).rejects.toThrow(/OEM code page/);
+    expect(regCalls()).toBe(2);
+  });
+
+  it('a runner that returns no raw bytes is an error, not a UTF-8 guess', async () => {
+    const run = rawRunnerOf(async () => ({ exitCode: 0, signal: null, stdout: 'x', stderr: '' }));
+    await expect(run(buildCommandSpec('x', []))).rejects.toThrow(/rawOutput/);
+  });
+
+  it('reads the task state from a CP932 Status column without the code page', async () => {
+    const row = Buffer.concat([Buffer.from('"PC","\\AzitoTest","N/A","'), Buffer.from('8e c0 8d 73 92 86'.replace(/ /g, ''), 'hex'), Buffer.from('","x","N/A","267009"\r\n')]);
+    const run: CommandSpecRunner = async () => ({ exitCode: 0, stdout: row, stderr: Buffer.alloc(0) });
+    const c = new SchtasksClient(run, { systemRoot: 'C:\\Windows', tmpDir });
+    expect(await c.query('AzitoTest')).toMatchObject({ exists: true, running: true });
   });
 });
 

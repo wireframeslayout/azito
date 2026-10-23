@@ -3,14 +3,16 @@ import os from 'os';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runCommandSpec, runHostOf } from '../../exec/runCommandSpec';
 import { resolveCurrentHostEnv } from '../hostEnv';
-import { SchtasksClient, type TaskScheduleState } from './schtasks';
+import { SchtasksClient, rawRunnerOf, type TaskScheduleState } from './schtasks';
+import { removeTaskIfPresent, startAndWaitRunning } from './testing/liveTask';
 import { buildTaskXml } from './taskDefinition';
 
 /**
  * The real Task Scheduler (`schtasks.exe`), on Windows only. A task with a unique name is registered, started, stopped and
  * deleted; `afterAll` deletes it whatever happened. Registration, query and delete must work everywhere. `/Run` and the
  * "is it running" check depend on an interactive logon session, which a CI runner may not have: if that part does not work
- * the test is skipped WITH the reason it printed (never silently), and the other steps still run.
+ * the test is skipped WITH the reason only when the Task Scheduler itself reports that there is no logon session (see
+ * testing/liveTask.ts); any other failure to start is a test failure.
  */
 const TASK = `AzitoCiTest-${crypto.randomBytes(6).toString('hex')}`;
 
@@ -32,7 +34,7 @@ describe.skipIf(process.platform !== 'win32')('schtasks on a real Task Scheduler
 
   beforeAll(() => {
     const host = resolveCurrentHostEnv();
-    client = new SchtasksClient((spec) => runCommandSpec(spec, runHostOf(host)), host);
+    client = new SchtasksClient(rawRunnerOf((spec) => runCommandSpec(spec, { ...runHostOf(host), rawOutput: true })), host);
     taskXml = buildTaskXml({
       userId: `${process.env.USERDOMAIN ?? os.hostname()}\\${os.userInfo().username}`,
       description: 'AZITO CI test task (safe to delete)',
@@ -44,9 +46,8 @@ describe.skipIf(process.platform !== 'win32')('schtasks on a real Task Scheduler
   });
 
   afterAll(async () => {
-    // Best effort: the task may already be deleted by the test, and a leftover must not fail the run that is reporting something else.
-    await client.stop(TASK).catch(() => undefined);
-    await client.delete(TASK).catch(() => undefined);
+    // "Already deleted" is fine; a task that cannot be removed fails the suite instead of being left behind unnoticed.
+    await removeTaskIfPresent(client, TASK);
   });
 
   it('registers the logon-trigger task from the generated XML', async () => {
@@ -60,23 +61,14 @@ describe.skipIf(process.platform !== 'win32')('schtasks on a real Task Scheduler
   });
 
   it('starts the task and sees it running', async (ctx) => {
-    try {
-      await client.start(TASK);
-    } catch (err) {
+    const outcome = await startAndWaitRunning(client, TASK, () => client.start(TASK));
+    if (outcome.skipReason) {
       runnable = false;
-      const reason = `schtasks /Run is not possible on this machine: ${err instanceof Error ? err.message : String(err)}`;
-      console.warn(`[schtasks.windows.test] SKIPPED start/stop: ${reason}`);
-      ctx.skip(reason);
-    }
-    const state = await waitFor((s) => s.exists && s.running, 20_000);
-    if (!(state.exists && state.running)) {
-      runnable = false;
-      const reason = `/Run was accepted but the task did not report running within 20s (state ${JSON.stringify(state)}); the runner probably has no interactive logon session`;
-      console.warn(`[schtasks.windows.test] SKIPPED start/stop: ${reason}`);
-      ctx.skip(reason);
+      console.warn(`[schtasks.windows.test] SKIPPED start/stop: ${outcome.skipReason}`);
+      ctx.skip(outcome.skipReason);
     }
     runnable = true;
-    expect(state).toMatchObject({ exists: true, running: true, lastResult: 0x41301 });
+    expect(await client.query(TASK)).toMatchObject({ exists: true, running: true, lastResult: 0x41301 });
   }, 60_000);
 
   it('stops the running task', async (ctx) => {
@@ -85,6 +77,10 @@ describe.skipIf(process.platform !== 'win32')('schtasks on a real Task Scheduler
     const state = await waitFor((s) => s.exists && !s.running, 15_000);
     expect(state).toMatchObject({ exists: true, running: false, failed: false });
   }, 60_000);
+
+  it('finds the task whatever the case of the name', async () => {
+    expect((await client.query(TASK.toLowerCase())).exists).toBe(true);
+  });
 
   it('deletes the task, after which it no longer exists', async () => {
     await client.delete(TASK);

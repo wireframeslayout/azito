@@ -37,6 +37,8 @@ export function runHostOf(hostEnv: Pick<HostEnv, 'platform' | 'systemRoot'>): Ru
 export type RunCommandOptions = RunHost & {
   /** Overrides {@link DEFAULT_KILL_GRACE_MS}. */
   killGraceMs?: number;
+  /** Also return the output bytes untouched (`stdoutBytes` / `stderrBytes`); `stdout` / `stderr` stay the UTF-8 text. */
+  rawOutput?: boolean;
 };
 
 /** One output stream, kept as bytes and cut at the byte limit (`exceeded`: more than the limit was written). */
@@ -60,6 +62,10 @@ class Capture {
     this.chunks.push(chunk);
     this.bytes += chunk.length;
     return false;
+  }
+
+  raw(): Buffer {
+    return Buffer.concat(this.chunks);
   }
 
   /** `cutShort`: the command was stopped, so the output may end in the middle of a character. */
@@ -178,8 +184,11 @@ export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): P
         const err = stderr.text(cutShort);
         if (stopReason === 'timeout') reject(new CommandTimeoutError(spec.timeoutMs, out, err));
         else if (stopReason === 'output_limit') reject(new CommandOutputLimitError(spec.maxOutputBytes, out, err));
-        else if (exitCode !== null) resolve({ exitCode, signal: null, stdout: out, stderr: err });
-        else resolve({ exitCode: 128 + (signal ? osConstants.signals[signal] : 0), signal, stdout: out, stderr: err });
+        else {
+          const raw = options.rawOutput ? { stdoutBytes: stdout.raw(), stderrBytes: stderr.raw() } : {};
+          if (exitCode !== null) resolve({ exitCode, signal: null, stdout: out, stderr: err, ...raw });
+          else resolve({ exitCode: 128 + (signal ? osConstants.signals[signal] : 0), signal, stdout: out, stderr: err, ...raw });
+        }
       });
     };
 
