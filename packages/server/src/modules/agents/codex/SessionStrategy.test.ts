@@ -1,8 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { CodexSessionStrategy } from './SessionStrategy';
 import { posixDialect } from '../../../shared/os/shellDialect';
+import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 
 const server: ServerConfig = {
   name: 'local',
@@ -20,22 +24,41 @@ const server: ServerConfig = {
   createdAt: '2026-01-01T00:00:00.000Z',
 };
 
-function createStrategy(output: string): { strategy: CodexSessionStrategy; exec: ReturnType<typeof vi.fn> } {
-  const exec = vi.fn().mockResolvedValue({ stdout: output, stderr: '', code: 0 });
-  const transportFactory = { getTransport: vi.fn().mockReturnValue({ exec }) } as unknown as TransportFactory;
-  return { strategy: new CodexSessionStrategy(transportFactory), exec };
+let home: string;
+let nextMtime: number;
+
+beforeEach(() => {
+  home = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-codex-sessions-')));
+  nextMtime = 1_000_000;
+});
+afterEach(() => {
+  rmSync(home, { recursive: true, force: true });
+});
+
+/** A strategy over the real files of a temporary home directory (the hub's own host: LocalFileOps). */
+function createStrategy(): CodexSessionStrategy {
+  const ops = new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: home }));
+  const transportFactory = { getFileOps: () => ops } as unknown as TransportFactory;
+  return new CodexSessionStrategy(transportFactory);
 }
 
-function meta(filePath: string, sessionId: string, cwd: string | null, originator: string | null): string {
-  return [
-    `FILE:${filePath}`,
-    JSON.stringify({ type: 'session_meta', payload: { session_id: sessionId, cwd, originator } }),
-  ].join('\n');
+/** Writes a rollout file under ~/.codex/sessions; each call is newer than the one before. Returns its path. */
+function rollout(name: string, firstLine: string, options: { mtime?: number } = {}): string {
+  const full = path.join(home, '.codex', 'sessions', '2026', '07', '15', name);
+  mkdirSync(path.dirname(full), { recursive: true });
+  writeFileSync(full, `${firstLine}\n{"type":"event_msg","payload":{"session_id":"from-a-later-line"}}\n`);
+  const mtime = options.mtime ?? (nextMtime += 10);
+  utimesSync(full, mtime, mtime);
+  return full;
+}
+
+function meta(sessionId: string, cwd: string | null, originator: string | null): string {
+  return JSON.stringify({ type: 'session_meta', payload: { session_id: sessionId, cwd, originator } });
 }
 
 describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review: respawn MCP-bypass fix)', () => {
   it('includes the azt-mcp disable override on a resume respawn, same as a fresh launch', () => {
-    const { strategy } = createStrategy('');
+    const strategy = createStrategy();
     const fresh = strategy.buildRespawnCommand(null, null, null, posixDialect);
     const resumed = strategy.buildRespawnCommand('session-1', null, null, posixDialect);
     expect(fresh).toContain('-c mcp_servers.azt-mcp.enabled=false');
@@ -52,7 +75,7 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
   });
 
   it('forwards model and extraArgs on a resume respawn, same as a fresh launch', () => {
-    const { strategy } = createStrategy('');
+    const strategy = createStrategy();
     const resumed = strategy.buildRespawnCommand('session-2', 'gpt-5.6-sol', '--verbose', posixDialect);
     expect(resumed).toBe(
       "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol' '--verbose'",
@@ -60,14 +83,14 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
   });
 
   it('omits MCP disable flag when blockMcp is false (Issue #471)', () => {
-    const { strategy } = createStrategy('');
+    const strategy = createStrategy();
     const fresh = strategy.buildRespawnCommand(null, null, null, posixDialect, false);
     expect(fresh).not.toContain('mcp_servers.azt-mcp.enabled=false');
     expect(fresh).toBe('codex --dangerously-bypass-approvals-and-sandbox');
   });
 
   it('omits MCP disable flag on resume when blockMcp is false', () => {
-    const { strategy } = createStrategy('');
+    const strategy = createStrategy();
     const resumed = strategy.buildRespawnCommand('session-3', null, null, posixDialect, false);
     expect(resumed).not.toContain('mcp_servers.azt-mcp.enabled=false');
     expect(resumed).toBe('codex resume session-3 --dangerously-bypass-approvals-and-sandbox');
@@ -76,55 +99,64 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
 
 describe('CodexSessionStrategy.scanSessionId', () => {
   it('returns a session with a matching cwd', async () => {
-    const { strategy } = createStrategy(meta('/tmp/rollout.jsonl', 'session-1', '/work', 'codex'));
-    await expect(strategy.scanSessionId(server, '/work')).resolves.toBe('session-1');
+    rollout('rollout-1.jsonl', meta('session-1', '/work', 'codex'));
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBe('session-1');
   });
 
   it('excludes a mismatched cwd', async () => {
-    const { strategy } = createStrategy(meta('/tmp/rollout.jsonl', 'session-1', '/other', 'codex'));
-    await expect(strategy.scanSessionId(server, '/work')).resolves.toBeNull();
+    rollout('rollout-1.jsonl', meta('session-1', '/other', 'codex'));
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBeNull();
   });
 
   it('excludes codex_exec sessions', async () => {
-    const { strategy } = createStrategy(meta('/tmp/rollout.jsonl', 'session-1', '/work', 'codex_exec'));
-    await expect(strategy.scanSessionId(server, '/work')).resolves.toBeNull();
+    rollout('rollout-1.jsonl', meta('session-1', '/work', 'codex_exec'));
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBeNull();
   });
 
   it('selects the oldest candidate after filtering', async () => {
-    const output = [
-      meta('/tmp/old.jsonl', 'old', '/work', 'codex'),
-      meta('/tmp/new.jsonl', 'new', '/work', 'codex'),
-    ].join('\n');
-    const { strategy } = createStrategy(output);
-    await expect(strategy.scanSessionId(server, '/work')).resolves.toBe('old');
+    rollout('rollout-new.jsonl', meta('new', '/work', 'codex'));
+    rollout('rollout-old.jsonl', meta('old', '/work', 'codex'), { mtime: 500_000 });
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBe('old');
   });
 
   it('skips cwd filtering when workingDirectory is null', async () => {
-    const output = [
-      meta('/tmp/other.jsonl', 'other', '/other', 'codex'),
-      meta('/tmp/exec.jsonl', 'exec', '/work', 'codex_exec'),
-    ].join('\n');
-    const { strategy } = createStrategy(output);
-    await expect(strategy.scanSessionId(server, null)).resolves.toBe('other');
+    rollout('rollout-other.jsonl', meta('other', '/other', 'codex'));
+    rollout('rollout-exec.jsonl', meta('exec', '/work', 'codex_exec'));
+    await expect(createStrategy().scanSessionId(server, null)).resolves.toBe('other');
   });
 
   it('normalizes trailing slashes before comparing cwd', async () => {
-    const { strategy } = createStrategy(meta('/tmp/rollout.jsonl', 'session-1', '/work/', 'codex'));
-    await expect(strategy.scanSessionId(server, '/work///')).resolves.toBe('session-1');
+    rollout('rollout-1.jsonl', meta('session-1', '/work/', 'codex'));
+    await expect(createStrategy().scanSessionId(server, '/work///')).resolves.toBe('session-1');
   });
 
   it('skips candidates with invalid session metadata', async () => {
-    const { strategy } = createStrategy('FILE:/tmp/bad.jsonl\nnot json');
-    await expect(strategy.scanSessionId(server, '/work')).resolves.toBeNull();
+    rollout('rollout-bad.jsonl', 'not json');
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBeNull();
   });
 
   it('skips excluded session IDs and returns the next candidate', async () => {
-    const output = [
-      meta('/tmp/old.jsonl', 'assigned', '/work', 'codex'),
-      meta('/tmp/new.jsonl', 'unassigned', '/work', 'codex'),
-    ].join('\n');
-    const { strategy } = createStrategy(output);
+    rollout('rollout-old.jsonl', meta('assigned', '/work', 'codex'), { mtime: 500_000 });
+    rollout('rollout-new.jsonl', meta('unassigned', '/work', 'codex'));
+    const strategy = createStrategy();
     strategy.excludeSessionId('assigned');
     await expect(strategy.scanSessionId(server, '/work')).resolves.toBe('unassigned');
+  });
+
+  it('reads the metadata from the first line only, and only from rollout-*.jsonl files', async () => {
+    rollout('rollout-1.jsonl', meta('first-line', '/work', 'codex'));
+    rollout('other.jsonl', meta('not-a-rollout', '/work', 'codex'), { mtime: 400_000 });
+    rollout('rollout-2.txt', meta('wrong-extension', '/work', 'codex'), { mtime: 400_000 });
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBe('first-line');
+  });
+
+  it('considers only rollouts newer than the timestamp', async () => {
+    rollout('rollout-before.jsonl', meta('before', '/work', 'codex'), { mtime: 1000 });
+    rollout('rollout-after.jsonl', meta('after', '/work', 'codex'), { mtime: 3000 });
+    await expect(createStrategy().scanSessionId(server, '/work', new Date(2_000_000))).resolves.toBe('after');
+  });
+
+  it('is null when there is no sessions directory', async () => {
+    await expect(createStrategy().scanSessionId(server, '/work')).resolves.toBeNull();
   });
 });

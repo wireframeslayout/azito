@@ -1,11 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile } from 'child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import * as path from 'path';
 import { FileOpsError, type FileOpsErrorCode } from '../../../shared/fs/fileOps';
 import { ShellFileOps } from './ShellFileOps';
+import { AgentUnreachableError } from './AgentUnreachableError';
 import type { ExecResult } from './ServerTransport';
 
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
@@ -63,10 +64,12 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       writeFileSync(path.join(odd, '.hidden'), '');
       const entries = (await ops.list(odd)).sort((a, b) => a.name.localeCompare(b.name));
       expect(entries).toEqual([
-        { name: '.hidden', kind: 'file', size: 0 },
-        { name: 'a.txt', kind: 'file', size: 5 },
+        { name: '.hidden', kind: 'file', size: 0, mtimeMs: expect.any(Number) },
+        { name: 'a.txt', kind: 'file', size: 5, mtimeMs: expect.any(Number) },
         { name: 'sub', kind: 'directory' },
       ]);
+      const listed = entries.find((e) => e.name === 'a.txt')!;
+      expect(Math.abs(listed.mtimeMs! - statSync(path.join(odd, 'a.txt')).mtimeMs)).toBeLessThan(1000);
       expect(existsSync(path.join(dir, 'pwned'))).toBe(false);
     });
 
@@ -97,6 +100,146 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
     });
   });
 
+  describe('walk', () => {
+    const options = { excludeNames: [] as string[], maxEntries: 1000, timeBudgetMs: 10_000 };
+    const files = (...names: string[]): void => {
+      for (const name of names) {
+        mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+        writeFileSync(path.join(dir, name), 'x');
+      }
+    };
+
+    it('lists the regular files at any depth with their mtime, in one command', async () => {
+      files('b.txt', 'sub/deep/y.txt', 'a.txt');
+      sh.commands.length = 0;
+
+      const { entries, truncated } = await ops.walk(dir, options);
+
+      expect(entries.map((e) => e.path).sort()).toEqual(['a.txt', 'b.txt', 'sub/deep/y.txt']);
+      expect(Math.abs(entries.find((e) => e.path === 'a.txt')!.mtimeMs - statSync(path.join(dir, 'a.txt')).mtimeMs)).toBeLessThan(1000);
+      expect(truncated).toBe(false);
+      expect(sh.commands).toHaveLength(1);
+    });
+
+    it('prunes excluded names', async () => {
+      files('keep.ts', 'node_modules/p/a.js', 'a/node_modules/b.js', 'a/skip.log', 'a/ok.ts', 'a/b/deep.ts');
+
+      expect((await ops.walk(dir, { ...options, excludeNames: ['node_modules', '*.log'] })).entries.map((e) => e.path).sort()).toEqual(['a/b/deep.ts', 'a/ok.ts', 'keep.ts']);
+    });
+
+    it('stops at maxEntries and says so', async () => {
+      files('a.txt', 'b.txt', 'c.txt');
+
+      const result = await ops.walk(dir, { ...options, maxEntries: 2 });
+
+      expect(result.entries).toHaveLength(2);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('quotes a root that is hostile to a shell, and is NOT_FOUND for one that is not a directory', async () => {
+      const odd = path.join(dir, "it's $(touch pwned)");
+      mkdirSync(odd);
+      writeFileSync(path.join(odd, 'a.txt'), '');
+
+      expect((await ops.walk(odd, options)).entries.map((e) => e.path)).toEqual(['a.txt']);
+      expect(existsSync(path.join(dir, 'pwned'))).toBe(false);
+      expect(await codeOf(ops.walk(path.join(dir, 'missing'), options))).toBe('NOT_FOUND');
+    });
+
+    it('reports an exec that was not answered in time (the agent\'s HTTP deadline) as truncated, with nothing', async () => {
+      const slow = new ShellFileOps({ exec: async () => { throw new AgentUnreachableError('old', 'timeout'); } });
+
+      expect(await slow.walk(dir, options)).toEqual({ entries: [], truncated: true });
+    });
+
+    it('lets an agent that cannot be reached at all propagate', async () => {
+      const down = new ShellFileOps({ exec: async () => { throw new AgentUnreachableError('old', 'refused'); } });
+
+      await expect(down.walk(dir, options)).rejects.toBeInstanceOf(AgentUnreachableError);
+    });
+
+    // An old agent hands back the output so far when it kills a command (its time, its 1MB output limit), as if it had finished.
+    describe('output cut by the agent', () => {
+      const line = (n: number): string => `1700000000.5 dir/file-${String(n).padStart(6, '0')}.txt`;
+
+      it('is truncated, without the half line, when the end marker is missing', async () => {
+        const cutOutput = `${line(1)}\n${line(2)}\n1700000000.5 dir/file-0000`;
+        const stub = new ShellFileOps({ exec: async () => ({ stdout: cutOutput, stderr: '', code: 0 }) });
+
+        const result = await stub.walk(dir, options);
+
+        expect(result.truncated).toBe(true);
+        expect(result.entries.map((e) => e.path)).toEqual(['dir/file-000001.txt', 'dir/file-000002.txt']);
+      });
+
+      it('is truncated, without the half line, when the command\'s own output limit cut it (a stub that resolves at 1MB)', async () => {
+        const all = Array.from({ length: 30_000 }, (_, n) => line(n)).join('\n');
+        const atLimit = Buffer.from(all).subarray(0, 900_000).toString();
+        // what `head -c` leaves, then the command's own newline and marker
+        const stub = new ShellFileOps({ exec: async () => ({ stdout: `${atLimit}\nAZITO_WALK_END\n`, stderr: '', code: 0 }) });
+
+        const result = await stub.walk(dir, { ...options, maxEntries: 1_000_000 });
+
+        expect(result.truncated).toBe(true);
+        expect(result.entries.every((e) => /^dir\/file-\d{6}\.txt$/.test(e.path))).toBe(true);
+      });
+
+      it('is complete, and not truncated, when the end marker is there', async () => {
+        const stub = new ShellFileOps({ exec: async () => ({ stdout: `${line(1)}\n${line(2)}\n\nAZITO_WALK_END\n`, stderr: '', code: 0 }) });
+
+        expect(await stub.walk(dir, options)).toEqual({
+          entries: [{ path: 'dir/file-000001.txt', mtimeMs: 1700000000500 }, { path: 'dir/file-000002.txt', mtimeMs: 1700000000500 }],
+          truncated: false,
+        });
+      });
+    });
+  });
+
+  describe('replaceDirectory', () => {
+    const tree = (name: string, content: string): string => {
+      const full = path.join(dir, name);
+      mkdirSync(full, { recursive: true });
+      writeFileSync(path.join(full, 'f.txt'), content);
+      return full;
+    };
+
+    it('replaces the target with the staging directory in one command and leaves no backup', async () => {
+      const target = tree('target', 'old');
+      const staging = tree('staging', 'new');
+      sh.commands.length = 0;
+
+      await ops.replaceDirectory(staging, target);
+
+      expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('new');
+      expect(existsSync(staging)).toBe(false);
+      expect(readdirSync(dir).filter((n) => n.includes('azito-old'))).toEqual([]);
+      expect(sh.commands).toHaveLength(1);
+    });
+
+    it('moves into a missing target, and keeps the old tree when the staging directory is missing', async () => {
+      await ops.replaceDirectory(tree('s1', 'new'), path.join(dir, 'fresh'));
+      expect(readFileSync(path.join(dir, 'fresh', 'f.txt'), 'utf8')).toBe('new');
+
+      const target = tree('target', 'old');
+      expect(await codeOf(ops.replaceDirectory(path.join(dir, 'missing'), target))).toBe('NOT_FOUND');
+      expect(readFileSync(path.join(target, 'f.txt'), 'utf8')).toBe('old');
+    });
+  });
+
+  describe('stat withAge', () => {
+    it('reports the age by the host\'s own clock, only when asked', async () => {
+      writeFileSync(path.join(dir, 'f'), 'x');
+      const old = (Date.now() - 10 * 60 * 1000) / 1000;
+      utimesSync(path.join(dir, 'f'), old, old);
+
+      const aged = await ops.stat(path.join(dir, 'f'), { withAge: true });
+
+      expect(aged?.ageMs).toBeGreaterThan(9.9 * 60 * 1000);
+      expect(aged?.ageMs).toBeLessThan(10.5 * 60 * 1000);
+      expect((await ops.stat(path.join(dir, 'f')))?.ageMs).toBeUndefined();
+    });
+  });
+
   describe('read', () => {
     it('returns the exact bytes, a trailing newline included', async () => {
       const bytes = Buffer.from('line one\nline two\n');
@@ -112,6 +255,24 @@ describe.skipIf(process.platform === 'win32')('ShellFileOps against a real shell
       const binary = Buffer.from([0, 255, 10, 13, 0, 1]);
       writeFileSync(path.join(dir, 'bin'), binary);
       expect((await ops.read(path.join(dir, 'bin'))).data.equals(binary)).toBe(true);
+    });
+
+    it('reads only the first headBytes of a file when asked', async () => {
+      writeFileSync(path.join(dir, 'rollout'), 'first line\nsecond line\n');
+      const head = await ops.read(path.join(dir, 'rollout'), { headBytes: 10 });
+      expect(head.data.toString()).toBe('first line');
+      expect(head.stat.size).toBe(23);
+      expect((await ops.read(path.join(dir, 'rollout'), { headBytes: 1000 })).data.toString()).toBe('first line\nsecond line\n');
+      writeFileSync(path.join(dir, 'empty'), '');
+      expect((await ops.read(path.join(dir, 'empty'), { headBytes: 10 })).data.length).toBe(0);
+    });
+
+    it.skipIf(process.getuid?.() === 0)('fails on a file it cannot read instead of returning it as empty', async () => {
+      const locked = path.join(dir, 'locked');
+      writeFileSync(locked, 'secret');
+      chmodSync(locked, 0o000);
+
+      expect(await codeOf(ops.read(locked, { headBytes: 10 }))).toBe('FAILED');
     });
 
     it('refuses a missing path, a directory and a file over the limit', async () => {

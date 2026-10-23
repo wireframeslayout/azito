@@ -1434,7 +1434,10 @@ export class ExecuteTaskUseCase {
             const launchTime = new Date();
             for (let attempt = 0; attempt < 3; attempt++) {
               await sleep(10_000);
-              const scannedId = await strategy.scanSessionId(scanServer, effectiveDir ?? null, launchTime).catch(() => null);
+              const scannedId = await strategy.scanSessionId(scanServer, effectiveDir ?? null, launchTime).catch((err: unknown) => {
+                console.warn(`[ExecuteTask] session scan on server "${scanServer.name}" failed (task ${taskId})`, err);
+                return null;
+              });
               if (scannedId) {
                 const assignedW = scanWindowRepo.findAgentSessionIdsByServer(scanServer.name);
                 const assignedT = scanTaskRepo.findAgentSessionIdsByServer(scanServer.name);

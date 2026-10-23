@@ -11,9 +11,13 @@ import {
   type FileContent,
   type FileStat,
   type IFileOps,
+  type WalkEntry,
+  type WalkOptions,
+  type WalkResult,
   type WriteOptions,
   type WriteResult,
 } from './fileOps';
+import { compileGlob } from './glob';
 
 /** What a {@link LocalFileOps} needs to know of the host it runs on, resolved once at the process's entry point. */
 export interface LocalFileOpsHost {
@@ -73,6 +77,18 @@ async function statOrNull(target: string, followLinks: boolean): Promise<fs.Stat
   }
 }
 
+/** The first `count` bytes of a file (fewer when it is shorter). */
+async function readHead(target: string, count: number): Promise<Buffer> {
+  const handle = await fs.promises.open(target, 'r');
+  try {
+    const buffer = Buffer.alloc(count);
+    const { bytesRead } = await handle.read(buffer, 0, count, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
+}
+
 /** The OS's own resolution (`fs.promises.realpath` is Node's JS one): it follows junctions and returns the filesystem's notation. */
 const realpathNative = promisify(fs.realpath.native);
 
@@ -112,20 +128,92 @@ export class LocalFileOps implements IFileOps {
       return Promise.all(items.map(async (item): Promise<DirEntry> => {
         const kind = kindOf(item);
         if (kind === 'directory') return { name: item.name, kind };
-        // The size of what a link points at; a dangling link has none.
-        const size = await fs.promises.stat(this.api.join(target, item.name)).then((s) => s.size, () => undefined);
-        return size === undefined ? { name: item.name, kind } : { name: item.name, kind, size };
+        // The size and mtime of what a link points at; a dangling link has neither.
+        const stats = await fs.promises.stat(this.api.join(target, item.name)).catch(() => undefined);
+        return stats === undefined ? { name: item.name, kind } : { name: item.name, kind, size: stats.size, mtimeMs: stats.mtimeMs };
       }));
     });
   }
 
-  async stat(path: string, options: { followLinks?: boolean } = {}): Promise<FileStat | null> {
+  async stat(path: string, options: { followLinks?: boolean; withAge?: boolean } = {}): Promise<FileStat | null> {
     const target = this.checked(path);
     const stats = await statOrNull(target, options.followLinks !== false);
-    return stats && toFileStat(stats);
+    if (!stats) return null;
+    return options.withAge ? { ...toFileStat(stats), ageMs: Date.now() - stats.mtimeMs } : toFileStat(stats);
   }
 
-  async read(path: string, options: { maxBytes?: number } = {}): Promise<FileContent> {
+  async walk(root: string, options: WalkOptions): Promise<WalkResult> {
+    const base = this.checked(root);
+    const excluded = options.excludeNames.map((glob) => compileGlob(glob, true));
+    const deadline = Date.now() + options.timeBudgetMs;
+    const entries: WalkEntry[] = [];
+    const expired = (): boolean => Date.now() > deadline;
+    let level = [{ absolute: base, relative: '' }];
+    while (level.length > 0) {
+      const next: typeof level = [];
+      for (const dir of level) {
+        if (expired()) return { entries, truncated: true };
+        let items: fs.Dirent[];
+        try {
+          items = await fs.promises.readdir(dir.absolute, { withFileTypes: true });
+        } catch (err) {
+          if (dir.absolute === base) throw toFileOpsError(err);
+          continue;
+        }
+        items.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+        for (const item of items) {
+          // Checked per entry and after each await, not per directory: one directory can hold a very large number of files.
+          if (expired()) return { entries, truncated: true };
+          if (excluded.some((matches) => matches(item.name))) continue;
+          const relative = dir.relative === '' ? item.name : `${dir.relative}/${item.name}`;
+          if (item.isDirectory()) {
+            next.push({ absolute: this.api.join(dir.absolute, item.name), relative });
+          } else if (item.isFile()) {
+            if (entries.length >= options.maxEntries) return { entries, truncated: true };
+            // A file that vanished since the listing is not one.
+            const stats = await fs.promises.lstat(this.api.join(dir.absolute, item.name)).catch(() => null);
+            if (expired()) return { entries, truncated: true };
+            if (stats) entries.push({ path: relative, mtimeMs: stats.mtimeMs });
+          }
+        }
+      }
+      level = next;
+    }
+    return { entries, truncated: false };
+  }
+
+  /**
+   * `target` is renamed to a backup beside it, `staging` to `target`, and only then is the backup removed. If the second rename
+   * fails, the backup goes back (and if even that fails the error says where the old tree is). Removing the backup afterwards is
+   * best-effort: the replacement has already happened.
+   */
+  async replaceDirectory(staging: string, target: string): Promise<void> {
+    const from = this.checked(staging);
+    const to = this.checked(target);
+    return this.withPathLocks([from, to], () => guarded(async () => {
+      if (!(await fs.promises.lstat(from)).isDirectory()) throw new FileOpsError('NOT_A_DIRECTORY', `Not a directory: ${from}`);
+      const existing = await statOrNull(to, false);
+      if (existing === null) {
+        await fs.promises.rename(from, to);
+        return;
+      }
+      const backup = this.api.join(this.api.dirname(to), `.${this.api.basename(to)}.azito-old-${randomBytes(8).toString('hex')}`);
+      await fs.promises.rename(to, backup);
+      try {
+        await fs.promises.rename(from, to);
+      } catch (err) {
+        try {
+          await fs.promises.rename(backup, to);
+        } catch (restoreError) {
+          throw new AggregateError([err, restoreError], `Could not replace ${to}, and could not put it back; the previous content is at ${backup}`);
+        }
+        throw err;
+      }
+      await fs.promises.rm(backup, { recursive: true, force: true }).catch(() => undefined);
+    }));
+  }
+
+  async read(path: string, options: { maxBytes?: number; headBytes?: number } = {}): Promise<FileContent> {
     const target = this.checked(path);
     return guarded(async () => {
       const stats = await fs.promises.stat(target);
@@ -133,6 +221,7 @@ export class LocalFileOps implements IFileOps {
       if (options.maxBytes !== undefined && stats.size > options.maxBytes) {
         throw new FileOpsError('TOO_LARGE', `File too large (${stats.size} bytes, limit ${options.maxBytes})`, { size: stats.size });
       }
+      if (options.headBytes !== undefined) return { data: await readHead(target, options.headBytes), stat: toFileStat(stats) };
       return { data: await fs.promises.readFile(target), stat: toFileStat(stats) };
     });
   }

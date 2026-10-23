@@ -1,8 +1,8 @@
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
-import { shellQuote } from '../../shared/shellQuote';
 import { FileBrowseError } from './FileBrowseService';
 import { parseRipgrepJson } from './parseRipgrepJson';
+import { searchFileNames, type NameSearchResult } from './nameSearch';
 import { buildCommandSpec, CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandResult } from '../../shared/exec/commandSpec';
 
 const MAX_RESULTS = 200;
@@ -59,14 +59,15 @@ export class FileSearchService {
     const hasRg = await this.checkRgAvailable(server);
     const engine: 'rg' | 'grep' = hasRg ? 'rg' : 'grep';
 
-    const [nameMatches, content] = await Promise.all([
+    const [names, content] = await Promise.all([
       this.searchByName(server, opts),
       this.searchContent(server, opts, engine),
     ]);
+    const nameMatches = names.paths;
     const contentHits = content.hits;
 
     const totalCount = nameMatches.length + contentHits.length;
-    const truncated = totalCount >= MAX_RESULTS || content.truncated;
+    const truncated = totalCount >= MAX_RESULTS || content.truncated || names.truncated;
 
     return {
       nameMatches: nameMatches.slice(0, MAX_RESULTS),
@@ -101,23 +102,19 @@ export class FileSearchService {
     }
   }
 
-  private async searchByName(server: ServerConfig, opts: SearchOptions): Promise<string[]> {
-    const cmd = this.buildFindCommand(opts);
-    const transport = this.transportFactory.getTransport(server);
-    try {
-      const result = await transport.exec(cmd, SEARCH_TIMEOUT_MS);
-      if (!result.stdout.trim()) return [];
-      const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
-      return result.stdout.trim().split('\n')
-        .filter(Boolean)
-        .map(p => p.startsWith(root) ? p.slice(root.length) : p)
-        .slice(0, MAX_RESULTS);
-    } catch (err: unknown) {
-      if (isTimeoutError(err)) {
-        throw new FileBrowseError('Search timed out', 504);
-      }
-      return [];
-    }
+  /**
+   * File names are found by one walk on the host (`IFileOps.walk`) and matched here (see `searchFileNames`). A tree that could not
+   * be seen whole in the time allowed is reported as `truncated`, and what was found is still returned.
+   */
+  private async searchByName(server: ServerConfig, opts: SearchOptions): Promise<NameSearchResult> {
+    return searchFileNames(this.transportFactory.getTransport(server).files(), {
+      root: opts.root,
+      query: opts.query,
+      caseSensitive: opts.caseSensitive,
+      regex: opts.regex,
+      include: this.splitGlobPatterns(opts.include),
+      excludeNames: [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)],
+    }, { maxResults: MAX_RESULTS, budgetMs: SEARCH_TIMEOUT_MS });
   }
 
   private async searchContent(server: ServerConfig, opts: SearchOptions, engine: 'rg' | 'grep'): Promise<{ hits: SearchHit[]; truncated: boolean }> {
@@ -140,29 +137,6 @@ export class FileSearchService {
       // The output cap hit before even one whole line: nothing usable, but the search was cut.
       return { hits: [], truncated: err instanceof CommandOutputLimitError };
     }
-  }
-
-  buildFindCommand(opts: SearchOptions): string {
-    const sq = shellQuote;
-    const root = sq(opts.root);
-
-    const excludedDirs = [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)];
-    const pruneExprs = excludedDirs
-      .map(d => `-name ${sq(d)}`)
-      .join(' -o ');
-
-    const includePatterns = this.splitGlobPatterns(opts.include);
-    const includeExpr = includePatterns.length
-      ? ` \\( ${includePatterns.map(p => p.includes('/') ? `-path ${sq('*/' + p)}` : `-name ${sq(p)}`).join(' -o ')} \\)`
-      : '';
-
-    const nameFlag = opts.regex
-      ? (opts.caseSensitive ? '-regex' : '-iregex')
-      : (opts.caseSensitive ? '-name' : '-iname');
-
-    const pattern = opts.regex ? opts.query : `*${opts.query}*`;
-
-    return `LC_ALL=C command find ${root} \\( ${pruneExprs} \\) -prune -o -type f${includeExpr} ${nameFlag} ${sq(pattern)} -print | head -${MAX_RESULTS}`;
   }
 
   private parseHits(stdout: string, opts: SearchOptions, engine: 'rg' | 'grep'): SearchHit[] {

@@ -1,6 +1,11 @@
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { FileSearchService, type SearchOptions } from './FileSearchService';
 import { CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandSpec } from '../../shared/exec/commandSpec';
+import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+import type { IFileOps } from '../../shared/fs/fileOps';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import * as path from 'path';
 import { argvOfShellLine, argvOfSpec, failed, ok } from '../../shared/exec/testing/commandTesting';
 
 type RunAnswer = ReturnType<typeof ok> | Error;
@@ -9,8 +14,8 @@ interface Answers {
   rgVersion?: RunAnswer;
   /** the content search (rg or grep) */
   content?: RunAnswer;
-  /** the name search (`find`, through exec) */
-  find?: { stdout: string; stderr: string; code: number } | Error;
+  /** the host's file operations; by default a host with no files, where the name search finds nothing */
+  files?: IFileOps;
 }
 
 function createMockTransportFactory(answers: Answers = {}) {
@@ -27,10 +32,11 @@ function createMockTransportFactory(answers: Answers = {}) {
     }),
     exec: vi.fn(async (command: string) => {
       execCommands.push(command);
-      return unwrap(answers.find ?? { stdout: '', stderr: '', code: 1 });
+      return { stdout: '', stderr: '', code: 1 };
     }),
   };
-  return { factory: { getTransport: () => transport } as any, runSpecs, execCommands, transport };
+  const files = answers.files ?? ({ platform: 'linux', walk: async () => ({ entries: [], truncated: false }) } as unknown as IFileOps);
+  return { factory: { getTransport: () => ({ ...transport, files: () => files }) } as any, runSpecs, execCommands, transport };
 }
 
 /** `rg` is not installed: the one case grep stands in for it. */
@@ -49,34 +55,6 @@ const rgMatch = (path: string, line: number, text: string): string => JSON.strin
 });
 
 describe('FileSearchService', () => {
-  describe('buildFindCommand', () => {
-    it('builds case-insensitive glob command by default', () => {
-      const service = new FileSearchService(createMockTransportFactory().factory);
-      const cmd = service.buildFindCommand({ ...baseOpts, root: '/home/user/project' });
-
-      expect(cmd).toContain('-iname');
-      expect(cmd).toContain("'*test*'");
-      expect(cmd).toContain("-name 'node_modules'");
-      expect(cmd).toContain("-name '.git'");
-      expect(cmd).toContain("-name 'dist'");
-      expect(cmd).toContain("-name '.worktrees'");
-      expect(cmd).toContain('head -200');
-    });
-
-    it('uses -name for case-sensitive search', () => {
-      const service = new FileSearchService(createMockTransportFactory().factory);
-      const cmd = service.buildFindCommand({ ...baseOpts, query: 'Test', caseSensitive: true });
-      expect(cmd).toContain('-name');
-      expect(cmd).not.toContain('-iname');
-    });
-
-    it('uses -iregex for regex mode', () => {
-      const service = new FileSearchService(createMockTransportFactory().factory);
-      const cmd = service.buildFindCommand({ ...baseOpts, query: '.*\\.test\\.ts$', regex: true });
-      expect(cmd).toContain('-iregex');
-    });
-  });
-
   describe('buildRgArgs', () => {
     const service = new FileSearchService(createMockTransportFactory().factory);
 
@@ -295,23 +273,78 @@ describe('FileSearchService', () => {
       await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 504 });
     });
 
-    it('returns name matches from find output (a shell file operation, still on exec)', async () => {
-      const { factory, execCommands } = createMockTransportFactory({
-        rgVersion: NO_RG,
-        find: { stdout: '/project/src/test.ts\n/project/src/test.spec.ts\n', stderr: '', code: 0 },
-      });
-      const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, root: '/project/' });
-      expect(result.nameMatches).toEqual(['src/test.ts', 'src/test.spec.ts']);
-      expect(execCommands).toHaveLength(1);
-      expect(execCommands[0]).toContain('find');
+  });
+
+  describe('name search with the host\'s file operations', () => {
+    let root: string;
+
+    beforeEach(() => {
+      root = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'azito-filesearch-')));
+    });
+    afterEach(() => {
+      rmSync(root, { recursive: true, force: true });
     });
 
-    it('sets truncated when results exceed limit', async () => {
-      const names = Array.from({ length: 200 }, (_, i) => `/project/file${i}.ts`).join('\n');
-      const { factory } = createMockTransportFactory({ rgVersion: NO_RG, find: { stdout: names + '\n', stderr: '', code: 0 } });
-      const result = await new FileSearchService(factory).search(baseServer, { ...baseOpts, query: 'file', root: '/project/' });
-      expect(result.truncated).toBe(true);
+    function serviceOver(files: IFileOps): { service: FileSearchService; execCommands: string[] } {
+      const { factory, execCommands } = createMockTransportFactory({ rgVersion: NO_RG, files });
+      return { service: new FileSearchService(factory), execCommands };
+    }
+
+    function writeFiles(...names: string[]): void {
+      for (const name of names) {
+        mkdirSync(path.dirname(path.join(root, name)), { recursive: true });
+        writeFileSync(path.join(root, name), '');
+      }
+    }
+
+    const local = (): LocalFileOps => new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: root }));
+
+    it('lists names through IFileOps without running find, skipping the excluded directories', async () => {
+      writeFiles('src/test.ts', 'src/test.spec.ts', 'node_modules/p/test.js', '.git/test', 'dist/test.js', 'readme.md');
+      const { service, execCommands } = serviceOver(local());
+
+      const result = await service.search(baseServer, { ...baseOpts, root });
+
+      expect(result.nameMatches).toEqual(['src/test.spec.ts', 'src/test.ts']);
+      expect(execCommands).toEqual([]);
+    });
+
+    it('applies include, exclude, case and regex as the find command did', async () => {
+      writeFiles('A/Test.ts', 'A/test.js', 'B/test.ts', 'vendor/test.ts');
+      const { service } = serviceOver(local());
+
+      const names = async (o: Partial<SearchOptions>): Promise<string[]> => (await service.search(baseServer, { ...baseOpts, root, ...o })).nameMatches;
+
+      expect(await names({ include: '*.ts', excludeExtra: 'vendor' })).toEqual(['A/Test.ts', 'B/test.ts']);
+      expect(await names({ caseSensitive: true })).toEqual(['A/test.js', 'B/test.ts', 'vendor/test.ts']);
+      expect(await names({ regex: true, query: '.*/B/.*' })).toEqual(['B/test.ts']);
+    });
+
+    it('is truncated at 200 names', async () => {
+      writeFiles(...Array.from({ length: 205 }, (_, i) => `file${i}.ts`));
+      const { service } = serviceOver(local());
+
+      const result = await service.search(baseServer, { ...baseOpts, root, query: 'file' });
+
       expect(result.nameMatches).toHaveLength(200);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('keeps the content hits and the names found, and says truncated, when the name walk ran out of time', async () => {
+      const walkedPartly = { platform: 'linux', walk: async () => ({ entries: [{ path: 'src/test.ts', mtimeMs: 1 }], truncated: true }) } as unknown as IFileOps;
+      const { factory } = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: ok(rgMatch('/project/a.ts', 3, 'test one') + '\n'), files: walkedPartly });
+
+      const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+
+      expect(result.nameMatches).toEqual(['src/test.ts']);
+      expect(result.contentHits.map((h) => h.path)).toEqual(['a.ts']);
+      expect(result.truncated).toBe(true);
+    });
+
+    it('lets a failure of the host propagate instead of answering with no names', async () => {
+      const unreachable = { platform: 'linux', walk: async () => { throw new Error('agent unreachable'); } } as unknown as IFileOps;
+
+      await expect(serviceOver(unreachable).service.search(baseServer, baseOpts)).rejects.toThrow('agent unreachable');
     });
   });
 });
