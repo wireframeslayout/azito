@@ -168,7 +168,7 @@ function checkAccessRules(prefix: string): void {
   const targets: Array<[string, 'file' | 'dir']> = [
     [path.join(prefix, 'hub', '.env'), 'file'],
     [path.join(prefix, 'data'), 'dir'],
-    [path.join(prefix, 'data', 'master.key'), 'file'],
+    [path.join(prefix, 'data', 'data.db'), 'file'],
   ];
   for (const [target, kind] of targets) {
     assert(fs.existsSync(target), `expected to exist: ${target}`);
