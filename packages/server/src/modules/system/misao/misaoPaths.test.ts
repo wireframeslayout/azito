@@ -72,7 +72,7 @@ describe('resolveMisaoPaths on Windows', () => {
     expect(paths.socket).toMatch(/^\\\\\.\\pipe\\misao-runneradmin-[0-9a-f]{16}$/);
   });
 
-  it.each(['C:\\a b\\x', 'C:\\a&b\\x', 'C:\\a (b)\\x', "C:\\a'b\\x", 'C:/a/b'])('accepts the prefix %s (spaces, &, parentheses, a quote and slashes are no problem inside the task\'s quotes)', (prefix) => {
+  it.each(['C:\\a b\\x', 'C:\\a&b\\x', 'C:\\a (b)\\x', "C:\\a'b\\x", 'C:\\50%\\x', 'C:\\hi!\\x', 'C:/a/b'])('accepts the prefix %s (the task carries the paths in environment variables, so none of these is re-read as command syntax)', (prefix) => {
     expect(() => resolveMisaoPaths(prefix, user)).not.toThrow();
   });
 
@@ -80,7 +80,7 @@ describe('resolveMisaoPaths on Windows', () => {
     expect(resolveMisaoPaths('C:/a/b/', user).root).toBe('C:\\a\\b\\misao');
   });
 
-  it.each(['C:\\a"b', 'C:\\50%\\x', 'C:\\hi!\\x', 'C:\\a\nb'])('rejects the prefix %j (cmd.exe would re-interpret it inside the task)', (prefix) => {
+  it.each(['C:\\a"b', 'C:\\a\nb'])('rejects the prefix %j (a quote is not a Windows path character; a line break breaks the task definition)', (prefix) => {
     expect(() => resolveMisaoPaths(prefix, user)).toThrow(/must not contain/);
   });
 

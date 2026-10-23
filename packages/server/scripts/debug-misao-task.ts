@@ -48,12 +48,9 @@ async function main(): Promise<void> {
   if (!fs.existsSync(exeSource)) throw new Error('MISAO_CLI is not set');
   const home = os.homedir();
   const same: Rewrite = (a) => a;
-  await variant('A spaces only', path.join(home, 'Foo Bar', 'misao'), same);
-  await variant('B parens only', path.join(home, 'Foo(Work)', 'misao'), same);
-  await variant('C spaces+parens', path.join(home, 'Foo Bar (Work)', 'misao'), same);
-  await variant('D spaces+parens, cmd /s', path.join(home, 'Foo Bar (Work)', 'misao'), (a) => a.replace('/d /c', '/d /s /c'));
-  await variant('E spaces+parens, cmd path quoted', path.join(home, 'Foo Bar (Work)', 'misao'), (a) => a.replace(/--headless (\S+cmd\.exe)/, '--headless "$1"'));
-  await variant('F spaces+parens, cmd /s and quoted', path.join(home, 'Foo Bar (Work)', 'misao'), (a) => a.replace('/d /c', '/d /s /c').replace(/--headless (\S+cmd\.exe)/, '--headless "$1"'));
+  await variant('A spaces+parens (launcher form)', path.join(home, 'Foo Bar (Work)', 'misao'), same);
+  await variant('B odd characters (launcher form)', path.join(home, "A&B (100%) it's ok!", 'misao'), same);
+  await variant('C 8.3 temp + spaces+parens', path.join(os.tmpdir(), 'Foo Bar (Work)', '.azito', 'misao'), same);
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

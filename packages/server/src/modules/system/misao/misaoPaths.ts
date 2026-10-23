@@ -53,15 +53,15 @@ export function misaoWindowsUserOf(platform: NodeJS.Platform): MisaoWindowsUser 
 }
 
 /**
- * Windows: the prefix is a drive path (`C:\Users\Foo Bar (Work)\.azito`). It is written into a task definition inside double
- * quotes for `cmd.exe`, where spaces, parentheses and `&` are fine; a quote, `%` and `!` (cmd expands them inside quotes) and a
- * line break are not, so they are refused here, early (the same refusal `misaoTaskArguments` makes).
+ * Windows: the prefix is a drive path (`C:\Users\Foo Bar (Work)\.azito`). Spaces, parentheses, `&`, `%` and `!` are all fine: a
+ * path with any of them reaches the task through the launcher script, in environment variables (see `misaoTaskArguments`). A
+ * quote cannot be in a Windows path, and a line break would break the task definition, so those are refused here, early.
  */
 function resolveWindowsMisaoPaths(prefix: string, user: MisaoWindowsUser): MisaoPaths {
   const win32 = path.win32;
   if (!/^[A-Za-z]:[\\/]/.test(prefix)) throw new Error(`AZITO prefix must be an absolute path on a drive (C:\\...): ${prefix}`);
-  if (/["%!\r\n\0]/.test(prefix)) {
-    throw new Error(`AZITO prefix must not contain a quote, "%", "!" or a line break (it is written into the misao task): ${prefix}`);
+  if (/["\r\n\0]/.test(prefix)) {
+    throw new Error(`AZITO prefix must not contain a quote or a line break: ${prefix}`);
   }
   const normalized = win32.normalize(prefix).replace(/[\\/]+$/, '');
   const root = win32.join(normalized, 'misao');
