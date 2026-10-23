@@ -70,7 +70,7 @@ describe('ClaudeSessionStrategy.scanSessionId', () => {
 });
 
 describe('ClaudeSessionStrategy', () => {
-  const strategy = createStrategy();
+  const strategy = new ClaudeSessionStrategy({} as TransportFactory);
 
   it('starts a new session with --session-id', () => {
     expect(strategy.buildNewSessionFlags(SESSION_ID)).toBe(`--session-id ${SESSION_ID}`);
