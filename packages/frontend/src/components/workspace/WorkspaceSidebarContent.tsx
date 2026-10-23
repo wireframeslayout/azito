@@ -77,6 +77,7 @@ interface WorkspaceSidebarContentProps {
 }
 
 const SEARCH_BLOCKED_NOTICE_ID = 'file-search-blocked-reason';
+const GIT_BLOCKED_NOTICE_ID = 'file-git-blocked-reason';
 
 export default function WorkspaceSidebarContent({
   sidebarMode,
@@ -226,11 +227,14 @@ export default function WorkspaceSidebarContent({
             }
             const effectiveRoot = selectedWorktreePath ?? rootPath;
             const searchBlockedReason = hostFeatureBlock(selectedFileServer, 'fileSearch');
+            const gitBlockedReason = hostFeatureBlock(selectedFileServer, 'git');
             return (
               <>
                 <FileSidebarHeader
                   searchBlockedReason={searchBlockedReason}
                   searchBlockedReasonId={SEARCH_BLOCKED_NOTICE_ID}
+                  diffBlockedReason={gitBlockedReason}
+                  diffBlockedReasonId={GIT_BLOCKED_NOTICE_ID}
                   onSearch={() => setFilesView(filesView === 'search' ? 'tree' : 'search')}
                   onDiff={() => { onOpenDiff(selectedFileServer, effectiveRoot); if (mobile) onCloseMobileSidebar(); }}
                   onRefresh={handleRefresh}
@@ -245,7 +249,12 @@ export default function WorkspaceSidebarContent({
                     <Notice tone="info">{searchBlockedReason}</Notice>
                   </div>
                 )}
-                {project && (
+                {gitBlockedReason && (
+                  <div id={GIT_BLOCKED_NOTICE_ID} style={{ padding: '0 12px 8px', flexShrink: 0 }}>
+                    <Notice tone="info">{gitBlockedReason}</Notice>
+                  </div>
+                )}
+                {project && !gitBlockedReason && (
                   <RootSwitcher
                     serverName={selectedFileServer}
                     projectId={project.id}

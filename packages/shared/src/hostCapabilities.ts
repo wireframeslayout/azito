@@ -9,8 +9,8 @@
  * Open on Windows (not listed as features, with the path that lets them work):
  *  - file list / read / write / create / delete / rename: `IFileOps` (`FileBrowseService`), Windows paths handled by `pathApiFor`.
  *  - file name search: `searchFileNames` over `IFileOps.walk`.
- *  - git diff, log, worktree list: `runGit` -> `transport.run` (a `CommandSpec`, no shell). They need `git` on the host;
- *    without it the API's own error is what the UI shows.
+ *
+ * Closed on Windows until #370: git (see `WIN32_UNAVAILABLE`).
  */
 
 export type HostPlatform = 'linux' | 'darwin' | 'win32';
@@ -21,13 +21,14 @@ export interface HostPlatformInfo {
 
 export type HostFeature =
   | 'fileSearch'
+  | 'git'
   | 'taskExecution'
   | 'workerLaunch'
   | 'tmux'
   | 'browserRuntime'
   | 'harness';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['fileSearch', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
+export const HOST_FEATURES: readonly HostFeature[] = ['fileSearch', 'git', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -38,6 +39,9 @@ export type HostFeatureSupport =
  * which path closes it.
  *  - fileSearch (#370): `GET /files/search` runs `rg`, else `grep`, through `transport.run`, and reads the hits with `/`-rooted
  *    paths (`FileSearchService.parseHits`); Windows has no grep and returns backslash paths, so a search without rg finds nothing.
+ *  - git (#370): diff / commits / worktree list / branch search (`modules/git/routes.ts`, `GET /branches`). `SAFE_PATH` in
+ *    `GitDiffService` accepts POSIX paths only (a `C:\...` path is `Invalid path`), and a Windows host cannot be assumed to have `git`.
+ *    Those routes answer `unsupported_os` (`assertGitSupported` in `shared/os/hostProfile.ts`). #370 makes git work on Windows, then removes this row and that guard.
  *  - taskExecution (#371): `ExecuteTaskUseCase` starts the worker in a pane with a command (`paneShell.commandArgs` is null on Windows -> `unsupported_os`).
  *  - workerLaunch (#371): a new window with claude / codex / a command: the same pane command (`MisaoServers`, `paneShell.ts`).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.
@@ -46,6 +50,7 @@ export type HostFeatureSupport =
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   fileSearch: 370,
+  git: 370,
   taskExecution: 371,
   workerLaunch: 371,
   tmux: null,

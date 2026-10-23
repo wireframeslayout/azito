@@ -14,6 +14,9 @@ interface FileSidebarHeaderProps {
   /** Why file search is closed on this server's host (a Windows agent); null / absent: open. The button stays focusable, does nothing, and points at the notice `searchBlockedReasonId` names. */
   searchBlockedReason?: string | null;
   searchBlockedReasonId?: string;
+  /** Why git (the diff view) is closed on this server's host (a Windows agent); null / absent: open. Same contract as `searchBlockedReason`. */
+  diffBlockedReason?: string | null;
+  diffBlockedReasonId?: string;
 }
 
 export function FileSidebarHeader({
@@ -27,6 +30,8 @@ export function FileSidebarHeader({
   onSelectServer,
   searchBlockedReason,
   searchBlockedReasonId,
+  diffBlockedReason,
+  diffBlockedReasonId,
 }: FileSidebarHeaderProps) {
   const { t } = useTranslation('files');
   const { t: tw } = useTranslation('workspace');
@@ -114,13 +119,16 @@ export function FileSidebarHeader({
       </button>
       <button
         type="button"
-        onClick={onDiff}
-        title={tw('sidebar.gitDiff')}
+        onClick={diffBlockedReason ? undefined : onDiff}
+        aria-disabled={diffBlockedReason ? true : undefined}
+        aria-describedby={diffBlockedReason ? diffBlockedReasonId : undefined}
+        title={diffBlockedReason ?? tw('sidebar.gitDiff')}
         className="icon-btn"
         style={{
           border: 'none',
           color: 'var(--text-dim)',
-          cursor: 'pointer',
+          cursor: diffBlockedReason ? 'not-allowed' : 'pointer',
+          opacity: diffBlockedReason ? 0.5 : 1,
           padding: '2px 6px',
         }}
       >

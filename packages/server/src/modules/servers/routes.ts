@@ -35,7 +35,7 @@ import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort'
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
-import { assertPosixHost } from '../../shared/os/hostProfile';
+import { assertPosixHost, assertGitSupported } from '../../shared/os/hostProfile';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
 import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
@@ -1332,6 +1332,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       const q = (request.query.q || '').trim().toLowerCase();
       const projectId = request.query.project_id ? parseInt(request.query.project_id, 10) : NaN;

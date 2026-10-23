@@ -1,4 +1,7 @@
 {
+  "blocked": {
+    "title": "このサーバーでは git の表示はまだ使えません"
+  },
   "issues": {
     "title": "Issues",
     "pullRequests": "プルリクエスト",
