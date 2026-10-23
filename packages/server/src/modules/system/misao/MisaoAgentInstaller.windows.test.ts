@@ -134,8 +134,10 @@ class FakeWindowsAgent {
       return reply();
     }
     if (script.includes('# AZITO_DAEMON_PATHS')) {
-      const version = this.daemonVersion ?? this.current;
-      return reply(Buffer.from(this.daemonUp && version ? `${ROOT}\\${version}\\misao.exe` : '', 'utf8').toString('base64'));
+      if (!this.daemonUp) return { exitCode: 1, signal: null, stdout: '', stderr: 'no daemon serves the pipe' };
+      const expected = /\$expected = '([^']*)'/.exec(script)![1]!;
+      const actual = `${ROOT}\\${this.daemonVersion ?? this.current}\\misao.exe`;
+      return reply([actual, expected].map((path) => Buffer.from(path, 'utf8').toString('base64')).join('\n'));
     }
     if (script.includes('function Get-AgentNodes')) {
       if (!this.options.unstoppable) this.stopDaemon();

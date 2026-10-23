@@ -20,6 +20,7 @@ import { windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
 import { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import { describeMisaoDaemon, registerMisaoDriver, type MisaoHandle } from '../../tmux/misao/misaoDriver';
 import { hubPaneShell } from '../../tmux/misao/paneShell';
+import { daemonCheckScript, parseDaemonCheck, sameProgram } from './misaoWindowsVerify';
 import { readMisaoBundle } from './MisaoBundle';
 import { writeHubBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller } from './MisaoAgentInstaller';
@@ -275,6 +276,26 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
       expect((await driver().listWorkspaces(server)).flatMap((w) => w.windows).length).toBe(before);
     }, 60_000);
   });
+
+  it('names the program behind the pipe from the pipe\'s own server process, whatever spelling of the path is compared (8.3 short names)', async () => {
+    const exe = path.win32.join(ROOT, currentVersion, 'misao.exe');
+    const shortPath = (await powershell(`$global:LASTEXITCODE = 0\n(New-Object -ComObject Scripting.FileSystemObject).GetFile(${powershellDialect.quote(exe)}).ShortPath`)).trim();
+    if (shortPath.toLowerCase() === exe.toLowerCase()) {
+      console.warn(`[MisaoWindowsInstaller.misaoIntegration.test] this volume made no 8.3 short name for ${exe} (it is the same spelling): the short-path comparison below is trivial here`);
+    } else {
+      expect(shortPath).toMatch(/~\d/);
+    }
+    const started = Date.now();
+    const viaShort = parseDaemonCheck(await powershell(daemonCheckScript(PIPE, shortPath)));
+    console.log(`[MisaoWindowsInstaller.misaoIntegration.test] the pipe check (Add-Type, connect, server pid, long paths) took ${Date.now() - started} ms; short ${shortPath}, long ${viaShort.actual}`);
+    expect(sameProgram(viaShort)).toBe(true);
+    expect(viaShort.actual.toLowerCase()).toBe(exe.toLowerCase());
+    // The upper-case spelling of the same path is the same program; another file is not.
+    expect(sameProgram(parseDaemonCheck(await powershell(daemonCheckScript(PIPE, exe.toUpperCase()))))).toBe(true);
+    expect(sameProgram(parseDaemonCheck(await powershell(daemonCheckScript(PIPE, MISAO_CLI))))).toBe(false);
+    // A pipe of a similar name has no server: nothing is matched by name.
+    await expect(powershell(daemonCheckScript(`${PIPE}-other`, exe))).rejects.toThrow();
+  }, 120_000);
 
   it('a newer bundled release is put beside the running one and does not touch it; the update then switches and starts it', async (ctx) => {
     if (!viaTask) ctx.skip('the daemon was started directly (no logon session): there is no task to switch');

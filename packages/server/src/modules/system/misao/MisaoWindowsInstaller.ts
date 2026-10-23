@@ -11,6 +11,7 @@ import { redactSecretText } from '../../../shared/redactSecretText';
 import { managedEndpointOf, MISAO_RELEASE_FILE_NAMES, type AgentMisaoWindowsHost, type MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
 import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
+import { daemonCheckScript, parseDaemonCheck, sameProgram } from './misaoWindowsVerify';
 import { MisaoServiceError } from './MisaoServiceError';
 import { buildMisaoTaskXml, misaoWindowsLayout, misaoWindowsReleasePaths, type MisaoWindowsLayout } from './misaoWindowsTask';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
@@ -313,17 +314,10 @@ export class MisaoWindowsInstaller {
 
   /** The pipe being open does not say whose daemon it is: the program running behind it must be the release's own `misao.exe`. */
   private async verifyRelease(session: Session, version: string): Promise<void> {
-    const q = powershellDialect.quote;
-    const out = await this.script(session, 'Checking which misao is running', [
-      '# AZITO_DAEMON_PATHS',
-      `$pipe = ${q(session.pipe)}`,
-      '$paths = @(Get-CimInstance Win32_Process -Filter "Name = \'misao.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($pipe) } | ForEach-Object { $_.ExecutablePath })',
-      "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($paths -join \"`n\")))",
-    ].join('\n'));
-    const running = Buffer.from(out.trim(), 'base64').toString('utf8').split('\n').filter((line) => line !== '');
-    const expected = this.layout(session, version).exe.toLowerCase();
-    if (running.length === 0 || running.some((exe) => exe.toLowerCase() !== expected)) {
-      throw new MisaoServiceError('daemon_not_ready', `The pipe ${session.pipe} answers, but the program behind it is ${running.length === 0 ? 'not found' : running.join(', ')}, not ${expected}.`);
+    const out = await this.script(session, 'Checking which misao is running', daemonCheckScript(session.pipe, this.layout(session, version).exe));
+    const check = parseDaemonCheck(out);
+    if (!sameProgram(check)) {
+      throw new MisaoServiceError('daemon_not_ready', `The pipe ${session.pipe} answers, but the program behind it is ${check.actual}, not ${check.expected}.`);
     }
   }
 
