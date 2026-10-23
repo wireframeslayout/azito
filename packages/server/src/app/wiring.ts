@@ -30,10 +30,11 @@ import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
 import { probeMisaoDaemon, registerMisaoDriver, resolveMisaoRuntimeForHub, type MisaoHandle, type MisaoRuntime } from '../modules/tmux/misao/misaoDriver';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
-import { HUB_SERVICE, createServiceManager, runCommand } from '../modules/system/serviceManager';
+import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
+import { createMisaoServiceManager, createServiceManager } from '../modules/system/createServiceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
-import { MISAO_SERVICE, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 import { invalidateSessionCache } from '../modules/tmux/routes/sessions';
 import { CodexExecClient } from '../modules/llm/CodexExecClient';
 import type { ILlmClient } from '../modules/llm/ILlmClient';
@@ -564,7 +565,7 @@ function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard
     pathsError = err instanceof Error ? err.message : String(err);
     console.warn(`[misao] the managed misao service is unavailable: ${pathsError}`);
   }
-  const serviceManager = createServiceManager(hostEnv, MISAO_SERVICE, runCommand);
+  const serviceManager = createMisaoServiceManager(hostEnv, runCommand);
   return new MisaoServiceService({
     paths,
     ...(pathsError ? { pathsError } : {}),
@@ -578,10 +579,10 @@ function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard
   });
 }
 
-function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): SystemUpdateModule {
+function buildSystemUpdateModule(dataPaths: DataPaths, repos: Repositories, misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, launchedByTaskScheduler: boolean): SystemUpdateModule {
   const channelResolver = new UpdateChannelResolver(dataPaths.updateChannel, secretFileGuard);
   const stateManager = new UpdateStateManager(dataPaths.updateState, dataPaths.updateLog, secretFileGuard);
-  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir);
+  const deployModeDetector = new DeployModeDetector(hostEnv.homeDir, launchedByTaskScheduler);
   const hubService = createServiceManager(hostEnv, HUB_SERVICE, runCommand);
   const systemUpdateService = new SystemUpdateService(channelResolver, stateManager, deployModeDetector, dataPaths, repos.taskRepo, 'manager' in hubService ? hubService.manager : null);
   return { deployModeDetector, systemUpdateService, channelResolver, misaoService: buildMisaoService(misao, hostEnv, secretFileGuard) };
@@ -623,7 +624,7 @@ function buildAgentActivityMonitor(
 
 // ─── Composition root ───
 
-export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): Promise<Wiring> {
+export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, hostEnv: HostEnv, secretFileGuard: SecretFileGuard, launchedByTaskScheduler: boolean): Promise<Wiring> {
   // Build agent bundle (no-op if already up to date)
   const agentBundler = new AgentBundler();
   try {
@@ -704,7 +705,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
   const interactionMonitor = new InteractionMonitor(repos.windowRepo, Date.now, paneHandleResolver);
-  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard);
+  const systemUpdateModule = buildSystemUpdateModule(dataPaths, repos, infra.misao, hostEnv, secretFileGuard, launchedByTaskScheduler);
 
   return {
     uiToken,

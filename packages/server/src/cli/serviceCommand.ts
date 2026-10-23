@@ -1,29 +1,39 @@
-import type { HostEnv } from '../shared/os/hostEnv';
-import { HUB_SERVICE, createServiceManager, runCommand, type ServiceManager } from '../modules/system/serviceManager';
+import { HUB_SERVICE, runCommand, type ServiceManager } from '../modules/system/serviceManager';
+import { createServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
+import type { ServiceCommandContext } from './serviceCommandContext';
+import { installWindowsTask, resolveWindowsHub, runOnWindows, taskExists, type WindowsHub } from './serviceCommandWindows';
 
 const USAGE = `Usage: azito service <command>
 
-Commands (the hub's own service: systemd on Linux, launchd on macOS):
-  status    Show whether the service is installed and running (launchd: and which domain it is loaded into)
+Commands (the hub's own service: systemd on Linux, launchd on macOS, a Task Scheduler task on Windows):
+  status    Show whether the service is installed and running (launchd: and which domain it is loaded into; Windows: and where its log is)
   start     Start the service
   stop      Stop the service
   restart   Restart the service
-  reload    Make it run its current definition (systemd: daemon-reload + restart; launchd: bootout + bootstrap into the same domain)`;
+  reload    Make it run its current definition (systemd: daemon-reload + restart; launchd: bootout + bootstrap into the same domain)
+  install   Windows only: register the Task Scheduler task (it starts at your logon; --yes replaces a task registered for another install). Linux and macOS: install.sh sets the service up`;
 
-const COMMANDS = ['status', 'start', 'stop', 'restart', 'reload'] as const;
+const COMMANDS = ['status', 'start', 'stop', 'restart', 'reload', 'install'] as const;
 type ServiceCommand = typeof COMMANDS[number];
 
 function isServiceCommand(value: string | undefined): value is ServiceCommand {
   return COMMANDS.some((command) => command === value);
 }
 
-async function printStatus(manager: ServiceManager): Promise<void> {
+export type { ServiceCommandContext };
+
+async function printStatus(manager: ServiceManager, windowsHub: WindowsHub | undefined): Promise<void> {
   if (!manager.isInstalled()) {
     console.log('service:   not installed');
     return;
   }
   const { state, domains } = await manager.inspect();
   console.log(`service:   ${manager.kind} (${state})`);
+  if (windowsHub) {
+    console.log(`log:       ${windowsHub.layout.logFile}`);
+    // The definition copy outlives a task that was deleted by hand.
+    if (!(await taskExists(windowsHub))) console.log('warning:   the task is not registered any more (deleted?). Run `azito service install` to register it again.');
+  }
   if (manager.kind !== 'launchd') return;
   console.log(`domain:    ${domains.length === 0 ? 'not loaded' : domains.join(' + ')}`);
   if (domains.length > 1) {
@@ -31,13 +41,19 @@ async function printStatus(manager: ServiceManager): Promise<void> {
   }
 }
 
+function notInstalledMessage(manager: ServiceManager): string {
+  return `The AZITO service is not installed (no ${manager.kind === 'launchd' ? 'LaunchAgent plist' : 'systemd unit'}). Run install.sh without --no-service.`;
+}
+
 /**
- * `azito service ...`: operate the hub's own service. The CLI wrapper install.sh puts in ~/.local/bin calls this on macOS,
- * so the launchd handling (user/<uid>, moving older gui/<uid> installs, #366) is in one place, the same one the in-app update and `azito misao` use.
+ * `azito service ...`: operate the hub's own service. The CLI wrapper install.sh puts in ~/.local/bin calls this on macOS, and
+ * `azito.cmd` on Windows, so the launchd handling (user/<uid>, moving older gui/<uid> installs, #366) and the Task Scheduler
+ * handling are in one place, the same one the in-app update and `azito misao` use.
  */
-export async function serviceCommand(argv: string[], host: Pick<HostEnv, 'platform' | 'homeDir' | 'uid'>): Promise<void> {
+export async function serviceCommand(argv: string[], host: ServiceHost, context: ServiceCommandContext): Promise<void> {
   const [command, ...rest] = argv;
-  if (!isServiceCommand(command) || rest.length > 0) {
+  const yes = command === 'install' && rest.length === 1 && rest[0] === '--yes';
+  if (!isServiceCommand(command) || (rest.length > 0 && !yes)) {
     console.log(USAGE);
     if (argv.length > 0) process.exitCode = 1;
     return;
@@ -46,19 +62,24 @@ export async function serviceCommand(argv: string[], host: Pick<HostEnv, 'platfo
     const created = createServiceManager(host, HUB_SERVICE, runCommand);
     if ('error' in created) throw created.error;
     const manager = created.manager;
+    const windowsHub = manager.kind === 'taskscheduler' ? resolveWindowsHub(host, context) : undefined;
     if (command === 'status') {
-      await printStatus(manager);
+      await printStatus(manager, windowsHub);
       return;
     }
-    if (!manager.isInstalled()) {
-      throw new Error(`The AZITO service is not installed (no ${manager.kind === 'launchd' ? 'LaunchAgent plist' : 'systemd unit'}). Run install.sh without --no-service.`);
+    if (command === 'install') {
+      if (!windowsHub) throw new Error('`azito service install` is for Windows. On Linux and macOS install.sh sets the service up.');
+      await installWindowsTask(manager, windowsHub, context, yes);
+    } else {
+      if (windowsHub) await runOnWindows(command, manager, windowsHub, context);
+      else if (!manager.isInstalled()) throw new Error(notInstalledMessage(manager));
+      else if (command === 'start') await manager.start();
+      else if (command === 'stop') await manager.stop();
+      else if (command === 'restart') await manager.restart();
+      else await manager.reload();
     }
-    if (command === 'start') await manager.start();
-    else if (command === 'stop') await manager.stop();
-    else if (command === 'restart') await manager.restart();
-    else await manager.reload();
     console.log(`service ${command}: done`);
-    await printStatus(manager);
+    await printStatus(manager, windowsHub);
   } catch (err) {
     console.error(`azito service: ${err instanceof Error ? err.message : String(err)}`);
     process.exitCode = 1;

@@ -6,7 +6,8 @@
 # Runs under Windows PowerShell 5.1 as the current user (no administrator rights needed). It installs the hub bundle
 # (azito-hub-<tag>-win32-x64.zip) into <Prefix>\hub\<tag>\ and points <Prefix>\hub\current.txt at it (Windows does not use
 # a `current` symlink), creates <Prefix>\hub\.env and <Prefix>\data\, and puts the `azito` command in <Prefix>\bin\.
-# The hub is not installed as a resident service yet: start it with `azito start`.
+# Unless -NoService is given, the hub is registered as a Task Scheduler task that starts at your logon (the counterpart of the
+# systemd / launchd service of install.sh), and started: `azito start|stop|status` operate it, and its log is <Prefix>\logs\hub.log.
 [CmdletBinding()]
 param(
     # Release tag to install (default: the latest release).
@@ -21,7 +22,7 @@ param(
     [switch]$Yes,
     # Do not add <Prefix>\bin to the user's PATH.
     [switch]$NoPath,
-    # Accepted for parity with install.sh. The hub is not registered as a service yet, so this is always the behaviour.
+    # Do not register the Task Scheduler task. Run the hub in the foreground with `azito run`, or register it later with `azito service install`.
     [switch]$NoService
 )
 
@@ -48,6 +49,7 @@ set "AZITO_CMD=%~1"
 if /i "%AZITO_CMD%"=="start" goto :start
 if /i "%AZITO_CMD%"=="stop" goto :stop
 if /i "%AZITO_CMD%"=="status" goto :status
+if /i "%AZITO_CMD%"=="run" goto :run
 if /i "%AZITO_CMD%"=="token" goto :forward
 if /i "%AZITO_CMD%"=="misao" goto :forward
 if /i "%AZITO_CMD%"=="service" goto :forward
@@ -56,7 +58,7 @@ if not defined AZITO_CMD goto :usage
 setlocal EnableDelayedExpansion
 echo Unknown command: !AZITO_CMD! 1>&2
 echo. 1>&2
-echo Usage: azito {start^|stop^|status^|token show^|token rotate^|misao status^|service status^|version} 1>&2
+echo Usage: azito {start^|stop^|status^|run^|token show^|token rotate^|misao status^|service status^|version} 1>&2
 exit /b 1
 
 :forward
@@ -64,18 +66,22 @@ exit /b 1
 exit /b %ERRORLEVEL%
 
 :start
-if not exist "%AZITO_HUB%\run.ps1" goto :missinghub
-"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%AZITO_HUB%\run.ps1"
+"%AZITO_HUB%\node.exe" "%AZITO_HUB%\azito-hub.cjs" service start
 exit /b %ERRORLEVEL%
 
 :stop
-echo azito stop: the hub is not registered as a resident service on Windows yet (planned, see issue #380), so there is nothing to stop. 1>&2
-echo A hub started with "azito start" runs in the foreground: stop it with Ctrl+C or by closing its window. 1>&2
-exit /b 1
+"%AZITO_HUB%\node.exe" "%AZITO_HUB%\azito-hub.cjs" service stop
+exit /b %ERRORLEVEL%
 
 :status
-echo azito status: the hub is not registered as a resident service on Windows yet (planned, see issue #380), so there is no status to show. 1>&2
-exit /b 1
+"%AZITO_HUB%\node.exe" "%AZITO_HUB%\azito-hub.cjs" service status
+exit /b %ERRORLEVEL%
+
+:run
+rem The hub in this window (Ctrl+C stops it), not as the Task Scheduler task: for a first look, or an install made with -NoService.
+if not exist "%AZITO_HUB%\run.ps1" goto :missinghub
+"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%AZITO_HUB%\run.ps1"
+exit /b %ERRORLEVEL%
 
 :version
 echo current: %AZITO_VER%
@@ -84,7 +90,7 @@ echo current: %AZITO_VER%
 exit /b %ERRORLEVEL%
 
 :usage
-echo Usage: azito {start^|stop^|status^|token show^|token rotate^|misao status^|service status^|version}
+echo Usage: azito {start^|stop^|status^|run^|token show^|token rotate^|misao status^|service status^|version}
 exit /b 0
 
 :notinstalled
@@ -249,6 +255,42 @@ function Invoke-Node([string]$Node, [string[]]$NodeArgs) {
     if ($LASTEXITCODE -ne 0) { throw "azito-hub $($NodeArgs[1]) failed (exit code $LASTEXITCODE)" }
 }
 
+# The port the hub listens on: PORT in hub\.env (the same file run.ps1 loads), 3001 when it names none.
+function Get-HubPort([string]$EnvFile) {
+    foreach ($line in [System.IO.File]::ReadAllLines($EnvFile)) {
+        if ($line -match '^\s*PORT\s*=\s*"?(\d+)"?\s*$') { return [int]$Matches[1] }
+    }
+    return 3001
+}
+
+# Starts the registered task and waits for /api/health. A task that cannot be started is an error (the files are installed, so
+# the message says what to run after fixing it); a hub that has not answered within a minute is a warning with the log's place,
+# like install.sh's "Service started but health check failed".
+function Start-InstalledService([string]$Node, [string]$Hub, [string]$Prefix, [string]$HubRoot) {
+    Write-Host 'Starting the hub...'
+    try {
+        Invoke-Node $Node @($Hub, 'service', 'start')
+    } catch {
+        throw "The hub is installed and the task is registered, but it could not be started: $($_.Exception.Message) Fix the problem above and run: azito start"
+    }
+    $port = Get-HubPort (Join-Path $HubRoot '.env')
+    $url = "http://127.0.0.1:$port/api/health"
+    $deadline = (Get-Date).AddSeconds(60)
+    while ((Get-Date) -lt $deadline) {
+        try {
+            $response = Invoke-WebRequest -UseBasicParsing -Uri $url -TimeoutSec 5
+            if ($response.StatusCode -eq 200) {
+                Write-Host "AZITO is running at http://localhost:$port/"
+                return
+            }
+        } catch {
+            # not up yet
+        }
+        Start-Sleep -Milliseconds 500
+    }
+    Write-Warning "The task was started but $url did not answer within a minute. Check the log: $Prefix\logs\hub.log (azito status shows the task's state)."
+}
+
 function Resolve-Release {
     # Returns the tag to install and, for -ZipPath, the local zip.
     if ($ZipPath -ne '') {
@@ -304,7 +346,11 @@ function Invoke-Install {
     Write-Host "  Version:      $tag"
     Write-Host '  Platform:     win32-x64'
     Write-Host "  Prefix:       $Prefix"
-    Write-Host '  Service:      none (start it with `azito start`)'
+    if ($NoService) {
+        Write-Host '  Service:      skip (-NoService; run the hub with `azito run`)'
+    } else {
+        Write-Host "  Service:      Task Scheduler task 'AzitoHub' (starts at your logon)"
+    }
     Write-Host ''
 
     # AZITO drives git worktrees on this host, so git must exist. Tailscale and the agent CLIs are optional.
@@ -416,6 +462,17 @@ function Invoke-Install {
             Write-Host "$bin is already in your user PATH."
         }
 
+        # Register the task before the pointer: a registration that fails leaves no pointer, so running the installer again
+        # repairs the install. The task's definition is generated by the hub's own code (TypeScript), never written here, and it
+        # reads current.txt each time it starts, so it does not name this version.
+        if (-not $NoService) {
+            Write-Host 'Registering the Task Scheduler task...'
+            $installArgs = @($hub, 'service', 'install')
+            # -Yes also lets the install replace a task that another install of this user registered (the command refuses without it).
+            if ($Yes) { $installArgs += '--yes' }
+            Invoke-Node $node $installArgs
+        }
+
         # The pointer is written last, after every step that can fail: it is what marks the install as complete, so a run
         # that stopped earlier (a version folder but no current.txt) is repaired by running the installer again.
         Write-TextAtomic $pointer "$tag`r`n"
@@ -429,11 +486,20 @@ function Invoke-Install {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }
 
+    if (-not $NoService) { Start-InstalledService $node $hub $Prefix $hubRoot }
+
     Write-Host ''
     Write-Host 'Installation complete!'
     Write-Host ''
-    Write-Host '  The hub is not registered as a resident service on Windows yet, so it only runs while you keep it open.'
-    Write-Host '  Start:   azito start     (runs in this window; stop it with Ctrl+C)'
+    if ($NoService) {
+        Write-Host '  The hub is not registered as a service (-NoService).'
+        Write-Host '  Run:      azito run     (in this window; stop it with Ctrl+C)'
+        Write-Host '  Register: azito service install, then azito start'
+    } else {
+        Write-Host '  The hub runs as the Task Scheduler task AzitoHub: it starts when you log on and restarts when it fails.'
+        Write-Host '  Start:   azito start     (stop: azito stop, state: azito status)'
+        Write-Host "  Log:     $Prefix\logs\hub.log"
+    }
     Write-Host '  Token:   azito token show'
     Write-Host '  Version: azito version'
 }

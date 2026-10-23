@@ -10,6 +10,7 @@ import type { DeployMode, SystemUpdateStatus, VersionEntry } from '../../hooks/u
 const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
   systemd: 'systemd',
   launchd: 'launchd',
+  taskscheduler: 'Task Scheduler',
   source: 'source (dev)',
 };
 
@@ -64,7 +65,7 @@ export default function SystemSection() {
     if (!res.started) setStartError(res.error ?? t('system.couldNotStart'));
   };
 
-  const canInstall = status?.deployMode !== 'source' && (status?.runningTasks ?? 0) === 0;
+  const canInstall = (status?.deployMode === 'systemd' || status?.deployMode === 'launchd') && (status?.runningTasks ?? 0) === 0;
 
   const handleInstallVersion = async (v: VersionEntry): Promise<void> => {
     if (v.relation === 'older') {
@@ -121,7 +122,7 @@ export default function SystemSection() {
         <SectionRow label={t('system.status')}>
           <Chip tone={statusTone(status.status)}>{STATUS_KEYS[status.status] ? t(STATUS_KEYS[status.status]) : status.status}</Chip>
         </SectionRow>
-        {status.deployMode !== 'source' && (
+        {(status.deployMode === 'systemd' || status.deployMode === 'launchd') && (
           <SectionRow label={t('system.devChannel')}>
             <label className="toggle">
               <input

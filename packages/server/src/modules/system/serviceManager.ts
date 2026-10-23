@@ -4,7 +4,6 @@ import path from 'path';
 import { execFile } from 'child_process';
 import type { MisaoServiceState } from '@azito/shared';
 import type { HostEnv } from '../../shared/os/hostEnv';
-import { HostProfileError } from '../../shared/os/hostProfile';
 
 /**
  * How a service on THIS host (the one the hub runs on) is managed. 'source' has no service manager, so it is not
@@ -392,19 +391,4 @@ export class LaunchdServiceManager implements ServiceManager {
 /** The service manager of a known kind (the update script is told which one the hub runs under). */
 export function serviceManagerOfKind(kind: ServiceManagerKind, spec: ServiceSpec, run: CommandRunner, host: Pick<HostEnv, 'homeDir' | 'uid'>): ServiceManager {
   return kind === 'systemd' ? new SystemdServiceManager(run, spec, host.homeDir) : new LaunchdServiceManager(run, spec, host.homeDir, host.uid, DEFAULT_LAUNCHD_TIMING);
-}
-
-export type ServiceManagerResult = { manager: ServiceManager } | { error: HostProfileError };
-
-/**
- * The service manager of this host. Windows (a known OS; the Task Scheduler implementation is #380) is `unsupported_os`
- * and any other OS is `unsupported_host`: both with the reason, never a fallback to another manager.
- */
-export function createServiceManager(host: Pick<HostEnv, 'platform' | 'homeDir' | 'uid'>, spec: ServiceSpec, run: CommandRunner): ServiceManagerResult {
-  if (host.platform === 'linux') return { manager: serviceManagerOfKind('systemd', spec, run, host) };
-  if (host.platform === 'darwin') return { manager: serviceManagerOfKind('launchd', spec, run, host) };
-  if (host.platform === 'win32') {
-    return { error: new HostProfileError('unsupported_os', 'Managing the service on Windows (Task Scheduler) is not supported yet: only systemd (Linux) and launchd (macOS) are.') };
-  }
-  return { error: new HostProfileError('unsupported_host', `This host (${host.platform}) has neither systemd nor launchd, so its service cannot be managed.`) };
 }

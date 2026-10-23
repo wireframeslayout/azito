@@ -1,7 +1,16 @@
 # AZITO hub launcher for Windows (the bundle's run.ps1; run-hub.sh is its Unix counterpart).
 # Runs under Windows PowerShell 5.1, never asks a question (a scheduled task may start it), runs the hub in the
 # foreground and exits with the hub's exit code.
+#
+# -Service -LogFile <file> is how the Task Scheduler task starts it (see modules/system/windowsHubService.ts): the hub's stdout and
+# stderr are appended to <file> (a task has nowhere to send them), and the hub is told which conhost.exe the task runs under so that
+# it ends when that process is gone (the Task Scheduler's "End" ends only that conhost.exe, never the hub below it).
+param(
+    [switch]$Service,
+    [string]$LogFile = ''
+)
 $ErrorActionPreference = 'Stop'
+if ($Service -and $LogFile -eq '') { throw '-Service needs -LogFile <file>' }
 
 $bundle = $PSScriptRoot
 
@@ -64,9 +73,52 @@ if ($front.Count -gt 0) { $env:PATH = ($front -join ';') + ';' + $env:PATH }
 
 $env:NODE_PATH = (Join-Path $bundle 'node_modules') + $(if ($env:NODE_PATH) { ';' + $env:NODE_PATH } else { '' })
 
+# Service mode. The hub runs under cmd.exe so that the shell does the redirection: everything it writes (and a crash's last words)
+# lands in one file in the bytes it wrote, UTF-8. The command line is built here as one string and every path reaches cmd
+# through an environment variable, so a prefix with spaces, parentheses or & needs no quoting beyond the surrounding quotes.
+# A log over 10 MB is moved aside (one previous file is kept) when the hub starts; if that fails it is reported in the log and the hub starts anyway.
+function Start-HubService([string]$Node, [string]$Entry, [string]$Log) {
+    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Log) | Out-Null
+    # Rotation is best effort: a log that another program holds open cannot be moved, and that must not keep the hub from starting.
+    $rotationFailure = $null
+    try {
+        if ((Test-Path -LiteralPath $Log -PathType Leaf) -and ((Get-Item -LiteralPath $Log).Length -gt 10MB)) {
+            Move-Item -LiteralPath $Log -Destination "$Log.1" -Force
+        }
+    } catch {
+        $rotationFailure = $_.Exception.Message
+    }
+    $info = New-Object System.Diagnostics.ProcessStartInfo
+    $info.FileName = Join-Path $env:SystemRoot 'System32\cmd.exe'
+    $info.Arguments = '/d /s /c ""%AZITO_HUB_NODE%" "%AZITO_HUB_ENTRY%" >>"%AZITO_HUB_LOG%" 2>&1"'
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.EnvironmentVariables['AZITO_HUB_NODE'] = $Node
+    $info.EnvironmentVariables['AZITO_HUB_ENTRY'] = $Entry
+    $info.EnvironmentVariables['AZITO_HUB_LOG'] = $Log
+    # The task runs this script under `conhost.exe --headless`: that process is what "End" ends, and what the hub follows.
+    $me = Get-CimInstance Win32_Process -Filter "ProcessId = $PID"
+    $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($me.ParentProcessId)"
+    if ($parent -and $parent.Name -eq 'conhost.exe') {
+        $info.EnvironmentVariables['AZITO_HUB_EXIT_WITH_PID'] = [string]$parent.ProcessId
+    } else {
+        [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: not started under conhost.exe, so the hub will not follow a parent process`r`n")
+    }
+    if ($rotationFailure) {
+        [System.IO.File]::AppendAllText($Log, "[$([DateTime]::UtcNow.ToString('o'))] run.ps1: could not move the log over 10 MB aside, so it keeps growing: $rotationFailure`r`n")
+    }
+    $process = [System.Diagnostics.Process]::Start($info)
+    $process.WaitForExit()
+    return $process.ExitCode
+}
+
 try {
-    & (Join-Path $bundle 'node.exe') (Join-Path $bundle 'azito-hub.cjs')
-    $hubExit = $LASTEXITCODE
+    if ($Service) {
+        $hubExit = Start-HubService (Join-Path $bundle 'node.exe') (Join-Path $bundle 'azito-hub.cjs') $LogFile
+    } else {
+        & (Join-Path $bundle 'node.exe') (Join-Path $bundle 'azito-hub.cjs')
+        $hubExit = $LASTEXITCODE
+    }
 } finally {
     try {
         if ($null -ne $restoreOutput) { [Console]::OutputEncoding = $restoreOutput }

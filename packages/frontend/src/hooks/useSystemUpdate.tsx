@@ -5,7 +5,7 @@ export type SystemUpdateStatus = 'up-to-date' | 'checking' | 'update-available' 
   | 'confirming' | 'running' | 'restarting' | 'success' | 'failed'
   | 'disabled' | 'blocked';
 
-export type DeployMode = 'systemd' | 'launchd' | 'source';
+export type DeployMode = 'systemd' | 'launchd' | 'taskscheduler' | 'source';
 
 export interface UpdateCommit {
   sha: string;
