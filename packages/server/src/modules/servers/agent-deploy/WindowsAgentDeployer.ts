@@ -75,9 +75,14 @@ export interface WindowsAgentLayout {
   taskXml: string;
 }
 
+/** `<home>\<dir>`: the folder everything of this agent install lives in. */
+export function windowsAgentRoot(home: string, options: WindowsAgentOptions): string {
+  return path.win32.join(home, options.dir);
+}
+
 export function windowsAgentLayout(home: string, options: WindowsAgentOptions, version: string): WindowsAgentLayout {
   if (!SAFE_VERSION.test(version)) throw new Error(`Unsafe agent version "${version}"`);
-  const root = path.win32.join(home, options.dir);
+  const root = windowsAgentRoot(home, options);
   const versionDir = path.win32.join(root, version);
   const envFile = path.win32.join(root, 'agent.env');
   return {
@@ -183,7 +188,7 @@ export class WindowsAgentDeployer {
       await this.transfer.putFile(input.sshHost, input.tarballPath, `${layout.rootRelative}/azito-agent-${input.version}.tar.gz`);
       await this.verifySha256(input.sshHost, layout.tarball, input.expectedSha256);
       previous = await this.capturePrevious(client);
-      await this.stopTask(client);
+      await this.stopTask(input.sshHost, client, layout.root);
       await this.extract(input, layout);
       await this.writeSettings(input, layout, envContent);
       await this.registerXml(input.sshHost, layout, client, taskXml);
@@ -203,7 +208,7 @@ export class WindowsAgentDeployer {
 
   /** Stops the task if it is running and waits until it is not (`/End` returns before the process is gone). */
   async stop(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
-    await this.stopTask(this.schtasks(sshHost, host));
+    await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentRoot(host.home, this.options));
   }
 
   /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart). */
@@ -211,7 +216,7 @@ export class WindowsAgentDeployer {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
-    await this.stopTask(client);
+    await this.stopTask(sshHost, client, windowsAgentRoot(host.home, this.options));
     await client.start(this.options.taskName);
   }
 
@@ -251,17 +256,37 @@ export class WindowsAgentDeployer {
     return { taskXml: await client.exportXml(this.options.taskName), wasRunning: state.running };
   }
 
-  private async stopTask(client: SchtasksClient): Promise<void> {
+  /**
+   * Stops the task and makes sure no agent process is left: the Task Scheduler's `/End` ends the task's own process (the
+   * `conhost.exe`), and the `node.exe` it started can outlive it and keep the version folder open. So after the task has
+   * stopped, any `node.exe` / `conhost.exe` whose command line names this install's folder is ended too (the Windows
+   * counterpart of ending the Unix agent by its command line), and the call fails if one will not go.
+   */
+  private async stopTask(sshHost: string, client: SchtasksClient, root: string): Promise<void> {
     const taskName = this.options.taskName;
     let state = await client.query(taskName);
-    if (!state.exists || !state.running) return;
-    await client.stop(taskName);
-    const deadline = Date.now() + STOP_WAIT_MS;
-    while (state.exists && state.running) {
-      if (Date.now() >= deadline) throw new Error(`The task "${taskName}" is still running ${STOP_WAIT_MS / 1000}s after it was stopped`);
-      await sleep(STOP_POLL_MS);
-      state = await client.query(taskName);
+    if (state.exists && state.running) {
+      await client.stop(taskName);
+      const deadline = Date.now() + STOP_WAIT_MS;
+      while (state.exists && state.running) {
+        if (Date.now() >= deadline) throw new Error(`The task "${taskName}" is still running ${STOP_WAIT_MS / 1000}s after it was stopped`);
+        await sleep(STOP_POLL_MS);
+        state = await client.query(taskName);
+      }
     }
+    await this.endStrayProcesses(sshHost, root);
+  }
+
+  private async endStrayProcesses(sshHost: string, root: string): Promise<void> {
+    const q = powershellDialect.quote;
+    await this.script(sshHost, 'Ending the agent processes', [
+      `$root = ${q(`${root}\\`)}`,
+      'function Get-AgentProcesses { @(Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.IndexOf($root, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and ($_.Name -eq \'node.exe\' -or $_.Name -eq \'conhost.exe\') }) }',
+      'foreach ($p in Get-AgentProcesses) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }',
+      'for ($i = 0; $i -lt 20 -and (Get-AgentProcesses).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }',
+      '$left = @(Get-AgentProcesses)',
+      'if ($left.Count -gt 0) { throw "An agent process did not end: $($left[0].Name) $($left[0].ProcessId)" }',
+    ].join('\n'), QUICK_MS);
   }
 
   /** Runs a PowerShell script on the host; a non-zero exit is an error carrying the script's own message. */
@@ -380,7 +405,7 @@ export class WindowsAgentDeployer {
 
     // Nothing was touched before the capture: only the temporary files are removed.
     if (previous !== undefined) {
-      await attempt('stopped the new agent', () => this.stopTask(client));
+      await attempt('stopped the new agent', () => this.stopTask(input.sshHost, client, layout.root));
       await attempt('restored the previous files', async () => {
         await this.script(input.sshHost, 'Restoring the previous files', [
           `if (Test-Path -LiteralPath ${q(layout.versionDirPrev)}) { if (Test-Path -LiteralPath ${q(layout.versionDir)}) { Remove-Item -LiteralPath ${q(layout.versionDir)} -Recurse -Force }; Move-Item -LiteralPath ${q(layout.versionDirPrev)} -Destination ${q(layout.versionDir)} }`,

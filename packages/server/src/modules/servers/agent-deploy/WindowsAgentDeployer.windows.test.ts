@@ -147,12 +147,20 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
   let direct: ChildProcess | undefined;
   let logonSession: boolean | undefined;
   const firewallRules = new Set<string>();
+  /**
+   * A copy of node.exe at a path of its own: the runner already has firewall rules for the real node.exe (they would make the
+   * "no rule" cases unreachable), and the rules this suite adds name this path only.
+   */
+  const fwDir = path.join(os.tmpdir(), `azito-ci-fw-${SUFFIX}`);
+  const fwNode = path.join(fwDir, 'node.exe');
 
   const layoutOf = (v = version) => windowsAgentLayout(host.home, OPTIONS, v);
   const schtasksPath = (): string => path.win32.join(host.systemRoot, 'System32', 'schtasks.exe');
 
   beforeAll(async () => {
     OPTIONS.port = await freePort();
+    fs.mkdirSync(fwDir, { recursive: true });
+    fs.copyFileSync(process.execPath, fwNode);
     const bundler = new AgentBundler();
     await bundler.ensureBuild();
     version = bundler.getBundleHash();
@@ -180,6 +188,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
         if (left !== '0') problems.push(`the firewall rule "${name}" is still there (${left})`);
       }
     }
+    fs.rmSync(fwDir, { recursive: true, force: true });
+    if (fs.existsSync(fwDir)) problems.push(`the folder ${fwDir} could not be removed`);
     const dir = path.join(os.homedir(), OPTIONS.dir);
     for (let attempt = 0; attempt < 20 && fs.existsSync(dir); attempt++) {
       try { fs.rmSync(dir, { recursive: true, force: true }); } catch { await new Promise((r) => setTimeout(r, 500)); }
@@ -197,7 +207,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
   });
 
   describe('the firewall script on the real PowerShell', () => {
-    const run = async (port: number, node = host.nodePath!) => {
+    const run = async (port: number, node = fwNode) => {
       const out = await cmdExec('ci', buildFirewallCommand(port, node, BIND), 120_000);
       expect(out.code, out.stderr).toBe(0);
       return parseFirewallResult(out.stdout, out.stderr, out.code);
@@ -225,7 +235,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
         '$global:LASTEXITCODE = 0',
         'ConvertTo-Json -InputObject $info -Compress',
       ].join('\n'))) as Record<string, string>;
-      expect(detail.program.toLowerCase()).toBe(host.nodePath!.toLowerCase());
+      expect(detail.program.toLowerCase()).toBe(fwNode.toLowerCase());
       expect(detail.local).toBe(BIND);
       expect(detail.remote).toMatch(/^100\.64\.0\.0\/(10|255\.192\.0\.0)$/);
       expect(detail.port).toBe(String(port));
@@ -237,7 +247,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const name = `${FIREWALL_RULE_PREFIX} block`;
       firewallRules.add(name);
       track(port);
-      await create(name, `-Action Block -LocalPort ${port} -Program ${powershellDialect.quote(host.nodePath!)}`);
+      await create(name, `-Action Block -LocalPort ${port} -Program ${powershellDialect.quote(fwNode)}`);
       const result = await run(port);
       expect(result.blockedBy).toContain(name);
       expect(result.created).toBe(false);
@@ -252,8 +262,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const narrowName = `${FIREWALL_RULE_PREFIX} narrow`;
       firewallRules.add(rangeName);
       firewallRules.add(narrowName);
-      await create(rangeName, `-Action Allow -LocalPort ${rangePort}-${rangePort + 1} -Program ${powershellDialect.quote(host.nodePath!)}`);
-      await create(narrowName, `-Action Allow -LocalPort ${narrowPort} -Program ${powershellDialect.quote(host.nodePath!)} -RemoteAddress LocalSubnet`);
+      await create(rangeName, `-Action Allow -LocalPort ${rangePort}-${rangePort + 1} -Program ${powershellDialect.quote(fwNode)}`);
+      await create(narrowName, `-Action Allow -LocalPort ${narrowPort} -Program ${powershellDialect.quote(fwNode)} -RemoteAddress LocalSubnet`);
       const range = await run(rangePort);
       if (!range.elevated) ctx.skip('this session is not elevated');
       expect(range).toMatchObject({ ruleFound: false, created: true });
@@ -265,7 +275,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const name = `${FIREWALL_RULE_PREFIX} program`;
       firewallRules.add(name);
       track(port);
-      await create(name, `-Action Allow -Program ${powershellDialect.quote(host.nodePath!)}`);
+      await create(name, `-Action Allow -Program ${powershellDialect.quote(fwNode)}`);
       expect(await run(port)).toMatchObject({ ruleFound: true, created: false });
     }, 300_000);
   });
@@ -393,10 +403,14 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       await deployer.restart('ci', host);
       await waitForHealth(OPTIONS.port, version, 60_000);
 
+      // For the record (not asserted): what the Task Scheduler's own /End leaves behind. The deployer's stop sweeps the rest.
+      await cmdExec('ci', `"${schtasksPath()}" /End /TN ${OPTIONS.taskName}`, 60_000);
+      await new Promise((r) => setTimeout(r, 3000));
+      console.log(`[WindowsAgentDeployer.windows.test] processes left 3s after the task's own /End: ${JSON.stringify(await agentProcesses(layoutOf().root))}`);
+
       await deployer.stop('ci', host);
       await waitForNoHealth(OPTIONS.port, 15_000);
-      // /End ended the conhost, and node went with it.
-      for (let i = 0; i < 20 && (await agentProcesses(layoutOf().root)).length > 0; i++) await new Promise((r) => setTimeout(r, 500));
+      // After stop() there is no agent process of this install: the conhost, and the node it started.
       expect(await agentProcesses(layoutOf().root)).toEqual([]);
     }, 300_000);
 
