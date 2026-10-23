@@ -7,7 +7,7 @@ import { hostTar } from './archive';
 
 /**
  * Smoke test for a Windows hub bundle (azito-hub-<ver>-win32-x64.zip): extracts it, starts the bundled `node.exe
- * azito-hub.cjs` straight from Node (run.ps1 is B2 of #380) with a throwaway data directory on a free loopback port,
+ * azito-hub.cjs` straight from Node (the run.ps1 / install.ps1 path is smoke-install-win32.ts) with a throwaway data directory on a free loopback port,
  * waits for `/api/health` to answer 200 and stops the process again. A bundle that cannot boot on Windows (a missing
  * native module, a POSIX-only startup step) fails here instead of on a user's machine.
  * Usage: tsx smoke-hub-win32.ts <path to the zip>

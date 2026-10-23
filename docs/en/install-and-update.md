@@ -76,7 +76,49 @@ If it reports Node.js as missing even though the host has it, the service's PATH
 
 ## Windows bundle
 
-Each release also carries `azito-hub-<version>-win32-x64.zip`, the hub for Windows x64: `node.exe`, the hub bundle, `public/`, `harness/`, the `deploy/` templates, the native modules built on Windows (better-sqlite3, node-pty with ConPTY) and the same misao release as the other bundles. The zip is listed in `SHA256SUMS`. It is an artifact only for now: the launcher (`run.ps1`), the installer and the service registration for Windows are not part of it yet (#380), so there is no supported install procedure for it.
+Each release also carries `azito-hub-<version>-win32-x64.zip`, the hub for Windows x64: `node.exe`, the hub bundle, `public/`, `harness/`, the `deploy/` templates, the native modules built on Windows (better-sqlite3, node-pty with ConPTY) and the same misao release as the other bundles. The zip is listed in `SHA256SUMS`. It also carries `run.ps1`, the launcher (the counterpart of `run.sh`).
+
+### Install on Windows (install.ps1)
+
+`install.ps1` (a release asset, also in the repository root) installs it for the current user with Windows PowerShell 5.1: no administrator rights, no symlinks. It needs `git` on the PATH.
+
+```powershell
+# Download install.ps1 and SHA256SUMS from the release page, check install.ps1 against SHA256SUMS, then:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Yes] [-NoPath]
+```
+
+| Option | Meaning |
+|---|---|
+| `-Version <tag>` | Release to install (default: the latest release) |
+| `-Prefix <dir>` | Installation prefix (default: `%USERPROFILE%\.azito`) |
+| `-ZipPath <file>` | Use a local `azito-hub-<tag>-win32-x64.zip` instead of downloading (offline installs). Add `-Sha256Sums <file>` to check it |
+| `-Yes` | Skip the confirmation prompt |
+| `-NoPath` | Do not add `<prefix>\bin` to the user's PATH |
+| `-NoService` | Accepted for parity with `install.sh`; the hub is not registered as a service yet, so this is always the behaviour |
+
+It downloads the zip and `SHA256SUMS`, stops if the checksum does not match, and refuses a zip whose entries would land outside the install folder. Layout:
+
+```
+<prefix>\hub\<version>\        the extracted bundle (node.exe, azito-hub.cjs, run.ps1, ...)
+<prefix>\hub\current.txt       the installed version, one line (Windows has no `current` symlink)
+<prefix>\hub\.env              configuration (outside the version folder, so updates keep it)
+<prefix>\data\                 database, keys and tokens
+<prefix>\bin\azito.cmd         the CLI
+```
+
+`hub\.env` and `data\` are created by the bundled hub itself (`node.exe azito-hub.cjs init-env`), so their access rules (current user only) come from the same code that protects them at run time. Running the installer again reports the existing install and changes nothing; updating by hand means extracting the new zip into `hub\<tag>` and writing the tag into `current.txt`.
+
+The CLI reads `current.txt` and runs the bundled hub:
+
+| Command | Effect |
+|---|---|
+| `azito start` | Runs the hub in the foreground through `run.ps1` (Ctrl+C stops it) |
+| `azito token show` / `token rotate` | The UI token |
+| `azito version` | The version in `current.txt` and the bundle's own |
+| `azito misao ...`, `azito service ...` | Passed to the hub; they report why they are not available on Windows yet |
+| `azito stop` / `azito status` | Exit 1 with the reason: there is no resident service yet |
+
+**Not supported yet (#380):** running the hub as a resident service (Task Scheduler), the hub's own misao, and in-app update/uninstall (#381). Until then the hub runs only while `azito start` is open.
 
 ## Manual Install (tarball)
 

@@ -59,8 +59,8 @@ jobs:
           tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
           arch -x86_64 "$SMOKE/misao/x86_64-apple-darwin/misao" --version
 
-      # The Windows bundle is a zip with no run.ps1 yet (B2 of #380): start the bundled node.exe on azito-hub.cjs directly,
-      # wait for /api/health and stop it. build-hub.ts has already checked the zip for data/ and the stage contents.
+      # Start the bundled node.exe on azito-hub.cjs directly, wait for /api/health and stop it. build-hub.ts has already checked
+      # the zip for data/ and the stage contents. (The install.ps1 / azito.cmd / run.ps1 path is exercised by ci.yml's "Hub bundle (Windows)".)
       - name: Smoke-test the Windows hub bundle
         if: matrix.platform == 'win32'
         shell: bash
@@ -104,10 +104,10 @@ jobs:
         run: |
           mkdir -p release-assets
           find artifacts \( -name 'azito-hub-*.tar.gz' -o -name 'azito-hub-*.zip' \) -exec cp {} release-assets/ \;
-          cp install.sh release-assets/
+          cp install.sh install.ps1 release-assets/
 
           cd release-assets
-          sha256sum azito-hub-*.tar.gz azito-hub-*.zip install.sh > SHA256SUMS
+          sha256sum azito-hub-*.tar.gz azito-hub-*.zip install.sh install.ps1 > SHA256SUMS
 
       - name: Test install.sh re-run detection
         run: |

@@ -214,7 +214,7 @@ function copyRuntimeDeps(moduleName: string, nodeModulesDest: string, seen = new
   }
 }
 
-/** Files only a Unix bundle carries (the launcher script and the Node binary). B2 adds run.ps1 / install.ps1 / azito.cmd to the Windows one. */
+/** Files only a Unix bundle carries (the launcher script and the Node binary). A Windows bundle has `run.ps1` and `node.exe` instead. */
 const UNIX_ONLY_FILES = ['run.sh', 'node'];
 
 /**
@@ -231,7 +231,7 @@ function assertStageContents(platform: Args['platform']): void {
     'release.json',
     'channel.json',
     'version.txt',
-    ...(isWin32 ? ['node.exe', 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'] : UNIX_ONLY_FILES),
+    ...(isWin32 ? ['node.exe', 'run.ps1', 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'] : UNIX_ONLY_FILES),
     'public/index.html',
     'harness/chat-commands.json',
     'dist-agent/azito-agent.tar.gz',
@@ -430,8 +430,11 @@ async function main(): Promise<void> {
     copyRuntimeDeps(m, nodeModulesStage);
   }
 
-  // 8. Stage run.sh (a Windows bundle's launcher, run.ps1, is B2 of #380)
-  if (args.platform !== 'win32') {
+  // 8. Stage the launcher: run.sh, or run.ps1 for a Windows bundle. install.sh / install.ps1 are not in the bundle: they
+  // are release assets of their own (the installer is what fetches the bundle), and `azito.cmd` is written by install.ps1.
+  if (args.platform === 'win32') {
+    fs.copyFileSync(path.join(SCRIPT_DIR, 'run-hub.ps1'), path.join(STAGE, 'run.ps1'));
+  } else {
     const runSh = fs.readFileSync(path.join(SCRIPT_DIR, 'run-hub.sh'), 'utf-8');
     fs.writeFileSync(path.join(STAGE, 'run.sh'), runSh, { mode: 0o755 });
   }

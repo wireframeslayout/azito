@@ -76,7 +76,49 @@ Servers → 対象サーバー → Setup の Node.js 欄は、同梱 Node では
 
 ## Windows 版の配布物
 
-リリースには `azito-hub-<version>-win32-x64.zip`（Windows x64 のハブ）も含まれます。中身は `node.exe`、ハブ本体、`public/`、`harness/`、`deploy/` のテンプレート、Windows 上でビルドしたネイティブモジュール（better-sqlite3、ConPTY の node-pty）、ほかの配布物と同じ版の misao です。zip は `SHA256SUMS` に載ります。現時点では配布物があるだけで、Windows 用の起動スクリプト（`run.ps1`）・インストーラ・サービス登録はまだ含まれません（#380）。導入手順は未提供です。
+リリースには `azito-hub-<version>-win32-x64.zip`（Windows x64 のハブ）も含まれます。中身は `node.exe`、ハブ本体、`public/`、`harness/`、`deploy/` のテンプレート、Windows 上でビルドしたネイティブモジュール（better-sqlite3、ConPTY の node-pty）、ほかの配布物と同じ版の misao です。zip は `SHA256SUMS` に載ります。起動スクリプト `run.ps1`（`run.sh` に当たるもの）も含みます。
+
+### Windows への導入（install.ps1）
+
+`install.ps1`（リリースの資産。リポジトリのルートにもあります）は、Windows PowerShell 5.1 で現在のユーザー向けに導入します。管理者権限もシンボリックリンクも要りません。PATH に `git` が必要です。
+
+```powershell
+# リリースページから install.ps1 と SHA256SUMS を取得し、install.ps1 を SHA256SUMS で照合してから:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Yes] [-NoPath]
+```
+
+| オプション | 意味 |
+|---|---|
+| `-Version <tag>` | 導入する版（省略時は最新のリリース） |
+| `-Prefix <dir>` | 導入先（既定は `%USERPROFILE%\.azito`） |
+| `-ZipPath <file>` | ダウンロードの代わりにローカルの `azito-hub-<tag>-win32-x64.zip` を使う（オフライン用）。`-Sha256Sums <file>` を足すと照合する |
+| `-Yes` | 確認を省く |
+| `-NoPath` | `<prefix>\bin` をユーザーの PATH に足さない |
+| `-NoService` | `install.sh` と揃えて受け付ける。ハブはまだサービス登録しないので、常にこの動作 |
+
+zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止まります。展開先のフォルダの外に出るエントリを含む zip も拒否します。配置:
+
+```
+<prefix>\hub\<version>\        展開した配布物（node.exe、azito-hub.cjs、run.ps1 など）
+<prefix>\hub\current.txt       導入した版（1 行。Windows には `current` の symlink が無い）
+<prefix>\hub\.env              設定（版のフォルダの外。更新で消えない）
+<prefix>\data\                 データベース・鍵・トークン
+<prefix>\bin\azito.cmd         CLI
+```
+
+`hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を書きます。
+
+CLI は `current.txt` を読んで同梱のハブを実行します:
+
+| コマンド | 動作 |
+|---|---|
+| `azito start` | `run.ps1` 経由でハブを前面で実行（Ctrl+C で止める） |
+| `azito token show` / `token rotate` | UI トークン |
+| `azito version` | `current.txt` の版と、配布物自身の版 |
+| `azito misao ...`、`azito service ...` | ハブに渡す。Windows ではまだ使えない理由が表示される |
+| `azito stop` / `azito status` | 理由付きで終了コード 1（常駐がまだ無い） |
+
+**未対応（#380）:** ハブの常駐（タスクスケジューラ）、ハブ自身の misao、アプリ内の更新・アンインストール（#381）。それまでは `azito start` を開いている間だけハブが動きます。
 
 ## 手動インストール（tarball）
 
