@@ -157,7 +157,11 @@ async function main(): Promise<void> {
     const taskXml = schtasks(['/Query', '/TN', MISAO_TASK, '/XML']);
     assert(taskXml.status === 0, 'schtasks /Query failed for the misao task', taskXml.output);
     assert(/<LogonTrigger>/.test(taskXml.output) && /<RestartOnFailure>/.test(taskXml.output), 'the misao task must be a logon task that restarts on failure', taskXml.output);
-    assert(/conhost\.exe/i.test(taskXml.output) && /--headless/.test(taskXml.output) && taskXml.output.toLowerCase().includes('misao.exe'), 'the misao task must run misao.exe under conhost.exe --headless', taskXml.output);
+    // The prefix has spaces and parentheses, which conhost.exe re-reads wrongly in a command line: the task runs a launcher script (-EncodedCommand), and the paths are in it, not in the command line.
+    assert(/conhost\.exe/i.test(taskXml.output) && /--headless/.test(taskXml.output) && /-EncodedCommand/.test(taskXml.output), 'the misao task must run the launcher script under conhost.exe --headless', taskXml.output);
+    const launcher = Buffer.from(/-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(taskXml.output)?.[1] ?? '', 'base64').toString('utf16le');
+    assert(launcher.includes(misaoExe) && launcher.includes(misaoRoot), 'the launcher script must name this release\'s misao.exe and the folder', launcher);
+    assert(!taskXml.output.includes('Foo Bar'), 'no path of the prefix may be in the task\'s command line', taskXml.output);
     pipe = envValue(envFile, 'MISAO_SOCKET') ?? '';
     assert(/^\\\\\.\\pipe\\misao-[A-Za-z0-9._-]+-[0-9a-f]{16}$/.test(pipe), 'hub\\.env must name the misao named pipe as MISAO_SOCKET', pipe);
     const pids = misaoPids(pipe);
@@ -234,14 +238,7 @@ async function main(): Promise<void> {
     assert(/daemon:\s+reachable/.test(azito(azitoCmd, 'misao status').output), 'the daemon must be reachable again');
   } catch (err) {
     console.error(`[smoke-misao] hub.log:\n${readLog(hubLog)}\n[smoke-misao] misao.log:\n${readLog(misaoLog)}`);
-    console.error(`[smoke-misao] task XML:\n${schtasks(['/Query', '/TN', MISAO_TASK, '/XML']).output}`);
     console.error(`[smoke-misao] task state:\n${schtasks(['/Query', '/TN', MISAO_TASK, '/V', '/FO', 'LIST']).output}`);
-    if (misaoExe !== '' && fs.existsSync(misaoExe)) {
-      const direct = spawnSync(misaoExe, ['--version'], { encoding: 'utf-8', timeout: 30_000 });
-      console.error(`[smoke-misao] misao.exe --version: ${direct.status} ${direct.stdout}${direct.stderr}`);
-      const viaCmd = spawnSync(CMD, ['/d', '/c', `""${misaoExe}" --version"`], { encoding: 'utf-8', timeout: 30_000, windowsVerbatimArguments: true });
-      console.error(`[smoke-misao] cmd /d /c ""misao.exe" --version": ${viaCmd.status} ${viaCmd.stdout}${viaCmd.stderr}`);
-    }
     throw err;
   } finally {
     step('cleanup: stop the hub and misao, delete the tasks');
