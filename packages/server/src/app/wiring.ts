@@ -9,6 +9,7 @@ import { EventEmitter } from 'events';
 import type { HostEnv } from '../shared/os/hostEnv';
 import { TaskTempFiles } from '../shared/os/taskTempFiles';
 import type { SecretFileGuard } from '../shared/os/secretFileGuard';
+import { HubGitSupport } from '../modules/git/HubGitSupport';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
 import type { DataPaths } from '../shared/dataDir';
@@ -239,6 +240,8 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   /** Issue #28 Phase A: resolved once here (the composition root boundary) via shared/auth/scopedAuthFlag.ts, then threaded through — see that file's doc comment for why buildServer.ts reads this instead of process.env directly. */
   scopedAuthEnabled: boolean;
   harnessPrefix?: string;
+  /** GIT_ASKPASS launcher and the empty hooks directory for the git commands that run on the hub's own machine. */
+  hubGitSupport: HubGitSupport;
 }
 
 // ─── Per-module factories ───
@@ -415,9 +418,9 @@ function readHubGitIdentity(): GitIdentity | null {
   }
 }
 
-function buildFetchDistributionService(infra: SharedInfra, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null): FetchDistributionService {
+function buildFetchDistributionService(infra: SharedInfra, hubGitSupport: HubGitSupport, dataPaths: DataPaths, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null): FetchDistributionService {
   const sftpService = new SftpService(infra.sshClient);
-  const hubRepoCache = new HubRepoCache(dataPaths.dir);
+  const hubRepoCache = new HubRepoCache(dataPaths.dir, hubGitSupport);
   const remoteBundleOps = new RemoteBundleOps();
   // sshClient passed to normalize the outer lock key's host identity (Issue
   // #87 review, 6th pass, Important finding 3) — see FetchDistributionService's
@@ -485,14 +488,15 @@ function buildExecuteTaskUseCase(
   fetchDistributionService: FetchDistributionService,
   distributionStateRepo: SqliteDistributionStateRepository,
   dataPaths: DataPaths,
+  hubGitSupport: HubGitSupport,
   hubGitIdentity: GitIdentity | null,
   harnessPrefix?: string,
 ): ExecuteTaskUseCase {
 
   const sftpService = new SftpService(infra.sshClient);
   const remoteBundleOps = new RemoteBundleOps();
-  const cleanPusher = new CleanPusher();
-  const hubRepoCache = new HubRepoCache(dataPaths.dir);
+  const cleanPusher = new CleanPusher(hubGitSupport);
+  const hubRepoCache = new HubRepoCache(dataPaths.dir, hubGitSupport);
   const pushNotaryService = new PushNotaryService(remoteBundleOps, sftpService, cleanPusher, infra.gitProvider, hubRepoCache);
 
   return new ExecuteTaskUseCase(
@@ -675,10 +679,11 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // table.
   const distributionStateRepo = new SqliteDistributionStateRepository(db);
   const hubGitIdentity = readHubGitIdentity();
-  const fetchDistributionService = buildFetchDistributionService(infra, dataPaths, distributionStateRepo, hubGitIdentity);
+  const hubGitSupport = new HubGitSupport(hostEnv, secretFileGuard, path.join(dataPaths.dir, 'git-support'));
+  const fetchDistributionService = buildFetchDistributionService(infra, hubGitSupport, dataPaths, distributionStateRepo, hubGitIdentity);
   const appServices = buildApplicationServices(infra, repos, uiToken, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, hubGitIdentity, harnessPrefix);
   const resourceGuard = new ResourceGuard(infra.transportFactory, repos.resourceGuardSettingsRepo);
-  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, hubGitIdentity, harnessPrefix);
+  const executeTaskUseCase = buildExecuteTaskUseCase(infra, repos, appServices, resourceGuard, scopedAuthEnabled, fetchDistributionService, distributionStateRepo, dataPaths, hubGitSupport, hubGitIdentity, harnessPrefix);
   const paneHandleResolver = new PaneHandleResolver(infra.muxDriverRegistry, repos.windowRepo, repos.serverRepo);
   const agentActivityMonitor = buildAgentActivityMonitor(infra, repos, executeTaskUseCase, appServices.sessionCaptureService, appServices.windowActivityStatusService, paneHandleResolver, infra.muxDriverRegistry);
   executeTaskUseCase.setActivitySource(agentActivityMonitor);
@@ -702,6 +707,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     resourceGuard,
     scopedAuthEnabled,
     harnessPrefix,
+    hubGitSupport,
     distributionStateRepo,
     fetchDistributionService,
     ...systemUpdateModule,

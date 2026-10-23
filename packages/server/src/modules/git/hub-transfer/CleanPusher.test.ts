@@ -5,6 +5,7 @@ import * as path from 'path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { CleanPusher } from './CleanPusher';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
+import { testHubGitSupport } from '../testHubGitSupport';
 
 // `execFileSync` is re-exported through a spy wrapper (rather than
 // `vi.spyOn(childProcess, 'execFileSync')`) because Vitest 4 runs
@@ -85,7 +86,7 @@ describe('CleanPusher', () => {
     const remoteDir = makeTmpDir('azito-cleanpusher-remote-');
     runGit(['init', '-q', '--bare', remoteDir], remoteDir);
 
-    const pusher = new CleanPusher();
+    const pusher = new CleanPusher(testHubGitSupport());
     const identity = makeIdentity(remoteDir);
     const result = pusher.push(bundlePath, identity, 'unused-token', branch);
 
@@ -104,7 +105,7 @@ describe('CleanPusher', () => {
     const remoteDir = makeTmpDir('azito-cleanpusher-remote-');
     runGit(['init', '-q', '--bare', remoteDir], remoteDir);
 
-    const pusher = new CleanPusher();
+    const pusher = new CleanPusher(testHubGitSupport());
     const identity = makeIdentity(remoteDir);
     pusher.push(bundlePath, identity, 'unused-token', branch);
 
@@ -120,7 +121,10 @@ describe('CleanPusher', () => {
       ([cmd, args]) => cmd === 'git' && Array.isArray(args) && args.includes('init') && args.includes('-c'),
     );
     expect(initCall).toBeDefined();
-    expect(initCall![1]).toContain('core.hooksPath=/dev/null');
+    const hooksPath = (initCall![1] as string[]).find((a) => a.startsWith('core.hooksPath='));
+    expect(hooksPath).toBeDefined();
+    expect(hooksPath).not.toBe('core.hooksPath=/dev/null');
+    expect(fs.readdirSync(hooksPath!.slice('core.hooksPath='.length))).toEqual([]);
   });
 
   // #124 Bug 1: incremental bundle + empty bare repo
@@ -145,7 +149,7 @@ describe('CleanPusher', () => {
     const remoteDir = makeTmpDir('azito-cleanpusher-incr-remote-');
     runGit(['init', '-q', '--bare', remoteDir], remoteDir);
 
-    const pusher = new CleanPusher();
+    const pusher = new CleanPusher(testHubGitSupport());
     expect(() => pusher.push(bundlePath, makeIdentity(remoteDir), 'unused-token', branch)).toThrow();
   });
 
@@ -176,7 +180,7 @@ describe('CleanPusher', () => {
     const remoteDir = makeTmpDir('azito-cleanpusher-seed-remote-');
     runGit(['init', '-q', '--bare', remoteDir], remoteDir);
 
-    const pusher = new CleanPusher();
+    const pusher = new CleanPusher(testHubGitSupport());
     const result = pusher.push(bundlePath, makeIdentity(remoteDir), 'unused-token', branch, seedDir);
     expect(result.pushedSha).toBe(tipSha);
 

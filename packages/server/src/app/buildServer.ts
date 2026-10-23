@@ -475,7 +475,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   // (servers/routes.ts) and the project-scoped one (projects/routes.ts)
   // share this exact instance.
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
-  const localRepoCloneService = new LocalRepoCloneService();
+  const localRepoCloneService = new LocalRepoCloneService(wiring.hubGitSupport);
   await app.register(serversRoutes, {
     serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, harnessHash: wiring.harnessUpdater.getHarnessHash(), harnessUpdater: wiring.harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: async (srv) => {

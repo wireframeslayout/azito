@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isReleaseMode, getReleaseInfo, getBundleRoot } from '../../../shared/releaseInfo';
@@ -23,7 +23,7 @@ export class AgentBundler {
   getHubSha(): string {
     const info = getReleaseInfo();
     if (info) return info.commit;
-    return execSync('git rev-parse --short HEAD', { cwd: SERVER_ROOT, timeout: 5000 })
+    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: SERVER_ROOT, timeout: 5000 })
       .toString()
       .trim();
   }
@@ -88,7 +88,8 @@ export class AgentBundler {
   async ensureBuild(): Promise<void> {
     if (!this.needsBuild()) return;
     console.log('[AgentBundler] Building agent bundle...');
-    execSync('npx tsx scripts/build-agent.ts', {
+    // The node binary itself loads tsx: `npx` is `npx.cmd` on Windows and cannot be run without a shell.
+    execFileSync(process.execPath, ['--import', 'tsx', 'scripts/build-agent.ts'], {
       cwd: SERVER_ROOT,
       stdio: 'inherit',
       timeout: 180000,

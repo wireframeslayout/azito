@@ -5,6 +5,7 @@ import * as path from 'path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { LocalRepoCloneService, LocalCloneTargetNotEmptyError } from './LocalRepoCloneService';
 import type { CanonicalRepositoryIdentity } from './resolveCanonicalRepositoryIdentity';
+import { testHubGitSupport } from './testHubGitSupport';
 
 // Never hits a real remote (github.com/gitlab.com etc.) — every fixture repo
 // here is a throwaway local git repository under the OS tmp dir, matching
@@ -50,7 +51,7 @@ describe('LocalRepoCloneService', () => {
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'nested', 'project');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await service.clone(makeIdentity(origin), null, 'main', targetDir);
 
     expect(fs.existsSync(path.join(targetDir, 'file.txt'))).toBe(true);
@@ -63,7 +64,7 @@ describe('LocalRepoCloneService', () => {
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'a', 'b', 'c');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).resolves.not.toThrow();
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
@@ -74,7 +75,7 @@ describe('LocalRepoCloneService', () => {
     const targetDir = makeTmpDir('azito-clone-target-');
     fs.writeFileSync(path.join(targetDir, 'preexisting.txt'), 'do not touch\n');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).rejects.toThrow(LocalCloneTargetNotEmptyError);
 
     // The pre-existing content must survive untouched.
@@ -87,30 +88,32 @@ describe('LocalRepoCloneService', () => {
     createOriginRepo(origin, 'main');
     const targetDir = makeTmpDir('azito-clone-target-');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await expect(service.clone(makeIdentity(origin), null, 'main', targetDir)).resolves.not.toThrow();
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('never leaves the askpass script (which holds the token) behind after a successful clone', async () => {
+  it('never writes the token into any file of the support directory after a successful clone', async () => {
     const origin = makeTmpDir('azito-clone-origin-');
     createOriginRepo(origin, 'main');
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
     const token = 'super-secret-token-value';
 
-    const service = new LocalRepoCloneService();
+    const support = testHubGitSupport(makeTmpDir('azito-clone-support-'));
+    const service = new LocalRepoCloneService(support);
     await service.clone(makeIdentity(origin), token, 'main', targetDir);
 
-    // The askpass script (mode 0700, holds the token) must be cleaned up —
-    // it is the only place the token is ever written to disk.
-    const leftover = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('azito-clone-askpass-'));
-    expect(leftover).toEqual([]);
+    // The token reaches git only through the environment, so no launcher / helper file may contain it.
+    const files = fs.readdirSync(support.dir, { withFileTypes: true }).filter((e) => e.isFile());
+    expect(files.length).toBeGreaterThan(0);
+    for (const f of files) expect(fs.readFileSync(path.join(support.dir, f.name), 'utf-8')).not.toContain(token);
     expect(fs.existsSync(path.join(targetDir, '.git'))).toBe(true);
   });
 
-  it('never leaks the token into a thrown error, and cleans up the askpass script on failure too (no real remote touched)', async () => {
-    const service = new LocalRepoCloneService();
+  it('never leaks the token into a thrown error, and leaves no token in the support directory on failure either (no real remote touched)', async () => {
+    const support = testHubGitSupport(makeTmpDir('azito-clone-support-'));
+    const service = new LocalRepoCloneService(support);
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
     const token = 'super-secret-token-value';
@@ -128,8 +131,9 @@ describe('LocalRepoCloneService', () => {
     expect(thrown).not.toBeNull();
     expect(thrown!.message).not.toContain(token);
 
-    const leftover = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith('azito-clone-askpass-'));
-    expect(leftover).toEqual([]);
+    for (const f of fs.readdirSync(support.dir, { withFileTypes: true }).filter((e) => e.isFile())) {
+      expect(fs.readFileSync(path.join(support.dir, f.name), 'utf-8')).not.toContain(token);
+    }
   });
 
   it('returns a Promise rather than blocking synchronously (review finding: sync clone froze the whole hub for up to 300s)', () => {
@@ -138,7 +142,7 @@ describe('LocalRepoCloneService', () => {
     const targetRoot = makeTmpDir('azito-clone-target-');
     const targetDir = path.join(targetRoot, 'project');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     const result = service.clone(makeIdentity(origin), null, 'main', targetDir);
 
     // A synchronous (execFileSync-based) implementation would have already

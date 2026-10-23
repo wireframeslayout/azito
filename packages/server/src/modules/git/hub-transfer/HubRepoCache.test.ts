@@ -5,6 +5,7 @@ import * as path from 'path';
 import { describe, it, expect, afterEach } from 'vitest';
 import { HubRepoCache } from './HubRepoCache';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
+import { testHubGitSupport } from '../testHubGitSupport';
 
 // Issue #87 (hub 代行 git 配信) correctness bug: `fetchWithAskPass()` used to
 // run a bare `git fetch origin <branch>`, which — under git's default fetch
@@ -69,7 +70,7 @@ describe('HubRepoCache', () => {
     const originSha = createOriginRepo(originDir, branch);
 
     const dataDir = makeTmpDir('azito-hubrepocache-data-');
-    const cache = new HubRepoCache(dataDir);
+    const cache = new HubRepoCache(dataDir, testHubGitSupport());
     const identity = makeIdentity(originDir);
 
     const sha = cache.ensureFetched(identity, 'unused-token', branch);
@@ -94,7 +95,7 @@ describe('HubRepoCache', () => {
     const originSha = createOriginRepo(originDir, branch);
 
     const dataDir = makeTmpDir('azito-hubrepocache-data-');
-    const cache = new HubRepoCache(dataDir);
+    const cache = new HubRepoCache(dataDir, testHubGitSupport());
     const identity = makeIdentity(originDir);
 
     cache.ensureFetched(identity, 'unused-token', branch);
@@ -130,7 +131,7 @@ describe('HubRepoCache', () => {
       execFileSync('git', ['-C', repoDir, 'rev-parse', `refs/heads/${branch}`], { encoding: 'utf-8' }),
     ).toThrow();
 
-    const cache = new HubRepoCache(dataDir);
+    const cache = new HubRepoCache(dataDir, testHubGitSupport());
     const sha = cache.ensureFetched(identity, 'unused-token', branch);
 
     expect(sha).toBe(originSha);

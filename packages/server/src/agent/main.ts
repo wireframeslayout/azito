@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import websocket from '@fastify/websocket';
 import { EventEmitter } from 'node:events';
-import { execFile, execSync } from 'child_process';
+import { execFile, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolveCurrentHostEnv, type HostEnv } from '../shared/os/hostEnv';
@@ -64,7 +64,7 @@ function resolveVersion(): string {
     return fs.readFileSync(path.join(__dirname, 'version.txt'), 'utf-8').trim();
   } catch {
     try {
-      return execSync('git rev-parse --short HEAD', { timeout: 3000 }).toString().trim();
+      return execFileSync('git', ['rev-parse', '--short', 'HEAD'], { timeout: 3000 }).toString().trim();
     } catch { return 'unknown'; }
   }
 }

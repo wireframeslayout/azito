@@ -1,5 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import os from 'os';
 import fs from 'fs';
 import type { IServerRepository, ServerConfig } from './Server';
@@ -71,7 +71,7 @@ function readHubBootId(): string | null {
 
 function getTailscaleDnsName(): string | null {
   try {
-    const tsJson = execSync('tailscale status --self --json 2>/dev/null', { timeout: 5000 }).toString();
+    const tsJson = execFileSync('tailscale', ['status', '--self', '--json'], { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
     const tsData = JSON.parse(tsJson);
     const dnsName = (tsData.Self?.DNSName || '').replace(/\.$/, '');
     return dnsName || null;
@@ -82,7 +82,7 @@ function getTailscaleDnsName(): string | null {
 
 function getTailscaleIp(): string | null {
   try {
-    return execSync('tailscale ip -4 2>/dev/null', { timeout: 5000 }).toString().trim() || null;
+    return execFileSync('tailscale', ['ip', '-4'], { timeout: 5000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() || null;
   } catch {
     return null;
   }
@@ -1443,7 +1443,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const tsHost = await getTailscaleDnsName();
         try {
           if (!tsHost) throw new Error('tailscale DNS name unavailable');
-          const user = execSync('whoami', { timeout: 2000 }).toString().trim();
+          const user = os.userInfo().username;
           sshHost = `${user}@${tsHost}`;
         } catch {
           sshHost = `${process.env.USER || 'user'}@${os.hostname()}`;

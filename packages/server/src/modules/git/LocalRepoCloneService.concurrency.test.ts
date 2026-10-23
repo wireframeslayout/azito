@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import { testHubGitSupport } from './testHubGitSupport';
 
 // Regression coverage for Issue #87 review, Important finding 2: making
 // clone() async reopened a race the old synchronous implementation happened
@@ -54,7 +55,7 @@ describe('LocalRepoCloneService concurrency', () => {
     // create it, exactly the scenario the review flagged.
     const targetDir = path.join(targetRoot, 'shared-target');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     const results = await Promise.allSettled([
       service.clone(makeIdentity(origin), null, 'main', targetDir),
       service.clone(makeIdentity(origin), null, 'main', targetDir),
@@ -118,7 +119,7 @@ describe('LocalRepoCloneService concurrency', () => {
     const targetDirA = path.join(targetRoot, 'project-a');
     const targetDirB = path.join(targetRoot, 'project-b');
 
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     await Promise.all([
       service.clone(makeIdentity(origin), null, 'main', targetDirA),
       service.clone(makeIdentity(origin), null, 'main', targetDirB),

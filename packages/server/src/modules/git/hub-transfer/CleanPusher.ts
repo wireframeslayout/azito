@@ -6,14 +6,16 @@ import * as path from 'path';
 import { assertSafeBranch } from '../assertSafeGitArgs';
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 import type { CleanPushResult } from './types';
+import { ASKPASS_USERNAME, type HubGitSupport } from '../HubGitSupport';
 
 export class CleanPusher {
+  constructor(private readonly hubGit: HubGitSupport) {}
+
   push(bundlePath: string, identity: CanonicalRepositoryIdentity, token: string, branch: string, seedDir?: string): CleanPushResult {
     assertSafeBranch(branch, 'branch');
 
     const nonce = crypto.randomBytes(8).toString('hex');
     const tmpDir = path.join(os.tmpdir(), `azito-clean-push-${nonce}`);
-    let askPassPath: string | null = null;
 
     try {
       fs.mkdirSync(tmpDir, { recursive: true });
@@ -21,7 +23,7 @@ export class CleanPusher {
       const env = this.cleanEnv();
 
       execFileSync('git', [
-        '-c', 'core.hooksPath=/dev/null',
+        ...this.hubGit.hooksPathArgs(),
         'init', '--bare', tmpDir,
       ], {
         encoding: 'utf-8',
@@ -36,7 +38,7 @@ export class CleanPusher {
       if (seedDir && fs.existsSync(seedDir)) {
         execFileSync('git', [
           '-C', tmpDir,
-          '-c', 'core.hooksPath=/dev/null',
+          ...this.hubGit.hooksPathArgs(),
           'fetch', seedDir, '+refs/heads/*:refs/heads/*',
         ], {
           encoding: 'utf-8',
@@ -53,7 +55,7 @@ export class CleanPusher {
         '-C', tmpDir,
         '-c', 'fetch.fsckObjects=true',
         '-c', 'transfer.fsckObjects=true',
-        '-c', 'core.hooksPath=/dev/null',
+        ...this.hubGit.hooksPathArgs(),
         'fetch', bundlePath, refSpec,
       ], {
         encoding: 'utf-8',
@@ -67,11 +69,10 @@ export class CleanPusher {
         env,
       }).trim();
 
-      askPassPath = this.writeAskPassScript(token);
       const pushUrl = this.embedUsername(identity.httpsUrl);
       execFileSync('git', [
         '-C', tmpDir,
-        '-c', 'core.hooksPath=/dev/null',
+        ...this.hubGit.hooksPathArgs(),
         'push', pushUrl,
         `refs/heads/${branch}:refs/heads/${branch}`,
       ], {
@@ -79,29 +80,21 @@ export class CleanPusher {
         timeout: 120_000,
         env: {
           ...env,
-          GIT_ASKPASS: askPassPath,
+          ...this.hubGit.askPassEnv(token),
           GIT_TERMINAL_PROMPT: '0',
         },
       });
 
       return { pushedSha };
     } finally {
-      if (askPassPath) try { fs.unlinkSync(askPassPath); } catch {}
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
     }
-  }
-
-  private writeAskPassScript(token: string): string {
-    const nonce = crypto.randomBytes(8).toString('hex');
-    const scriptPath = path.join(os.tmpdir(), `azito-askpass-push-${nonce}.sh`);
-    fs.writeFileSync(scriptPath, `#!/bin/sh\necho '${token.replace(/'/g, "'\\''")}'`, { mode: 0o700 });
-    return scriptPath;
   }
 
   private embedUsername(httpsUrl: string): string {
     try {
       const url = new URL(httpsUrl);
-      url.username = 'x-access-token';
+      url.username = ASKPASS_USERNAME;
       return url.toString();
     } catch {
       return httpsUrl;

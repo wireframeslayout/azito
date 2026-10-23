@@ -1,4 +1,4 @@
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
@@ -48,8 +48,8 @@ export class PushVerifier {
   private readShasLocal(workingDir: string, branch: string): { localSha: string; remoteSha: string } | null {
     const opts = { cwd: workingDir, encoding: 'utf-8' as const, timeout: 5000 };
     try {
-      const localSha = execSync('git rev-parse HEAD', opts).trim();
-      const remoteShaLine = execSync(`git ls-remote --heads origin ${branch}`, opts).trim();
+      const localSha = execFileSync('git', ['rev-parse', 'HEAD'], opts).trim();
+      const remoteShaLine = execFileSync('git', ['ls-remote', '--heads', '--', 'origin', branch], opts).trim();
       if (!localSha || !remoteShaLine) return null;
       return { localSha, remoteSha: remoteShaLine.slice(0, 40) };
     } catch {

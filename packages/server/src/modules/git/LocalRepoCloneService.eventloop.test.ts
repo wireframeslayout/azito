@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
+import { testHubGitSupport } from './testHubGitSupport';
 
 // Isolated from LocalRepoCloneService.test.ts on purpose: this file mocks
 // `child_process.execFile` so we can prove other event-loop work (a
@@ -72,7 +73,7 @@ describe('LocalRepoCloneService (event loop non-blocking)', () => {
     const targetDir = path.join(targetRoot, 'project');
 
     const order: string[] = [];
-    const service = new LocalRepoCloneService();
+    const service = new LocalRepoCloneService(testHubGitSupport());
     const clonePromise = service
       .clone({ provider: 'github', host: 'local-test', owner: 'owner', repo: 'repo', httpsUrl: origin }, null, 'main', targetDir)
       .catch(() => { /* expected: the mocked callback below reports a failure */ })
