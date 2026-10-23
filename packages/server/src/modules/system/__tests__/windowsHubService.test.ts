@@ -148,9 +148,16 @@ describe('findHubProcesses', () => {
     expect(script).toContain('Get-Process -Name node');
     expect(script).toContain('$cim.CreationDate.ToFileTimeUtc() - $started.ToFileTimeUtc()');
     // Gone and another user's are skipped; this user's own process that cannot be verified is an error with its id.
-    expect(script).toContain('if ($mine -eq $false) { continue }');
+    expect(script).toContain('if (-not $owner.Mine) { continue }');
     expect(script).toContain('throw "Cannot open hub process $($p.Id) to verify it: $openError"');
-    expect(script).toContain('throw "Cannot tell whose hub process $($p.Id) is');
+    // GetOwnerSid answers "access denied" with a non-zero ReturnValue, not an exception: it is kept, and only ReturnValue 0 with a
+    // SID may be compared; anything else is an error naming the process and the ReturnValue.
+    expect(script).toContain('$r = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid');
+    expect(script).toContain('if ($r.ReturnValue -ne 0) { return [pscustomobject]@{ Mine = $null; Reason = "ReturnValue $($r.ReturnValue)" } }');
+    expect(script).toContain("Reason = 'ReturnValue 0 but no SID'");
+    expect(script).toContain('throw "Cannot tell whose hub process $($p.Id) is (GetOwnerSid: $($owner.Reason))"');
+    // The owner is looked at only after the command line matched this hub, so an unrelated node.exe never raises it.
+    expect(script.indexOf('$cim.CommandLine -notmatch $pattern')).toBeLessThan(script.indexOf('Get-Owner $cim'));
   });
 
   it('fails with the script\'s own message', async () => {

@@ -204,8 +204,14 @@ const FORCE_WAIT_MS = 10_000;
 const PROCESS_PREAMBLE = [
   "$ProgressPreference = 'SilentlyContinue'",
   '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-  // $true: the process is this user's; $false: another user's; $null: the owner could not be read (never taken for "not mine").
-  'function Get-IsMine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $null } }',
+  // GetOwnerSid reports "access denied" and the like as a non-zero ReturnValue, not as an exception, so the result is kept and
+  // looked at: Mine is $true / $false only for ReturnValue 0 with a SID; anything else is $null with the reason, never "not mine".
+  'function Get-Owner($process) {',
+  '  try { $r = Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop } catch { return [pscustomobject]@{ Mine = $null; Reason = $_.Exception.Message } }',
+  '  if ($r.ReturnValue -ne 0) { return [pscustomobject]@{ Mine = $null; Reason = "ReturnValue $($r.ReturnValue)" } }',
+  '  if (-not ($r.Sid -is [string]) -or $r.Sid -eq \'\') { return [pscustomobject]@{ Mine = $null; Reason = \'ReturnValue 0 but no SID\' } }',
+  '  return [pscustomobject]@{ Mine = ($r.Sid -eq $me); Reason = $null }',
+  '}',
 ];
 
 /**
@@ -234,9 +240,10 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
     '  try { $null = $p.Handle; $started = $p.StartTime } catch { $openError = $_.Exception.Message }',
     '  $cim = Get-CimInstance Win32_Process -Filter "ProcessId = $($p.Id)"',
     '  if (-not $cim -or -not $cim.CommandLine -or $cim.CommandLine -notmatch $pattern) { continue }',
-    '  $mine = Get-IsMine $cim',
-    '  if ($mine -eq $false) { continue }',
-    '  if ($null -eq $mine) { throw "Cannot tell whose hub process $($p.Id) is (its owner could not be read)" }',
+    // Only a process whose command line is this hub's gets its owner looked at: an unrelated node.exe of another user is skipped above.
+    '  $owner = Get-Owner $cim',
+    '  if ($null -eq $owner.Mine) { throw "Cannot tell whose hub process $($p.Id) is (GetOwnerSid: $($owner.Reason))" }',
+    '  if (-not $owner.Mine) { continue }',
     '  if ($openError) { throw "Cannot open hub process $($p.Id) to verify it: $openError" }',
     '  if ([Math]::Abs($cim.CreationDate.ToFileTimeUtc() - $started.ToFileTimeUtc()) -gt 10000) { throw "Hub process $($p.Id) is not the process that was read (the start time differs)" }',
     '  "$($p.Id) $($started.ToFileTimeUtc())"',
