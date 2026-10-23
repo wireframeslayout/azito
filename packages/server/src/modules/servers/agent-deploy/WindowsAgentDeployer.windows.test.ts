@@ -297,7 +297,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(fs.existsSync(layout.tarball)).toBe(false);
       expect(fs.existsSync(layout.extractDir)).toBe(false);
       expect(fs.existsSync(layout.taskXml)).toBe(false);
-      expect(fs.readFileSync(layout.envFile, 'utf8')).toBe(`AZITO_AGENT_TOKEN="${input.token}"\nAZITO_AGENT_BIND="${BIND}"\nPORT="${OPTIONS.port}"\nAZITO_AGENT_LOG_FILE="${layout.logFile}"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\n`);
+      expect(fs.readFileSync(layout.envFile, 'utf8')).toBe(`AZITO_AGENT_TOKEN="${input.token}"\nAZITO_AGENT_BIND="${BIND}"\nPORT="${OPTIONS.port}"\nAZITO_AGENT_LOG_FILE="${layout.logFile}"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\nAZITO_MISAO_DIR="${OPTIONS.misaoDir}"\n`);
       // The previous (broad) file is kept aside until the deploy is committed; the live one and its folder are owner-only.
       expect(fs.readFileSync(layout.envFilePrev, 'utf8')).toContain('old-token');
       for (const [target, kind] of [[layout.envFile, 'file'], [layout.root, 'dir']] as const) expect(await ownerOnly(target, kind)).toBe(true);
