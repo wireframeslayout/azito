@@ -88,6 +88,15 @@ describe('resolveMisaoPaths on Windows', () => {
     expect(() => resolveMisaoPaths(prefix, user)).toThrow(/on a drive/);
   });
 
+  it('resolves the root itself (misao may be a junction): the root, the pipe and the log all follow where it really is', () => {
+    const resolvePath = (folder: string): string => folder.endsWith('\\misao') ? `${folder.slice(0, -'misao'.length)}elsewhere\\misao-real` : folder;
+    const paths = resolveMisaoPaths('C:\\Users\\dev\\.azito', { userName: 'dev', resolvePath });
+    expect(paths.root).toBe('C:\\Users\\dev\\.azito\\elsewhere\\misao-real');
+    expect(paths.socket).toBe(windowsMisaoPipe(paths.root, 'dev'));
+    expect(paths.current).toBe(`${paths.root}\\current`);
+    expect(paths.hubEnvFile).toBe('C:\\Users\\dev\\.azito\\hub\\.env');
+  });
+
   it('keeps the root of a drive as a root (C: alone is the current folder of the drive)', () => {
     expect(resolveMisaoPaths('C:\\', user).root).toBe('C:\\misao');
   });

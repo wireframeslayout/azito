@@ -70,7 +70,8 @@ function resolveWindowsMisaoPaths(prefix: string, user: MisaoWindowsUser): Misao
   const spelled = win32.normalize(prefix).replace(/(?<=[^\\/:])[\\/]+$/, '');
   // Windows spells one folder many ways (8.3 short names such as RUNNER~1, letter case): the prefix is taken in its real spelling.
   const normalized = user.resolvePath(spelled);
-  const root = win32.join(normalized, 'misao');
+  // The root itself is resolved too (`misao` may be a junction): this is the string the pipe, the task and the ownership check all use, and the one an agent reports.
+  const root = user.resolvePath(win32.join(normalized, 'misao'));
   return {
     prefix: normalized,
     root,

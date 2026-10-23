@@ -23,6 +23,14 @@ describe('the pipe name follows the folder, not its spelling (the owner of the f
     expect(afterCreate).toBe(windowsMisaoPipe(path.join(real, '.azito', 'misao'), 'dev'));
   });
 
+  it.skipIf(process.platform === 'win32')('gives the root of misao itself being a link the pipe of where it really is, the same string an agent reports', () => {
+    const real = path.join(dir, 'real-misao');
+    fs.mkdirSync(real);
+    fs.symlinkSync(real, path.join(dir, 'misao'), 'dir');
+    expect(resolveRealPath(path.join(dir, 'misao'))).toBe(real);
+    expect(windowsMisaoPipe(resolveRealPath(path.join(dir, 'misao')), 'dev')).toBe(windowsMisaoPipe(real, 'dev'));
+  });
+
   it('is a pure function of the string: a path of another host is never looked up on this one', () => {
     expect(windowsMisaoPipe('C:\\Users\\RUNNER~1\\.azito\\misao', 'dev')).not.toBe(windowsMisaoPipe('C:\\Users\\runneradmin\\.azito\\misao', 'dev'));
     expect(windowsMisaoPipe('C:\\Users\\Dev\\.azito\\misao', 'dev')).toBe(windowsMisaoPipe('c:\\users\\dev\\.azito\\misao', 'dev'));
