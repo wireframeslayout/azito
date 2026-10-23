@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -39,16 +39,6 @@ function powershell(args: string[]): Result {
 function azito(azitoCmd: string, args: string): Result {
   const r = spawnSync(CMD, ['/d', '/s', '/c', `""${azitoCmd}" ${args}"`], { encoding: 'utf-8', timeout: 180_000, windowsVerbatimArguments: true });
   return { status: r.status, output: `${r.stdout}${r.stderr}` };
-}
-
-function azitoAsync(azitoCmd: string, args: string): Promise<Result> {
-  return new Promise((resolve) => {
-    const child = spawn(CMD, ['/d', '/s', '/c', `""${azitoCmd}" ${args}"`], { windowsVerbatimArguments: true });
-    let output = '';
-    child.stdout.on('data', (c: Buffer) => { output += c.toString(); });
-    child.stderr.on('data', (c: Buffer) => { output += c.toString(); });
-    child.on('close', (code) => resolve({ status: code, output }));
-  });
 }
 
 function schtasks(args: string[]): Result {
@@ -95,11 +85,6 @@ function ancestorsOf(pid: number): Array<{ pid: number; name: string }> {
   ].join('\n');
   const r = powershell(['-Command', script]);
   return r.output.split(/\r?\n/).map((l) => /^(\d+) (\S+)$/.exec(l.trim())).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ pid: Number(m[1]), name: m[2] }));
-}
-
-function aliveNames(pids: number[]): string {
-  const r = powershell(['-Command', `Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { "$($_.ProcessName)($($_.Id))" }`]);
-  return r.output.trim().split(/\r?\n/).join(',');
 }
 
 function processAlive(pid: number): boolean {
@@ -169,27 +154,13 @@ async function main(): Promise<void> {
     assert(reinstall.status === 0 && /already registered/.test(reinstall.output), 'azito service install again must be a no-op', reinstall.output);
 
     step('azito stop leaves no node.exe');
-    // Diagnosis: what is alive of the hub's process chain while `azito stop` runs.
-    const stopChain = ancestorsOf(hubNodePids(entryFragment)[0]);
-    console.log(`[smoke-service] chain before azito stop: ${stopChain.map((p) => `${p.name}(${p.pid})`).join(' <- ')}`);
-    console.log(`[smoke-service] task state before azito stop:\n${schtasks(['/Query', '/TN', TASK_NAME, '/FO', 'LIST', '/V']).output}`);
-    const stopStarted = Date.now();
-    const stopTimeline: string[] = [];
-    const stopRun = azitoAsync(azitoCmd, 'stop');
-    let stopDone = false;
-    void stopRun.then(() => { stopDone = true; });
-    while (!stopDone) {
-      stopTimeline.push(`${Math.round((Date.now() - stopStarted) / 1000)}s: ${aliveNames(stopChain.slice(0, 4).map((p) => p.pid)) || 'none'}`);
-      await sleep(100);
-    }
-    console.log(`[smoke-service] chain alive during azito stop: ${[...new Set(stopTimeline.map((l) => l.replace(/^\d+s: /, '')))].join(' | ')} (${stopTimeline.length} samples)\n${stopTimeline.join('\n')}`);
-    const stop = await stopRun;
+    const stop = azito(azitoCmd, 'stop');
     assert(stop.status === 0, 'azito stop failed', stop.output);
     assert(hubNodePids(entryFragment).length === 0, 'azito stop must leave no hub node.exe', stop.output);
     assert((await healthStatus()) === null, '/api/health must not answer after azito stop');
     // Observation only: on the runner the Task Scheduler's End ends the whole process tree at once, so the hub may never get to log its shutdown.
     console.log(`[smoke-service] graceful shutdown logged after azito stop: ${/shutting down gracefully/.test(readLog(logFile))}`);
-    console.log(`[smoke-service] azito stop output: ${stop.output.trim()}`);
+    assert(!/ended forcibly/.test(stop.output), 'azito stop must not have had to end the hub forcibly (it ends by itself when the task is ended)', stop.output);
     const stopped = azito(azitoCmd, 'status');
     assert(/service:\s+taskscheduler \((inactive|failed)\)/.test(stopped.output), 'azito status must show the task stopped', stopped.output);
 

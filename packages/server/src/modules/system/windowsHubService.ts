@@ -182,13 +182,14 @@ export async function endHubProcesses(run: SpecRunner, systemRoot: string, targe
   const script = [
     ...PROCESS_PREAMBLE,
     `$targets = @(${list})`,
+    // @() around every call: a function that returns one object returns it unwrapped, and a PowerShell 5.1 object has no .Count.
     'function Get-Alive { @($targets | Where-Object { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)"; $p -and $p.CreationDate.ToFileTimeUtc() -eq $_.Created }) }',
     `$until = (Get-Date).AddMilliseconds(${Math.trunc(graceMs)})`,
-    'while ((Get-Alive).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }',
+    'while (@(Get-Alive).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }',
     '$forced = @(Get-Alive)',
     'foreach ($t in $forced) { Stop-Process -Id $t.Id -Force -ErrorAction SilentlyContinue }',
     `$until = (Get-Date).AddMilliseconds(${FORCE_WAIT_MS})`,
-    'while ((Get-Alive).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }',
+    'while (@(Get-Alive).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }',
     '$left = @(Get-Alive)',
     "if ($left.Count -gt 0) { throw \"A hub process did not end: $(($left | ForEach-Object { $_.Id }) -join ', ')\" }",
     '$forced | ForEach-Object { "forced $($_.Id)" }',
