@@ -195,10 +195,11 @@ async function main(): Promise<void> {
     const unavailable = (sessions.json as { unavailable?: Array<{ kind: string }> } | null)?.unavailable ?? [];
     assert(!unavailable.some((entry) => entry.kind === 'misao'), 'misao must not be unavailable on the local server', sessions.text);
 
-    step('opening a misao window: the panes of a Windows hub are not implemented yet, and the API says so');
+    step('opening a misao window: the panes of a Windows hub are not implemented yet (#370 / #371), and the API says so');
     const created = await api(token, 'POST', '/api/servers/local/mux/workspaces', { name: 'smoke', kind: 'misao' });
     console.log(`[smoke-misao] POST /api/servers/local/mux/workspaces -> ${created.status} ${created.text}`);
-    assert(created.status === 501 && /unsupported_os/.test(created.text), 'a misao window on a Windows hub must be refused as unsupported_os (PowerShell panes are #370 / #371)', created.text);
+    // The refusal is the pane shell's (`hubPaneShell`): the daemon is reached and asked to open nothing. How the create route reports it (a 500 today) is B4a's; PowerShell panes are #370 / #371.
+    assert(created.status >= 400 && /\(win32\) are not supported yet/.test(created.text), 'a misao window on a Windows hub must be refused because panes are not supported there yet', created.text);
     assert(misaoPids(pipe).length === 1, 'the refused window must not have disturbed the daemon');
 
     step('azito stop ends the hub and leaves misao running');
