@@ -361,6 +361,9 @@ export class MisaoServiceService {
   }
 
   private renderUnit(bundle: MisaoBundle, controller: ServiceManager): string {
+    if (controller.kind === 'taskscheduler' || controller.templateName === undefined) {
+      throw new Error('The misao service definition on Windows is not generated from a unit template yet');
+    }
     return renderMisaoUnit({
       template: fs.readFileSync(path.join(bundle.templatesDir, controller.templateName), 'utf-8'),
       manager: controller.kind,

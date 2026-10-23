@@ -32,7 +32,7 @@ export interface MisaoServiceStatus {
   unmanagedReason?: MisaoUnmanagedReason;
   /** The concrete error behind `unmanagedReason` when there is one (`invalid_prefix`). */
   unmanagedDetail?: string;
-  serviceManager?: 'systemd' | 'launchd';
+  serviceManager?: 'systemd' | 'launchd' | 'taskscheduler';
   /** The unit / plist file exists. */
   serviceInstalled: boolean;
   serviceState?: MisaoServiceState;
