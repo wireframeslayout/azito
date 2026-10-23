@@ -40,6 +40,8 @@ $info = [ordered]@{
   windowsCaption = $caption
   tailscaleIp = $tailscaleIp
   home = $env:USERPROFILE
+  systemRoot = $env:SystemRoot
+  userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
@@ -61,6 +63,8 @@ const rawSchema = z.object({
   windowsCaption: z.string().nullable(),
   tailscaleIp: z.string().nullable(),
   home: z.string().min(1),
+  systemRoot: z.string().min(1),
+  userId: z.string().min(1),
 });
 
 export interface WindowsPreflightInfo {
@@ -73,6 +77,10 @@ export interface WindowsPreflightInfo {
   windowsVersion: string | null;
   tailscaleIp: string | null;
   home: string;
+  /** `%SystemRoot%` of the host (where `schtasks.exe` lives). */
+  systemRoot: string;
+  /** The user the SSH session runs as, `DOMAIN\user` (or `COMPUTER\user`): the user the agent's task is registered for. */
+  userId: string;
 }
 
 const ARCH_BY_REGISTRY_VALUE: Readonly<Record<string, string>> = { AMD64: 'x64', ARM64: 'arm64', x86: 'x86' };
@@ -101,6 +109,8 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
     windowsVersion: v.windowsCaption ? v.windowsCaption.trim().replace(/^Microsoft\s+/, '') : null,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
     home: v.home,
+    systemRoot: v.systemRoot,
+    userId: v.userId,
   };
 }
 

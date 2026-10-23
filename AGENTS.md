@@ -230,6 +230,14 @@ packages/
 - Token-based authentication between hub and agent
 - Uses HTTP REST for commands + WebSocket for terminal/file streaming
 - DB migrations: 021 (agent server columns), 022 (agent bootstrap status)
+- Windows agent (#369 A2): `AgentInstaller.install` branches on the preflight's OS to `WindowsAgentDeployer` (SFTP + PowerShell
+  EncodedCommand over SSH; the Unix sh bootstrap is untouched). The bundle is unpacked by `tar.exe` into `%USERPROFILE%\.azito\agent\<version>\`
+  (owner-only folder, no symlink: the task names the version folder), the settings go to an owner-only `agent.env`, and the service is a
+  Task Scheduler logon task (`AzitoAgent`, Q2's `buildTaskXml` + `SchtasksClient` run on the host through `windowsSshRunner`) that starts
+  `node.exe --env-file=<agent.env> <entry>`: the agent runs only while that user is logged on. `windowsFirewall.ts` checks (and, when the
+  SSH session is elevated, adds) the inbound rule first. `AZITO_WIN_AGENT_TASK_NAME` / `AZITO_WIN_AGENT_DIR` / `AZITO_WIN_AGENT_PORT`
+  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks and the
+  misao relay on win32 and writes `AZITO_AGENT_LOG_FILE`. misao on Windows (A3) and update / removal (#372) are not done: `update()` stays `unsupported_os`.
 
 ### Subagent Delegation
 - Worker delegation can route by worker type; per-task overrides are stored via `024_subagent_config`

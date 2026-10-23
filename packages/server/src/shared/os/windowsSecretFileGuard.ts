@@ -48,7 +48,8 @@ export const PROTECT_CHANGED = 'protected';
  * 読み出した明示的な許可（他のユーザーのもの）は PurgeAccessRules で全部除く
  * （`icacls /inheritance:r /grant:r` だけでは他の主体の明示的な許可が残る）。所有者を変えられなければ失敗する。
  */
-const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
+// PROTECT_SCRIPT / INSPECT_SCRIPT are also run on ANOTHER Windows host over SSH (the hub installing an agent), with AZITO_GUARD_PATH set by the caller's script.
+export const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
   `$acl=$info.GetAccessControl(${ACL_SECTIONS}); ` +
   "if($isDir){$inh=[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{$inh=[System.Security.AccessControl.InheritanceFlags]'None'}; " +
   "$ownerOk=$false; try { $ownerOk=($acl.GetOwner([System.Security.Principal.SecurityIdentifier]).Value -eq $sid.Value) } catch {}; " +
@@ -73,7 +74,7 @@ const CREATE_SCRIPT = PS_PREAMBLE +
   '$stream.Dispose()';
 
 /** 全エントリを SID に解決して JSON で返す（表示名はロケールで変わるので、判定は SID だけで行う）。 */
-const INSPECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
+export const INSPECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
   `$acl=$info.GetAccessControl(${ACL_SECTIONS}); ` +
   '$entries=@($acl.Access | ForEach-Object { ' +
   "$s=''; try { $s=$_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value } catch {}; " +

@@ -352,18 +352,43 @@ On hub startup, all registered Agent servers are automatically version-checked. 
 
 To update manually, use Servers → target server → Setup → Agent Server → "Reinstall".
 
-## Adding a Windows host as an agent (not installable yet)
+## Adding a Windows host as an agent
 
-Installing the agent on Windows is being built (#369). Today the install only runs the **preflight** and then stops with `unsupported_os: installing the agent on a Windows host is not supported yet`; nothing is transferred and no server is registered. The preflight already tells you whether a Windows host is ready:
+Servers → Add → Agent works for a Windows host over SSH. The agent runs, but **misao and tmux are not installed on Windows yet** (#369 A3), so the server has no pane server and the install reports the `unsupported_os` reason for misao beside a successful install. File, git and task features on Windows come with #370 / #371; updating and removing a Windows agent comes with #372 (a Windows agent is reinstalled from the Setup row, which replaces it in place).
+
+Prepare the Windows host:
 
 | Prerequisite | Detail |
 |---|---|
-| OpenSSH Server | Enabled on the Windows host and reachable from the hub. The default shell may stay **cmd.exe** (PowerShell also works): the hub reads the OS first and then runs its checks as a PowerShell script that behaves the same under both |
-| Windows | x64 only, judged by the OS's native architecture (Windows on ARM is refused with the reason, even under x64 emulation). The edition (10 / 11 / Server) is only displayed, not checked |
+| OpenSSH Server | Enabled on the Windows host and reachable from the hub. The default shell may stay **cmd.exe** (PowerShell also works): the hub reads the OS first and then runs its checks as a PowerShell script that behaves the same under both. The SSH user is the user the agent will run as |
+| Windows | x64 only, judged by the OS's native architecture (Windows on ARM is refused with the reason, even under x64 emulation). Windows 10 version 1803 or later (for `tar.exe`). The edition (10 / 11 / Server) is only displayed, not checked |
 | Node.js v24+ | On the PATH of the SSH session |
 | Tailscale | Installed and signed in. `tailscale.exe` is also found at `%ProgramFiles%\Tailscale\tailscale.exe` when it is not on the PATH |
+| Windows Firewall | Must allow inbound TCP 3002 (see step 1 below) |
 
 The OS is detected from one `echo AZITO_OS:%OS%:$?` (it reads no variable, so `set -u` does not matter) whose output differs between sh, cmd.exe and PowerShell; an answer that matches none of them is reported as an error, never guessed.
+
+What the install does (no administrator rights are needed or asked for):
+
+1. **Windows Firewall check.** Windows blocks inbound connections to a program until a rule allows them, and its first-run prompt appears on the desktop, never in an SSH session. The install looks for an enabled inbound Allow rule for TCP 3002 or for `node.exe`. If there is none and the SSH session is elevated (an administrator), it adds `AZITO Agent (TCP 3002)`, limited to the Tailscale range `100.64.0.0/10`. If the session is not elevated it **stops before transferring anything** and prints the command to run once in an Administrator PowerShell:
+   `New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -RemoteAddress 100.64.0.0/10 -Profile Any`
+2. **Transfer** the bundle over SFTP to `%USERPROFILE%\.azito\agent\` and check its SHA256 on the host.
+3. **Unpack** with the system `tar.exe` into `%USERPROFILE%\.azito\agent\<version>\` (the archive is first checked for paths that leave the folder). The folder is owner-only. There is no symlink: the task below names the version folder, so a reinstall re-registers it.
+4. **Settings.** The token, bind address (the Tailscale IP) and port go to `%USERPROFILE%\.azito\agent\agent.env`, a file only the current user may read (the hub checks the ACL and refuses to go on otherwise). The agent is started as `node.exe --env-file=<that file> <version folder>\azito-agent.cjs`, so no launcher script is involved. The agent writes its own log to `%USERPROFILE%\.azito\agent\agent.log`.
+5. **Service.** A Task Scheduler task `AzitoAgent` that **runs at logon of the SSH user** (user rights, restarted after a failure), then `/Run`.
+6. **Health check**, the same as on Linux.
+
+**The agent only runs while that user is logged on to Windows** (at the console or over Remote Desktop). After a reboot nothing starts until they log on, and logging off stops the agent. A server that survives logoff needs auto-logon or another service model, which is not offered yet. Because the task starts in the user's session, `node.exe` has a console window on that desktop; closing it stops the agent.
+
+Operating it:
+
+| Action | How |
+|---|---|
+| Restart | The hub restarts the task (`schtasks /End` then `/Run`) when it cannot reach the agent; or "Reinstall" in the Setup row |
+| Stop | On the host or in an SSH session: `schtasks /End /TN AzitoAgent` (it comes back at the next logon; add `schtasks /Change /TN AzitoAgent /DISABLE` to keep it from starting) |
+| Remove (until #372) | `schtasks /End /TN AzitoAgent`, `schtasks /Delete /TN AzitoAgent /F`, delete `%USERPROFILE%\.azito\agent`, and `Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` if the install added the rule |
+
+To try a second agent beside the real one, set `AZITO_WIN_AGENT_TASK_NAME`, `AZITO_WIN_AGENT_DIR` (a folder under the user's home) and `AZITO_WIN_AGENT_PORT` in the hub's environment. They default to `AzitoAgent`, `.azito\agent` and `3002`.
 
 ## Rollback
 

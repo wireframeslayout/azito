@@ -3,6 +3,7 @@ import { HOST_PROBE_COMMAND } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND } from './hostOsProbe';
 import { buildWindowsPreflightCommand } from './windowsPreflight';
 import { AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
+import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
 
 const VERSION = 'bundlehash1';
 
@@ -43,7 +44,7 @@ describe('AgentInstaller', () => {
 
   function make(misao?: AgentMisaoInstaller, sshOpts: { tmux?: string; probe?: string } = {}) {
     const { ssh, commands } = makeSsh(sshOpts);
-    const installer = new AgentInstaller(ssh as never, makeBundler() as never, misao);
+    const installer = new AgentInstaller(ssh as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
     // The transfer is the SSH library's business (and needs a real server): everything around it is what is tested here.
     (installer as unknown as { transferAndDeploy: () => Promise<void> }).transferAndDeploy = async () => undefined;
     return { installer, commands };
@@ -223,7 +224,7 @@ describe('AgentInstaller', () => {
 
   describe('OS detection and the Windows preflight', () => {
     const windowsOutput = (over: Record<string, unknown> = {}) => `banner\n<<AZITO_PREFLIGHT_BEGIN>>\n${JSON.stringify({
-      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', ...over,
+      nodePath: 'C:\\node.exe', nodeVersion: 'v24.14.0', arch: 'AMD64', windowsCaption: 'Microsoft Windows 11 Pro', tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d', ...over,
     })}\n<<AZITO_PREFLIGHT_END>>\n`;
 
     function makeWindows(login: 'cmd' | 'powershell', over: Record<string, unknown> = {}) {
@@ -235,7 +236,7 @@ describe('AgentInstaller', () => {
         if (command === buildWindowsPreflightCommand()) return { stdout: windowsOutput(over), stderr: '', code: 0 };
         throw new Error(`unexpected command on a Windows host: ${command}`);
       });
-      const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, okMisao());
+      const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
       return { installer, commands };
     }
 
@@ -245,18 +246,6 @@ describe('AgentInstaller', () => {
       expect(commands.slice(0, 3)).toEqual([HOST_OS_PROBE_COMMAND, 'node --version', HOST_PROBE_COMMAND]);
       expect(commands).toContain('tmux -V');
       expect(commands).toContain('tailscale ip -4');
-    });
-
-    it.each(['cmd', 'powershell'] as const)('runs the PowerShell preflight on a Windows host with a %s login shell, then stops with unsupported_os and stores no profile', async (login) => {
-      const { installer, commands } = makeWindows(login);
-      const steps: InstallProgress[] = [];
-      const result = await installer.install('user@host', (p) => steps.push(p));
-      expect(commands).toEqual([HOST_OS_PROBE_COMMAND, buildWindowsPreflightCommand()]);
-      expect(result.success).toBe(false);
-      expect(result.hostProfile).toBeUndefined();
-      expect(result.error).toBe("unsupported_os: installing the agent on a Windows host is not supported yet (preflight passed: Windows 11 Pro x64, Node 24.14.0, Tailscale 100.64.0.9)");
-      expect(steps.map((s) => `${s.step}:${s.status}`)).toEqual(['preflight:running', 'preflight:error']);
-      expect(steps[1].message).toBe(result.error);
     });
 
     it('fails the preflight of a Windows host with every reason: old Node, arm64, no Tailscale', async () => {
@@ -277,7 +266,7 @@ describe('AgentInstaller', () => {
     it('fails with a reason, and sends nothing else, when the OS probe answers as none of sh, cmd or PowerShell', async () => {
       const commands: string[] = [];
       const execIsolated = vi.fn(async (_host: string, command: string) => { commands.push(command); return { stdout: 'weird\n', stderr: '', code: 0 }; });
-      const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, okMisao());
+      const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, DEFAULT_WINDOWS_AGENT_OPTIONS, okMisao());
       const result = await installer.install('user@host');
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/Could not tell the host's OS/);

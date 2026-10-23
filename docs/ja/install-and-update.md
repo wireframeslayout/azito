@@ -349,18 +349,43 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 手動で更新する場合は Servers → 対象サーバー → Setup → Agent Server の「Reinstall」を使用します。
 
-## Windows ホストをエージェントとして追加する（導入は未対応）
+## Windows ホストをエージェントとして追加する
 
-Windows へのエージェント導入は開発中です（#369）。現時点では **preflight（事前確認）** だけを実行し、`unsupported_os: installing the agent on a Windows host is not supported yet` で止まります。転送もサーバー登録も行いません。ただし preflight で、その Windows ホストが前提を満たしているかは確認できます。
+Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent は動きますが、**Windows には misao も tmux もまだ入りません**（#369 A3）。そのためペインサーバーが無く、導入結果には misao の `unsupported_os` の理由が、導入成功と並べて出ます。Windows でのファイル・git・タスク実行は #370 / #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
+
+Windows 側の準備:
 
 | 前提 | 内容 |
 |---|---|
-| OpenSSH サーバー | Windows 側で有効化し、ハブから到達できること。既定シェルは **cmd.exe のままでよい**（PowerShell でも可）。ハブは先に OS を判定し、以後の確認は両方で同じに動く PowerShell スクリプトで行います |
-| Windows | x64 のみ。OS ネイティブのアーキテクチャで判定（ARM 版 Windows は x64 エミュレーション下でも理由付きで拒否）。Windows の版（10 / 11 / Server）は表示だけで検査しない |
+| OpenSSH サーバー | Windows 側で有効化し、ハブから到達できること。既定シェルは **cmd.exe のままでよい**（PowerShell でも可）。ハブは先に OS を判定し、以後の確認は両方で同じに動く PowerShell スクリプトで行います。SSH で入るユーザーが、agent を動かすユーザーになります |
+| Windows | x64 のみ。OS ネイティブのアーキテクチャで判定（ARM 版 Windows は x64 エミュレーション下でも理由付きで拒否）。Windows 10 1803 以降（`tar.exe` のため）。Windows の版（10 / 11 / Server）は表示だけで検査しない |
 | Node.js v24+ | SSH セッションの PATH にあること |
 | Tailscale | 導入済みでサインイン済みであること。PATH に無くても `%ProgramFiles%\Tailscale\tailscale.exe` を探します |
+| Windows ファイアウォール | 受信 TCP 3002 を許可していること（下の手順 1） |
 
 OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo AZITO_OS:%OS%:$?`（変数を読まないので `set -u` でも動く）で行い、どれにも当てはまらない応答は推測せずエラーにします。
+
+導入で行うこと（管理者権限は要りませんし、求めません）:
+
+1. **Windows ファイアウォールの確認。** Windows は、規則が許可するまでプログラムへの受信を遮ります。初回の許可ダイアログはデスクトップに出るだけで、SSH のセッションには出ません。導入は、TCP 3002 または `node.exe` に対する、有効な受信の許可規則を探します。無く、かつ SSH のセッションが管理者のトークンを持っていれば、Tailscale の範囲 `100.64.0.0/10` に限った `AZITO Agent (TCP 3002)` を追加します。管理者でなければ、**何も転送する前に止まり**、管理者の PowerShell で 1 回だけ実行するコマンドを表示します:
+   `New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -RemoteAddress 100.64.0.0/10 -Profile Any`
+2. **転送。** バンドルを SFTP で `%USERPROFILE%\.azito\agent\` へ送り、ホスト上で SHA256 を照合します。
+3. **展開。** 標準の `tar.exe` で `%USERPROFILE%\.azito\agent\<version>\` に展開します（先に、フォルダーの外へ出るパスが無いか検査します）。フォルダーは本人だけが読めます。symlink は使いません。下のタスクが版のフォルダーを直接指すので、再導入のたびにタスクを登録し直します。
+4. **設定。** トークン、bind するアドレス（Tailscale の IP）、ポートは `%USERPROFILE%\.azito\agent\agent.env` に書きます。本人だけが読める ACL にし、そうなっていなければハブが検査して先へ進みません。agent は `node.exe --env-file=<そのファイル> <版のフォルダー>\azito-agent.cjs` で起動するので、起動用のスクリプトは挟みません。agent 自身のログは `%USERPROFILE%\.azito\agent\agent.log` に書かれます。
+5. **常駐。** タスクスケジューラのタスク `AzitoAgent` を登録します。**SSH で入ったユーザーのログオン時に起動**し（ユーザー権限、失敗時は再起動）、続けて `/Run` します。
+6. **ヘルスチェック。** Linux と同じです。
+
+**agent は、そのユーザーが Windows にログオンしている間だけ動きます**（コンソールでも、リモートデスクトップでも）。再起動後はログオンするまで何も起動せず、ログオフすると agent は止まります。ログオフしても動き続けるサーバーには、自動ログオンなど別の方式が要りますが、まだ用意していません。タスクはユーザーのセッションで起動するので、そのデスクトップに `node.exe` のコンソールウィンドウが出ます。閉じると agent が止まります。
+
+運用:
+
+| 操作 | 方法 |
+|---|---|
+| 再起動 | ハブが agent に届かないとき、タスクを再起動します（`schtasks /End` のあと `/Run`）。または Setup の行の「Reinstall」 |
+| 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`（次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
+| 削除（#372 まで） | `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は `Remove-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` |
+
+本物の agent の隣で 2 つ目を試すときは、ハブの環境変数 `AZITO_WIN_AGENT_TASK_NAME`、`AZITO_WIN_AGENT_DIR`（ユーザーのホーム直下のフォルダー）、`AZITO_WIN_AGENT_PORT` を設定します。既定は `AzitoAgent`、`.azito\agent`、`3002` です。
 
 ## ロールバック
 

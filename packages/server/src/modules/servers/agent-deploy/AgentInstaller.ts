@@ -1,13 +1,16 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import { Readable } from 'stream';
 import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
 import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
-import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight } from './windowsPreflight';
+import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
+import { WindowsAgentDeployer, windowsAgentLayout } from './WindowsAgentDeployer';
+import type { WindowsAgentOptions } from './windowsAgentConfig';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
 
@@ -41,7 +44,8 @@ export interface InstallResult {
   port: number;
   token: string;
   version: string;
-  startMethod: 'systemd' | 'nohup';
+  /** `taskscheduler`: a Windows agent (a logon task). */
+  startMethod: 'systemd' | 'nohup' | 'taskscheduler';
   steps: InstallProgress[];
   error?: string;
   /** The host has tmux (the preflight found one). A host without it can only use misao, so the server must default to it. */
@@ -61,6 +65,8 @@ interface PreflightInfo {
   hostProfile: HostProfile;
   /** Empty when the host has no tmux: not required, misao is the pane server this hub installs. */
   tmuxVersion: string;
+  /** Set for a Windows host: what the preflight read, which the Windows install needs. */
+  windows?: WindowsPreflightInfo;
 }
 
 const AGENT_PORT = 3002;
@@ -71,6 +77,8 @@ export class AgentInstaller {
   constructor(
     private sshClient: SshClient,
     private bundler: AgentBundler,
+    /** Task name, folder and port of an agent installed on a Windows host (resolved at the entry point). */
+    private windowsAgent: WindowsAgentOptions,
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
   ) {}
@@ -102,6 +110,8 @@ export class AgentInstaller {
       report('preflight', 'error', msg);
       return { success: false, host: '', port: AGENT_PORT, token, version, startMethod: 'nohup', steps, error: msg };
     }
+
+    if (preflight.windows) return this.installOnWindows(sshHost, version, token, preflight, preflight.windows, steps, report);
 
     // ── Transfer & deploy ──
     report('transfer', 'running', 'Transferring agent bundle...');
@@ -151,6 +161,75 @@ export class AgentInstaller {
     }
 
     return { success: true, host: preflight.tailscaleIp, port: AGENT_PORT, token, version, startMethod, steps, tmuxFound, hostProfile: preflight.hostProfile, ...(misaoError ? { misaoError } : {}) };
+  }
+
+  /**
+   * The Windows install (the Unix sh bootstrap is not used): transfer and unpack over SFTP + PowerShell, settings in an owner-only
+   * file, a Task Scheduler logon task as the service, then the same health check. misao is not installed on Windows yet (#369 A3).
+   */
+  private async installOnWindows(
+    sshHost: string,
+    version: string,
+    token: string,
+    preflight: PreflightInfo,
+    host: WindowsPreflightInfo,
+    steps: InstallProgress[],
+    report: (step: InstallStep, status: InstallProgress['status'], message: string) => void,
+  ): Promise<InstallResult> {
+    const port = this.windowsAgent.port;
+    const ip = preflight.tailscaleIp;
+    const deployer = this.windowsDeployer();
+    const failed = (error: string): InstallResult => ({ success: false, host: ip, port, token, version, startMethod: 'taskscheduler', steps, error });
+
+    report('transfer', 'running', 'Transferring agent bundle...');
+    try {
+      const tarballPath = this.bundler.getTarballPath();
+      if (!fs.existsSync(tarballPath)) throw new Error('Agent tarball not found — run build first');
+      await deployer.deploy({
+        sshHost, host, nodePath: host.nodePath!, version, tarballPath, token, bindAddress: ip,
+        expectedSha256: readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz'),
+      });
+      report('transfer', 'ok', 'Agent deployed');
+    } catch (err) {
+      const msg = (err as Error).message;
+      report('transfer', 'error', msg);
+      return failed(msg);
+    }
+
+    report('start', 'running', 'Starting agent...');
+    try {
+      await deployer.start(sshHost, host);
+      report('start', 'ok', `Started via Task Scheduler (runs while ${host.userId} is logged on)`);
+    } catch (err) {
+      const msg = (err as Error).message;
+      report('start', 'error', msg);
+      return failed(msg);
+    }
+
+    report('health', 'running', 'Verifying agent health...');
+    try {
+      await this.healthCheck(ip, port, version);
+      report('health', 'ok', 'Agent healthy');
+    } catch (err) {
+      // A broken agent must not keep restarting itself (the task restarts it on failure): stop it, and say why it may be unreachable.
+      const stopped = await deployer.stop(sshHost, host).then(() => '', (e: unknown) => ` (it could not be stopped: ${(e as Error).message})`);
+      const msg = `${(err as Error).message}. ${await deployer.describeTask(sshHost, host)}. Check that ${host.userId} is logged on to Windows (the agent starts at logon) and that Windows Firewall allows TCP ${port}; the agent's log is ${windowsAgentLayout(host.home, this.windowsAgent, version).logFile}${stopped}`;
+      report('health', 'error', msg);
+      return failed(msg);
+    }
+
+    // misao on a Windows agent is #369 A3. Reported like a misao that could not be installed: the agent stays installed and healthy.
+    const misaoError = 'unsupported_os: installing misao on a Windows agent is not supported yet (planned for the next release)';
+    report('misao', 'ok', `Skipped: ${misaoError}`);
+    return { success: true, host: ip, port, token, version, startMethod: 'taskscheduler', steps, tmuxFound: false, hostProfile: preflight.hostProfile, misaoError };
+  }
+
+  private windowsDeployer(): WindowsAgentDeployer {
+    return new WindowsAgentDeployer(
+      (host, command, timeoutMs) => this.sshClient.execIsolated(host, command, timeoutMs),
+      { putFile: (host, localPath, remote) => this.sftpUpload(host, localPath, remote), putBuffer: (host, data, remote) => this.sftpWrite(host, data, remote) },
+      this.windowsAgent,
+    );
   }
 
   /** Puts misao on the agent that just came up. A failure is reported, not thrown: the agent stays installed. */
@@ -215,15 +294,22 @@ export class AgentInstaller {
   }
 
   /** One PowerShell script (EncodedCommand: the same under a cmd.exe and a PowerShell login shell) answers everything. */
-  private async preflightWindows(sshHost: string): Promise<never> {
+  private async preflightWindows(sshHost: string): Promise<PreflightInfo> {
     const result = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
     const info = parseWindowsPreflight(result.stdout, result.stderr, result.code);
     const missing = checkWindowsPreflight(info);
     if (missing.length > 0) {
       throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
     }
-    // The preflight passed; transferring, starting and registering the agent on Windows are #369 A2 / A3. Nothing is stored for the host.
-    throw new HostProfileError('unsupported_os', `installing the agent on a Windows host is not supported yet (preflight passed: ${info.windowsVersion ?? 'Windows'} x64, Node ${info.nodeVersion}, Tailscale ${info.tailscaleIp})`);
+    // checkWindowsPreflight passed: node, x64 and the Tailscale IP are there.
+    await this.windowsDeployer().ensureFirewall(sshHost, info.nodePath!);
+    return {
+      tailscaleIp: info.tailscaleIp!,
+      nodeVersion: info.nodeVersion!,
+      hostProfile: { platform: 'win32', arch: 'x64' },
+      tmuxVersion: '',
+      windows: info,
+    };
   }
 
   private async preflightPosix(sshHost: string): Promise<PreflightInfo> {
@@ -424,8 +510,13 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  async recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup'> {
-    assertPosixHost(hostProfile, 'this agent server', 'restarting the agent over SSH');
+  async recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup' | 'taskscheduler'> {
+    if (hostProfile?.platform === 'win32') {
+      // The settings and the task are already on the host: ask it who it is, then restart the logon task.
+      const probe = await this.sshClient.execIsolated(sshHost, buildWindowsPreflightCommand());
+      await this.windowsDeployer().restart(sshHost, parseWindowsPreflight(probe.stdout, probe.stderr, probe.code));
+      return 'taskscheduler';
+    }
     return this.startAgent(sshHost, tailscaleIp, token, muxRuntime);
   }
 
@@ -466,6 +557,14 @@ export class AgentInstaller {
   }
 
   private sftpUpload(sshHost: string, localPath: string, remotePath: string): Promise<void> {
+    return this.sftpPut(sshHost, () => fs.createReadStream(localPath), remotePath);
+  }
+
+  private sftpWrite(sshHost: string, data: Buffer, remotePath: string): Promise<void> {
+    return this.sftpPut(sshHost, () => Readable.from([data]), remotePath);
+  }
+
+  private sftpPut(sshHost: string, source: () => Readable, remotePath: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const resolved = this.sshClient.resolveHost(sshHost);
       const conn = new Ssh2Client();
@@ -479,7 +578,7 @@ export class AgentInstaller {
       conn.on('ready', () => {
         conn.sftp((err, sftp) => {
           if (err) { clearTimeout(timeout); conn.end(); return reject(err); }
-          const readStream = fs.createReadStream(localPath);
+          const readStream = source();
           const writeStream = sftp.createWriteStream(remotePath);
           writeStream.on('close', () => {
             clearTimeout(timeout);

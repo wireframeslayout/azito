@@ -97,11 +97,16 @@ async function main(): Promise<void> {
   const hostEnv = resolveCurrentHostEnv();
   const agentHostProfile = toHostProfile(hostEnv.platform, hostEnv.arch);
   const startedAt = Date.now();
+  // A Windows agent runs as a Task Scheduler task, which has nowhere to send its output: its settings name a log file.
+  const logFile = process.env.AZITO_AGENT_LOG_FILE;
   const app = Fastify({
     logger: {
       serializers: { req: serializeRequestForLog },
+      ...(logFile ? { file: logFile } : {}),
     },
   });
+  // tmux and misao (a unix-socket daemon) do not exist on Windows yet: the agent runs without a pane server there (misao on Windows is #369 A3).
+  const hasPaneServer = hostEnv.platform !== 'win32';
   const agentEventBus = new EventEmitter();
   const browserSessionManager = new BrowserSessionManager(
     path.resolve(hostEnv.homeDir, '.azito', 'browser-profile'),
@@ -131,10 +136,14 @@ async function main(): Promise<void> {
   // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
   // socket path disables the relay (tmux keeps working) rather than stopping the agent.
   let misaoSocket: AgentMisaoSocket | null = null;
-  try {
-    misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir);
-  } catch (err) {
-    app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+  if (hasPaneServer) {
+    try {
+      misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir);
+    } catch (err) {
+      app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+    }
+  } else {
+    app.log.info(`misao relay disabled: no misao on ${hostEnv.platform} hosts yet`);
   }
   const relayMisao = createMisaoRelay(misaoSocket, app.log);
 
@@ -260,7 +269,7 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    for (const event of hookEvents) {
+    for (const event of hasPaneServer ? hookEvents : []) {
       await new Promise<void>((resolve) => {
         execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
       });
@@ -309,8 +318,12 @@ async function main(): Promise<void> {
     }
   };
 
-  installTmuxHooks();
-  hookInstallInterval = setInterval(installTmuxHooks, 60000);
+  if (hasPaneServer) {
+    installTmuxHooks();
+    hookInstallInterval = setInterval(installTmuxHooks, 60000);
+  } else {
+    app.log.info(`tmux hooks not installed: no tmux on ${hostEnv.platform} hosts`);
+  }
 }
 
 main().catch((err) => {

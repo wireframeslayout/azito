@@ -15,6 +15,8 @@ function output(over: Record<string, unknown> = {}, wrap = (json: string) => `${
     windowsCaption: 'Microsoft Windows 11 Pro',
     tailscaleIp: '100.64.0.9',
     home: 'C:\\Users\\dev',
+    systemRoot: 'C:\\Windows',
+    userId: 'DESKTOP-1\\dev',
     ...over,
   }));
 }
@@ -41,6 +43,8 @@ describe('parseWindowsPreflight', () => {
       windowsVersion: 'Windows 11 Pro',
       tailscaleIp: '100.64.0.9',
       home: 'C:\\Users\\dev',
+      systemRoot: 'C:\\Windows',
+      userId: 'DESKTOP-1\\dev',
     });
   });
 
@@ -57,7 +61,7 @@ describe('parseWindowsPreflight', () => {
   });
 
   it('reads \\uXXXX-escaped non-ASCII text (the script prints ASCII only)', () => {
-    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8"}\n${END}\n`);
+    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
     expect(parseWindowsPreflight(noisy).home).toBe('C:\\Users\u30c6\u30b9\u30c8');
   });
 
@@ -140,6 +144,8 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
     expect(info.windowsVersion).toMatch(/^Windows /);
     expect(info.tailscaleIp).toBeNull();
     expect(info.home.length).toBeGreaterThan(0);
+    expect(info.systemRoot.toLowerCase()).toBe((process.env.SystemRoot ?? '').toLowerCase());
+    expect(info.userId).toMatch(/^[^\\]+\\[^\\]+$/);
     expect(checkWindowsPreflight(info)).toEqual([expect.stringMatching(/^Tailscale IP not found/)]);
   }, 120_000);
 

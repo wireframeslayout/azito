@@ -308,7 +308,8 @@ export class SshClient {
     });
   }
 
-  async execIsolated(hostAlias: string, command: string): Promise<ExecResult> {
+  /** `timeoutMs` bounds the whole call (connect + command); the default suits a quick probe, a long step (extracting a bundle on Windows) passes more. */
+  async execIsolated(hostAlias: string, command: string, timeoutMs = 15000): Promise<ExecResult> {
     return new Promise<ExecResult>((resolve, reject) => {
       const resolved = this.resolveHost(hostAlias);
       const conn = new Client();
@@ -324,7 +325,7 @@ export class SshClient {
         // audit_log (servers/routes.ts). Redacting here is defense-in-depth
         // alongside the redaction applied there.
         reject(new Error('Isolated exec timed out'));
-      }, 15000);
+      }, timeoutMs);
 
       conn.on('ready', () => {
         conn.exec(command, (err: Error | undefined, stream: ClientChannel) => {

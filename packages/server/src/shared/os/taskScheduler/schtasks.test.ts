@@ -33,6 +33,15 @@ describe('SchtasksClient', () => {
     expect(() => new SchtasksClient(rawFromText(fakeRunTransport().run), { systemRoot: undefined, tmpDir })).toThrow(/SystemRoot/);
   });
 
+  it('registers from an XML file that is already on the host the runner executes on, without a temporary directory of its own', async () => {
+    const transport = fakeRunTransport();
+    const c = new SchtasksClient(rawFromText(transport.run), { systemRoot: 'C:\\Windows' });
+    await c.registerFromFile('AzitoTest', 'C:\\Users\\a b\\task.xml');
+    expect(transport.specs[0]!.args).toEqual(['/Create', '/XML', 'C:\\Users\\a b\\task.xml', '/TN', 'AzitoTest', '/F']);
+    await expect(c.register('AzitoTest', '<Task/>')).rejects.toThrow(/no temporary directory/);
+    await expect(c.registerFromFile('bad name', 'C:\\x.xml')).rejects.toThrow(/Invalid task name/);
+  });
+
   it('rejects a task name that is not plain ASCII (schtasks speaks the OEM code page)', async () => {
     const { client: c, specs } = client();
     await expect(c.start('日本語')).rejects.toThrow(/Invalid task name/);
