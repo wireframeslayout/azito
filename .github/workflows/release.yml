@@ -71,7 +71,7 @@ jobs:
       # wait for /api/health and stop it. build-hub.ts has already checked the zip for data/ and the stage contents.
       - name: Smoke-test the Windows hub bundle
         if: matrix.platform == 'win32'
-        run: npx -w packages/server tsx scripts/smoke-hub-win32.ts "$(ls packages/server/dist-hub/azito-hub-*.zip)"
+        run: npx -w packages/server tsx scripts/smoke-hub-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)"
 
       - name: Verify no data/ in tarball
         if: matrix.platform != 'win32'
