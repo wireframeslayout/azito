@@ -80,8 +80,16 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (`assertStageContents`) before tarring. Native modules are `external` in the bundle and copied in.
 - `scripts/run-hub.sh` becomes `run.sh` in the bundle. It resolves the host PATH (nvm/nodenv/Homebrew)
   and a UTF-8 locale, because systemd/launchd hand the service a minimal environment.
-- Releases are cut by tagging `v*`; `.github/workflows/release.yml` builds linux-x64/arm64 and
-  darwin-arm64 and publishes them with `SHA256SUMS` and `install.sh`. Tags containing a hyphen
+- Releases are cut by tagging `v*`; `.github/workflows/release.yml` builds linux-x64/arm64,
+  darwin-arm64 and win32-x64 and publishes them with `SHA256SUMS` and `install.sh`.
+- **win32-x64** (#380 B1): `--platform win32 --arch x64` produces `azito-hub-<ver>-win32-x64.zip` and must run on a Windows host
+  (better-sqlite3 / node-pty come from that host's `node_modules`, never cross-built). `node.exe` is the official zip checked
+  against `SHASUMS256.txt` (`scripts/nodeAssets.ts`, not `download-node.sh`: a Windows runner has no guaranteed curl / unzip);
+  archives are read and written with the OS's `System32\tar.exe` (`scripts/archive.ts` `hostTar()`, because the GNU tar that ships
+  with Git for Windows can't read a zip). `assertStageContents(platform)` requires `node.exe`, `better_sqlite3.node` and node-pty's
+  `conpty*.node` / `conpty/` files instead of `run.sh` / `node` / `spawn-helper`. The launcher `run.ps1`, `install.ps1` and the CLI
+  are B2; the zip is booted in CI (`ci.yml` "Hub bundle (Windows)" and the release build) by `scripts/smoke-hub-win32.ts`, which
+  runs `node.exe azito-hub.cjs` directly and waits for `/api/health`. Tags containing a hyphen
   (`v0.3.0-rc1`) are published as pre-releases.
 - Installed layout: `~/.azito/hub/<version>/` with a `current` symlink, `~/.azito/hub/.env`
   (config, outside the versioned dir) and `~/.azito/data/` (DB, keys, token).

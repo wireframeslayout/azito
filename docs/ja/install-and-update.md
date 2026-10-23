@@ -74,6 +74,10 @@ Servers → 対象サーバー → Setup の Node.js 欄は、同梱 Node では
 
 ホストに Node.js を入れているのに未導入と表示される場合は、サービスの PATH に nodenv/nvm の shim が含まれていない可能性があります（v0.3.0-rc2 で修正済み）。それ以前のバージョンでは `~/.azito/hub/current/run.sh` を新しいものに差し替えてサービスを再起動してください。
 
+## Windows 版の配布物
+
+リリースには `azito-hub-<version>-win32-x64.zip`（Windows x64 のハブ）も含まれます。中身は `node.exe`、ハブ本体、`public/`、`harness/`、`deploy/` のテンプレート、Windows 上でビルドしたネイティブモジュール（better-sqlite3、ConPTY の node-pty）、ほかの配布物と同じ版の misao です。zip は `SHA256SUMS` に載ります。現時点では配布物があるだけで、Windows 用の起動スクリプト（`run.ps1`）・インストーラ・サービス登録はまだ含まれません（#380）。導入手順は未提供です。
+
 ## 手動インストール（tarball）
 
 ```bash

@@ -1,9 +1,11 @@
-import { execSync } from 'child_process';
+import { execFileSync, execSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
+import { hostTar, listArchive } from './archive';
+import { stageNodeWin32 } from './nodeAssets';
 import { MISAO_RELEASE, misaoExecutableName, misaoReleaseFileName, stageMisao, type MisaoManifest, type MisaoReleaseFile } from './misaoAssets';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -17,7 +19,7 @@ const DEFAULT_NODE_VERSION = 'v24.14.0';
 
 interface Args {
   version: string;
-  platform: 'linux' | 'darwin';
+  platform: 'linux' | 'darwin' | 'win32';
   arch: 'x64' | 'arm64';
   repo: string;
   nodeVersion: string;
@@ -38,8 +40,15 @@ function parseArgs(): Args {
   }
 
   if (!args.version) throw new Error('--version is required');
-  if (!args.platform) throw new Error('--platform is required (linux|darwin)');
+  if (!args.platform) throw new Error('--platform is required (linux|darwin|win32)');
   if (!args.arch) throw new Error('--arch is required (x64|arm64)');
+  if (!['linux', 'darwin', 'win32'].includes(args.platform)) throw new Error(`unsupported --platform ${args.platform} (linux|darwin|win32)`);
+  if (args.platform === 'win32') {
+    if (args.arch !== 'x64') throw new Error(`win32 is built for x64 only (got --arch ${args.arch})`);
+    // better-sqlite3 and node-pty are staged from this host's node_modules, so the bundle is only as good as the host
+    // that installed them: a Windows bundle is built on Windows, never cross-built.
+    if (process.platform !== 'win32') throw new Error('a win32 bundle must be built on a Windows host (native modules are not cross-built)');
+  }
 
   return {
     version: args.version,
@@ -70,21 +79,21 @@ function hashDirContents(dir: string): string {
 
   const hash = crypto.createHash('sha256');
   for (const rel of files) {
-    hash.update(rel);
+    hash.update(rel.split(path.sep).join('/'));
     hash.update('\0');
     hash.update(fs.readFileSync(path.join(dir, rel)));
   }
   return hash.digest('hex').slice(0, 12);
 }
 
-function copyDir(src: string, dest: string): void {
+function copyDir(src: string, dest: string, include: (fileName: string) => boolean = () => true): void {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
-    } else {
+      copyDir(srcPath, destPath, include);
+    } else if (include(entry.name)) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
@@ -115,7 +124,7 @@ function copyBetterSqlite3(dest: string): void {
   if (fs.existsSync(prebuildsDir)) copyDir(prebuildsDir, path.join(dest, 'prebuilds'));
 }
 
-function copyNodePty(dest: string): void {
+function copyNodePty(dest: string, platform: Args['platform']): void {
   const src = resolveNativeModule('node-pty');
   fs.mkdirSync(dest, { recursive: true });
 
@@ -124,7 +133,14 @@ function copyNodePty(dest: string): void {
 
   for (const sub of ['lib', 'build', 'prebuilds']) {
     const subDir = path.join(src, sub);
-    if (fs.existsSync(subDir)) copyDir(subDir, path.join(dest, sub));
+    if (!fs.existsSync(subDir)) continue;
+    if (sub === 'prebuilds' && platform === 'win32') {
+      // Only this platform's prebuilds (node-pty loads `prebuilds/<platform>-<arch>/`), without the debug symbols.
+      const own = path.join(subDir, 'win32-x64');
+      if (fs.existsSync(own)) copyDir(own, path.join(dest, sub, 'win32-x64'), (name) => !name.endsWith('.pdb'));
+      continue;
+    }
+    copyDir(subDir, path.join(dest, sub));
   }
 
   // On Unix node-pty execs a `spawn-helper` binary to start the pty. It arrives
@@ -198,15 +214,22 @@ function copyRuntimeDeps(moduleName: string, nodeModulesDest: string, seen = new
   }
 }
 
-function assertStageContents(): void {
+/** Files only a Unix bundle carries (the launcher script and the Node binary). B2 adds run.ps1 / install.ps1 / azito.cmd to the Windows one. */
+const UNIX_ONLY_FILES = ['run.sh', 'node'];
+
+/** node-pty's Windows files (conpty is the backend; winpty is the fallback for a Windows before 1809 and is not required). */
+const NODE_PTY_WIN32_FILES = ['conpty.node', 'conpty_console_list.node'];
+const NODE_PTY_WIN32_CONPTY_DLL_FILES = ['conpty/conpty.dll', 'conpty/OpenConsole.exe'];
+
+function assertStageContents(platform: Args['platform']): void {
+  const isWin32 = platform === 'win32';
   const required = [
     'azito-hub.cjs',
     'azito-supervisor.cjs',
     'release.json',
     'channel.json',
     'version.txt',
-    'run.sh',
-    'node',
+    ...(isWin32 ? ['node.exe', 'node_modules/better-sqlite3/build/Release/better_sqlite3.node'] : UNIX_ONLY_FILES),
     'public/index.html',
     'harness/chat-commands.json',
     'dist-agent/azito-agent.tar.gz',
@@ -228,6 +251,8 @@ function assertStageContents(): void {
     throw new Error(`Stage validation failed: missing files: ${missing.join(', ')}`);
   }
 
+  if (isWin32) assertNodePtyWin32();
+
   // The staged misao must be exactly the pinned release: a truncated copy or a stale cache would otherwise ship
   // a daemon that fails the first time a user installs it.
   const manifest = JSON.parse(fs.readFileSync(path.join(STAGE, 'misao', 'manifest.json'), 'utf-8')) as MisaoManifest;
@@ -244,10 +269,13 @@ function assertStageContents(): void {
       }
     }
     const executable = misaoExecutableName(target);
-    if ((fs.statSync(path.join(STAGE, 'misao', target, executable)).mode & 0o111) === 0) {
+    // A Windows host has no execute bit to read (stat reports 0o666 for every file).
+    if (!isWin32 && (fs.statSync(path.join(STAGE, 'misao', target, executable)).mode & 0o111) === 0) {
       throw new Error(`Stage validation failed: misao/${target}/${executable} is not executable`);
     }
   }
+
+  if (isWin32) return;
 
   // node-pty execs these; shipping one without +x breaks every terminal.
   const helpers = findFiles(path.join(STAGE, 'node_modules', 'node-pty'), 'spawn-helper');
@@ -260,11 +288,25 @@ function assertStageContents(): void {
   }
 }
 
-function assertNoDataDir(tarball: string): void {
-  const listing = execSync(`tar tzf "${tarball}"`, { timeout: 30000 }).toString();
-  const dataEntries = listing.split('\n').filter(l => l.startsWith('data/') || l === 'data');
+/** node-pty's native files for Windows: each one in `build/Release` (a source build) or in `prebuilds/win32-x64` (the npm package's own). */
+function assertNodePtyWin32(): void {
+  const root = path.join(STAGE, 'node_modules', 'node-pty');
+  const prebuilds = path.join(root, 'prebuilds', 'win32-x64');
+  const missing = [
+    ...NODE_PTY_WIN32_FILES.filter(f => !fs.existsSync(path.join(root, 'build', 'Release', f)) && !fs.existsSync(path.join(prebuilds, f))),
+    ...NODE_PTY_WIN32_CONPTY_DLL_FILES.filter(f => !fs.existsSync(path.join(prebuilds, f))),
+  ];
+  if (missing.length > 0) {
+    throw new Error(`Stage validation failed: node-pty Windows files are missing: ${missing.join(', ')}`);
+  }
+}
+
+function assertNoDataDir(archive: string): void {
+  const dataEntries = listArchive(archive)
+    .map(entry => entry.replace(/^\.\//, ''))
+    .filter(entry => entry.startsWith('data/') || entry === 'data');
   if (dataEntries.length > 0) {
-    throw new Error(`Tarball contains data/ entries: ${dataEntries.join(', ')}`);
+    throw new Error(`Archive contains data/ entries: ${dataEntries.join(', ')}`);
   }
 }
 
@@ -376,7 +418,7 @@ async function main(): Promise<void> {
   // 7. Stage native modules
   const nodeModulesStage = path.join(STAGE, 'node_modules');
   copyBetterSqlite3(path.join(nodeModulesStage, 'better-sqlite3'));
-  copyNodePty(path.join(nodeModulesStage, 'node-pty'));
+  copyNodePty(path.join(nodeModulesStage, 'node-pty'), args.platform);
   copySsh2(path.join(nodeModulesStage, 'ssh2'));
   // playwright is required at module load by BrowserSession, so the hub cannot
   // boot without it — a `local` server runs Chromium on the hub itself, not
@@ -387,16 +429,22 @@ async function main(): Promise<void> {
     copyRuntimeDeps(m, nodeModulesStage);
   }
 
-  // 8. Stage run.sh
-  const runSh = fs.readFileSync(path.join(SCRIPT_DIR, 'run-hub.sh'), 'utf-8');
-  fs.writeFileSync(path.join(STAGE, 'run.sh'), runSh, { mode: 0o755 });
+  // 8. Stage run.sh (a Windows bundle's launcher, run.ps1, is B2 of #380)
+  if (args.platform !== 'win32') {
+    const runSh = fs.readFileSync(path.join(SCRIPT_DIR, 'run-hub.sh'), 'utf-8');
+    fs.writeFileSync(path.join(STAGE, 'run.sh'), runSh, { mode: 0o755 });
+  }
 
   // 9. Download and stage Node binary
   console.log(`[build-hub] Downloading Node.js ${args.nodeVersion} for ${args.platform}-${args.arch}...`);
-  execSync(
-    `bash "${path.join(SCRIPT_DIR, 'download-node.sh')}" "${args.nodeVersion}" "${args.platform}" "${args.arch}" "${STAGE}"`,
-    { stdio: 'inherit', timeout: 120000 },
-  );
+  if (args.platform === 'win32') {
+    await stageNodeWin32(args.nodeVersion, STAGE);
+  } else {
+    execSync(
+      `bash "${path.join(SCRIPT_DIR, 'download-node.sh')}" "${args.nodeVersion}" "${args.platform}" "${args.arch}" "${STAGE}"`,
+      { stdio: 'inherit', timeout: 120000 },
+    );
+  }
 
   // 10. Content hash (before writing version metadata)
   const bundleHash = hashDirContents(STAGE);
@@ -420,14 +468,19 @@ async function main(): Promise<void> {
   fs.writeFileSync(path.join(STAGE, 'version.txt'), `${args.version}\n${bundleHash}\n${commit}\n`);
 
   // 14. Validate stage contents
-  assertStageContents();
+  assertStageContents(args.platform);
 
-  // 15. Create tarball
-  const tarballName = `azito-hub-${args.version}-${args.platform}-${args.arch}.tar.gz`;
-  execSync(`tar czf "${tarballName}" -C stage .`, { cwd: DIST });
+  // 15. Create the archive: a zip for Windows (tar.exe -a picks the format from the extension; Compress-Archive in
+  // PowerShell 5.1 writes backslash entry names that other unzippers mis-read), a tarball elsewhere.
+  const tarballName = `azito-hub-${args.version}-${args.platform}-${args.arch}.${args.platform === 'win32' ? 'zip' : 'tar.gz'}`;
+  if (args.platform === 'win32') {
+    execFileSync(hostTar(), ['-a', '-c', '-f', tarballName, '-C', 'stage', '.'], { cwd: DIST, timeout: 300000 });
+  } else {
+    execSync(`tar czf "${tarballName}" -C stage .`, { cwd: DIST });
+  }
   const tarballPath = path.join(DIST, tarballName);
 
-  // 16. Verify no data/ in tarball
+  // 16. Verify no data/ in the archive
   assertNoDataDir(tarballPath);
 
   // 17. Generate SHA256SUMS

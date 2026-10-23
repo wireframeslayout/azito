@@ -74,6 +74,10 @@ The Node.js row under Servers → your server → Setup inspects the *host*, not
 
 If it reports Node.js as missing even though the host has it, the service's PATH may be missing your nodenv/nvm shims (fixed in v0.3.0-rc2). On older versions, replace `~/.azito/hub/current/run.sh` with the newer one and restart the service.
 
+## Windows bundle
+
+Each release also carries `azito-hub-<version>-win32-x64.zip`, the hub for Windows x64: `node.exe`, the hub bundle, `public/`, `harness/`, the `deploy/` templates, the native modules built on Windows (better-sqlite3, node-pty with ConPTY) and the same misao release as the other bundles. The zip is listed in `SHA256SUMS`. It is an artifact only for now: the launcher (`run.ps1`), the installer and the service registration for Windows are not part of it yet (#380), so there is no supported install procedure for it.
+
 ## Manual Install (tarball)
 
 ```bash

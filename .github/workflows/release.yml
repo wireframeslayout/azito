@@ -22,8 +22,15 @@ jobs:
           - os: macos-14
             platform: darwin
             arch: arm64
+          - os: windows-latest
+            platform: win32
+            arch: x64
 
     runs-on: ${{ matrix.os }}
+    # The steps are bash on every runner (Git Bash on Windows), so one command line serves all of them.
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
@@ -44,6 +51,7 @@ jobs:
       # Runs the bundled misao binary that fits this runner the way the installed service does (a mode-700 data dir, no node),
       # checks that server.info reports both versions and that a pane opens, and stops it — a broken or mismatched binary fails the release here.
       - name: Smoke-test bundled misao
+        if: matrix.platform != 'win32'
         run: |
           SMOKE=$(mktemp -d)
           tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
@@ -59,7 +67,14 @@ jobs:
           tar xzf packages/server/dist-hub/azito-hub-*.tar.gz -C "$SMOKE"
           arch -x86_64 "$SMOKE/misao/x86_64-apple-darwin/misao" --version
 
+      # The Windows bundle is a zip with no run.ps1 yet (B2 of #380): start the bundled node.exe on azito-hub.cjs directly,
+      # wait for /api/health and stop it. build-hub.ts has already checked the zip for data/ and the stage contents.
+      - name: Smoke-test the Windows hub bundle
+        if: matrix.platform == 'win32'
+        run: npx -w packages/server tsx scripts/smoke-hub-win32.ts "$(ls packages/server/dist-hub/azito-hub-*.zip)"
+
       - name: Verify no data/ in tarball
+        if: matrix.platform != 'win32'
         run: |
           TARBALL=$(ls packages/server/dist-hub/azito-hub-*.tar.gz)
           if tar tzf "$TARBALL" | grep -q '^data/'; then
@@ -79,6 +94,7 @@ jobs:
           name: hub-${{ matrix.platform }}-${{ matrix.arch }}
           path: |
             packages/server/dist-hub/azito-hub-*.tar.gz
+            packages/server/dist-hub/azito-hub-*.zip
             packages/server/dist-hub/SHA256SUMS
 
   release:
@@ -94,11 +110,11 @@ jobs:
       - name: Prepare release assets
         run: |
           mkdir -p release-assets
-          find artifacts -name 'azito-hub-*.tar.gz' -exec cp {} release-assets/ \;
+          find artifacts \( -name 'azito-hub-*.tar.gz' -o -name 'azito-hub-*.zip' \) -exec cp {} release-assets/ \;
           cp install.sh release-assets/
 
           cd release-assets
-          sha256sum azito-hub-*.tar.gz install.sh > SHA256SUMS
+          sha256sum azito-hub-*.tar.gz azito-hub-*.zip install.sh > SHA256SUMS
 
       - name: Test install.sh re-run detection
         run: |
