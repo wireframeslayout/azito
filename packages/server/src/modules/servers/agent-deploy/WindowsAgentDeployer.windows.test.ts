@@ -358,6 +358,10 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       const alive = (child: ChildProcess): boolean => {
         try { process.kill(child.pid!, 0); return true; } catch { return false; }
       };
+      // node reads --env-file even after the script name and exits when the file is missing: these decoys need real files.
+      fs.mkdirSync(path.join(layout.root, 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(layout.root, 'sub', 'agent.env'), '');
+      fs.writeFileSync(`${layout.envFile}.other`, '');
       const lookalike = start(`--env-file=${layout.envFile}`); // the argument of this install: it is ended
       const nested = start(`--env-file=${path.win32.join(layout.root, 'sub', 'agent.env')}`); // an install nested below this one
       const mention = start(path.win32.join(layout.root, 'agent.log')); // only mentions the folder
@@ -451,7 +455,8 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(fs.readFileSync(layout.envFile, 'utf8')).not.toBe(settingsBefore);
       await waitForNoHealth(OPTIONS.port, 15_000); // the old agent was stopped to replace its files
       const summary = await second.rollback();
-      expect(summary).toContain('restored the previous files');
+      expect(summary).toContain('restored the version folder');
+      expect(summary).toContain('restored the settings');
       expect(summary).toContain('started the previous agent again');
       expect(fs.readFileSync(layout.envFile, 'utf8')).toBe(settingsBefore);
       expect(fs.existsSync(layout.versionDirPrev)).toBe(false);
