@@ -45,6 +45,9 @@ export interface FirewallRuleRecord {
   localAddress: string[];
 }
 
+/** A list that PowerShell may have unrolled to a single value. */
+const textList = z.union([z.array(z.string()), z.string().transform((value) => [value])]);
+
 const ruleSchema = z.object({
   name: z.string(),
   displayName: z.string(),
@@ -54,10 +57,10 @@ const ruleSchema = z.object({
   owner: z.string(),
   service: z.string(),
   protocol: z.string(),
-  localPort: z.array(z.string()),
+  localPort: textList,
   program: z.string(),
-  remoteAddress: z.array(z.string()),
-  localAddress: z.array(z.string()),
+  remoteAddress: textList,
+  localAddress: textList,
 });
 
 const dumpSchema = z.object({
@@ -95,7 +98,7 @@ function Read-Filters($command, $policyStore) {
   foreach ($filter in & $command -PolicyStore $policyStore) { $byRule[$filter.InstanceID] = $filter }
   $byRule
 }
-function Join-Values($values) { @($values | ForEach-Object { "$_" }) }
+function Join-Values($values) { , @($values | ForEach-Object { "$_" }) }
 try {
   try { $null = Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop | Select-Object -First 1 } catch { $store = 'PersistentStore' }
   $ports = Read-Filters Get-NetFirewallPortFilter $store

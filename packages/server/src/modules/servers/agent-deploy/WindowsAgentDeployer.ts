@@ -306,7 +306,7 @@ export class WindowsAgentDeployer {
       `$envArgument = '--env-file=' + ${q(envFile)}`,
       "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
       '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-      'function Test-Mine($process) { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid).Sid -eq $me }',
+      'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
       'function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { $_.CommandLine -and ($_.CommandLine -match $pattern) -and (Test-Mine $_) }) }',
       '$targets = @()',
       'foreach ($node in Get-AgentNodes) {',
