@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
-import { buildHubLauncherScript, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, registeredHubPrefix, resolveWindowsUserId, samePrefix } from '../windowsHubService';
+import { buildHubLauncherScript, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix } from '../windowsHubService';
 
 const PREFIX = 'C:\\Users\\Foo Bar (Work)\\.azito';
 
@@ -86,14 +86,26 @@ describe('resolveWindowsUserId', () => {
 const scriptOf = (spec: CommandSpec): string => Buffer.from(spec.args[spec.args.indexOf('-EncodedCommand') + 1], 'base64').toString('utf16le');
 const result = (exitCode: number, stdout = '', stderr = ''): CommandResult => ({ exitCode, signal: null, stdout, stderr });
 
-describe('registeredHubPrefix / samePrefix', () => {
-  it('reads the prefix back from a generated definition, so a task of another install can be told apart', () => {
-    const xml = buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout("C:\\Users\\O'Neil (Work)\\.azito") });
-    expect(registeredHubPrefix(xml)).toBe("C:\\Users\\O'Neil (Work)\\.azito");
+describe('inspectRegisteredHub / samePrefix', () => {
+  const generated = (prefix: string): string => buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout(prefix) });
+
+  it('reads the prefix back from the XML the Task Scheduler holds for a generated task', () => {
+    expect(inspectRegisteredHub(generated(PREFIX), 'C:\\Windows')).toEqual({ prefix: PREFIX });
   });
 
-  it('is undefined for a definition that is not ours', () => {
-    expect(registeredHubPrefix('<Task></Task>')).toBeUndefined();
+  it.each(["C:\\Users\\O'Neil (Work)\\.azito", 'C:\\Users\\O\u2019Neil\\.azito', 'C:\\Users\\O\u2018Neil\u201A\u201B\\.azito'])('round-trips a prefix with quote characters: %s', (prefix) => {
+    expect(inspectRegisteredHub(generated(prefix), 'C:\\Windows')).toEqual({ prefix });
+  });
+
+  it('is unknown (undefined) for a definition that is not ours', () => {
+    expect(inspectRegisteredHub('<Task></Task>', 'C:\\Windows')).toBeUndefined();
+  });
+
+  it('is unknown when the action is not exactly what this code generates for that prefix, even if the $hubRoot line looks right', () => {
+    const xml = generated(PREFIX);
+    expect(inspectRegisteredHub(xml.replace('conhost.exe', 'cmd.exe'), 'C:\\Windows')).toBeUndefined();
+    expect(inspectRegisteredHub(xml.replace('--headless', '--headless -Extra'), 'C:\\Windows')).toBeUndefined();
+    expect(inspectRegisteredHub(xml, 'D:\\Windows')).toBeUndefined();
   });
 
   it('ignores case and a trailing separator, and nothing else', () => {
@@ -112,6 +124,7 @@ describe('findHubProcesses', () => {
     expect(script).toContain("[regex]::Escape('C:\\Users\\Foo Bar (Work)\\.azito\\hub\\') + '|' + [regex]::Escape('D:\\real\\.azito\\hub\\')");
     expect(script).toContain('$_.ProcessId -ne 999');
     expect(script).toContain('Test-Mine');
+    expect(script).toContain('(Get-Process -Id $_.ProcessId -ErrorAction Stop).StartTime.ToFileTimeUtc()');
   });
 
   it('fails with the script\'s own message', async () => {
@@ -126,15 +139,19 @@ describe('endHubProcesses', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('waits for the grace period before it ends anything, and only ends the same process (id and creation time)', async () => {
+  it('waits for the grace period before it ends anything, and ends only the same process through the handle it holds', async () => {
     const run = vi.fn(async (_spec: CommandSpec) => result(0, 'forced 4321\r\n'));
     const forced = await endHubProcesses(run, 'C:\\Windows', [{ pid: 4321, created: '133000000000000000' }], 20_000);
     expect(forced).toEqual([4321]);
     const script = scriptOf(run.mock.calls[0][0]);
     expect(script).toContain('Id = 4321; Created = 133000000000000000');
     expect(script).toContain('AddMilliseconds(20000)');
-    expect(script.indexOf('AddMilliseconds(20000)')).toBeLessThan(script.indexOf('Stop-Process'));
-    expect(script).toContain('$p.CreationDate.ToFileTimeUtc() -eq $_.Created');
+    expect(script.indexOf('AddMilliseconds(20000)')).toBeLessThan(script.indexOf('.Kill()'));
+    // The Process object holds a handle ($p.Handle), the start time is read from it, and it is the one that is killed.
+    expect(script).toContain('$null = $p.Handle');
+    expect(script).toContain('$p.StartTime.ToFileTimeUtc() -eq $target.Created');
+    expect(script).toContain('$p.Kill()');
+    expect(script).not.toContain('Stop-Process');
     // A single process comes back unwrapped, and a PowerShell 5.1 object has no .Count: every count goes through @().
     expect(script).not.toMatch(/(?<!@)\(Get-Alive\)\.Count/);
     expect(script).toContain('@(Get-Alive).Count');

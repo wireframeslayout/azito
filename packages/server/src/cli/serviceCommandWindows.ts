@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import type { ServiceManager } from '../modules/system/serviceManager';
 import type { ServiceHost } from '../modules/system/createServiceManager';
 import {
-  HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, registeredHubPrefix, resolveWindowsUserId, samePrefix,
+  HUB_GRACE_MS, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix,
   type HubWindowsLayout, type SpecRunner,
 } from '../modules/system/windowsHubService';
 import { resolveInstallPrefix } from '../modules/system/misao/misaoPaths';
@@ -50,46 +50,53 @@ function isThisPrefix(other: string, hub: WindowsHub): boolean {
   }
 }
 
+/** Which install the REGISTERED task (asked of the Task Scheduler, not read from our copy) belongs to; undefined when it is not a hub task this version recognises. */
+async function registeredOwner(hub: WindowsHub): Promise<{ prefix: string } | undefined> {
+  return inspectRegisteredHub(await hub.client.exportXml(HUB_SERVICE.windowsTaskName), hub.systemRoot);
+}
+
 /**
  * The task name is fixed (`AzitoHub`), so a task registered for another prefix of the same user would be operated from here by
- * mistake. Refuses to go on unless the registered task is this install's, and says where it belongs; refuses too when the copy
- * is there but the task itself is gone.
+ * mistake. The definition copy can disagree with the task (it is only ours), so the task itself is asked: it must exist, be
+ * recognised as a hub task, and belong to this install. Otherwise the operation is refused, saying where the task belongs.
  */
 export async function requireOwnTask(manager: ServiceManager, hub: WindowsHub): Promise<void> {
-  const registered = manager.readDefinition();
-  if (registered === undefined) throw new Error('The AZITO service is not installed (no Task Scheduler task). Run `azito service install`, or install.ps1 without -NoService.');
-  const prefix = registeredHubPrefix(registered);
-  if (prefix === undefined) throw new Error('The registered AzitoHub task is not one this version of AZITO made. Run `azito service install --yes` to replace it.');
-  if (!isThisPrefix(prefix, hub)) {
-    throw new Error(`The task AzitoHub belongs to another install (${prefix}), not this one (${hub.layout.prefix}). Operate it with that install's \`azito\`, or register this one with \`azito service install --yes\` (that replaces it).`);
+  if (!(await taskExists(hub))) {
+    if (manager.readDefinition() === undefined) throw new Error('The AZITO service is not installed (no Task Scheduler task). Run `azito service install`, or install.ps1 without -NoService.');
+    throw new Error('The task AzitoHub is not registered any more (it was deleted). Run `azito service install` to register it again.');
   }
-  if (!(await taskExists(hub))) throw new Error('The task AzitoHub is not registered any more (it was deleted). Run `azito service install` to register it again.');
+  const owner = await registeredOwner(hub);
+  if (owner === undefined) throw new Error('The registered AzitoHub task is not one this version of AZITO recognises (its action was changed, or it is from another version). Run `azito service install --yes` to replace it.');
+  if (!isThisPrefix(owner.prefix, hub)) {
+    throw new Error(`The task AzitoHub belongs to another install (${owner.prefix}), not this one (${hub.layout.prefix}). Operate it with that install's \`azito\`, or register this one with \`azito service install --yes\` (that replaces it).`);
+  }
 }
 
 /**
  * Registers the task. The definition is generated here (`buildHubTaskXml`), so install.ps1 never writes XML.
- * - The same definition for an existing task: nothing to do. A definition copy without the task (it was deleted by hand) is registered again.
- * - A task of ANOTHER install is replaced only with `--yes`, and never while it runs.
- * - A different definition of this install is replaced unless the hub is running from the registered one.
+ * - A task that exists is judged from the task itself, whatever the definition copy says:
+ *   - this install's, with the definition we would register: nothing to do (a missing or different copy is written again);
+ *   - running: never replaced;
+ *   - another install's, or one this version does not recognise: replaced only with `--yes`.
+ * - No task (a copy left behind after a delete by hand, or nothing): registered.
  */
 export async function installWindowsTask(manager: ServiceManager, hub: WindowsHub, context: ServiceCommandContext, yes: boolean): Promise<void> {
   const xml = buildHubTaskXml({ userId: resolveWindowsUserId(context.env), systemRoot: hub.systemRoot, layout: hub.layout });
-  const registered = manager.readDefinition();
-  const exists = await taskExists(hub);
-  if (registered === xml && exists) {
-    console.log('service install: the task is already registered with this definition');
-    return;
-  }
-  if (registered !== undefined && exists) {
-    const prefix = registeredHubPrefix(registered);
-    const other = prefix !== undefined && !isThisPrefix(prefix, hub);
+  if (await taskExists(hub)) {
+    const owner = await registeredOwner(hub);
+    const own = owner !== undefined && isThisPrefix(owner.prefix, hub);
+    if (own && manager.readDefinition() === xml) {
+      console.log('service install: the task is already registered with this definition');
+      return;
+    }
+    const whose = owner === undefined ? 'with a definition this version of AZITO does not recognise' : `for ${owner.prefix}`;
     if ((await manager.state()) === 'active') {
-      throw new Error(`The AZITO task is registered with a different definition${other ? ` (for ${prefix})` : ''} and is running. Stop it first (\`azito stop\` of that install), then install again.`);
+      throw new Error(`The AZITO task is registered ${whose} (not with the definition to install) and is running. Stop it first (\`azito stop\` of the install it belongs to), then install again.`);
     }
-    if (other && !yes) {
-      throw new Error(`The task AzitoHub is registered for another install (${prefix}). Installing here replaces it, and that install's \`azito start\` would then start this one. Run \`azito service install --yes\` to replace it.`);
+    if (!own && !yes) {
+      throw new Error(`The task AzitoHub is registered ${whose}. Installing here replaces it, and that install's \`azito start\` would then start this one. Run \`azito service install --yes\` to replace it.`);
     }
-    if (other) console.log(`service install: replacing the task registered for ${prefix}`);
+    if (!own) console.log(`service install: replacing the task registered ${whose}`);
   }
   await manager.install(xml);
 }

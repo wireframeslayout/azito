@@ -2,6 +2,7 @@ import * as path from 'path';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../shared/exec/commandSpec';
 import { powershellDialect, powershellEncodedArgs } from '../../shared/os/shellDialect';
 import { buildTaskXml } from '../../shared/os/taskScheduler/taskDefinition';
+import { joinWindowsArgs } from '../../shared/os/taskScheduler/windowsCommandLine';
 
 /**
  * The hub as a Task Scheduler task on Windows (#380 B3a). The pieces that are specific to the hub: the task's definition, the
@@ -76,17 +77,52 @@ export function buildHubLauncherScript(layout: HubWindowsLayout): string {
   ].join('\n');
 }
 
+const XML_ENTITIES: Readonly<Record<string, string>> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+function unescapeXml(value: string): string {
+  return value.replace(/&(amp|lt|gt|quot|apos);/g, (_, name: string) => XML_ENTITIES[name]!);
+}
+
+/** The quote characters PowerShell reads as a single quote, which `powershellDialect.quote` doubles (the same set as the writer's). */
+const QUOTE_CHARS = "'‘’‚‛";
+const HUB_ROOT_LINE = new RegExp(`^\\$hubRoot = '((?:[^${QUOTE_CHARS}]|([${QUOTE_CHARS}])\\2)*)'\\r?$`, 'm');
+
+/** What a task's action runs: the program and its arguments as one command line. */
+interface TaskExec {
+  command: string;
+  argumentsLine: string;
+}
+
+function hubTaskExec(systemRoot: string, layout: HubWindowsLayout): TaskExec {
+  return {
+    command: path.win32.join(systemRoot, 'System32', 'conhost.exe'),
+    argumentsLine: joinWindowsArgs(['--headless', windowsPowershell(systemRoot), ...powershellEncodedArgs(buildHubLauncherScript(layout))]),
+  };
+}
+
 /**
- * The prefix a registered task was made for, read back from its definition (the launcher's `$hubRoot`), or undefined when the
- * definition is not one of this code's. Which install a task belongs to is only in the task itself: the name is fixed.
+ * Which install a REGISTERED task (the XML the Task Scheduler gives back for it, not our copy) belongs to. The prefix is read from
+ * the launcher's `$hubRoot`, and the task is recognised only when its action (program and arguments) is exactly what this code
+ * generates for that prefix: a line that merely looks like ours, or an action somebody edited, is `undefined` (unknown).
  */
-export function registeredHubPrefix(xml: string): string | undefined {
-  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(xml)?.[1];
+export function inspectRegisteredHub(xml: string, systemRoot: string): { prefix: string } | undefined {
+  const exec = /<Exec>\s*<Command>([\s\S]*?)<\/Command>\s*(?:<Arguments>([\s\S]*?)<\/Arguments>)?/.exec(xml);
+  if (!exec) return undefined;
+  const command = unescapeXml(exec[1]);
+  const argumentsLine = unescapeXml(exec[2] ?? '');
+  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(argumentsLine)?.[1];
   if (!encoded) return undefined;
-  const script = Buffer.from(encoded, 'base64').toString('utf16le');
-  const hubRoot = /^\$hubRoot = '((?:[^']|'')*)'\r?$/m.exec(script)?.[1];
+  const hubRoot = HUB_ROOT_LINE.exec(Buffer.from(encoded, 'base64').toString('utf16le'))?.[1];
   if (hubRoot === undefined) return undefined;
-  return path.win32.dirname(hubRoot.replace(/''/g, "'"));
+  const prefix = path.win32.dirname(hubRoot.replace(new RegExp(`([${QUOTE_CHARS}])\\1`, 'g'), '$1'));
+  let expected: TaskExec;
+  try {
+    expected = hubTaskExec(systemRoot, hubWindowsLayout(prefix));
+  } catch {
+    return undefined;
+  }
+  if (command.toLowerCase() !== expected.command.toLowerCase() || argumentsLine !== expected.argumentsLine) return undefined;
+  return { prefix };
 }
 
 /** Whether two Windows paths name the same place by spelling (case and a trailing separator do not count). */
@@ -112,7 +148,7 @@ export function buildHubTaskXml(input: HubTaskInput): string {
   return buildTaskXml({
     userId: input.userId,
     description: 'AZITO Hub: started at logon',
-    executable: path.win32.join(input.systemRoot, 'System32', 'conhost.exe'),
+    executable: hubTaskExec(input.systemRoot, input.layout).command,
     args: ['--headless', windowsPowershell(input.systemRoot), ...powershellEncodedArgs(buildHubLauncherScript(input.layout))],
     workingDirectory: input.layout.hubRoot,
     restartOnFailure: { intervalMinutes: RESTART_INTERVAL_MINUTES, count: RESTART_COUNT },
@@ -137,7 +173,7 @@ export type SpecRunner = (spec: CommandSpec) => Promise<CommandResult>;
 /** A process identified the way the sweep needs it: by id AND creation time (an id can be handed to another process once it has ended). */
 export interface HubProcess {
   pid: number;
-  /** `ToFileTimeUtc()` of its creation date. */
+  /** `ToFileTimeUtc()` of its `Process.StartTime`. */
   created: string;
 }
 
@@ -165,7 +201,7 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
     ...PROCESS_PREAMBLE,
     `$roots = ${alternatives}`,
     "$pattern = '(^|[\\s\"])(' + $roots + ')[^\\\\\"\\s]+\\\\azito-hub\\.cjs([\\s\"]|$)'",
-    `Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ProcessId -ne ${Math.trunc(excludePid)} -and $_.CommandLine -and ($_.CommandLine -match $pattern) -and (Test-Mine $_) } | ForEach-Object { "$($_.ProcessId) $($_.CreationDate.ToFileTimeUtc())" }`,
+    `Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" | Where-Object { $_.ProcessId -ne ${Math.trunc(excludePid)} -and $_.CommandLine -and ($_.CommandLine -match $pattern) -and (Test-Mine $_) } | ForEach-Object { $started = try { (Get-Process -Id $_.ProcessId -ErrorAction Stop).StartTime.ToFileTimeUtc() } catch { $null }; if ($started) { "$($_.ProcessId) $started" } }`,
   ].join('\n');
   const result = await runPowershell(run, systemRoot, script, 'Looking for the hub processes');
   return result.stdout.split(/\r?\n/).map((line) => /^(\d+) (\d+)$/.exec(line.trim())).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ pid: Number(m[1]), created: m[2] }));
@@ -179,15 +215,28 @@ export async function findHubProcesses(run: SpecRunner, systemRoot: string, hubR
 export async function endHubProcesses(run: SpecRunner, systemRoot: string, targets: readonly HubProcess[], graceMs: number): Promise<number[]> {
   if (targets.length === 0) return [];
   const list = targets.map((t) => `[pscustomobject]@{ Id = ${Math.trunc(t.pid)}; Created = ${BigInt(t.created)} }`).join(', ');
+  // Each target is opened as a Process object, which holds a handle: while it is open its id cannot be handed to another process. The
+  // start time is checked on that very object, and `Kill()` ends that very object, never an id. A process that is not the one found
+  // before (another start time), or cannot be opened, is left alone.
   const script = [
     ...PROCESS_PREAMBLE,
     `$targets = @(${list})`,
-    // @() around every call: a function that returns one object returns it unwrapped, and a PowerShell 5.1 object has no .Count.
-    'function Get-Alive { @($targets | Where-Object { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $($_.Id)"; $p -and $p.CreationDate.ToFileTimeUtc() -eq $_.Created }) }',
+    'function Open-Target($target) {',
+    '  $p = Get-Process -Id $target.Id -ErrorAction SilentlyContinue',
+    '  if (-not $p) { return $null }',
+    '  try {',
+    '    $null = $p.Handle',
+    '    if (-not $p.HasExited -and $p.StartTime.ToFileTimeUtc() -eq $target.Created) { return $p }',
+    '  } catch { }',
+    '  return $null',
+    '}',
+    '$procs = @($targets | ForEach-Object { Open-Target $_ } | Where-Object { $_ })',
+    'function Get-Alive { @($procs | Where-Object { -not $_.HasExited }) }',
     `$until = (Get-Date).AddMilliseconds(${Math.trunc(graceMs)})`,
+    // @() around every call: a function that returns one object returns it unwrapped, and a PowerShell 5.1 object has no .Count.
     'while (@(Get-Alive).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }',
     '$forced = @(Get-Alive)',
-    'foreach ($t in $forced) { Stop-Process -Id $t.Id -Force -ErrorAction SilentlyContinue }',
+    'foreach ($p in $forced) { try { $p.Kill() } catch { } }',
     `$until = (Get-Date).AddMilliseconds(${FORCE_WAIT_MS})`,
     'while (@(Get-Alive).Count -gt 0 -and (Get-Date) -lt $until) { Start-Sleep -Milliseconds 250 }',
     '$left = @(Get-Alive)',
