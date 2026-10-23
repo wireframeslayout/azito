@@ -4,6 +4,7 @@ import { useGlobalFocus } from '../hooks/useGlobalFocus';
 import TaskRefBadges from './TaskRefBadges';
 import { Button } from './ui';
 import { useTranslation } from 'react-i18next';
+import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 
 interface Task {
   id: number;
@@ -13,6 +14,8 @@ interface Task {
   currentPhase?: string | null;
   projectId: number;
   unitId: number | null;
+  /** The server the task runs on, when known (a Windows host cannot run tasks yet). */
+  serverName?: string | null;
   priority: number;
   createdAt: string;
   sourceRef?: string | null;
@@ -79,6 +82,7 @@ export default function TaskKanbanBoard({
   onStop,
 }: TaskKanbanBoardProps) {
   const { isFocusedTask } = useGlobalFocus();
+  const executeBlockReason = useHostFeatureBlock();
   const { t } = useTranslation(['tasks', 'common']);
   const columns = groupTasks(tasks);
 
@@ -205,6 +209,8 @@ export default function TaskKanbanBoard({
                     {task.status === 'open' && (
                       <Button
                         size="sm" variant="primary"
+                        disabled={!!executeBlockReason(task.serverName, 'taskExecution')}
+                        title={executeBlockReason(task.serverName, 'taskExecution') ?? undefined}
                         onClick={(e) => { e.stopPropagation(); onExecute(task.id, task.unitId); }}
                         style={{ fontSize: 'var(--font-xs)', padding: '2px 8px' }}
                       >{t('common:actions.execute')}</Button>

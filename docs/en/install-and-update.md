@@ -360,6 +360,23 @@ To update manually, use Servers → target server → Setup → Agent Server →
 
 Servers → Add → Agent works for a Windows host over SSH. The bundled **misao** is installed after the agent (the Task Scheduler task `AzitoMisao`; see `misao.md`). Windows has no tmux, so misao is the only pane server and the default mux of a new server is misao. If only misao fails, the agent stays installed and the reason is reported as `misaoError` beside the successful install. Windows panes are cmd.exe; launching a worker (claude / codex) is #371. File, git and task features on Windows come with #370 / #371; updating and removing a Windows agent comes with #372 (a Windows agent is reinstalled from the Setup row, which replaces it in place).
 
+What works on a Windows agent, and what does not yet. The hub reads the OS from the agent (`hostProfile`) and shows it on the server list and in the server's Overview. The features that are not available yet are disabled in the UI with the reason as a tooltip or an inline note (the decision is one function, `hostFeatureSupport` in `@azito/shared`); an operation that reaches the hub anyway is answered `unsupported_os` (501) with the reason, and the UI shows it as it is.
+
+| Feature | On a Windows agent | Where it is going |
+|---|---|---|
+| Adding the server (preflight, agent install, OS detection), reinstall from Setup | Works | — |
+| misao (pane server), its install and update from Setup | Works | — |
+| New window with a plain shell | Works (cmd.exe) | — |
+| Files (explorer, search), diff and worktree list | Disabled in the UI | #370 |
+| Task and Unit execution | Disabled in the UI | #371 |
+| Starting claude / codex (or any command) in a new window | Disabled in the UI; choose the plain shell | #371 |
+| tmux (default mux choice, tmux runtime, apply tmux config, install tmux) | Not offered: Windows has no tmux, misao is the only pane server | — |
+| AZITO Harness (setup.sh), its install-status row | Disabled in the UI | #371 |
+| Browser runtime (Chromium) install | Disabled in the UI | #372 |
+| Update and removal of the agent on the host | Not available; reinstall from Setup replaces it in place | #372 |
+
+A server whose OS is not recorded yet (a Unix agent registered before the OS was kept) is treated as Unix: nothing is disabled.
+
 Prepare the Windows host:
 
 | Prerequisite | Detail |

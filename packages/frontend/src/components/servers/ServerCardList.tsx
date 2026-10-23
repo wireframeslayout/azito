@@ -1,3 +1,4 @@
+import { describeHostProfile } from '../../lib/hostProfile';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { paths } from '../../paths';
@@ -48,6 +49,7 @@ function ServerCard({
   const { t } = useTranslation('servers');
   const isOnline = status?.status === 'online';
   const hasDrift = !isHub && isOnline && status?.versionMatch === false;
+  const hostOs = describeHostProfile(server.hostProfile);
   const host = server.type === 'agent' && server.host
     ? `${server.host}:${server.agentPort ?? 3002}`
     : server.sshHost ?? '';
@@ -95,6 +97,7 @@ function ServerCard({
         marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap',
       }}>
         {host && <span>{host}</span>}
+        {hostOs && <span>{t(`overview.os.${hostOs.osKey}`)} {hostOs.arch}</span>}
         {server.agentVersion && <span>{server.agentVersion.slice(0, 7)}</span>}
         {hasDrift && <span style={{ color: 'var(--warning)' }}>{t('status.versionDrift', { version: (server.agentVersion ?? '').slice(0, 7) })}</span>}
       </div>

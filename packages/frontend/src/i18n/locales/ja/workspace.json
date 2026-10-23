@@ -87,6 +87,7 @@
     "quickAddTitle": "{{label}} を追加 — {{serverName}}"
   },
   "addWindow": {
+    "workerBlockedHint": "シェルのみ（エージェントなし）を選ぶと、ウィンドウだけを作れます。",
     "title": "ウィンドウを追加",
     "createAndAdd": "作成して追加",
     "addAllWindows": "すべてのウィンドウを追加",

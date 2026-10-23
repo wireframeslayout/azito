@@ -11,6 +11,9 @@ interface FileSidebarHeaderProps {
   serverCount: number;
   allServerNames?: string[];
   onSelectServer?: (name: string) => void;
+  /** Why file operations / version control are closed on this server's host (a Windows agent); null / absent: open. A closed button is disabled and says why. */
+  filesBlockedReason?: string | null;
+  gitBlockedReason?: string | null;
 }
 
 export function FileSidebarHeader({
@@ -22,6 +25,8 @@ export function FileSidebarHeader({
   serverCount,
   allServerNames,
   onSelectServer,
+  filesBlockedReason,
+  gitBlockedReason,
 }: FileSidebarHeaderProps) {
   const { t } = useTranslation('files');
   const { t: tw } = useTranslation('workspace');
@@ -92,7 +97,8 @@ export function FileSidebarHeader({
       <button
         type="button"
         onClick={onSearch}
-        title={searchActive ? tw('sidebar.fileTree') : tw('sidebar.searchFiles')}
+        disabled={!!filesBlockedReason}
+        title={filesBlockedReason ?? (searchActive ? tw('sidebar.fileTree') : tw('sidebar.searchFiles'))}
         aria-pressed={searchActive}
         className="icon-btn"
         style={{
@@ -107,7 +113,8 @@ export function FileSidebarHeader({
       <button
         type="button"
         onClick={onDiff}
-        title={tw('sidebar.gitDiff')}
+        disabled={!!gitBlockedReason}
+        title={gitBlockedReason ?? tw('sidebar.gitDiff')}
         className="icon-btn"
         style={{
           border: 'none',
@@ -121,7 +128,8 @@ export function FileSidebarHeader({
       <button
         type="button"
         onClick={onRefresh}
-        title={t('explorer.refresh')}
+        disabled={!!filesBlockedReason}
+        title={filesBlockedReason ?? t('explorer.refresh')}
         className="icon-btn"
         style={{
           border: 'none',

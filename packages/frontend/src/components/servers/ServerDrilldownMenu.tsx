@@ -26,11 +26,12 @@ export default function ServerDrilldownMenu({
   const navigate = useNavigate();
   const { t } = useTranslation('servers');
 
+  const currentServer = servers.find((s) => s.name === currentServerName);
   const windowCount = sessions.reduce((sum, s) => sum + s.windows.length, 0);
 
   const summaries: Record<string, SectionSummary> = {
     overview: getOverviewSummary(status),
-    setup: getSetupSummary(installStatus, installStatusError),
+    setup: getSetupSummary(installStatus, installStatusError, currentServer?.hostProfile),
     windows: getWindowsSummary(sessions.length, windowCount),
     danger: { text: '', tone: 'dim' },
   };

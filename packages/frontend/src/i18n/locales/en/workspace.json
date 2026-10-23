@@ -87,6 +87,7 @@
     "quickAddTitle": "Add {{label}} — {{serverName}}"
   },
   "addWindow": {
+    "workerBlockedHint": "Choose the plain shell (no agent) to create just a window.",
     "title": "Add Window",
     "createAndAdd": "Create & Add",
     "addAllWindows": "Add All Windows",

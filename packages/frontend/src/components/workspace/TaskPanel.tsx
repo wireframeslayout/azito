@@ -5,6 +5,7 @@ import { isOperatorRequiredError, reportIfOperatorRequired } from '../../api/ope
 import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMutationResult';
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
+import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
 import { StatusDot } from '../StatusBadge';
 import { MiniTabBar, IconButton, Button, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice, DocsLink } from '../ui';
 import type { MiniTab } from '../ui';
@@ -633,6 +634,7 @@ export default function TaskPanel({
   }, [windows]);
 
   const { setFocusedTarget } = useWorkspaceTargets();
+  const hostFeatureBlock = useHostFeatureBlock();
 
   // Push the terminal currently displayed by this task panel's *focused* pane into
   // global focus, so the WindowsSidebar highlight follows in-task window switches
@@ -1625,7 +1627,9 @@ export default function TaskPanel({
   // プライマリアクション行（実行/停止）: TaskDetailMenu 側は常に2ボタンを表示し、無効時は
   // disabled 表現（opacity/cursor）にする。既存のインライン条件判定（デスクトップ側と同一）を
   // enabled/disabled の真偽値へ切り出し、無効時は no-op にして誤クリックでも副作用を起こさない。
-  const canExecuteTask = !!(hasUnit && unit && task.status === 'open');
+  // A task on a host that cannot run tasks yet (a Windows agent) keeps its Execute entry, closed, with the reason.
+  const executeBlockReason = hostFeatureBlock(task.serverName, 'taskExecution');
+  const canExecuteTask = !!(hasUnit && unit && task.status === 'open' && !executeBlockReason);
   const canStopTask = !!(task.status === 'in_progress' && hasUnit && unit);
   const handleExecuteTask = () => { if (canExecuteTask && unit) executeTask(task.id, unit.id); };
   const handleStopTask = () => { if (canStopTask && unit) stopTask(unit.id); };
@@ -1670,7 +1674,7 @@ export default function TaskPanel({
           }
           actions={
             <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-              {hasUnit && unit && task.status === 'open' && <Button variant="primary" size="sm" onClick={() => executeTask(task.id, unit.id)}>{t('actions.execute')}</Button>}
+              {hasUnit && unit && task.status === 'open' && <Button variant="primary" size="sm" disabled={!!executeBlockReason} title={executeBlockReason ?? undefined} onClick={() => executeTask(task.id, unit.id)}>{t('actions.execute')}</Button>}
               {task.status === 'in_progress' && hasUnit && unit && <Button variant="danger" size="sm" onClick={() => stopTask(unit.id)}>{t('actions.stop')}</Button>}
               <button
                 onClick={(e) => moreMenu.show(e, [

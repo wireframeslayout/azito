@@ -15,6 +15,7 @@ import { Chip, Button, Notice, DocsLink } from '../../ui';
 import type { MuxDriverStatus } from '../../../lib/muxDriverStatus';
 import { MuxDriverNotice } from './MuxDriverNotice';
 import { describeHostProfile } from '../../../lib/hostProfile';
+import { hostFeatureBlockReason } from '../../../lib/hostFeature';
 
 // Issue #29 Step 2 C: display-side TTL for the isolation doctor's last
 // verification — purely advisory ("要再検証"), not a policy re-evaluation.
@@ -160,6 +161,7 @@ export default function OverviewSection({
 
   const isAgent = server.type === 'agent';
   const hostOs = describeHostProfile(server.hostProfile);
+  const tmuxBlockReason = hostFeatureBlockReason(server.hostProfile, 'tmux', t);
   const isChecking = !status || status.status === 'checking';
   const isOnline = status?.status === 'online';
   const memUsedPercent = measurement ? 100 - measurement.memAvailablePercent : null;
@@ -468,11 +470,15 @@ export default function OverviewSection({
             </span>
           </KvRow>
           <KvRow label={t('overview.muxRuntimeLabel')}>
-            <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
-              {server.muxRuntime === 'managed'
-                ? t('overview.muxManaged')
-                : `${t('overview.muxSystem')}${status?.mux?.tmux?.version ? ` ${status.mux.tmux.version}` : ''}`}
-            </span>
+            {tmuxBlockReason ? (
+              <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{tmuxBlockReason}</span>
+            ) : (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+                {server.muxRuntime === 'managed'
+                  ? t('overview.muxManaged')
+                  : `${t('overview.muxSystem')}${status?.mux?.tmux?.version ? ` ${status.mux.tmux.version}` : ''}`}
+              </span>
+            )}
             <span style={{ display: 'block', fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('overview.muxRuntimeNote')}</span>
           </KvRow>
           {isAgent && (

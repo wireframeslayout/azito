@@ -357,6 +357,23 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。Windows でのファイル・git・タスク実行は #370 / #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
 
+Windows のエージェントで使える機能と、まだ使えない機能は次のとおりです。ハブはエージェントから OS（`hostProfile`）を受け取り、サーバー一覧とサーバーの概要に表示します。まだ使えない機能は、UI で無効にし、理由をツールチップかその場の説明で出します（可否の判定は `@azito/shared` の `hostFeatureSupport` の 1 か所）。それでもハブに届いた操作は、理由付きの `unsupported_os`（501）で断られ、UI はその理由をそのまま出します。
+
+| 機能 | Windows のエージェント | 対応予定 |
+|---|---|---|
+| サーバーの追加（preflight・agent の導入・OS の自動判定）、Setup からの再導入 | 使える | — |
+| misao（ペインサーバー）と、Setup からの導入・更新 | 使える | — |
+| シェルだけの新しいウィンドウ | 使える（cmd.exe） | — |
+| ファイル（エクスプローラー・検索）、diff、ワークツリー一覧 | UI で無効 | #370 |
+| タスク・Unit の実行 | UI で無効 | #371 |
+| 新しいウィンドウでの claude / codex（や任意のコマンド）の起動 | UI で無効（シェルのみを選ぶ） | #371 |
+| tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
+| AZITO ハーネス（setup.sh）と、その install-status の行 | UI で無効 | #371 |
+| ブラウザ実行環境（Chromium）の導入 | UI で無効 | #372 |
+| ホスト上の agent の更新・削除 | 使えない（Setup からの再導入でその場で置き換わる） | #372 |
+
+OS がまだ記録されていないサーバー（OS を記録する前に登録された Unix の agent）は Unix として扱い、何も無効にしません。
+
 Windows 側の準備:
 
 | 前提 | 内容 |

@@ -156,6 +156,7 @@
     "stateInstalling": "Installing",
     "stateInstalled": "Installed",
     "stateNotInstalled": "Not installed",
+    "stateUnavailable": "Unavailable",
     "optional": "Optional",
     "showManual": "Show steps",
     "hideManual": "Hide",

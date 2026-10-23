@@ -156,6 +156,7 @@
     "stateInstalling": "インストール中",
     "stateInstalled": "導入済み",
     "stateNotInstalled": "未導入",
+    "stateUnavailable": "利用不可",
     "optional": "任意",
     "showManual": "手順を見る",
     "hideManual": "隠す",

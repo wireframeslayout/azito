@@ -8,6 +8,7 @@ import type { MuxDriverKind } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
 import type { MuxKindSelectModel } from '../../lib/muxKindChoice';
 import MuxKindField from './MuxKindField';
+import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
 import { findSessionByKey, hasMixedKinds, sessionKey, sessionOptionLabel, windowTargetSelectOptions } from '../../lib/sessionKind';
 
 interface AddWindowModalProps {
@@ -82,9 +83,12 @@ export default function AddWindowModal({
   const { t } = useTranslation(['workspace', 'common']);
   const [modelInvalid, setModelInvalid] = useState(false);
   const handleModelValidityChange = useCallback((valid: boolean) => setModelInvalid(!valid), []);
+  // Starting claude / codex (or any command) in a new window needs a pane command; a Windows pane takes none yet, so only a plain shell is offered there.
+  const hostFeatureBlock = useHostFeatureBlock();
+  const workerBlockReason = awMode === 'new' && awAgent !== 'none' ? hostFeatureBlock(awServer, 'workerLaunch') : null;
 
   return (
-    <Modal title={t('addWindow.title')} open={open} onClose={onClose} actions={<Button variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid} loadingLabel={t('addWindow.adding')}>{awMode === 'new' ? t('addWindow.createAndAdd') : awMode === 'session' ? t('addWindow.addAllWindows') : t('addWindow.add')}</Button>}>
+    <Modal title={t('addWindow.title')} open={open} onClose={onClose} actions={<Button variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid || !!workerBlockReason} loadingLabel={t('addWindow.adding')}>{awMode === 'new' ? t('addWindow.createAndAdd') : awMode === 'session' ? t('addWindow.addAllWindows') : t('addWindow.add')}</Button>}>
       {awMode === 'new' ? (
         <>
           {projectServers.length > 1 && (
@@ -132,6 +136,11 @@ export default function AddWindowModal({
                     <option key={key} value={key}>{val.label}</option>
                   ))}
             </FormSelect>
+            {workerBlockReason && (
+              <div role="status" style={{ marginTop: 6, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+                {workerBlockReason} {t('addWindow.workerBlockedHint')}
+              </div>
+            )}
             {agentPresetsError && (
               <div role="alert" style={{
                 marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-sm)',

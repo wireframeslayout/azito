@@ -1,4 +1,4 @@
-import type { MuxDriverKind } from '@azito/shared';
+import type { HostPlatformInfo, MuxDriverKind } from '@azito/shared';
 import { defaultMuxOptions } from './muxRuntimeForm';
 import type { UnavailableMuxKind } from './fetchServerSessions';
 import { errorMessageOf } from './apiResult';
@@ -20,8 +20,8 @@ export type MuxAvailabilityState =
   | { status: 'ready'; unavailable: readonly UnavailableMuxKind[] };
 
 /** The kinds a server offers for a new window: misao and tmux on a local or an agent server, tmux only elsewhere. */
-export function selectableMuxKinds(server: { type: string }): MuxDriverKind[] {
-  return defaultMuxOptions(server.type);
+export function selectableMuxKinds(server: { type: string; hostProfile?: HostPlatformInfo | null }): MuxDriverKind[] {
+  return defaultMuxOptions(server.type, server.hostProfile);
 }
 
 /** Why `kind` is down, as the hub reported it. Only a reason that says the binary is missing reads as "tmux is not installed"; any other reason this UI does not know reads as a generic "unavailable". */
@@ -72,7 +72,7 @@ export interface MuxKindSelectModel {
 }
 
 export function muxKindSelectModel(
-  server: { type: string; defaultMux: MuxDriverKind },
+  server: { type: string; defaultMux: MuxDriverKind; hostProfile?: HostPlatformInfo | null },
   state: MuxAvailabilityState,
   choice: MuxDriverKind | null,
 ): MuxKindSelectModel {

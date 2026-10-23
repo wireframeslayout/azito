@@ -13,6 +13,21 @@ describe('defaultMuxOptions', () => {
   it('offers only tmux for any other server type', () => {
     expect(defaultMuxOptions('ssh')).toEqual(['tmux']);
   });
+
+  it('offers misao only on a Windows host (it has no tmux), for a local or an agent server', () => {
+    expect(defaultMuxOptions('agent', { platform: 'win32' })).toEqual(['misao']);
+    expect(defaultMuxOptions('local', { platform: 'win32' })).toEqual(['misao']);
+  });
+
+  it('keeps misao and tmux on Linux, macOS and a host whose OS is not recorded', () => {
+    expect(defaultMuxOptions('agent', { platform: 'linux' })).toEqual(['misao', 'tmux']);
+    expect(defaultMuxOptions('agent', { platform: 'darwin' })).toEqual(['misao', 'tmux']);
+    expect(defaultMuxOptions('agent', null)).toEqual(['misao', 'tmux']);
+  });
+
+  it('a stored tmux default of a Windows agent starts the edit form on misao', () => {
+    expect(editableDefaultMux('tmux', defaultMuxOptions('agent', { platform: 'win32' }))).toBe('misao');
+  });
 });
 
 describe('editableDefaultMux', () => {
