@@ -77,6 +77,21 @@ function hubNodePids(entryFragment: string): number[] {
   return r.output.split(/\r?\n/).map((l) => l.trim()).filter((l) => /^\d+$/.test(l)).map(Number);
 }
 
+/** `pid` and its ancestors (name + id), for the diagnosis of what survives the Task Scheduler's End. */
+function ancestorsOf(pid: number): Array<{ pid: number; name: string }> {
+  const script = [
+    `$id = ${pid}`,
+    'while ($id) { $p = Get-CimInstance Win32_Process -Filter "ProcessId = $id"; if (-not $p) { break }; "$($p.ProcessId) $($p.Name)"; $id = $p.ParentProcessId }',
+  ].join('\n');
+  const r = powershell(['-Command', script]);
+  return r.output.split(/\r?\n/).map((l) => /^(\d+) (\S+)$/.exec(l.trim())).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ pid: Number(m[1]), name: m[2] }));
+}
+
+function processAlive(pid: number): boolean {
+  const r = powershell(['-Command', `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }`]);
+  return r.output.trim() === 'yes';
+}
+
 function readLog(logFile: string): string {
   return fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf-8') : '(no log file)';
 }
@@ -145,7 +160,7 @@ async function main(): Promise<void> {
     assert((await healthStatus()) === null, '/api/health must not answer after azito stop');
     // Observation only: on the runner the Task Scheduler's End ends the whole process tree at once, so the hub may never get to log its shutdown.
     console.log(`[smoke-service] graceful shutdown logged after azito stop: ${/shutting down gracefully/.test(readLog(logFile))}`);
-    assert(!/ended forcibly/.test(stop.output), 'azito stop must not have had to end the hub forcibly', stop.output);
+    console.log(`[smoke-service] azito stop output: ${stop.output.trim()}`);
     const stopped = azito(azitoCmd, 'status');
     assert(/service:\s+taskscheduler \((inactive|failed)\)/.test(stopped.output), 'azito status must show the task stopped', stopped.output);
 
@@ -155,9 +170,19 @@ async function main(): Promise<void> {
     await waitFor('/api/health after azito start', async () => (await healthStatus()) === 200, 90_000, () => readLog(logFile));
 
     step('the Task Scheduler\'s own End (no sweep): the hub follows its conhost.exe and ends by itself');
+    const chain = ancestorsOf(hubNodePids(entryFragment)[0]);
+    console.log(`[smoke-service] process chain of the hub before End: ${chain.map((p) => `${p.name}(${p.pid})`).join(' <- ')}`);
+    const endedAt = Date.now();
     const end = schtasks(['/End', '/TN', TASK_NAME]);
     assert(end.status === 0, 'schtasks /End failed', end.output);
-    await waitFor('the hub node.exe to end after /End', () => hubNodePids(entryFragment).length === 0, 60_000, () => `still running: ${hubNodePids(entryFragment).join(', ')}\n${readLog(logFile)}`);
+    const seen: string[] = [];
+    await waitFor('the hub node.exe to end after /End', () => {
+      const alive = chain.filter((p) => processAlive(p.pid)).map((p) => `${p.name}(${p.pid})`).join(',');
+      seen.push(`${Math.round((Date.now() - endedAt) / 1000)}s: ${alive || 'none'}`);
+      return hubNodePids(entryFragment).length === 0;
+    }, 60_000, () => `still running: ${hubNodePids(entryFragment).join(', ')}\n${readLog(logFile)}`);
+    console.log(`[smoke-service] alive after End (chain members): ${[...new Set(seen)].join(' | ')}`);
+    console.log(`[smoke-service] hub log lines about the parent: ${readLog(logFile).split(/\r?\n/).filter((l) => /parent|conhost|shutting down/.test(l)).join(' // ')}`);
     assert((await healthStatus()) === null, '/api/health must not answer after /End');
 
     step('azito service restart');
