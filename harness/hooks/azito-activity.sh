@@ -49,6 +49,18 @@ if [[ "$EVENT" != "start" && "$EVENT" != "stop" ]]; then
   exit 0
 fi
 
+# Claude Code passes the hook input as JSON on stdin; its session_id lets the hub keep
+# the window's agent_session_id current when the session changes mid-conversation.
+STDIN_JSON="$(cat 2>/dev/null || true)"
+SESSION_ID="$(grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' <<< "$STDIN_JSON" 2>/dev/null | head -1 | sed -E 's/.*:[[:space:]]*"([^"]*)"/\1/' || true)"
+if [[ ! "$SESSION_ID" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  SESSION_ID=""
+fi
+SESSION_FIELD=""
+if [[ -n "$SESSION_ID" ]]; then
+  SESSION_FIELD="$(printf ',"sessionId":"%s"' "$SESSION_ID")"
+fi
+
 AZITO_URL="${AZITO_URL:-http://localhost:3001}"
 AZITO_WEBHOOK_TOKEN="${AZITO_WEBHOOK_TOKEN:-}"
 AZITO_SERVER_NAME="${AZITO_SERVER_NAME:-}"
@@ -64,8 +76,8 @@ if [[ -z "${TMUX_PANE:-}" && "${MISAO_PANE_ID:-}" =~ ^p_[0-9A-Z]{26}$ ]]; then
   if [[ "$AZITO_SERVER_NAME" == *'"'* || "$AZITO_SERVER_NAME" == *'\'* ]]; then
     exit 0
   fi
-  PAYLOAD=$(printf '{"serverName":"%s","misaoPaneId":"%s","event":"%s"}' \
-    "$AZITO_SERVER_NAME" "$MISAO_PANE_ID" "$EVENT")
+  PAYLOAD=$(printf '{"serverName":"%s","misaoPaneId":"%s","event":"%s"%s}' \
+    "$AZITO_SERVER_NAME" "$MISAO_PANE_ID" "$EVENT" "$SESSION_FIELD")
 else
   if [[ -z "${TMUX_PANE:-}" ]] || ! command -v tmux >/dev/null 2>&1; then
     exit 0
@@ -101,8 +113,8 @@ else
     fi
   done
 
-  PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"%s","muxPaneRef":"%s"}' \
-    "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "$EVENT" "${TMUX_PANE:-}")
+  PAYLOAD=$(printf '{"serverName":"%s","sessionName":"%s","windowIndex":%s,"windowName":"%s","paneIndex":%s,"event":"%s","muxPaneRef":"%s"%s}' \
+    "$AZITO_SERVER_NAME" "$SESSION_NAME" "$WINDOW_INDEX" "$WINDOW_NAME" "$PANE_INDEX" "$EVENT" "${TMUX_PANE:-}" "$SESSION_FIELD")
 fi
 
 # Fire-and-forget in the background so this never blocks Claude's turn.
