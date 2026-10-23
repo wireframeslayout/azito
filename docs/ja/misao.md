@@ -124,7 +124,7 @@ Windows のエージェント（`x86_64-pc-windows-msvc`）には、同じくエ
 ファイル API だけです（sh は使いません）。
 
 - **常駐**は、タスクスケジューラのタスク `AzitoMisao`（ログオン時に起動）です。実行内容は `conhost.exe --headless cmd.exe /d /c ""<root>\<version>\misao.exe" serve --socket "<pipe>" --data "<root>" >> "<root>\misao.log" 2>&1"`
-  で、窓が出ず、ログ（misao 自身にはログのファイルを指定する引数が無い）は `cmd.exe` が追記します。作業ディレクトリはユーザーのホストフォルダーです（ペインがリリースのフォルダー内で始まって削除を妨げないように）。
+  で、窓が出ず、ログ（misao 自身にはログのファイルを指定する引数が無い）は `cmd.exe` が追記します。作業ディレクトリはユーザーのホームフォルダーです（ペインがリリースのフォルダー内で始まって削除を妨げないように）。
   失敗（非ゼロ終了）のときだけ 1 分後に再起動し、`misao stop`（終了コード 0）では再起動しません。ログオフ中はタスクが動かないので、デーモンも動きません。
 - **接続口**は名前付きパイプ `\\.\pipe\misao-<ユーザー>-<sha256(<root> の小文字)の先頭 16 桁>` です（`MISAO_DIR=<root>` のときに SDK の `resolveSocketPath` が返す名前と同じ。テストが照合します）。
   エージェントは起動時に 1 回だけこれを決め、`MISAO_SOCKET` にパイプの名前が入っていればそれを使います。リレー（`/ws?mode=misao`）と `GET /api/misao/status` / `PUT /api/misao/upload` は Windows でも有効です。

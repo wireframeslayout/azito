@@ -70,10 +70,13 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
   let viaTask: boolean | undefined;
   const warn = vi.fn();
 
-  const installerFor = (version: string) => {
+  /** The release the task starts now (the test moves it along). */
+  let currentVersion = OLD_VERSION;
+
+  const installerFor = (version: string, binary: Buffer = fs.readFileSync(MISAO_CLI), readyTimeoutMs = 60_000) => {
     const hub = path.join(tmp, `hub-${version}`);
-    if (!fs.existsSync(hub)) writeHubBundle(hub, version, fs.readFileSync(MISAO_CLI));
-    return new MisaoAgentInstaller(readMisaoBundle(hub), { windowsTaskName: TASK_NAME, readyTimeoutMs: 60_000, pollIntervalMs: 250 });
+    if (!fs.existsSync(hub)) writeHubBundle(hub, version, binary);
+    return new MisaoAgentInstaller(readMisaoBundle(hub), { windowsTaskName: TASK_NAME, readyTimeoutMs, pollIntervalMs: 250 });
   };
 
   /** A PowerShell script run on this machine the way the agent runs one for the installer. */
@@ -83,17 +86,22 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
     return result.stdout;
   }
 
-  /** The `misao.exe` processes whose command line names this run's pipe. */
-  async function daemonProcesses(): Promise<number[]> {
+  /** The processes of this run's daemon: `misao.exe`, and the `cmd.exe` / `conhost.exe` above it, found by the pipe or the folder in their command line. */
+  async function runProcesses(names: string[]): Promise<number[]> {
     const out = await powershell([
       `$pipe = ${powershellDialect.quote(PIPE)}`,
-      '$ids = @(Get-CimInstance Win32_Process -Filter "Name = \'misao.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($pipe) } | ForEach-Object { [int]$_.ProcessId })',
-      "$global:LASTEXITCODE = 0",
+      `$root = ${powershellDialect.quote(ROOT)}`,
+      `$names = @(${names.map((n) => powershellDialect.quote(n)).join(', ')})`,
+      '$ids = @(Get-CimInstance Win32_Process | Where-Object { $names -contains $_.Name -and $_.CommandLine -and ($_.CommandLine.Contains($pipe) -or $_.CommandLine.Contains($root)) } | ForEach-Object { [int]$_.ProcessId })',
+      '$global:LASTEXITCODE = 0',
       'ConvertTo-Json -InputObject $ids -Compress',
     ].join('\n'));
     const parsed = JSON.parse(out.trim() || '[]') as number | number[];
     return Array.isArray(parsed) ? parsed : [parsed];
   }
+
+  /** The `misao.exe` processes of this run. */
+  const daemonProcesses = (): Promise<number[]> => runProcesses(['misao.exe']);
 
   /** The Task Scheduler of the machine, reached through the agent like the installer does. */
   const tasks = () => new SchtasksClient(createScriptCommandSpecRunner(async (script, timeoutMs) => {
@@ -153,21 +161,31 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
     misao?.connection.close();
     direct?.kill();
     if (transport) {
-      // Whatever the test left running: the task (and with it the daemon), then any misao.exe of this pipe.
+      // Whatever the test left running: the task (and with it the daemon), then any process of this run. A question that cannot be answered is a problem too.
       await (async () => {
         const state = await tasks().query(TASK_NAME);
         if (state.exists && state.running) await tasks().stop(TASK_NAME);
         if (state.exists) await tasks().delete(TASK_NAME);
       })().catch((e: unknown) => problems.push(`deleting the task: ${(e as Error).message}`));
-      for (const id of await daemonProcesses().catch(() => [])) await powershell(`Stop-Process -Id ${id} -Force -ErrorAction SilentlyContinue`).catch(() => undefined);
-      if (await taskExists().catch(() => false)) problems.push(`the task ${TASK_NAME} is still registered`);
-      await new Promise((r) => setTimeout(r, 1000));
-      if ((await daemonProcesses().catch(() => [])).length > 0) problems.push('a misao.exe of this run is still running');
+      try {
+        for (const id of await runProcesses(['misao.exe', 'cmd.exe', 'conhost.exe'])) await powershell(`Stop-Process -Id ${id} -Force -ErrorAction SilentlyContinue`);
+      } catch (e) {
+        problems.push(`ending the processes: ${(e as Error).message}`);
+      }
+      try {
+        if (await taskExists()) problems.push(`the task ${TASK_NAME} is still registered`);
+        await new Promise((r) => setTimeout(r, 1000));
+        const left = await runProcesses(['misao.exe', 'cmd.exe', 'conhost.exe']);
+        if (left.length > 0) problems.push(`processes of this run are still running: ${left.join(', ')}`);
+      } catch (e) {
+        problems.push(`could not check what is left: ${(e as Error).message}`);
+      }
     }
     if (agent && agent.exitCode === null) {
       const exited = new Promise<void>((resolve) => agent!.once('exit', () => resolve()));
       agent.kill();
       await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 10_000))]);
+      if (agent.exitCode === null && agent.signalCode === null) problems.push('the agent process did not end');
     }
     // The folder may still be held for a moment by a process that is ending.
     for (let attempt = 0; attempt < 20 && fs.existsSync(ROOT); attempt++) {
@@ -191,7 +209,8 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
     try {
       result = await installerFor(OLD_VERSION).install(transport, (step) => steps.push(step));
     } catch (err) {
-      if (!NO_INTERACTIVE_LOGON.test((err as Error).message)) throw new Error(`${(err as Error).message}\nagent log:\n${agentLog.slice(-2000)}`);
+      // Only a developer's own machine may fall back to a daemon started directly: CI must prove the Task Scheduler path, so it fails there.
+      if (!NO_INTERACTIVE_LOGON.test((err as Error).message) || process.env.CI) throw new Error(`${(err as Error).message}\nagent log:\n${agentLog.slice(-2000)}`);
       viaTask = false;
       console.warn(`[MisaoWindowsInstaller.misaoIntegration.test] no interactive logon session: the task cannot start here (${(err as Error).message})`);
       // The install undid what it made: no task and no marker. The release folder is there; the daemon is started from it directly.
@@ -269,6 +288,7 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
     const steps: string[] = [];
     expect(await installer.update(transport, (step) => steps.push(step))).toEqual({ version: VERSION, runningVersion: VERSION, startMethod: 'taskscheduler', updateAvailable: false });
     expect(steps).toEqual(['inspect', 'stop', 'start']);
+    currentVersion = VERSION;
     expect(fs.readFileSync(path.win32.join(ROOT, 'current'), 'utf8').trim()).toBe(VERSION);
     expect(await registered()).toContain(path.win32.join(ROOT, VERSION, 'misao.exe'));
     const after = await daemonProcesses();
@@ -282,8 +302,41 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('misa
     await vi.waitFor(async () => expect(await screenOf(pane)).toContain('after-update'), { timeout: 30_000, interval: 300 });
   }, 300_000);
 
+  it('ends the task and sweeps the daemon when misao stop does not work, on the real PowerShell 5.1', async (ctx) => {
+    if (!viaTask) ctx.skip('the daemon was started directly (no logon session): there is no task to end');
+    const installer = installerFor('0.4.0');
+    await installer.install(transport); // put beside the running one
+    const [pidBefore] = await daemonProcesses();
+    // The agent is asked to run everything but `misao stop`, which "does nothing": the Task Scheduler's End and the sweep must stop it.
+    const real = transport.run.bind(transport);
+    const deaf = Object.create(transport) as AgentTransport;
+    deaf.run = async (spec) => (spec.file.toLowerCase().endsWith('misao.exe') && spec.args[0] === 'stop' ? { exitCode: 0, signal: null, stdout: '', stderr: '' } : real(spec));
+    expect(await installer.update(deaf)).toMatchObject({ version: '0.4.0', startMethod: 'taskscheduler' });
+    currentVersion = '0.4.0';
+    const after = await daemonProcesses();
+    expect(after.length).toBe(1);
+    expect(after[0]).not.toBe(pidBefore);
+    expect(fs.readFileSync(path.win32.join(ROOT, 'current'), 'utf8').trim()).toBe('0.4.0');
+    expect(await transport.fetchMisaoStatus()).toMatchObject({ socketPresent: true, installedVersion: '0.4.0' });
+  }, 300_000);
+
+  it('puts the previous release and task back, and starts it, when the new release does not come up', async (ctx) => {
+    if (!viaTask) ctx.skip('the daemon was started directly (no logon session): there is no task to switch');
+    // A file that is not a program: the task starts, cmd.exe cannot run it, and the pipe never opens.
+    const installer = installerFor('0.5.0', Buffer.from('this is not an executable'), 20_000);
+    await installer.install(transport);
+    const error = await installer.update(transport).then(() => undefined, (e: unknown) => e as Error);
+    expect(error).toMatchObject({ code: 'update_failed' });
+    expect(error!.message).toContain('was restored and started');
+    expect(fs.readFileSync(path.win32.join(ROOT, 'current'), 'utf8').trim()).toBe('0.4.0');
+    expect(await registered()).toContain(path.win32.join(ROOT, '0.4.0', 'misao.exe'));
+    expect(await registered()).not.toContain(path.win32.join(ROOT, '0.5.0', 'misao.exe'));
+    await vi.waitFor(async () => expect(await transport.fetchMisaoStatus()).toMatchObject({ socketPresent: true, installedVersion: '0.4.0' }), { timeout: 60_000, interval: 500 });
+    expect((await daemonProcesses()).length).toBe(1);
+  }, 300_000);
+
   it('misao stop through the pipe ends the daemon, and the task is not restarted for a clean exit', async () => {
-    const exe = path.win32.join(ROOT, viaTask ? VERSION : OLD_VERSION, 'misao.exe');
+    const exe = path.win32.join(ROOT, viaTask ? currentVersion : OLD_VERSION, 'misao.exe');
     const stopped = await transport.run(buildCommandSpec(exe, ['stop'], { env: { MISAO_SOCKET: PIPE }, timeoutMs: 60_000, maxOutputBytes: 1024 * 1024 }));
     expect(stopped.exitCode, stopped.stderr).toBe(0);
     await vi.waitFor(async () => expect((await transport.fetchMisaoStatus()).socketPresent).toBe(false), { timeout: 30_000, interval: 250 });

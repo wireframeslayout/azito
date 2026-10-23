@@ -30,6 +30,10 @@ interface FakeOptions {
   failStartFor?: string;
   /** `misao stop` does nothing, and so does ending the task and the sweep. */
   unstoppable?: boolean;
+  /** The daemon stops, but the task stays "running" (and cannot be ended) until the previous release is started again. */
+  stuckTask?: boolean;
+  /** Writing this file through the agent fails (a task XML whose registration cannot even start). */
+  failWriteOf?: string;
   status?: Partial<MisaoSocketStatus>;
 }
 
@@ -52,6 +56,8 @@ class FakeWindowsAgent {
   readonly written: string[] = [];
   /** What changed on the host, in order (the task calls except the queries, the current file, `misao stop`). */
   readonly events: string[] = [];
+  /** A stuck task is let go once the previous release is started again. */
+  private stuckReleased = false;
   private readonly staged = new Map<string, Map<string, string>>();
 
   constructor(private readonly bundle: MisaoBundle, private readonly options: FakeOptions = {}) {}
@@ -86,6 +92,7 @@ class FakeWindowsAgent {
       files: () => ({
         write: async (file: string, data: Buffer) => {
           this.written.push(file);
+          if (this.options.failWriteOf !== undefined && file.endsWith(this.options.failWriteOf)) throw new Error('disk full');
           if (file === `${ROOT}\\current`) {
             this.current = data.toString('utf8').trim();
             this.events.push(`current:${this.current}`);
@@ -133,14 +140,19 @@ class FakeWindowsAgent {
     if (last === '/Run') {
       const failing = this.options.failStartFor !== undefined && (this.host.registeredXml ?? '').includes(`\\${this.options.failStartFor}\\misao.exe`);
       if (failing) this.host.markEnded(1);
-      else this.daemonUp = true;
+      else {
+        this.daemonUp = true;
+        this.stuckReleased = true;
+      }
     }
     if (last === '/End' && result.code === 0 && !this.options.unstoppable) this.stopDaemon();
+    if (last === '/End' && this.options.stuckTask && !this.stuckReleased) this.host.markRunning();
     return { exitCode: result.code, signal: null, stdout: result.stdout, stderr: result.stderr };
   }
 
   private stopDaemon(): void {
     this.daemonUp = false;
+    if (this.options.stuckTask && !this.stuckReleased) return;
     if (this.host.taskState === 'running') this.host.markEnded();
   }
 
@@ -160,7 +172,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
   });
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }));
 
-  const installer = (b: MisaoBundle | null = bundle) => new MisaoAgentInstaller(b, { windowsTaskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10 });
+  const installer = (b: MisaoBundle | null = bundle) => new MisaoAgentInstaller(b, { windowsTaskName: TASK, readyTimeoutMs: 400, pollIntervalMs: 10, taskIdleTimeoutMs: 60 });
 
   describe('install', () => {
     it('sends the Windows build through the agent, owner-only folder first, and starts it as a logon task', async () => {
@@ -271,7 +283,28 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       const agent = new FakeWindowsAgent(bundle, { status: { socketPath: windowsMisaoPipe(root, 'dev'), host: { ...HOST, windows: { ...HOST.windows!, misaoRoot: root } } } });
       await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'unsupported_host' });
       expect(agent.uploads).toEqual([]);
-      expect(agent.schtasks()).toEqual([]);
+      expect(agent.schtasks().filter((call) => call !== '/Query')).toEqual([]);
+    });
+
+    it('does nothing while the task is running but the pipe is not up yet (a daemon on its way up)', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(OLD_VERSION, false);
+      agent.host.markRunning();
+      await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'daemon_not_ready', message: expect.stringContaining('Nothing was changed') });
+      expect(agent.schtasks()).not.toContain('/Create');
+      expect(agent.written).toEqual([]);
+    });
+
+    it('puts the previous task definition and current back when re-registering the same release fails or does not start', async () => {
+      for (const options of [{ failWriteOf: '.task.xml' }, { failStartFor: VERSION }] as const) {
+        const agent = new FakeWindowsAgent(bundle, options);
+        agent.seedInstalled(VERSION, false);
+        const before = agent.host.registeredXml;
+        await expect(installer().install(agent.asTarget())).rejects.toBeInstanceOf(Error);
+        expect(agent.host.registeredXml).toBe(before);
+        expect(agent.current).toBe(VERSION);
+        expect(agent.daemonUp).toBe(false);
+      }
     });
 
     it('removes what a failed first install made, and reports the failure', async () => {
@@ -328,9 +361,21 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
     it('changes nothing when the daemon cannot be stopped', async () => {
       const agent = new FakeWindowsAgent(bundle, { unstoppable: true });
       agent.seedInstalled(OLD_VERSION, true);
-      await expect(installer().update(agent.asTarget())).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('did not stop') });
+      await expect(installer().update(agent.asTarget())).rejects.toMatchObject({ code: 'update_failed', message: expect.stringContaining('still running and nothing was changed') });
       expect(agent.current).toBe(OLD_VERSION);
       expect(agent.schtasks()).not.toContain('/Create');
+    });
+
+    it('looks at the daemon again when misao stop worked but the task stays running: the previous release is put back and started', async () => {
+      const agent = new FakeWindowsAgent(bundle, { stuckTask: true });
+      agent.seedInstalled(OLD_VERSION, true);
+      const error = await installer().update(agent.asTarget()).then(() => undefined, (e: unknown) => e as Error);
+      expect(error).toMatchObject({ code: 'update_failed', message: expect.stringContaining('could not be ended') });
+      expect(error!.message).toContain(`The previous release ${OLD_VERSION} was restored and started`);
+      expect(error!.message).not.toContain('Nothing was changed');
+      expect(agent.current).toBe(OLD_VERSION);
+      expect(agent.host.registeredXml).toBe(`<Task>previous definition for ${OLD_VERSION}</Task>`);
+      expect(agent.daemonUp).toBe(true);
     });
 
     it('puts the previous release and task back and starts it when the new one does not come up', async () => {

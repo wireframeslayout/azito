@@ -111,14 +111,14 @@ function describeWindowsMisaoHost(hostEnv: HostEnv): AgentMisaoWindowsHost {
 }
 
 /** What the hub's misao installer needs to know about this host: its OS / architecture (to pick the binary), the node this agent runs on, and its PATH. */
-function describeMisaoHost(hostEnv: HostEnv): AgentMisaoHost {
+function describeMisaoHost(hostEnv: HostEnv, windows: AgentMisaoWindowsHost | undefined): AgentMisaoHost {
   return {
     homeDir: hostEnv.homeDir,
     nodePath: hostEnv.execPath,
     servicePath: buildServicePath(process.env, hostEnv.homeDir, fs.existsSync),
     platform: hostEnv.platform,
     arch: hostEnv.arch,
-    ...(hostEnv.platform === 'win32' ? { windows: describeWindowsMisaoHost(hostEnv) } : {}),
+    ...(windows ? { windows } : {}),
   };
 }
 
@@ -172,13 +172,15 @@ async function main(): Promise<void> {
 
   // The misao daemon's socket (a named pipe on Windows) is fixed here, at startup, from the agent's own environment. A setting that
   // cannot be a socket path disables the relay (tmux keeps working) rather than stopping the agent.
-  const misaoHost = describeMisaoHost(hostEnv);
+  let windowsMisao: AgentMisaoWindowsHost | undefined;
   let misaoSocket: AgentMisaoSocket | null = null;
   try {
-    misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir, misaoHost.windows);
+    if (hostEnv.platform === 'win32') windowsMisao = describeWindowsMisaoHost(hostEnv);
+    misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir, windowsMisao);
   } catch (err) {
     app.log.warn(`misao relay disabled: ${(err as Error).message}`);
   }
+  const misaoHost = describeMisaoHost(hostEnv, windowsMisao);
   const relayMisao = createMisaoRelay(misaoSocket, app.log);
 
   // Registered after the auth hook above, so it is covered by it like every other /api route.

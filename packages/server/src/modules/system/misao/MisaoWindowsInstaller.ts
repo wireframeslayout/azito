@@ -22,6 +22,8 @@ export interface MisaoWindowsInstallerOptions {
   readyTimeoutMs?: number;
   /** Pause between two checks. */
   pollIntervalMs?: number;
+  /** How long a stopped daemon's task gets to leave the running state before it is ended. */
+  taskIdleTimeoutMs?: number;
 }
 
 /** What the installer needs of an agent on Windows. */
@@ -31,7 +33,7 @@ const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const SCRIPT_TIMEOUT_MS = 60_000;
 const STOP_COMMAND_TIMEOUT_MS = 30_000;
-const TASK_IDLE_WAIT_MS = 20_000;
+const DEFAULT_TASK_IDLE_WAIT_MS = 20_000;
 const TASK_IDLE_POLL_MS = 500;
 const SCRIPT_OUTPUT_BYTES = 1024 * 1024;
 
@@ -78,6 +80,10 @@ export class MisaoWindowsInstaller {
     onProgress('inspect');
     const { session, status } = await this.inspect(target, bundle);
     const live = status.socketPresent;
+    // The pipe probe can miss a daemon that is just starting (the logon task is on its way up): the task's own state says so.
+    if (!live && (await this.taskIsRunning(session))) {
+      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections yet. Nothing was changed; try again in a moment.`);
+    }
     if (live && !status.installedVersion) {
       throw new MisaoServiceError('custom_socket', `A misao daemon is already listening on ${session.pipe} that AZITO did not install. It is used as it is; AZITO will not put a second one beside it.`);
     }
@@ -120,17 +126,21 @@ export class MisaoWindowsInstaller {
     await this.ensureVersion(session, onProgress);
 
     const previous = await this.snapshot(session, status.installedVersion);
-    if (live) {
-      onProgress('stop');
-      await this.stopDaemon(session, status.installedVersion);
-    }
-
-    onProgress('start');
+    // From the first step of the stop on, a failure leaves the daemon in a state to be looked at, not assumed: see recoverFromFailedUpdate.
+    const progress = { stopping: true };
     try {
+      if (live) {
+        onProgress('stop');
+        await this.stopDaemonProcess(session, status.installedVersion);
+      }
+      // A task that is still running (a clean exit leaves it for a moment) would ignore the next start.
+      await this.waitUntilTaskIdle(session);
+      progress.stopping = false;
+      onProgress('start');
       await this.switchAndStart(session, xml);
       return { version: bundle.version, runningVersion: bundle.version, startMethod: 'taskscheduler', updateAvailable: false };
     } catch (err) {
-      return this.recoverFromFailedUpdate(err, session, previous, status.installedVersion, live);
+      return this.recoverFromFailedUpdate(err, session, previous, status.installedVersion, live, progress.stopping);
     }
   }
 
@@ -324,25 +334,28 @@ export class MisaoWindowsInstaller {
    * (through the pipe; the daemon exits with code 0, so the task is not restarted), then the Task Scheduler's End plus a sweep of
    * the `misao.exe` processes of this user whose command line names this exact pipe. Throws when it still answers.
    */
-  private async stopDaemon(session: Session, binaryVersion: string | undefined): Promise<void> {
-    if (await this.isListening(session)) {
-      if (binaryVersion !== undefined) {
-        const stop = buildCommandSpec(this.layout(session, binaryVersion).exe, ['stop'], { env: { MISAO_SOCKET: session.pipe }, timeoutMs: STOP_COMMAND_TIMEOUT_MS, maxOutputBytes: SCRIPT_OUTPUT_BYTES });
-        await session.target.run(stop).catch(() => undefined);
-      }
-      if (!(await this.waitUntilStopped(session))) {
-        await this.endTaskAndProcesses(session);
-        if (!(await this.waitUntilStopped(session))) {
-          throw new MisaoServiceError('update_failed', `The misao daemon on ${session.pipe} did not stop. Nothing was changed.`);
-        }
-      }
+  private async stopDaemonProcess(session: Session, binaryVersion: string | undefined): Promise<void> {
+    if (!(await this.isListening(session))) return;
+    if (binaryVersion !== undefined) {
+      const stop = buildCommandSpec(this.layout(session, binaryVersion).exe, ['stop'], { env: { MISAO_SOCKET: session.pipe }, timeoutMs: STOP_COMMAND_TIMEOUT_MS, maxOutputBytes: SCRIPT_OUTPUT_BYTES });
+      await session.target.run(stop).catch(() => undefined);
     }
-    await this.waitUntilTaskIdle(session);
+    if (await this.waitUntilStopped(session)) return;
+    await this.endTaskAndProcesses(session);
+    if (!(await this.waitUntilStopped(session))) {
+      throw new MisaoServiceError('update_failed', `The misao daemon on ${session.pipe} did not stop. Nothing was changed.`);
+    }
+  }
+
+  private async taskIsRunning(session: Session): Promise<boolean> {
+    const state = await session.tasks.query(this.options.taskName);
+    return state.exists && state.running;
   }
 
   /** `schtasks /Run` does nothing while the previous instance of the task is still running (a clean exit leaves it for a moment). */
   private async waitUntilTaskIdle(session: Session): Promise<void> {
-    const deadline = Date.now() + TASK_IDLE_WAIT_MS;
+    const idleWaitMs = this.options.taskIdleTimeoutMs ?? DEFAULT_TASK_IDLE_WAIT_MS;
+    const deadline = Date.now() + idleWaitMs;
     for (;;) {
       const state = await session.tasks.query(this.options.taskName);
       if (!state.exists || !state.running) return;
@@ -352,7 +365,7 @@ export class MisaoWindowsInstaller {
     await this.endTaskAndProcesses(session);
     const state = await session.tasks.query(this.options.taskName);
     if (state.exists && state.running) {
-      throw new MisaoServiceError('update_failed', `The task "${this.options.taskName}" is still running ${TASK_IDLE_WAIT_MS / 1000}s after the daemon stopped. Nothing was changed.`);
+      throw new MisaoServiceError('update_failed', `The task "${this.options.taskName}" is still running ${idleWaitMs / 1000}s after the daemon stopped and it could not be ended.`);
     }
   }
 
@@ -388,10 +401,12 @@ export class MisaoWindowsInstaller {
    */
   private async restore(session: Session, previous: PreviousInstall): Promise<string[]> {
     try {
-      await this.stopDaemon(session, session.bundle.version);
+      await this.stopDaemonProcess(session, session.bundle.version);
     } catch (err) {
       return [`stopping the daemon on ${session.pipe}: ${describeError(err)}`];
     }
+    // Best effort: a task that stays "running" with no daemon behind it does not stop the previous task definition from being put back.
+    await this.waitUntilTaskIdle(session).catch(() => undefined);
     const failed: string[] = [];
     const attempt = async (what: string, action: () => Promise<unknown>): Promise<void> => {
       try {
@@ -426,7 +441,6 @@ export class MisaoWindowsInstaller {
 
   /** The first install failed: put an older install back as it was, or remove what this one made. The failure is reported either way (the caller rethrows it). */
   private async undoFailedInstall(cause: unknown, session: Session, previous: PreviousInstall): Promise<void> {
-    if (previous.version === session.bundle.version) return;
     const failed = await this.restore(session, previous);
     if (failed.length === 0) return;
     throw new MisaoServiceError('update_failed', `Installing misao ${session.bundle.version} failed (${describeError(cause)}) and putting the previous state back failed too (could not restore: ${failed.join('; ')}). ${this.manualRestore(session, previous)}`);
@@ -436,10 +450,20 @@ export class MisaoWindowsInstaller {
    * The switch failed after the old daemon was stopped (its panes are gone). Stop whatever the new release started, put the
    * previous file and task back, and start the previous release again; then report the failure either way: the update did not happen.
    */
-  private async recoverFromFailedUpdate(cause: unknown, session: Session, previous: PreviousInstall, previousVersion: string, wasRunning: boolean): Promise<never> {
+  private async recoverFromFailedUpdate(cause: unknown, session: Session, previous: PreviousInstall, previousVersion: string, wasRunning: boolean, whileStopping: boolean): Promise<never> {
     const bundledVersion = session.bundle.version;
     const causeText = describeError(cause);
     const manual = this.manualRestore(session, previous);
+    if (whileStopping) {
+      // Nothing was switched yet. Look at the daemon again instead of assuming: it may have stopped before the step that failed.
+      const listening = await this.isListening(session).then((up) => up, () => undefined);
+      if (listening === true) {
+        throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion} failed (${causeText}). The previous release ${previousVersion} is still running and nothing was changed.`);
+      }
+      if (listening === undefined) {
+        throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion} failed (${causeText}), and whether the daemon on ${session.pipe} is still running could not be confirmed. The task definition and ${session.windows.misaoRoot} were not changed.`);
+      }
+    }
     try {
       const failed = await this.restore(session, previous);
       if (failed.length > 0) throw new Error(`could not restore: ${failed.join('; ')}`);

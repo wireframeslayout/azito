@@ -21,6 +21,8 @@ export interface MisaoAgentInstallerOptions {
   pollIntervalMs?: number;
   /** The Task Scheduler task of the misao on a Windows agent (the hub's settings; a trial's own). A Windows agent is refused without it. */
   windowsTaskName?: string;
+  /** How long a stopped Windows daemon's task gets to leave the running state before it is ended. */
+  taskIdleTimeoutMs?: number;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
@@ -184,9 +186,9 @@ export class MisaoAgentInstaller {
   }
 
   private windows(): MisaoWindowsInstaller {
-    const { windowsTaskName, readyTimeoutMs, pollIntervalMs } = this.options;
+    const { windowsTaskName, readyTimeoutMs, pollIntervalMs, taskIdleTimeoutMs } = this.options;
     if (!windowsTaskName) throw new MisaoServiceError('not_managed', 'This hub was not given a task name for the misao of a Windows agent.');
-    return (this.windowsInstaller ??= new MisaoWindowsInstaller({ taskName: windowsTaskName, ...(readyTimeoutMs !== undefined ? { readyTimeoutMs } : {}), ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}) }));
+    return (this.windowsInstaller ??= new MisaoWindowsInstaller({ taskName: windowsTaskName, ...(readyTimeoutMs !== undefined ? { readyTimeoutMs } : {}), ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}), ...(taskIdleTimeoutMs !== undefined ? { taskIdleTimeoutMs } : {}) }));
   }
 
   private requireBundle(): MisaoBundle {

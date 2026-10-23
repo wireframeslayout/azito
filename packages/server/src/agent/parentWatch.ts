@@ -9,7 +9,8 @@ import * as path from 'path';
  *   once; it does not wait for the creation time to be read (reading it starts a program and can take a while).
  * - the parent's creation time, read once at the start and again every `verifyIntervalMs`, and compared with the first one
  *   that could be read. A different one means the pid now belongs to another process, so the parent is gone. Until it is
- *   known, a reused pid keeps the agent alive for at most that long. An unreadable time is "not known", never "gone".
+ *   known, a reused pid is not noticed: if the parent ends and its pid is reused before the first read worked, the new process's time
+ *   becomes the reference and the agent stays up as long as that process does. An unreadable time is "not known", never "gone".
  * When reading it fails `UNREADABLE_WARN_AFTER` times in a row, `onUnverifiable` is called once (only the pid is being
  * watched); when a read works again, `onVerifiable` is, and a later streak of failures warns again.
  */

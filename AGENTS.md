@@ -217,7 +217,7 @@ packages/
   NULL = an agent registered before the OS was kept = a Unix agent (existing sh paths keep working; a 404 from `/api/host` is `agent_outdated`
   and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
-  (neither is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
+  (neither is an error; an agent too old to report keeps the hub's shell); a Windows agent's node opens its reported `%ComSpec%` bare (a pane with a launch command is `unsupported_os` until #371); a Windows hub is `unsupported_os` (#380)
 
 ### Shell text (ShellDialect, #379 P9)
 - `shared/os/shellDialect.ts`: `ShellDialect` (POSIX sh / PowerShell 5.1) is for the two places text goes through a shell on the target — a fixed SSH bootstrap script and the line typed
@@ -225,7 +225,7 @@ packages/
   `quote`. Pane lines (`buildWorkerLaunchCommand`, `ISessionStrategy.buildRespawnCommand`, `wrapWithSupervisor`, the `cd` before a launch) take the server's dialect
   (`shellDialectFor(transportFactory.hostProfileFor(server))`). PowerShell `wrapScript` is the fixed `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>`
   (≤ 8191 characters, cmd.exe's limit); a native program with arbitrary arguments is `invoke`d through a fixed `node -e` launcher given `{ file, args }` as base64 JSON (nothing is placed on the host; `node` must be on PATH).
-  A win32 node's pane is still `unsupported_os` (`paneShell.ts`) until #370 / #371.
+  A Windows agent's bare cmd.exe pane works (`paneShell.ts`); a pane that launches a command is `unsupported_os` until #371.
 - Unix-only install scripts (tmux / browser runtime / harness `setup.sh` / misao on an agent / hub-transfer `RemoteBundleOps` / isolation doctor / agent redeploy over SSH) stay sh; each entry point starts with
   `assertPosixHost(transport.hostProfile, label, operation)` and a win32 server gets `HostProfileError('unsupported_os')`, which `mapAppError` answers as 501 `{ error: <reason>, code }` (the UI shows `error`).
   A host with no recorded OS is a Unix one. Their Windows versions are separate functions (#369 / #380).
@@ -255,8 +255,7 @@ packages/
   logged on. A reinstall is transactional (`WindowsDeployment.commit/rollback`: the previous task XML, `agent.env`, same-version folder and
   running state are kept aside until the new agent answers). `windowsFirewall.ts` checks (and, when the
   SSH session is elevated, adds) the inbound rule first. `AZITO_WIN_AGENT_TASK_NAME` / `AZITO_WIN_AGENT_DIR` / `AZITO_WIN_AGENT_PORT`
-  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks and the
-  misao relay on win32 and writes `AZITO_AGENT_LOG_FILE`. misao on Windows (A3) and update / removal (#372) are not done: `update()` stays `unsupported_os`.
+  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks on win32, relays misao over its named pipe (A3, above) and writes `AZITO_AGENT_LOG_FILE`. Agent update / removal (#372) is not done: `update()` stays `unsupported_os`.
 
 ### Subagent Delegation
 - Worker delegation can route by worker type; per-task overrides are stored via `024_subagent_config`
