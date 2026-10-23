@@ -11,7 +11,7 @@ import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/tra
 import { DuplicateLoadError, type ServiceInspection, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
-import { taskXmlNamesRoot, type LocalMisaoWindows } from './misaoLocalWindows';
+import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -235,7 +235,7 @@ export class MisaoServiceService {
   private async refuseTaskOfAnotherRoot(windows: LocalMisaoWindows, replace: boolean): Promise<void> {
     if (replace || !(await windows.tasks.query(windows.taskName)).exists) return;
     const xml = await windows.tasks.exportXml(windows.taskName);
-    if (!taskXmlNamesRoot(xml, this.paths.root)) {
+    if (!taskStartsMisaoOf(xml, this.paths.root)) {
       throw new MisaoServiceError('custom_socket', `The task "${windows.taskName}" is registered for a misao in another folder, not ${this.paths.root}. Installing here would take it over; run \`azito misao install --replace-socket\` to do that on purpose.`);
     }
   }

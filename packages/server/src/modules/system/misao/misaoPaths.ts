@@ -1,7 +1,8 @@
 import os from 'os';
 import path from 'path';
 import type { ServiceSpec } from '../serviceManager';
-import { canonicalHostPath, MISAO_WINDOWS_CURRENT_FILE, windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
+import { MISAO_WINDOWS_CURRENT_FILE, windowsMisaoPipe } from '../../servers/transport/agentMisaoSocket';
+import { resolveRealPath } from '../../../shared/os/realPath';
 import { MISAO_WINDOWS_TASK_NAME } from '../../servers/agent-deploy/windowsAgentConfig';
 
 /** sockaddr_un.sun_path on Linux holds 108 bytes including the terminating NUL (same limit as @misao/sdk). */
@@ -45,11 +46,13 @@ export function hubEnvFilePath(prefix: string): string {
 /** Present on a Windows host: the account name the daemon's named pipe is made from (as `os.userInfo()` reports it). */
 export interface MisaoWindowsUser {
   userName: string;
+  /** Puts a folder of THIS host in its real spelling (`resolveRealPath`). Given by the entry point, so the path logic below stays a function of its inputs. */
+  resolvePath: (folder: string) => string;
 }
 
 /** The Windows user of this process when the host is Windows (undefined elsewhere). Resolved at the entry point, then passed down. */
 export function misaoWindowsUserOf(platform: NodeJS.Platform): MisaoWindowsUser | undefined {
-  return platform === 'win32' ? { userName: os.userInfo().username } : undefined;
+  return platform === 'win32' ? { userName: os.userInfo().username, resolvePath: resolveRealPath } : undefined;
 }
 
 /**
@@ -66,7 +69,7 @@ function resolveWindowsMisaoPaths(prefix: string, user: MisaoWindowsUser): Misao
   // A drive root keeps its separator (`C:` alone is the drive's current folder, not its root).
   const spelled = win32.normalize(prefix).replace(/(?<=[^\\/:])[\\/]+$/, '');
   // Windows spells one folder many ways (8.3 short names such as RUNNER~1, letter case): the prefix is taken in its real spelling.
-  const normalized = canonicalHostPath(spelled);
+  const normalized = user.resolvePath(spelled);
   const root = win32.join(normalized, 'misao');
   return {
     prefix: normalized,

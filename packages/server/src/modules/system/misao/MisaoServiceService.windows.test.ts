@@ -44,7 +44,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     fs.mkdirSync(path.join(dir, 'hub'), { recursive: true });
     fs.mkdirSync(root, { recursive: true });
     taskExists = false;
-    exportedXml = taskXml(path.win32.normalize(root));
+    exportedXml = taskXml(root);
     install = vi.fn(async () => RESULT);
     update = vi.fn(async () => RESULT);
     windows = {
@@ -123,7 +123,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
 
   it('takes over a task of its own folder without asking (letter case does not matter)', async () => {
     taskExists = true;
-    exportedXml = taskXml(path.win32.normalize(paths.root).toUpperCase());
+    exportedXml = taskXml(paths.root.toUpperCase());
     await service().install();
     expect(install).toHaveBeenCalledTimes(1);
   });

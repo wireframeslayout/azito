@@ -8,6 +8,7 @@ import { rawRunnerOf, SchtasksClient } from '../../../shared/os/taskScheduler/sc
 import { readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost } from '../../servers/transport/agentMisaoSocket';
 import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstaller';
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
+import { resolveRealPath } from '../../../shared/os/realPath';
 
 /**
  * The hub's own misao on Windows: the very installer an agent server gets (`MisaoWindowsInstaller`), pointed at this machine.
@@ -67,18 +68,33 @@ export async function misaoWindowsTaskExists(hostEnv: Pick<HostEnv, 'platform' |
   return (await tasks.query(MISAO_SERVICE.windowsTaskName)).exists;
 }
 
+const XML_ENTITY = /&(lt|gt|quot|apos|amp);/g;
+const XML_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
+
 /**
- * Whether a task definition runs something under `root`: in its command line (XML entities decoded), or in the launcher script
- * a root with a space or a parenthesis goes through (`-EncodedCommand`, where a single quote in a path is doubled). Paths compare
- * without regard to case, like the file system.
+ * The folder a misao task starts the daemon in (its `--data` folder), read from the task definition: from the launcher script
+ * (`AZITO_MISAO_ROOT`, a PowerShell literal where `'` is doubled) or from the plain command line (`--data "<root>"`). Undefined when
+ * the definition has neither (not a misao task this code wrote).
  */
-export function taskXmlNamesRoot(xml: string, root: string): boolean {
-  const decoded = xml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+export function taskMisaoRoot(xml: string): string | undefined {
+  const decoded = xml.replace(XML_ENTITY, (_, name: string) => XML_ENTITIES[name]!);
   const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(decoded)?.[1];
-  const launcher = encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : '';
-  const wanted = `${path.win32.normalize(root).toLowerCase()}\\`;
-  return [decoded, launcher].some((text) => {
-    const lower = text.toLowerCase();
-    return lower.includes(wanted) || lower.includes(wanted.replace(/'/g, "''"));
-  });
+  if (encoded) {
+    const script = Buffer.from(encoded, 'base64').toString('utf16le');
+    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^']|'')*)'/.exec(script)?.[1];
+    return literal?.replace(/''/g, "'");
+  }
+  return /--data "([^"]*)"/.exec(decoded)?.[1];
+}
+
+/**
+ * Whether the task starts the misao of `root` (the hub's own folder, already in its real spelling). Both sides are the same host's
+ * paths, so the task's folder is resolved here too (a task written with a short name still names the same folder); they compare as
+ * Windows paths, without regard to case.
+ */
+export function taskStartsMisaoOf(xml: string, root: string): boolean {
+  const taskRoot = taskMisaoRoot(xml);
+  if (taskRoot === undefined) return false;
+  const same = (a: string, b: string): boolean => path.win32.normalize(a).toLowerCase() === path.win32.normalize(b).toLowerCase();
+  return same(resolveRealPath(taskRoot), resolveRealPath(root));
 }

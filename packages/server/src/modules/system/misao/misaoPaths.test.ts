@@ -56,7 +56,7 @@ describe('hasMisaoToRelyOn', () => {
 });
 
 describe('resolveMisaoPaths on Windows', () => {
-  const user = { userName: 'runneradmin' };
+  const user = { userName: 'runneradmin', resolvePath: (folder: string): string => folder };
   const base = 'C:\\Users\\Foo Bar (Work)\\.azito';
 
   it('lays the install out as an agent on the same host does, with the pipe of that folder and a current file', () => {

@@ -54,23 +54,14 @@ export interface AgentMisaoWindowsHost {
 }
 
 /**
- * The real spelling of a folder that exists on THIS machine (8.3 short names expanded, links followed, the case on disk); a path
- * that does not exist (yet) is returned as given. The one function every Windows misao path decision goes through.
- */
-export function canonicalHostPath(folder: string): string {
-  return fs.existsSync(folder) ? fs.realpathSync.native(folder) : folder;
-}
-
-/**
- * The managed pipe of a Windows host: `\\.\pipe\misao-<user>-<sha256(root, lower case)[0:16]>`, the name @misao/sdk's
+ * The managed pipe of a Windows host (a pure function of the strings it gets; `misaoRoot` must already be in its real spelling, which
+ * the host that owns the folder resolved once at its entry point: see `resolveRealPath`): `\\.\pipe\misao-<user>-<sha256(root, lower case)[0:16]>`, the name @misao/sdk's
  * `resolveSocketPath` gives for `MISAO_DIR=<root>` (a test keeps the two in step), so the `misao` CLI run with that MISAO_DIR
  * reaches the same daemon.
  */
 export function windowsMisaoPipe(misaoRoot: string, userName: string): string {
   const user = userName.replace(/[^A-Za-z0-9._-]/g, '_').slice(0, PIPE_USER_MAX_LENGTH);
-  // The name follows the folder, not how it is spelled: the hub, the CLI and an agent on one host must reach the same daemon
-  // whether a path says RUNNER~1 or runneradmin (a folder reached through a junction included).
-  const hash = crypto.createHash('sha256').update(canonicalHostPath(misaoRoot).toLowerCase()).digest('hex').slice(0, PIPE_HASH_LENGTH);
+  const hash = crypto.createHash('sha256').update(misaoRoot.toLowerCase()).digest('hex').slice(0, PIPE_HASH_LENGTH);
   return `${NAMED_PIPE_PREFIX}misao-${user}-${hash}`;
 }
 
