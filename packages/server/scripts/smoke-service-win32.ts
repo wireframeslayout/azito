@@ -97,6 +97,11 @@ function ancestorsOf(pid: number): Array<{ pid: number; name: string }> {
   return r.output.split(/\r?\n/).map((l) => /^(\d+) (\S+)$/.exec(l.trim())).filter((m): m is RegExpExecArray => m !== null).map((m) => ({ pid: Number(m[1]), name: m[2] }));
 }
 
+function aliveNames(pids: number[]): string {
+  const r = powershell(['-Command', `Get-Process -Id ${pids.join(',')} -ErrorAction SilentlyContinue | ForEach-Object { "$($_.ProcessName)($($_.Id))" }`]);
+  return r.output.trim().split(/\r?\n/).join(',');
+}
+
 function processAlive(pid: number): boolean {
   const r = powershell(['-Command', `if (Get-Process -Id ${pid} -ErrorAction SilentlyContinue) { 'yes' } else { 'no' }`]);
   return r.output.trim() === 'yes';
@@ -167,16 +172,17 @@ async function main(): Promise<void> {
     // Diagnosis: what is alive of the hub's process chain while `azito stop` runs.
     const stopChain = ancestorsOf(hubNodePids(entryFragment)[0]);
     console.log(`[smoke-service] chain before azito stop: ${stopChain.map((p) => `${p.name}(${p.pid})`).join(' <- ')}`);
+    console.log(`[smoke-service] task state before azito stop:\n${schtasks(['/Query', '/TN', TASK_NAME, '/FO', 'LIST', '/V']).output}`);
     const stopStarted = Date.now();
     const stopTimeline: string[] = [];
     const stopRun = azitoAsync(azitoCmd, 'stop');
     let stopDone = false;
     void stopRun.then(() => { stopDone = true; });
     while (!stopDone) {
-      stopTimeline.push(`${Math.round((Date.now() - stopStarted) / 1000)}s: ${stopChain.filter((p) => processAlive(p.pid)).map((p) => `${p.name}`).join(',') || 'none'}`);
-      await sleep(300);
+      stopTimeline.push(`${Math.round((Date.now() - stopStarted) / 1000)}s: ${aliveNames(stopChain.slice(0, 4).map((p) => p.pid)) || 'none'}`);
+      await sleep(100);
     }
-    console.log(`[smoke-service] chain alive during azito stop: ${[...new Set(stopTimeline.map((l) => l.replace(/^\d+s: /, '')))].join(' | ')} (${stopTimeline.length} samples)`);
+    console.log(`[smoke-service] chain alive during azito stop: ${[...new Set(stopTimeline.map((l) => l.replace(/^\d+s: /, '')))].join(' | ')} (${stopTimeline.length} samples)\n${stopTimeline.join('\n')}`);
     const stop = await stopRun;
     assert(stop.status === 0, 'azito stop failed', stop.output);
     assert(hubNodePids(entryFragment).length === 0, 'azito stop must leave no hub node.exe', stop.output);
