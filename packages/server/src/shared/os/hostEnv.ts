@@ -13,15 +13,20 @@ export interface HostEnv {
   platform: NodeJS.Platform;
   arch: string;
   homeDir: string;
+  /** このホストの一時フォルダ（`os.tmpdir()`）。ハブ自身のサーバーの signal / output / rules / pipe ファイルを置く。 */
+  tmpDir: string;
   execPath: string;
 }
 
-/** 純粋関数。homeDir が空のときだけ投げる（フォールバックしない）。 */
+/** 純粋関数。homeDir / tmpDir が空のときだけ投げる（フォールバックしない）。 */
 export function resolveHostEnv(input: HostEnv): HostEnv {
   if (input.homeDir === '') {
     throw new Error('Cannot resolve the home directory: os.homedir() returned an empty string (is HOME set to an empty value?)');
   }
-  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, execPath: input.execPath };
+  if (input.tmpDir === '') {
+    throw new Error('Cannot resolve the temp directory: os.tmpdir() returned an empty string');
+  }
+  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath };
 }
 
 /** 実プロセスから読む。`process.platform` を読んでよいのはここだけ。各プロセスの入口で 1 回呼ぶ。 */
@@ -30,6 +35,7 @@ export function resolveCurrentHostEnv(): HostEnv {
     platform: process.platform,
     arch: process.arch,
     homeDir: os.homedir(),
+    tmpDir: os.tmpdir(),
     execPath: process.execPath,
   });
 }

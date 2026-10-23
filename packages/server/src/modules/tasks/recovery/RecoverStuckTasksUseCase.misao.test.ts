@@ -5,6 +5,7 @@ import { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { ServerConfig } from '../../servers/Server';
 import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 vi.mock('fs');
 
@@ -51,6 +52,7 @@ describe('RecoverStuckTasksUseCase with a misao server whose driver is unavailab
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       // The misao task's window is a misao one (its row says so); a task without a row is read by its window string.
       { findByTask: vi.fn((id: number) => (id === 20 ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: 'azito:w_01M3XFD8H97JCPKS5Y5BH3JZQH', muxRef: { kind: 'misao', workspace: 'azito', window: 'w_01M3XFD8H97JCPKS5Y5BH3JZQH' } }] : [])) } as never,
+      new TaskTempFiles('/tmp', 'linux'),
     );
 
     await expect(useCase.run()).resolves.toBeUndefined();
@@ -101,6 +103,7 @@ describe('RecoverStuckTasksUseCase with a connected misao driver', () => {
       logger,
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       { findByTask: vi.fn().mockReturnValue(windows) } as never,
+      new TaskTempFiles('/tmp', 'linux'),
     );
     return { useCase, misaoDriver, tmuxDriver, resumeStateMachine, logger };
   }
@@ -202,6 +205,7 @@ describe('RecoverStuckTasksUseCase.runSkippedForDaemon', () => {
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       // The misao task's primary window row carries its misao ref (stored data without a ref is tmux).
       { findByTask: vi.fn((id: number) => (id === 40 ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
+      new TaskTempFiles('/tmp', 'linux'),
     );
 
     await useCase.run();
@@ -251,6 +255,7 @@ describe('RecoverStuckTasksUseCase keeps a task pending while the daemon keeps d
       { getOrThrow: vi.fn(() => devopsType), get: vi.fn(() => devopsType) } as never,
       // The misao task's primary window row carries its misao ref (stored data without a ref is tmux).
       { findByTask: vi.fn((id: number) => (true ? [{ isPrimary: true, ownerType: 'task', tmuxTarget: `azito:${WINDOW_ID}`, muxRef: { kind: 'misao', workspace: 'azito', window: WINDOW_ID } }] : [])) } as never,
+      new TaskTempFiles('/tmp', 'linux'),
     );
 
     await useCase.run();

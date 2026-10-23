@@ -8,6 +8,7 @@ import { resolveTaskPromptVars } from '../../prompt/resolveTaskPromptVars';
 import { renderSidekickBody } from '../../sidekicks/renderSidekickBody';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { isDistributionRequired } from './DistributionHelper';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 // Hub push notarization resolves its credential through the shared
 // `cliToken` module (Issue #87). Stubbed here so these tests never depend on
@@ -151,6 +152,7 @@ function makeRunner(overrides: {
     sendKeys: vi.fn(async (_server: unknown, _target: string, _keys: string[], _ctx?: unknown) => {}),
   };
   const workerWaiter = {
+    streamFailure: vi.fn(() => null),
     startPaneStream: vi.fn(() => ({ stop: vi.fn() })),
     startSignalStream: vi.fn(() => ({ getFilePath: () => '/tmp/sig', stop: vi.fn() })),
     waitForWorker: vi.fn(async () => ({ output: 'PHASE_COMPLETE', classification: { status: 'phase_complete' } })),
@@ -212,6 +214,7 @@ function makeRunner(overrides: {
     overrides.scopedAuthEnabled ?? true,
     (overrides.pushNotaryService ?? null) as any,
     sleepTaskWindows,
+    new TaskTempFiles('/tmp', 'linux'),
   );
 
   return { runner, taskRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitRepo, unitTypeLoader, sidekickLoader, workerInput, workerWaiter, appendLog, getWorktreeService, transportFactory, sidekickSyncService, httpSignalCoordinator, pushVerifier, gitProvider, pullRequestCreator, sleepTaskWindows };

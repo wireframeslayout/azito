@@ -7,6 +7,7 @@
 import { execFileSync } from 'child_process';
 import { EventEmitter } from 'events';
 import type { HostEnv } from '../shared/os/hostEnv';
+import { TaskTempFiles } from '../shared/os/taskTempFiles';
 import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 import * as path from 'path';
 import type { SqliteDatabase } from '../shared/db/Database';
@@ -121,6 +122,8 @@ export interface SharedInfra {
   harnessInstaller: HarnessInstaller;
   tmuxInstaller: TmuxInstaller;
   transportFactory: TransportFactory;
+  /** Resolves where a task's signal / pipe / output / rules files live (the hub's own server: HostEnv.tmpDir). */
+  taskTempFiles: TaskTempFiles;
   tmuxClient: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
   /** Created but not started: main.ts starts it. The daemon may be absent; the driver then reports `daemon_unreachable`. */
@@ -248,7 +251,9 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
-  const transportFactory = new TransportFactory(publicUrl, hostEnv.homeDir);
+  const taskTempFiles = TaskTempFiles.fromHostEnv(hostEnv);
+  taskTempFiles.assertHubDirShellSafe();
+  const transportFactory = new TransportFactory(publicUrl, hostEnv.homeDir, taskTempFiles);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
@@ -305,6 +310,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     harnessInstaller,
     tmuxInstaller,
     transportFactory,
+    taskTempFiles,
     tmuxClient,
     muxDriverRegistry,
     misao,
@@ -530,6 +536,7 @@ function buildExecuteTaskUseCase(
       findRunningSession: (taskId, agentSessionId, serverName) =>
         appServices.windowRespawnService.findRunningSessionForTask(taskId, agentSessionId, serverName),
     } satisfies IPrimaryWindowWaker,
+    infra.taskTempFiles,
     harnessPrefix,
     hubGitIdentity,
   );

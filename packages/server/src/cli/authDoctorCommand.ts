@@ -7,6 +7,7 @@ import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { resolveScopedAuthEnabled } from '../shared/auth/scopedAuthFlag';
 import { resolveDataDir } from '../shared/dataDir';
 import type { SecretFileGuard } from '../shared/os/secretFileGuard';
+import type { TaskTempFiles } from '../shared/os/taskTempFiles';
 import { openDatabase } from '../shared/db/Database';
 import { open } from '../shared/crypto/SecretBox';
 import { openDoctorMux, probeWindowLiveness, type DoctorMux } from './doctorMuxRegistry';
@@ -370,7 +371,7 @@ function checkCodexMcpTokenMatchesHub(guard: SecretFileGuard): CheckResult {
 // the flag on. Once AZITO_SCOPED_AUTH is actually enabled, this check is a
 // no-op (skipped) — draining is a one-time migration step, not an ongoing
 // invariant this command should keep flagging.
-async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string, guard: SecretFileGuard): Promise<CheckResult> {
+async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string, guard: SecretFileGuard, taskTempFiles: TaskTempFiles): Promise<CheckResult> {
   const label = 'scoped 認可 有効化前の生存タスクウィンドウ（ハブから全サーバーを検査）';
 
   if (resolveScopedAuthEnabled()) {
@@ -459,7 +460,7 @@ async function checkTaskOwnedWindowsBeforeScopedAuth(homeDir: string, guard: Sec
 
     // Every window is probed through the registry, by the driver of the mux that owns it. The misao daemon is
     // connected to only when a misao window is registered, so a tmux-only host never touches it.
-    mux = await openDoctorMux(homeDir);
+    mux = await openDoctorMux(homeDir, taskTempFiles);
 
     const alive: string[] = [];
     const unverifiable: string[] = [];
@@ -545,7 +546,7 @@ function colorize(ok: boolean, text: string): string {
   return `\x1b[${code}m${text}\x1b[0m`;
 }
 
-export async function authDoctorCommand(homeDir: string, guard: SecretFileGuard): Promise<void> {
+export async function authDoctorCommand(homeDir: string, guard: SecretFileGuard, taskTempFiles: TaskTempFiles): Promise<void> {
   console.log('azito auth doctor');
   console.log('多くの検査はこのマシンのローカルファイルのみが対象です。タスクウィンドウの生存検査（e）だけはハブから全サーバーを横断検査します — ハブ以外のホストで実行した場合はその旨を案内します。\n');
 
@@ -554,7 +555,7 @@ export async function authDoctorCommand(homeDir: string, guard: SecretFileGuard)
     checkOperatorEnvPermissions(homeDir, guard),
     checkMcpTokenMatchesHub(homeDir, guard),
     checkCodexMcpTokenMatchesHub(guard),
-    await checkTaskOwnedWindowsBeforeScopedAuth(homeDir, guard),
+    await checkTaskOwnedWindowsBeforeScopedAuth(homeDir, guard, taskTempFiles),
     checkScopedAuthFlag(),
   ];
 

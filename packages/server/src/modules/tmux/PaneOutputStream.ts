@@ -1,8 +1,6 @@
 import { EventEmitter } from 'events';
-import { spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { FileFollower } from '../../shared/fs/FileFollower';
 import type { IPaneStream } from './PaneStream';
 
 export type { IPaneStream };
@@ -163,32 +161,34 @@ export abstract class BasePaneStream extends EventEmitter implements IPaneStream
   }
 }
 
-// ─── Local: tail -f on local file ───
+// ─── Local: follows a local file (the `tail -f` of pipe-pane output) ───
 
 export class PaneOutputStream extends BasePaneStream {
   protected filePath: string;
-  private tailProc: ChildProcess | null = null;
+  private follower: FileFollower | null = null;
 
-  constructor(paneId: string) {
+  /** `filePath` は呼び出し側（TaskTempFiles）が決めた pipe ファイルのパス。 */
+  constructor(filePath: string) {
     super();
-    this.filePath = path.join(os.tmpdir(), `azito-pipe-${paneId}-${Date.now()}.log`);
+    this.filePath = filePath;
   }
 
   start(): void {
     fs.writeFileSync(this.filePath, '');
-    this.tailProc = spawn('tail', ['-f', '-n', '+1', this.filePath], {
-      stdio: ['ignore', 'pipe', 'ignore'],
+    this.follower = new FileFollower(this.filePath, {
+      onData: (text) => {
+        if (this.closed) return;
+        this.processChunk(text);
+      },
+      // 'error' with no listener would take the process down; the owner of the task fails just that task on 'stream_failed'.
+      onError: (err) => this.emit('stream_failed', err),
     });
-    this.tailProc.stdout!.on('data', (chunk: Buffer) => {
-      if (this.closed) return;
-      this.processChunk(chunk.toString('utf-8'));
-    });
-    this.tailProc.on('error', (err) => this.emit('error', err));
+    this.follower.start();
   }
 
   stop(): void {
     this.closed = true;
-    if (this.tailProc) { this.tailProc.kill('SIGTERM'); this.tailProc = null; }
+    if (this.follower) { this.follower.stop(); this.follower = null; }
     try { fs.unlinkSync(this.filePath); } catch {}
   }
 }

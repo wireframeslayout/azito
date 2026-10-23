@@ -3,6 +3,7 @@ import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -183,6 +184,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
   };
 }
 

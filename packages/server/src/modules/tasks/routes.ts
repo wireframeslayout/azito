@@ -16,6 +16,7 @@ import type { WindowRespawnService } from '../windows/WindowRespawnService';
 import type { TaskRestoreService } from './TaskRestoreService';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
+import type { TaskTempFiles } from '../../shared/os/taskTempFiles';
 import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
@@ -87,6 +88,7 @@ export function validateGitFields(body: Record<string, unknown>): string | null 
 // ─── Types ───
 
 export interface TasksRouteOptions {
+  taskTempFiles: TaskTempFiles;
   taskRepo: ITaskRepository;
   muxDriverRegistry: MuxDriverRegistry;
   projectRepo: IProjectRepository;
@@ -216,8 +218,8 @@ function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
 }
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
-  const { taskRepo, muxDriverRegistry, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled } = opts;
-  const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry, windowRepo });
+  const { taskRepo, muxDriverRegistry, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled, taskTempFiles } = opts;
+  const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry, windowRepo, logRepo, taskTempFiles });
 
   // ── GET /api/tasks ──
   fastify.get<{

@@ -50,6 +50,9 @@ export function choosePlanExtractionSource(kind: MuxDriverKind, paneText: string
  * output file and plan content the worker produced.
  */
 export class WorkerWaiter {
+  /** Streams that reported 'stream_failed' (possibly before waitForWorker started listening). */
+  private streamFailures = new WeakMap<IPaneStream, Error>();
+
   constructor(
     private muxDriverRegistry: MuxDriverRegistry,
     private transportFactory: TransportFactory,
@@ -80,6 +83,7 @@ export class WorkerWaiter {
     paneStream.on('subscription_error', (err: Error) => {
       this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_subscription_error', message: err.message });
     });
+    this.watchStreamFailure(paneStream, taskId, unitId);
     paneStream.start();
     const filePath = paneStream.getFilePath();
     if (filePath) {
@@ -91,13 +95,28 @@ export class WorkerWaiter {
     return paneStream;
   }
 
+  /** The failure a stream reported ('stream_failed'), if any. */
+  streamFailure(stream: IPaneStream): Error | null {
+    return this.streamFailures.get(stream) ?? null;
+  }
+
+  /** Subscribed before start(): a stream that can never work must fail its own task, not surface as an unhandled event. */
+  private watchStreamFailure(stream: IPaneStream, taskId: number, unitId: number): void {
+    stream.on('stream_failed', (err: Error) => {
+      this.streamFailures.set(stream, err);
+      this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_failed', message: err.message });
+    });
+  }
+
   startSignalStream(
     server: ServerConfig,
     taskId: number,
+    unitId: number,
     doneMarker: string,
     questionsMarker: string,
   ): IPaneStream {
     const stream = this.paneStreamFactory.create(`${taskId}-sig`, server);
+    this.watchStreamFailure(stream, taskId, unitId);
     stream.start();
     stream.setMarkers(doneMarker, questionsMarker);
     stream.enableMarkerDetection();
@@ -273,6 +292,18 @@ export class WorkerWaiter {
           }
         }, 500);
       };
+
+      // A stream that can never deliver (e.g. the agent is too old) ends this wait as a stopped worker, which fails only this task.
+      const onStreamFailed = (err: Error) => {
+        this.appendLog(taskId, unitId, 'command', { type: 'wait_stream_failed', message: err.message });
+        finish({ output: paneStream.getBuffer(), classification: { status: 'stopped', reason: err.message } });
+      };
+      for (const stream of signalStream ? [paneStream, signalStream] : [paneStream]) {
+        const earlier = this.streamFailures.get(stream);
+        // Deferred so the timers created below exist (and are cleared by finish's cleanup) when this ends the wait.
+        if (earlier) { setImmediate(() => onStreamFailed(earlier)); break; }
+        stream.on('stream_failed', onStreamFailed);
+      }
 
       const markerSource = signalStream ?? paneStream;
       markerSource.on('marker', (type: string, raw: string) => {

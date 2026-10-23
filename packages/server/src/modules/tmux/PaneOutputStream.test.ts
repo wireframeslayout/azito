@@ -1,6 +1,21 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { PaneOutputStream } from './PaneOutputStream';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+
+/** TaskTempFiles が決める pipe ファイルと同じ形（一時フォルダの azito-pipe-<id>-<stamp>.log）。 */
+function pipeFile(id: string): string {
+  return path.join(os.tmpdir(), `azito-pipe-${id}-${Date.now()}.log`);
+}
+
+async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
+  const start = Date.now();
+  while (!cond()) {
+    if (Date.now() - start > timeoutMs) throw new Error('waitFor: timed out');
+    await sleep(10);
+  }
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -8,7 +23,7 @@ function sleep(ms: number): Promise<void> {
 
 /**
  * Polls `getBuffer` until it stops changing for a short quiet period, instead of a
- * single fixed sleep. Needed for the large-write truncation test below: `tail -f`
+ * single fixed sleep. Needed for the large-write truncation test below: the file follower
  * reading + reassembling ~2.5MB (~25k lines) through processChunk can, under system
  * load, take much longer than a short fixed delay — and a fixed-length buffer size
  * check can't tell "settled" from "mid-stream, happens to be exactly at the cap"
@@ -39,7 +54,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should emit data when file is written to', async () => {
-    stream = new PaneOutputStream('test-1');
+    stream = new PaneOutputStream(pipeFile('test-1'));
     stream.start();
     const chunks: string[] = [];
     stream.on('data', (chunk: string) => chunks.push(chunk));
@@ -52,7 +67,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect PHASE_COMPLETE marker', async () => {
-    stream = new PaneOutputStream('test-2');
+    stream = new PaneOutputStream(pipeFile('test-2'));
     stream.start();
     stream.enableMarkerDetection();
     const markers: string[] = [];
@@ -65,7 +80,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect QUESTIONS_JSON marker with valid JSON', async () => {
-    stream = new PaneOutputStream('test-3');
+    stream = new PaneOutputStream(pipeFile('test-3'));
     stream.start();
     stream.enableMarkerDetection();
     const markers: Array<{ type: string; raw: string }> = [];
@@ -83,7 +98,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should NOT detect template QUESTIONS_JSON', async () => {
-    stream = new PaneOutputStream('test-4');
+    stream = new PaneOutputStream(pipeFile('test-4'));
     stream.start();
     stream.enableMarkerDetection();
     const markers: string[] = [];
@@ -95,9 +110,8 @@ describe('PaneOutputStream', () => {
     expect(markers.filter(m => m === 'questions_json')).toHaveLength(0);
   });
 
-  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
-  it.skipIf(process.platform === 'win32')('should accumulate buffer across multiple writes', async () => {
-    stream = new PaneOutputStream('test-5');
+  it('should accumulate buffer across multiple writes', async () => {
+    stream = new PaneOutputStream(pipeFile('test-5'));
     stream.start();
 
     fs.appendFileSync(stream.getFilePath(), 'first line\n');
@@ -111,7 +125,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should handle clean text marker detection (ANSI stripped by pipe-pane sed)', async () => {
-    stream = new PaneOutputStream('test-6');
+    stream = new PaneOutputStream(pipeFile('test-6'));
     stream.start();
     stream.enableMarkerDetection();
     const markers: string[] = [];
@@ -124,7 +138,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should NOT detect markers before enableMarkerDetection is called', async () => {
-    stream = new PaneOutputStream('test-guard-1');
+    stream = new PaneOutputStream(pipeFile('test-guard-1'));
     stream.start();
     const markers: string[] = [];
     stream.on('marker', (type: string) => markers.push(type));
@@ -135,9 +149,8 @@ describe('PaneOutputStream', () => {
     expect(markers).toHaveLength(0);
   });
 
-  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
-  it.skipIf(process.platform === 'win32')('should detect markers only in new output after enableMarkerDetection', async () => {
-    stream = new PaneOutputStream('test-guard-2');
+  it('should detect markers only in new output after enableMarkerDetection', async () => {
+    stream = new PaneOutputStream(pipeFile('test-guard-2'));
     stream.start();
     const markers: string[] = [];
     stream.on('marker', (type: string) => markers.push(type));
@@ -154,7 +167,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should ignore QUESTIONS_JSON in initial buffer after enableMarkerDetection', async () => {
-    stream = new PaneOutputStream('test-guard-3');
+    stream = new PaneOutputStream(pipeFile('test-guard-3'));
     stream.start();
     const markers: Array<{ type: string }> = [];
     stream.on('marker', (type: string) => markers.push({ type }));
@@ -170,7 +183,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should clean up file on stop', () => {
-    stream = new PaneOutputStream('test-7');
+    stream = new PaneOutputStream(pipeFile('test-7'));
     stream.start();
     const filePath = stream.getFilePath();
     expect(fs.existsSync(filePath)).toBe(true);
@@ -181,7 +194,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect QUESTIONS_JSON with multiple nested options', async () => {
-    stream = new PaneOutputStream('test-8');
+    stream = new PaneOutputStream(pipeFile('test-8'));
     stream.start();
     stream.enableMarkerDetection();
     const markers: Array<{ type: string; raw: string }> = [];
@@ -198,7 +211,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect unique markers when set', async () => {
-    stream = new PaneOutputStream('test-unique-1');
+    stream = new PaneOutputStream(pipeFile('test-unique-1'));
     stream.start();
     stream.setMarkers('AZITO_DONE_42_abc123', 'AZITO_QUESTIONS_42_abc123');
     stream.enableMarkerDetection();
@@ -212,7 +225,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect unique question markers', async () => {
-    stream = new PaneOutputStream('test-unique-2');
+    stream = new PaneOutputStream(pipeFile('test-unique-2'));
     stream.start();
     stream.setMarkers('AZITO_DONE_42_xyz789', 'AZITO_QUESTIONS_42_xyz789');
     stream.enableMarkerDetection();
@@ -228,9 +241,8 @@ describe('PaneOutputStream', () => {
     expect(parsed[0].text).toBe('質問');
   });
 
-  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
-  it.skipIf(process.platform === 'win32')('should detect QUESTIONS_JSON spanning multiple lines (terminal line wrap)', async () => {
-    stream = new PaneOutputStream('test-multiline-1');
+  it('should detect QUESTIONS_JSON spanning multiple lines (terminal line wrap)', async () => {
+    stream = new PaneOutputStream(pipeFile('test-multiline-1'));
     stream.start();
     stream.setMarkers('AZITO_DONE_42_ml1', 'AZITO_QUESTIONS_42_ml1');
     stream.enableMarkerDetection();
@@ -253,9 +265,8 @@ describe('PaneOutputStream', () => {
     expect(parsed[1].text).toBe('サイドバーの表示形式は？');
   });
 
-  // Windows では動かない: tail -f 前提（P3 で Node のファイル追跡に置き換え）
-  it.skipIf(process.platform === 'win32')('should detect generic QUESTIONS_JSON spanning multiple lines', async () => {
-    stream = new PaneOutputStream('test-multiline-2');
+  it('should detect generic QUESTIONS_JSON spanning multiple lines', async () => {
+    stream = new PaneOutputStream(pipeFile('test-multiline-2'));
     stream.start();
     stream.enableMarkerDetection();
     const markers: Array<{ type: string; raw: string }> = [];
@@ -274,7 +285,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should emulate \\r by keeping only text after last \\r', async () => {
-    stream = new PaneOutputStream('test-cr-emulate');
+    stream = new PaneOutputStream(pipeFile('test-cr-emulate'));
     stream.start();
     const chunks: string[] = [];
     stream.on('data', (chunk: string) => chunks.push(chunk));
@@ -290,7 +301,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect markers after \\r noise is stripped', async () => {
-    stream = new PaneOutputStream('test-cr-marker');
+    stream = new PaneOutputStream(pipeFile('test-cr-marker'));
     stream.start();
     stream.setMarkers('AZITO_DONE_42_cr1', 'AZITO_QUESTIONS_42_cr1');
     stream.enableMarkerDetection();
@@ -305,7 +316,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should produce clean plan output without spinner noise', async () => {
-    stream = new PaneOutputStream('test-cr-plan');
+    stream = new PaneOutputStream(pipeFile('test-cr-plan'));
     stream.start();
     const chunks: string[] = [];
     stream.on('data', (chunk: string) => chunks.push(chunk));
@@ -326,7 +337,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect QUESTIONS marker split by \\r from JSON (pipe-pane)', async () => {
-    stream = new PaneOutputStream('test-cr-split');
+    stream = new PaneOutputStream(pipeFile('test-cr-split'));
     stream.start();
     stream.setMarkers('AZITO_DONE_42_split', 'AZITO_QUESTIONS_42_split');
     stream.enableMarkerDetection();
@@ -344,7 +355,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('should detect DONE marker with \\r\\n line endings', async () => {
-    stream = new PaneOutputStream('test-cr-2');
+    stream = new PaneOutputStream(pipeFile('test-cr-2'));
     stream.start();
     stream.setMarkers('AZITO_DONE_42_cr2', 'AZITO_QUESTIONS_42_cr2');
     stream.enableMarkerDetection();
@@ -362,7 +373,7 @@ describe('PaneOutputStream', () => {
   // start → setMarkers → enableMarkerDetection immediately → worker appends marker line.
 
   it('signal file: detects done marker written by worker shell command', async () => {
-    stream = new PaneOutputStream('test-sig-done-1');
+    stream = new PaneOutputStream(pipeFile('test-sig-done-1'));
     stream.start();
     stream.setMarkers('AZITO_DONE_1_abc', 'AZITO_Q_1_abc');
     stream.enableMarkerDetection();
@@ -380,7 +391,7 @@ describe('PaneOutputStream', () => {
   });
 
   it('signal file: detects questions marker written by worker shell command', async () => {
-    stream = new PaneOutputStream('test-sig-q-1');
+    stream = new PaneOutputStream(pipeFile('test-sig-q-1'));
     stream.start();
     stream.setMarkers('AZITO_DONE_1_def', 'AZITO_Q_1_def');
     stream.enableMarkerDetection();
@@ -402,8 +413,20 @@ describe('PaneOutputStream', () => {
     stream = null;
   });
 
+  it('reports a failure while following as stream_failed, never as an unhandled error event', async () => {
+    stream = new PaneOutputStream(pipeFile('test-failure'));
+    const failures: Error[] = [];
+    stream.on('stream_failed', (e: Error) => failures.push(e));
+    stream.on('data', () => { throw new Error('listener broke'); });
+    stream.start();
+    fs.appendFileSync(stream.getFilePath(), 'line\n');
+    await waitFor(() => failures.length === 1);
+    expect(failures[0].message).toBe('listener broke');
+    expect(stream.listenerCount('error')).toBe(0);
+  });
+
   it('should truncate buffer when exceeding 2MB limit, preserving tail', async () => {
-    stream = new PaneOutputStream('test-truncate');
+    stream = new PaneOutputStream(pipeFile('test-truncate'));
     stream.start();
 
     // Write ~2.5MB of data (each line ~100 chars, ~25000 lines)

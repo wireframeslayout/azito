@@ -5,6 +5,7 @@ import type { TasksRouteOptions } from './routes';
 import type { Task } from './Task';
 import { ExecutionGateDeniedError } from './execution/ExecutionGate';
 import { TaskOriginationService } from './origination/TaskOriginationService';
+import { TaskTempFiles } from '../../shared/os/taskTempFiles';
 
 // Covers Issue #328's client-facing surface on the tasks routes: input_trust
 // must never be settable from a request body (only server-side code paths —
@@ -183,6 +184,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       return { success: result.code === 0, alreadyGone: false, result };
     }),
     scopedAuthEnabled: true,
+    taskTempFiles: new TaskTempFiles('/tmp', 'linux'),
   };
   return { opts, createCalls };
 }

@@ -6,6 +6,7 @@ import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { NO_AGENT_MISAO, registerMisaoDriver, resolveMisaoRuntimeForHub } from '../modules/tmux/misao/misaoDriver';
 import type { ServerConfig } from '../modules/servers/Server';
+import type { TaskTempFiles } from '../shared/os/taskTempFiles';
 
 export interface DoctorMux {
   registry: MuxDriverRegistry;
@@ -20,9 +21,9 @@ export interface DoctorMux {
  * here creates a window or writes to a pane, so the hub-side wiring the drivers normally get (change events, pane
  * environment) is left empty.
  */
-export async function openDoctorMux(homeDir: string): Promise<DoctorMux> {
+export async function openDoctorMux(homeDir: string, taskTempFiles: TaskTempFiles): Promise<DoctorMux> {
   const registry = new MuxDriverRegistry();
-  registry.register('tmux', new TmuxClient(new TransportFactory('', homeDir), '', '', '', ''));
+  registry.register('tmux', new TmuxClient(new TransportFactory('', homeDir, taskTempFiles), '', '', '', ''));
 
   const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(resolveServerEnvPath(), 'MISAO_SOCKET');
   const runtime = await resolveMisaoRuntimeForHub(

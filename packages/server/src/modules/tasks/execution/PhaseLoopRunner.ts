@@ -42,6 +42,7 @@ import { checkExecutionGate } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { isDistributionRequiredButRepositoryUnresolved } from './DistributionHelper';
 import type { ProjectRepository } from '../../projects/Project';
+import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -114,6 +115,7 @@ export class PhaseLoopRunner {
     private scopedAuthEnabled: boolean,
     private pushNotaryService: PushNotaryService | null,
     private sleepTaskWindows: (taskId: number) => Promise<number[]>,
+    private taskTempFiles: TaskTempFiles,
     private activitySource: { isKeyWorking(serverName: string, target: string): boolean } | null = null,
   ) {}
 
@@ -472,8 +474,9 @@ export class PhaseLoopRunner {
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
       let prompt: string;
+      let rulesFilePath: string | null = null;
       if (resolvedSubagentConfig?.enabled === true && phaseDef.subagentRole) {
-        const rulesFilePath = `/tmp/azito-rules-${task.id}-${nonce}.md`;
+        rulesFilePath = this.taskTempFiles.rulesFile(server, task.id, nonce);
         const role = phaseDef.subagentRole;
         const rulesContent = role === 'review'
           ? buildSubagentRulesFileContent('review', {
@@ -503,7 +506,7 @@ export class PhaseLoopRunner {
       const phaseStream = this.workerWaiter.startPaneStream(server, handle, task.id, unit.id);
       if (!phaseStream) return;
 
-      const outputFilePath = `/tmp/azito-output-${task.id}-${nonce}.md`;
+      const outputFilePath = this.taskTempFiles.outputFile(server, task.id, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
       let httpSignalTurn: AgentTurn | null;
       let pushingProbe: (() => Promise<boolean>) | undefined;
@@ -524,9 +527,22 @@ export class PhaseLoopRunner {
         const markerizedPromptWithSignal = envelopeResult.markerizedPrompt;
         httpSignalTurn = envelopeResult.httpSignalTurn;
 
-        this.appendLog(task.id, unit.id, 'command', { type: 'phase_prompt', phase, text: markerizedPromptWithSignal, doneMarker, questionsMarker, outputFilePath });
+        // Paths are recorded as created: recovery and cleanup read them back instead of re-deriving the layout.
+        this.appendLog(task.id, unit.id, 'command', {
+          type: 'phase_prompt', phase, text: markerizedPromptWithSignal, doneMarker, questionsMarker, outputFilePath,
+          ...(httpSignalMode ? {} : { signalFilePath: phaseSignalStream.getFilePath() }),
+          ...(rulesFilePath ? { rulesFilePath } : {}),
+        });
 
         const workerContext: WorkerContext = { server, handle, driver, supervisorTarget: supervisorTarget, taskId: task.id, unitId: unit.id };
+        // A pane stream that already failed (e.g. an agent too old to register it) cannot see the answer: fail with the reason, do not prompt.
+        const streamFailure = this.workerWaiter.streamFailure(phaseStream) ?? this.workerWaiter.streamFailure(phaseSignalStream);
+        if (streamFailure) {
+          phaseSignalStream.stop();
+          this.appendLog(task.id, unit.id, 'status_change', { status: 'error', message: streamFailure.message });
+          this.taskRepo.updateStatus(task.id, 'failed');
+          return;
+        }
         try {
           await runtime.sendPrompt(workerContext, markerizedPromptWithSignal);
         } catch (err: unknown) {
@@ -637,7 +653,7 @@ export class PhaseLoopRunner {
 
       if (classification.status === 'stopped') {
         this.appendLog(task.id, unit.id, 'output', output);
-        this.appendLog(task.id, unit.id, 'status_change', { status: 'error', message: 'Agent stopped unexpectedly' });
+        this.appendLog(task.id, unit.id, 'status_change', { status: 'error', message: classification.reason ?? 'Agent stopped unexpectedly' });
         this.taskRepo.updateStatus(task.id, 'failed');
         return;
       }

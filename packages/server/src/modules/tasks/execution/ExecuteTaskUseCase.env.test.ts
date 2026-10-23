@@ -25,6 +25,7 @@ import type { Unit, IUnitRepository } from '../../units/Unit';
 import type { ServerConfig, IServerRepository } from '../../servers/Server';
 import type { ProjectDetail, IProjectRepository } from '../../projects/Project';
 import type { IProjectServerRepository } from '../../projects/ProjectServer';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 // ─── Fixtures ───
 
@@ -464,6 +465,7 @@ function buildUseCase(opts: {
     { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
     // Issue #274: primaryWindowWaker mock — no-op for most tests.
     primaryWindowWaker as any,
+    new TaskTempFiles('/tmp', 'linux'),
   );
 
   return { useCase, primaryWindowWaker, taskRepo, windowRepo, logRepo, tmux, supervisorRegistry, worktreeServiceFactory, transportFactory, unitRepo, projectRepo, projectServerRepo, serverRepo, projectSecretRepo, unitTypeLoader, sidekickLoader, paneEnvService, gitProvider };
@@ -1646,6 +1648,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITO�
       null,
       { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
+      new TaskTempFiles('/tmp', 'linux'),
     );
 
     await useCase.followUp(42, 1, 'please continue');
@@ -2883,6 +2886,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       null,
       { resolve: () => tmux, supportedKinds: () => ['tmux'] } as any,
       { wake: vi.fn(async () => ({ tmuxTarget: 'azito:task-1' })), findRunningSession: vi.fn(async () => null) } as any,
+      new TaskTempFiles('/tmp', 'linux'),
     );
 
     // execute() itself resolves once setup (session/window/worktree

@@ -7,6 +7,7 @@ import { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ITaskTokenRepository } from '../tokens/TaskToken';
 import type { Task } from '../Task';
 import type { ServerConfig } from '../../servers/Server';
+import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 
 // Issue #28 third-party review finding (Critical): a task pane must never
 // see AZITO_UI_TOKEN/AZITO_AGENT_TOKEN inherited from the tmux SESSION's
@@ -78,7 +79,7 @@ describe('TaskPaneEnvironmentService x real tmux: session-env leak', () => {
     const { env } = paneEnvService.buildEnvForNewWindow(task, LOCAL_SERVER);
     expect(env.AZITO_UI_TOKEN).toBe('');
 
-    const transportFactory = new TransportFactory('http://127.0.0.1:1', os.homedir());
+    const transportFactory = new TransportFactory('http://127.0.0.1:1', os.homedir(), new TaskTempFiles('/tmp', 'linux'));
     const tmuxClient = new TmuxClient(transportFactory, 'http://127.0.0.1:1', 'ui-token-should-never-appear', 'http://127.0.0.1:1', 'wh-tok');
     const { windowName } = await tmuxClient.createWindow(LOCAL_SERVER, SESSION, 'task-window', { exactName: true, extraEnv: env });
     const target = `${SESSION}:${windowName}`;

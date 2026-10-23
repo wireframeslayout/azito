@@ -15,6 +15,9 @@ import { handleAgentTerminal } from '../modules/tmux/ws/agentTerminalHandler';
 import { muxRefFromTmuxTarget, parseMuxRef, type MuxRef, type PaneOrdinal } from '@azito/shared';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from '../modules/tmux/tmuxHooks';
 import { handleFileTail } from '../modules/files/ws/fileTailHandler';
+import { ManagedStreamFiles } from '../modules/files/ws/ManagedStreamFiles';
+import paneStreamRoutes from './paneStreamRoutes';
+import { TaskTempFiles } from '../shared/os/taskTempFiles';
 import { createTokenVerifier } from '../modules/servers/auth/tokenAuth';
 import { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { handleBrowserConnection } from '../modules/browser/ws/browserHandler';
@@ -112,7 +115,11 @@ async function main(): Promise<void> {
   const muxKind = 'tmux';
   const hookRt = resolveTmuxRuntime(muxRuntime, hostEnv.homeDir);
 
-  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir);
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir, TaskTempFiles.fromHostEnv(hostEnv));
+
+  // Files the hub has registered for tailing (`/ws?mode=file-tail` serves nothing else). The hub names them under /tmp for now.
+  const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir], { logger: app.log });
+  await app.register(paneStreamRoutes, { managed: managedStreamFiles });
 
   // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
   // socket path disables the relay (tmux keeps working) rather than stopping the agent.
@@ -180,7 +187,7 @@ async function main(): Promise<void> {
           socket.close();
           return;
         }
-        handleFileTail(socket, filePath);
+        handleFileTail(socket, filePath, managedStreamFiles);
         return;
       }
 
