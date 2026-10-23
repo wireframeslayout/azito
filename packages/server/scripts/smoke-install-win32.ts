@@ -144,9 +144,9 @@ function checkRepairAndDiagnostics(installPs1: string, zip: string, sums: string
   fs.renameSync(nodeExe, `${nodeExe}.off`);
   const missing = azito(azitoCmd, 'version');
   assert(missing.status === 1 && /incomplete/.test(missing.output) && missing.output.includes(path.join(hubDir, version)), 'a missing node.exe must be reported with the path intact', missing.output);
+  fs.renameSync(`${nodeExe}.off`, nodeExe);
   const unknown = azito(azitoCmd, '"bogus&echo injected"');
   assert(unknown.status === 1 && unknown.output.includes('Unknown command: bogus&echo injected') && !/^injected/m.test(unknown.output), 'an argument with & must not run as a command', unknown.output);
-  fs.renameSync(`${nodeExe}.off`, nodeExe);
 }
 
 function checkCli(azitoCmd: string, prefix: string, version: string): void {
