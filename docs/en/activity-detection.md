@@ -195,7 +195,20 @@ After resolution, an empty `AZITO_WEBHOOK_TOKEN` or `AZITO_SERVER_NAME` makes th
 without doing anything.
 
 Scripts involved: `harness/hooks/azito-activity.sh`, `azito-interaction.sh`,
-`azito-question.sh`.
+`azito-question.sh`, `azito-session.sh`.
+
+### Following the session id (SessionStart hook / `sessionId`)
+
+When Claude Code's session id changes mid-conversation (`/resume`, `/subtask`, ...),
+`windows.agent_session_id` stays at the value from window creation and a respawn's `--resume`
+reopens the old session. To prevent that, the hooks read `session_id` from the stdin JSON and
+add `sessionId` to the webhook body only when it is a UUID (`start`/`stop` from
+`azito-activity.sh` do the same). The `SessionStart` hook (`azito-session.sh`, registered by
+`setup.sh`) posts it as `event: "session"`.
+
+- The hub updates `agent_session_id` of the matched **agent window** (`window_type = 'agent'`) only when it differs from `sessionId`
+- `event: "session"` never changes the activity (Tier 1 hook) state
+- Each update shows up as `sessionUpdate` (`from` / `to` / `at` / `event`) in `GET /api/debug/activity`
 
 ### Window identification (phase 4: muxPaneRef-first)
 

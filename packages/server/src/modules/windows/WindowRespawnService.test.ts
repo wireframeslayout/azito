@@ -2276,7 +2276,9 @@ describe('WindowRespawnService — misao window identity', () => {
     expect(tmux.closeWindow).toHaveBeenCalledWith(expect.anything(), oldRef);
     expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5--ab12', expect.objectContaining({ exactName: true }));
     expect(result.tmuxTarget).toBe(`azito:${NEW_ID}`);
-    expect(windowRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: newRef, label: 'task-5--ab12', sleeping: false }));
+    expect(windowRepo.update).toHaveBeenCalledWith(7, expect.objectContaining({ tmuxTarget: `azito:${NEW_ID}`, muxRef: newRef, sleeping: false }));
+    const updateArg = vi.mocked(windowRepo.update).mock.calls.find(c => c[0] === 7)?.[1] as Record<string, unknown>;
+    expect(updateArg).not.toHaveProperty('label');
     expect(taskRepo.update).toHaveBeenCalledWith(5, { tmuxWindow: NEW_ID });
   });
 
@@ -2299,7 +2301,33 @@ describe('WindowRespawnService — misao window identity', () => {
 
     await service.respawn(7, server);
 
-    expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5', expect.anything());
+    expect(tmux.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5-w7', expect.anything());
+  });
+
+  it('does not update label on respawn (label-less window)', async () => {
+    const win = makeWindow({ id: 7, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: undefined });
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: OLD_ID });
+    const { service, windowRepo } = misaoService(win, task);
+
+    await service.respawn(7, server);
+
+    const updateArg = vi.mocked(windowRepo.update).mock.calls.find(c => c[0] === 7)?.[1] as Record<string, unknown>;
+    expect(updateArg).not.toHaveProperty('label');
+  });
+
+  it('uses unique openName for different windows of the same task', async () => {
+    const win1 = makeWindow({ id: 7, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: undefined });
+    const win2 = makeWindow({ id: 8, taskId: 5, tmuxTarget: `azito:${OLD_ID}`, muxRef: oldRef, label: undefined });
+    const task = makeTask({ id: 5, unitId: 10, tmuxWindow: OLD_ID });
+
+    const { service: service1, tmux: tmux1 } = misaoService(win1, task);
+    const { service: service2, tmux: tmux2 } = misaoService(win2, task);
+
+    await service1.respawn(7, server);
+    await service2.respawn(8, server);
+
+    expect(tmux1.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5-w7', expect.anything());
+    expect(tmux2.openWindow).toHaveBeenCalledWith(expect.anything(), 'azito', 'task-5-w8', expect.anything());
   });
 
   it('leaves a tmux window row and task untouched in name (tmux behaviour unchanged)', async () => {

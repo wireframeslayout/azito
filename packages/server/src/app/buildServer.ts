@@ -652,7 +652,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
           return null;
         }
       },
-      recordAgentActivity: (serverName, tmuxTarget, event) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event),
+      recordAgentActivity: (serverName, tmuxTarget, event, sessionId) => agentActivityMonitor.recordResolvedHookSignal(serverName, tmuxTarget, event, sessionId),
     },
   });
   await app.register(agentSignalRoutes, { agentSignalService, verifyToken: verifyWebhookToken, auditLogService });

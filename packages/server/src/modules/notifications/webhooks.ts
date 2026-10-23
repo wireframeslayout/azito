@@ -9,10 +9,12 @@ import type { ResolvedWindow } from '../operations/PaneHandleResolver';
  * Hook signals from a misao pane, which has no tmux coordinates and identifies itself by its pane id
  * (`$MISAO_PANE_ID`, sent as `misaoPaneId`). Takes effect only when the body carries no tmux fields.
  */
+const SESSION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export interface MisaoWebhookOptions {
   /** The window a misao pane belongs to, or null when no registered window owns it or the daemon cannot be reached. */
   resolvePane: (serverName: string, paneId: string) => Promise<ResolvedWindow | null>;
-  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event']) => void;
+  recordAgentActivity: (serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string) => void;
 }
 
 export interface WebhookRouteOptions {
@@ -157,8 +159,11 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       event?: unknown;
       muxPaneRef?: unknown;
       misaoPaneId?: unknown;
+      sessionId?: unknown;
     };
 
+    const sessionId = typeof body.sessionId === 'string' && SESSION_ID_RE.test(body.sessionId)
+      ? body.sessionId : undefined;
     const misaoPaneId = readMisaoPaneId(body);
     if (misaoPaneId !== undefined) {
       if (typeof body.serverName !== 'string' || body.serverName === '') {
@@ -167,12 +172,12 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       if (misaoPaneId === null) {
         return reply.status(400).send({ error: 'misaoPaneId must be a misao pane id' });
       }
-      if (body.event !== 'start' && body.event !== 'stop') {
-        return reply.status(400).send({ error: 'event must be "start" or "stop"' });
+      if (body.event !== 'start' && body.event !== 'stop' && body.event !== 'session') {
+        return reply.status(400).send({ error: 'event must be "start", "stop" or "session"' });
       }
       const resolved = await misao.resolvePane(resolveServerName(body.serverName), misaoPaneId);
       // Only the first pane carries the window's agent state; a split pane's hook must not stand in for it.
-      if (resolved && resolved.ordinal === 1) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event);
+      if (resolved && resolved.ordinal === 1) misao.recordAgentActivity(resolveServerName(body.serverName), resolved.tmuxTarget, body.event, sessionId);
       return { ok: true };
     }
 
@@ -191,8 +196,8 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
     if (typeof body.paneIndex !== 'number' || !Number.isFinite(body.paneIndex)) {
       return reply.status(400).send({ error: 'paneIndex must be a finite number' });
     }
-    if (body.event !== 'start' && body.event !== 'stop') {
-      return reply.status(400).send({ error: 'event must be "start" or "stop"' });
+    if (body.event !== 'start' && body.event !== 'stop' && body.event !== 'session') {
+      return reply.status(400).send({ error: 'event must be "start", "stop" or "session"' });
     }
 
     const muxPaneRef = typeof body.muxPaneRef === 'string' && isPaneHandleLike(body.muxPaneRef, 'tmux')
@@ -206,6 +211,7 @@ const webhookRoutes: FastifyPluginCallback<WebhookRouteOptions> = (fastify, opts
       paneIndex: body.paneIndex,
       event: body.event,
       muxPaneRef,
+      sessionId,
     });
 
     return { ok: true };
