@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  isTabOfPane,
+  tabsToCloseAfterPaneDelete,
   terminalTabId,
   parseTerminalTabId,
   terminalWsParams,
@@ -276,5 +278,55 @@ describe('retargetedTerminalRef', () => {
     const ref = retargetedTerminalRef('terminal:local::w7.1', 'local', 9);
     expect(isValidTerminalRef(ref)).toBe(true);
     expect(parseTerminalTabId(terminalTabId(ref))).toEqual(ref);
+  });
+});
+
+describe('isTabOfPane', () => {
+  it('matches a tab with terminalRef windowId + pane', () => {
+    const tab = { type: 'terminal', serverName: 's1', terminalRef: { kind: 'windowId' as const, serverName: 's1', windowId: 5, pane: 2 } };
+    expect(isTabOfPane(tab, 's1', 5, 2)).toBe(true);
+  });
+
+  it('does not match a different pane of the same window', () => {
+    const tab = { type: 'terminal', serverName: 's1', terminalRef: { kind: 'windowId' as const, serverName: 's1', windowId: 5, pane: 1 } };
+    expect(isTabOfPane(tab, 's1', 5, 2)).toBe(false);
+  });
+
+  it('matches a tab with legacy target w<id>.<ordinal>', () => {
+    const tab = { type: 'terminal', serverName: 's1', target: 'w5.2' };
+    expect(isTabOfPane(tab, 's1', 5, 2)).toBe(true);
+  });
+
+  it('does not match a non-terminal tab', () => {
+    const tab = { type: 'task', serverName: 's1', terminalRef: { kind: 'windowId' as const, serverName: 's1', windowId: 5, pane: 2 } };
+    expect(isTabOfPane(tab, 's1', 5, 2)).toBe(false);
+  });
+
+  it('does not match a different server', () => {
+    const tab = { type: 'terminal', serverName: 's2', terminalRef: { kind: 'windowId' as const, serverName: 's2', windowId: 5, pane: 2 } };
+    expect(isTabOfPane(tab, 's1', 5, 2)).toBe(false);
+  });
+
+  it('does not match a window-level tab (no pane suffix in target)', () => {
+    const tab = { type: 'terminal', serverName: 's1', target: 'sess:main' };
+    expect(isTabOfPane(tab, 's1', 5, 2)).toBe(false);
+  });
+});
+
+describe('tabsToCloseAfterPaneDelete', () => {
+  const paneTab = { id: 't1', type: 'terminal', serverName: 's1', terminalRef: { kind: 'windowId' as const, serverName: 's1', windowId: 5, pane: 2 } };
+  const otherTab = { id: 't2', type: 'terminal', serverName: 's1', terminalRef: { kind: 'windowId' as const, serverName: 's1', windowId: 5, pane: 1 } };
+  const tabs = [paneTab, otherTab];
+
+  it('returns matching tabs for misao windows', () => {
+    expect(tabsToCloseAfterPaneDelete(tabs, { serverName: 's1', windowId: 5, ordinal: 2, windowKind: 'misao' })).toEqual([paneTab]);
+  });
+
+  it('returns nothing for tmux windows', () => {
+    expect(tabsToCloseAfterPaneDelete(tabs, { serverName: 's1', windowId: 5, ordinal: 2, windowKind: 'tmux' })).toEqual([]);
+  });
+
+  it('returns nothing when window kind is unknown', () => {
+    expect(tabsToCloseAfterPaneDelete(tabs, { serverName: 's1', windowId: 5, ordinal: 2, windowKind: undefined })).toEqual([]);
   });
 });

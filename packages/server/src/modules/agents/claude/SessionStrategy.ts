@@ -23,16 +23,14 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     return `--resume ${sessionId}`;
   }
 
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null): string | null {
+  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): string | null {
     if (agentSessionId) {
+      const mcpFlag = blockMcp ? ' --strict-mcp-config' : '';
       const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
       const extra = extraArgs?.trim() ? ` ${extraArgs.trim()}` : '';
-      // --strict-mcp-config: same MCP lockdown as buildClaudeLaunchCommand
-      // (Issue #28 design v3 §3) — a `--resume` relaunch is still a task
-      // worker pane, not a human-driven terminal.
-      return `claude --resume ${agentSessionId} --dangerously-skip-permissions --strict-mcp-config${modelFlag}${extra}`;
+      return `claude --resume ${agentSessionId} --dangerously-skip-permissions${mcpFlag}${modelFlag}${extra}`;
     }
-    return buildClaudeLaunchCommand({ model, extraArgs });
+    return buildClaudeLaunchCommand({ model, extraArgs, blockMcp });
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

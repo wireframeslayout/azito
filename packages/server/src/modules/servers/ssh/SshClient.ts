@@ -18,6 +18,7 @@ interface ParsedHost {
   host: string;
   port: number;
   username: string;
+  portExplicit: boolean;
 }
 
 interface PendingCommand {
@@ -43,17 +44,19 @@ function parseHostString(hostStr: string): ParsedHost | null {
   const username = hostStr.substring(0, atIdx);
   let rest = hostStr.substring(atIdx + 1);
   let port = 22;
+  let portExplicit = false;
 
   const colonIdx = rest.lastIndexOf(':');
   if (colonIdx !== -1) {
     const maybePort = parseInt(rest.substring(colonIdx + 1), 10);
     if (!isNaN(maybePort) && maybePort > 0 && maybePort <= 65535) {
       port = maybePort;
+      portExplicit = true;
       rest = rest.substring(0, colonIdx);
     }
   }
 
-  return { host: rest, port, username };
+  return { host: rest, port, username, portExplicit };
 }
 
 function findDefaultKey(): string | null {
@@ -66,13 +69,20 @@ function findDefaultKey(): string | null {
   return null;
 }
 
-function loadSSHConfig(): ReturnType<typeof SSHConfig.parse> {
-  const sshConfigPath = path.join(process.env.HOME || '', '.ssh', 'config');
+function loadSSHConfig(configPath: string): ReturnType<typeof SSHConfig.parse> {
   try {
-    const raw = fs.readFileSync(sshConfigPath, 'utf8');
+    const raw = fs.readFileSync(configPath, 'utf8');
     return SSHConfig.parse(raw);
   } catch {
     return SSHConfig.parse('');
+  }
+}
+
+function configMtimeMs(configPath: string): number | null {
+  try {
+    return fs.statSync(configPath).mtimeMs;
+  } catch {
+    return null;
   }
 }
 
@@ -89,12 +99,18 @@ const END_MARKER = '\x02AGENTMGR_E';
 export class SshClient {
   private shellPool: Map<string, PersistentShell> = new Map();
   private parsedConfig: ReturnType<typeof SSHConfig.parse> | null = null;
+  private configMtime: number | null = null;
+  private configPath: string;
 
-  constructor(private fingerprintStore?: FingerprintStore) {}
+  constructor(private fingerprintStore?: FingerprintStore, configPath?: string) {
+    this.configPath = configPath ?? path.join(process.env.HOME || '', '.ssh', 'config');
+  }
 
   private getConfig(): ReturnType<typeof SSHConfig.parse> {
-    if (this.parsedConfig) return this.parsedConfig;
-    this.parsedConfig = loadSSHConfig();
+    const mtime = configMtimeMs(this.configPath);
+    if (this.parsedConfig && mtime === this.configMtime) return this.parsedConfig;
+    this.parsedConfig = loadSSHConfig(this.configPath);
+    this.configMtime = mtime;
     return this.parsedConfig;
   }
 
@@ -107,8 +123,8 @@ export class SshClient {
         ? (computed.IdentityFile as string).replace(/^~/, process.env.HOME || '')
         : findDefaultKey();
       return {
-        host: direct.host,
-        port: direct.port,
+        host: (computed.HostName as string) || direct.host,
+        port: direct.portExplicit ? direct.port : parseInt((computed.Port as string) || '22', 10),
         username: direct.username,
         identityFile,
         agent: process.env.SSH_AUTH_SOCK || null,

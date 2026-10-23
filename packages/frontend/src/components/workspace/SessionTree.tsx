@@ -8,6 +8,7 @@ import { lookupWindowTask } from '../../lib/windowTask';
 import { terminalTabId, terminalRefFromWindow, type TerminalRef } from '../../lib/terminalRef';
 import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import { Icon } from '../ui/Icon';
+import { paneRowBadge } from '../../lib/paneRowBadge';
 
 interface SessionTreeProps {
   serverName: string;
@@ -135,7 +136,7 @@ export default function SessionTree({
                             color: isActive ? 'var(--accent)' : 'inherit',
                           }}>
                           <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)' }}>
-                            <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
+                            <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>{paneRowBadge(pane)}</span>
                             {paneLabel}
                           </span>
                         </div>

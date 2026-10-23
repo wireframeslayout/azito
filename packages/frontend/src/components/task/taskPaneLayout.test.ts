@@ -16,6 +16,7 @@ import {
   resolveDisplayedTaskTerminal,
   makeTaskLayoutStorage,
   SUB_TAB_KEY,
+  remapWindowTabsById,
 } from './taskPaneLayout';
 
 function makeWindow(overrides: Partial<Window> = {}): Window {
@@ -495,5 +496,45 @@ describe('writeSubTabMap LRU eviction', () => {
     expect(result['50']).toBeDefined();
     expect(result['301']).toBeDefined();
     expect(Object.keys(result).length).toBe(50);
+  });
+});
+
+describe('remapWindowTabsById', () => {
+  it('maps the old tab id to the new one when a misao window tmuxTarget changes', () => {
+    const prev = [makeWindow({ id: 1, serverName: 'local', tmuxTarget: 'ws:1.0' })];
+    const next = [makeWindow({ id: 1, serverName: 'local', tmuxTarget: 'ws:2.0' })];
+    const remaps = remapWindowTabsById(prev, next);
+    expect(remaps.size).toBe(1);
+    expect(remaps.get(windowTabId('local', 'ws:1.0'))).toBe(windowTabId('local', 'ws:2.0'));
+  });
+
+  it('returns an empty map when tmuxTarget is unchanged', () => {
+    const w = [makeWindow({ id: 1, serverName: 'local', tmuxTarget: 'sess:main.1' })];
+    expect(remapWindowTabsById(w, w).size).toBe(0);
+  });
+
+  it('ignores windows that disappeared', () => {
+    const prev = [makeWindow({ id: 1, tmuxTarget: 'a:1.0' }), makeWindow({ id: 2, tmuxTarget: 'b:1.0' })];
+    const next = [makeWindow({ id: 1, tmuxTarget: 'a:1.0' })];
+    expect(remapWindowTabsById(prev, next).size).toBe(0);
+  });
+
+  it('ignores windows that were added', () => {
+    const prev = [makeWindow({ id: 1, tmuxTarget: 'a:1.0' })];
+    const next = [makeWindow({ id: 1, tmuxTarget: 'a:1.0' }), makeWindow({ id: 2, tmuxTarget: 'b:1.0' })];
+    expect(remapWindowTabsById(prev, next).size).toBe(0);
+  });
+
+  it('maps several windows changed at once', () => {
+    const prev = [makeWindow({ id: 1, tmuxTarget: 'a:1.0' }), makeWindow({ id: 2, tmuxTarget: 'b:1.0' })];
+    const next = [makeWindow({ id: 1, tmuxTarget: 'a:2.0' }), makeWindow({ id: 2, tmuxTarget: 'b:2.0' })];
+    expect(remapWindowTabsById(prev, next).size).toBe(2);
+  });
+
+  it('remaps when serverName changes', () => {
+    const prev = [makeWindow({ id: 1, serverName: 'old', tmuxTarget: 'a:1.0' })];
+    const next = [makeWindow({ id: 1, serverName: 'new', tmuxTarget: 'a:1.0' })];
+    const remaps = remapWindowTabsById(prev, next);
+    expect(remaps.get(windowTabId('old', 'a:1.0'))).toBe(windowTabId('new', 'a:1.0'));
   });
 });

@@ -18,10 +18,34 @@ export function parseNodeVersion(stdout: string): InstallStatusItem {
   return { installed: true, version: `v${raw}`, detail: major < 24 ? 'v24+ required' : undefined };
 }
 
-export function parseHarnessCheck(stdout: string): InstallStatusItem {
-  return stdout.trim()
-    ? { installed: true }
-    : { installed: false, detail: 'azt-harness not installed' };
+export interface HarnessCheckResult extends InstallStatusItem {
+  outdated?: boolean;
+  installedVersion?: string;
+  expectedVersion?: string;
+  autoUpdate?: { status: string; message?: string; at?: string };
+}
+
+export function parseHarnessCheck(
+  stdout: string,
+  expectedHash?: string,
+  autoUpdateResult?: { status: string; message?: string; at?: string },
+): HarnessCheckResult {
+  const lines = stdout.split('\n');
+  const dirExists = lines[0]?.trim();
+  if (!dirExists) return { installed: false, detail: 'azt-harness not installed' };
+
+  const remoteVersion = lines[1]?.trim() || undefined;
+  const result: HarnessCheckResult = { installed: true };
+
+  if (expectedHash) {
+    result.outdated = remoteVersion !== expectedHash;
+    if (remoteVersion) result.installedVersion = remoteVersion;
+    result.expectedVersion = expectedHash;
+  }
+  if (autoUpdateResult) {
+    result.autoUpdate = autoUpdateResult;
+  }
+  return result;
 }
 
 export function parseTailscaleCheck(stdout: string): InstallStatusItem {
@@ -40,5 +64,5 @@ export function parseChromiumInstall(stdout: string): InstallStatusItem {
 
 export function buildHarnessCheckCommand(prefix?: string): string {
   const harnessDir = `~/.azito/harness${prefix ? `-${prefix}` : ''}`;
-  return `ls -d ${harnessDir}/skills ~/.claude/skills/azt-* 2>/dev/null | head -1`;
+  return `ls -d ${harnessDir}/skills ~/.claude/skills/azt-* 2>/dev/null | head -1; cat ${harnessDir}/VERSION 2>/dev/null`;
 }

@@ -194,6 +194,39 @@ test.describe('misao ドライバ', () => {
     await expect(finishedRow(app, windowId)).toBeVisible({ timeout: REALTIME_BUDGET_MS });
   });
 
+  test('ペイン削除: サイドバーから消した行だけが消え、残りは自分のハンドルを保つ（#475）', async ({ app, harness }) => {
+    const { windowId, label } = await createRegisteredWindow(harness, projectId, 'pane-del');
+
+    await harness.api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction: 'v' }) });
+    await harness.api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction: 'v' }) });
+
+    const sessions = await harness.api<{ sessions: Array<{ name: string; windows: Array<{ panes: Array<{ index: number; handle: string }> }> }> }>('/servers/local/sessions?detail=1');
+    const sess = sessions.sessions.find((s) => s.name === label);
+    const panes = sess!.windows[0].panes;
+    expect(panes).toHaveLength(3);
+    const [first, second, third] = panes.map((p) => p.handle);
+
+    const shortBadge = (h: string) => `#${h.slice(-4)}`;
+
+    await app.setViewportSize({ width: 1280, height: 800 });
+    await app.goto(`${harness.baseUrl}/workspace/${projectId}`);
+    await app.getByPlaceholder('タイトル・ID・ブランチで検索…').fill(label);
+    const expander = app.locator('[role="button"][aria-expanded="false"]').first();
+    await expect(expander).toBeVisible({ timeout: 20_000 });
+    await expander.click();
+
+    for (const h of [first, second, third]) await expect(app.getByText(shortBadge(h), { exact: true })).toBeVisible();
+
+    await app.getByText(shortBadge(second), { exact: true }).click({ button: 'right' });
+    await app.getByText('ペインを削除', { exact: true }).click();
+    await expect(app.getByText(/を終了しますか/)).toBeVisible();
+    await app.getByRole('button', { name: '確認', exact: true }).click();
+
+    await expect(app.getByText(shortBadge(second), { exact: true })).toHaveCount(0, { timeout: 15_000 });
+    await expect(app.getByText(shortBadge(first), { exact: true })).toBeVisible();
+    await expect(app.getByText(shortBadge(third), { exact: true })).toBeVisible();
+  });
+
   test('デーモン断: 概要に「misao に接続できません」が出る', async ({ app, harness, misaoDaemon }) => {
     // 記録した PID にだけ SIGTERM を送る。ディレクトリはワーカー終了時の stop() が消す。
     await misaoDaemon.stopProcess();

@@ -16,12 +16,13 @@ import type { LaunchOptions } from '../AgentProvider';
  */
 const STRICT_MCP_CONFIG_FLAG = ' --strict-mcp-config';
 
-export function buildClaudeLaunchCommand({ model, extraArgs }: LaunchOptions): string {
+export function buildClaudeLaunchCommand({ model, extraArgs, blockMcp = true }: LaunchOptions): string {
+  const mcpFlag = blockMcp ? STRICT_MCP_CONFIG_FLAG : '';
   const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
   const extra = extraArgs?.trim()
     ? ' ' + extraArgs.trim().split(/\s+/).map(shellQuote).join(' ')
     : '';
-  return `claude --dangerously-skip-permissions${STRICT_MCP_CONFIG_FLAG}${modelFlag}${extra}`;
+  return `claude --dangerously-skip-permissions${mcpFlag}${modelFlag}${extra}`;
 }
 
 export function buildClaudeHeadlessCommand(model: string): string {

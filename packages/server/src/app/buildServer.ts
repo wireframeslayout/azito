@@ -477,7 +477,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService();
   await app.register(serversRoutes, {
-    serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, harnessHash: wiring.harnessUpdater.getHarnessHash(), harnessUpdater: wiring.harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: async (srv) => {
       if (srv.type === 'local') return describeMisaoDaemon(wiring.misao.connection);
       // An agent server's row also says whether this hub can install misao there, and when its daemon is another release.
@@ -507,7 +507,10 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
       invalidateSessionCache(next.name);
       paneHandleResolver.clearServer(next.name);
       supervisorRegistry.clearServerPaneRefs(next.name);
-      syncTmuxChangeHooks(tmuxHookManager, next, app.log);
+      // Serialized: uninstall must complete before install (both may target the same tmux server).
+      void tmuxHookManager.uninstall(previous)
+        .catch((err: unknown) => { app.log.warn(`Failed to uninstall tmux hooks on ${previous.name}: ${err}`); })
+        .then(() => syncTmuxChangeHooks(tmuxHookManager, next, app.log));
     },
     onServerChanged: ({ previous, next }) => {
       // An agent server's misao node is bound to the endpoint and token it was made with: any edit, reinstall or delete
@@ -582,7 +585,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const fileSearchService = new FileSearchService(transportFactory);
   await app.register(fileBrowseRoutes, { serverRepo, projectServerRepo, transportFactory, searchService: fileSearchService });
   await app.register(gitRoutes, { serverRepo, transportFactory, taskRepo, projectServerRepo, worktreeServiceFactory, projectRepo, gitProvider });
-  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
+  await app.register(projectsRoutes, { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux: tmuxClient, muxDriverRegistry, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService });
   await app.register(unitsRoutes, { unitRepo, taskRepo, logRepo, executeTaskUseCase, projectRepo, projectServerRepo, serverRepo, sidekickLoader: sidekickPackageLoader, unitTypeLoader, muxDriverRegistry });
   await app.register(operationsRoutes, { executeTaskUseCase, agentActivityMonitor, supervisorRegistry, windowRepo, paneHandleResolver });
   await app.register(auditLogRoutes, { auditLogService });

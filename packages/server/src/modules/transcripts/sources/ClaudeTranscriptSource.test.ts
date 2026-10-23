@@ -1118,6 +1118,45 @@ describe('ClaudeTranscriptSource', () => {
       expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
     });
 
+    describe('AskUserQuestion preceded by assistant text', () => {
+      const toolUseId = 'toolu_017G1yjmjPBsBGNyvwP6ktNR';
+      const askRecord = {
+        type: 'assistant',
+        uuid: 'a2',
+        message: { content: [{ type: 'tool_use', id: toolUseId, name: 'AskUserQuestion', input: { questions: [{ question: 'Lunch?', options: [{ label: 'Ramen' }] }] } }] },
+      };
+      const textRecord = { type: 'assistant', uuid: 'a1', message: { content: [{ type: 'text', text: 'Let me ask you something.' }] } };
+      const resultRecord = {
+        type: 'user',
+        uuid: 'r1',
+        message: { content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'answered' }] },
+        toolUseResult: { questions: [], answers: { 'Lunch?': 'Ramen' }, annotations: {} },
+      };
+
+      it('returns in_progress for user, text, unanswered AskUserQuestion', async () => {
+        writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'hi' } }, textRecord, askRecord]);
+        const result = await service.getSessionTailState(SID_A);
+        expect(result.state).toBe('in_progress');
+      });
+
+      it('returns in_progress for text, unanswered AskUserQuestion without a leading user record', async () => {
+        writeSession(dir, 'proj-a', SID_A, [textRecord, askRecord]);
+        expect((await service.getSessionTailState(SID_A)).state).toBe('in_progress');
+      });
+
+      it('returns terminal_final once the question is answered and the agent replies with text', async () => {
+        const finalText = { type: 'assistant', uuid: 'a3', message: { content: [{ type: 'text', text: 'Ramen it is.' }] } };
+        writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'hi' } }, textRecord, askRecord, resultRecord, finalText]);
+        expect((await service.getSessionTailState(SID_A)).state).toBe('terminal_final');
+      });
+
+      it('does not surface the unanswered AskUserQuestion record as an entry in readSession', async () => {
+        writeSession(dir, 'proj-a', SID_A, [{ type: 'user', uuid: 'u1', message: { content: 'hi' } }, textRecord, askRecord]);
+        const result = service.readSession(SID_A);
+        expect(result!.entries.map((e) => e.uuid)).toEqual(['u1', 'a1']);
+      });
+    });
+
     it('returns in_progress when the last meaningful record is a task_notification (background task resumes the agent turn)', async () => {
       writeSession(dir, 'proj-a', SID_A, [
         { type: 'user', uuid: 'u1', message: { content: 'do it' } },

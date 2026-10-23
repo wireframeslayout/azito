@@ -17,6 +17,8 @@ import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { TransportFactory } from './transport/TransportFactory';
 import { AgentUnreachableError } from './transport/AgentUnreachableError';
 import type { HarnessInstaller, HarnessInstallProgress, HarnessInstallResult } from './agent-deploy/HarnessInstaller';
+import type { HarnessUpdater } from './agent-deploy/HarnessUpdater';
+import { buildHarnessInstallOptions } from './agent-deploy/harnessInstallOptions';
 import type { IProjectRepository } from '../projects/Project';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IWindowRepository } from '../windows/SqliteWindowRepository';
@@ -184,6 +186,8 @@ export interface ServersRouteOptions {
   webhookToken: string;
   uiToken: string;
   harnessPrefix?: string;
+  harnessHash: string;
+  harnessUpdater: HarnessUpdater;
   // Issue #29 review (6th pass), Important finding 3: serializes the
   // isolation_intent false->true check-through-commit span below against the
   // sessions/windows/panes creation routes' server-refetch-through-tmux-create
@@ -228,7 +232,7 @@ export interface ServersRouteOptions {
 // ─── Plugin ───
 
 const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts, done) => {
-  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, onServerChanged, misaoDaemonStatus } = opts;
+  const { serverRepo, serverAliasRepo, tmux, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken, harnessPrefix, harnessHash, harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery, onMuxChanged, onServerChanged, misaoDaemonStatus } = opts;
 
   // Issue #29 review, Important finding 1: a false->true isolation_intent
   // transition must actually purge a previously-distributed operator token
@@ -450,6 +454,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       }
       if (serverRepo.findByName(name))
         return reply.status(409).send({ error: 'Server already exists' });
+      if (type === 'local' && serverRepo.findAll().some((s) => s.type === 'local'))
+        return reply.status(409).send({ error: 'local_server_exists', message: 'Only one local server is allowed' });
       try {
         serverRepo.create(name, type, host, agentPort, agentToken, undefined, undefined, validMuxRuntime, validDefaultMux);
         notifyServerCreated(name);
@@ -904,7 +910,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const steps: HarnessInstallProgress[] = [];
       let result: HarnessInstallResult;
-      const installOptions = { azitoUrl: azito_url, webhookToken, uiToken, serverName: srv.name, prefix: harnessPrefix, isolationIntent: srv.isolationIntent };
+      const installOptions = buildHarnessInstallOptions(srv, { webhookToken, uiToken, harnessPrefix }, { azitoUrl: azito_url, version: harnessHash });
 
       if (srv.type === 'local') {
         result = await harnessInstaller.installLocal(installOptions);
@@ -1174,7 +1180,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const checkHarness = async () => {
         try {
           const r = await transport.exec(buildHarnessCheckCommand(harnessPrefix));
-          return parseHarnessCheck(stripTerminalArtifacts(r.stdout));
+          const autoUpdate = harnessUpdater.getLastResult(srv.name);
+          return parseHarnessCheck(stripTerminalArtifacts(r.stdout), harnessHash, autoUpdate);
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message };
         }

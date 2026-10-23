@@ -83,6 +83,19 @@ the operator's full-power token out of files that task-side processes read.
 skill works whether it's invoked from inside a task pane or from a human's manually-started
 terminal.
 
+### MCP blocking scope
+
+Agent processes launched in a task's worker window (`is_primary = 1`) receive flags that block
+access to the `azt-mcp` MCP server (Claude: `--strict-mcp-config`, Codex:
+`-c mcp_servers.azt-mcp.enabled=false`). This prevents a task agent from reaching the
+full-authority API surface through the operator's `AZITO_UI_TOKEN`-carrying MCP server.
+
+User-added windows (`is_primary = 0`) do **not** receive these blocking flags. These windows
+are interactive development sessions that need MCP server access. However, non-primary windows
+attached to a task with `inputTrust = 'untrusted'` are blocked until execution is approved
+(`approve-execution` with a matching fingerprint). If the task or its settings cannot be
+resolved, blocking is applied (fail-closed).
+
 ### `~/.azito/operator.env`
 
 When you pass `--ui-token` to `setup.sh`, it writes `AZITO_URL` and `AZITO_UI_TOKEN` into
@@ -593,6 +606,12 @@ Encrypted secrets cannot be decrypted. Re-enter the following manually:
 5. Reinstall agent servers (reissues their tokens)
 
 Before doing that, check whether an old `master.key` survives elsewhere (backups, or next to `data.db.bak-*`).
+
+### Tokens in existing logs
+
+Before v0.11.1, the UI token included in browser terminal WebSocket connection URLs was recorded in plaintext in request logs. Tokens may be readable in old logs retained by journald or log files.
+
+Remediation: run `azito token rotate` to invalidate the current token and issue a new one. Tokens in old logs become invalid.
 
 ### Reverting to the previous version
 

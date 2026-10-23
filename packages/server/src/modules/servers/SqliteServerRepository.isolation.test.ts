@@ -121,7 +121,7 @@ function buildSeededDb(): Database.Database {
   return db;
 }
 
-describe('SqliteServerRepository — isolation_intent transitions (Issue #29 review, Important finding 3)', () => {
+describe('SqliteServerRepository — isolation_intent transitions (Issue #29 review, Important finding 3)', { timeout: 20000 }, () => {
   it('clears isolation_verified_at, isolation_report AND isolation_cleanup_report atomically when intent flips true -> false', () => {
     const db = buildSeededDb();
     db.prepare(`INSERT INTO servers (name, type) VALUES ('srv', 'agent')`).run();

@@ -57,6 +57,20 @@ describe('CodexSessionStrategy.buildRespawnCommand (Issue #28 third-party review
       "codex resume session-2 --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol' '--verbose'",
     );
   });
+
+  it('omits MCP disable flag when blockMcp is false (Issue #471)', () => {
+    const { strategy } = createStrategy('');
+    const fresh = strategy.buildRespawnCommand(null, null, null, false);
+    expect(fresh).not.toContain('mcp_servers.azt-mcp.enabled=false');
+    expect(fresh).toBe('codex --dangerously-bypass-approvals-and-sandbox');
+  });
+
+  it('omits MCP disable flag on resume when blockMcp is false', () => {
+    const { strategy } = createStrategy('');
+    const resumed = strategy.buildRespawnCommand('session-3', null, null, false);
+    expect(resumed).not.toContain('mcp_servers.azt-mcp.enabled=false');
+    expect(resumed).toBe('codex resume session-3 --dangerously-bypass-approvals-and-sandbox');
+  });
 });
 
 describe('CodexSessionStrategy.scanSessionId', () => {

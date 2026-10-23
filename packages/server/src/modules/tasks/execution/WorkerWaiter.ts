@@ -1,4 +1,4 @@
-import type { PaneHandle } from '@azito/shared';
+import { muxKindOfPaneHandle, type MuxDriverKind, type PaneHandle } from '@azito/shared';
 import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { MuxDriverRegistry } from '../../tmux/MuxDriverRegistry';
 import type { ServerConfig } from '../../servers/Server';
@@ -37,6 +37,11 @@ const CONFIRMATION_PATTERNS = [
   /\? \(Y\)es/i,
   /accept\?/i,
 ];
+
+/** misao has no scrollback, so prefer the accumulated line-stream output; tmux keeps its scrollback capture. */
+export function choosePlanExtractionSource(kind: MuxDriverKind, paneText: string, pipeOutput: string): string {
+  return kind === 'misao' ? pipeOutput || paneText : paneText || pipeOutput;
+}
 
 /**
  * Manages the pane/signal stream lifecycle around a worker invocation:
@@ -132,16 +137,21 @@ export class WorkerWaiter {
     handle: PaneHandle,
     pipeOutput: string,
   ): Promise<string | null> {
-    const rawPaneText = await this.capturePaneText(server, handle);
-    const paneText = rawPaneText ? removeCompletionSignalBlock(rawPaneText) : rawPaneText;
+    const kind = muxKindOfPaneHandle(handle);
     const cleanedPipeOutput = removeCompletionSignalBlock(pipeOutput);
-    if (paneText) {
+    let paneText = '';
+    if (kind !== 'misao') {
+      const rawPaneText = await this.capturePaneText(server, handle);
+      paneText = rawPaneText ? removeCompletionSignalBlock(rawPaneText) : '';
+    }
+    const source = choosePlanExtractionSource(kind, paneText, cleanedPipeOutput);
+    if (source) {
       try {
-        const { planMarkdown } = await this.contentExtractor.extractPlan(paneText);
+        const { planMarkdown } = await this.contentExtractor.extractPlan(source);
         if (planMarkdown) return planMarkdown;
       } catch { /* fall through to programmatic */ }
     }
-    return extractPlanMarkdown(paneText || cleanedPipeOutput);
+    return extractPlanMarkdown(source);
   }
 
   async waitForWorker(

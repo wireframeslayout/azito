@@ -47,6 +47,7 @@ import { AgentBundler } from '../modules/servers/agent-deploy/AgentBundler';
 import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
 import { HarnessInstaller } from '../modules/servers/agent-deploy/HarnessInstaller';
+import { HarnessUpdater } from '../modules/servers/agent-deploy/HarnessUpdater';
 import { TmuxInstaller } from '../modules/servers/agent-deploy/TmuxInstaller';
 import { NotificationBus } from '../modules/notifications/NotificationBus';
 
@@ -221,6 +222,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   webhookToken: string;
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
+  harnessUpdater: HarnessUpdater;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
   interactionMonitor: InteractionMonitor;
@@ -649,6 +651,12 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
+  const harnessUpdater = new HarnessUpdater(
+    infra.harnessInstaller, infra.sshClient, repos.serverRepo,
+    { webhookToken, uiToken, harnessPrefix },
+    infra.serverIsolationMutex,
+    { info: (m) => console.log(`[harness-updater] ${m}`), warn: (m) => console.warn(`[harness-updater] ${m}`) },
+  );
   // Constructed here, once, and passed to both `buildFetchDistributionService`
   // (which writes to it on every successful distribution) and
   // `buildApplicationServices`/`buildExecuteTaskUseCase` (which read from it
@@ -676,6 +684,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...repos,
     ...pushNotification,
     agentUpdater,
+    harnessUpdater,
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,

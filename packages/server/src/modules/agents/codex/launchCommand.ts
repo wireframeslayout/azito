@@ -35,13 +35,14 @@ const CODEX_MCP_DISABLE_FLAG = ` -c mcp_servers.azt-mcp.enabled=false`;
  * scoping. Both paths now go through this one function so the flag can't
  * drift out of sync again.
  */
-function buildCodexCommand(agentSessionId: string | null, { model, extraArgs }: LaunchOptions): string {
+function buildCodexCommand(agentSessionId: string | null, { model, extraArgs, blockMcp = true }: LaunchOptions): string {
   const resumePrefix = agentSessionId ? `resume ${agentSessionId} ` : '';
+  const mcpFlag = blockMcp ? CODEX_MCP_DISABLE_FLAG : '';
   const modelFlag = model ? ` --model ${shellQuote(model)}` : '';
   const extra = extraArgs?.trim()
     ? ' ' + extraArgs.trim().split(/\s+/).map(shellQuote).join(' ')
     : '';
-  return `codex ${resumePrefix}--dangerously-bypass-approvals-and-sandbox${CODEX_MCP_DISABLE_FLAG}${modelFlag}${extra}`;
+  return `codex ${resumePrefix}--dangerously-bypass-approvals-and-sandbox${mcpFlag}${modelFlag}${extra}`;
 }
 
 export function buildCodexLaunchCommand(opts: LaunchOptions): string {

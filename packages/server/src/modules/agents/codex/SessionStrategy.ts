@@ -23,11 +23,11 @@ export class CodexSessionStrategy implements ISessionStrategy {
     return `resume ${sessionId}`;
   }
 
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null): string | null {
+  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): string | null {
     if (agentSessionId) {
-      return buildCodexRespawnCommand(agentSessionId, { model, extraArgs });
+      return buildCodexRespawnCommand(agentSessionId, { model, extraArgs, blockMcp });
     }
-    return buildCodexLaunchCommand({ model, extraArgs });
+    return buildCodexLaunchCommand({ model, extraArgs, blockMcp });
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

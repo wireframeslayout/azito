@@ -7,6 +7,7 @@ import { WindowIdChip } from './WindowIdChip';
 import { PaneStateChip, DIMMED_PANE_OPACITY } from './PaneStateChip';
 import { Chip } from './Chip';
 import { isPaneLive } from '../../lib/paneState';
+import { paneRowBadge } from '../../lib/paneRowBadge';
 import { resolveWindowDisplay } from '../../lib/windowDisplay';
 import { canActOnMux, planWindowRow } from '../../lib/windowRowPlan';
 import { EmptyWindowActions } from '../terminal/EmptyWindowActions';
@@ -20,7 +21,7 @@ export type WindowItem = Pick<Window, 'id' | 'serverName' | 'tmuxTarget' | 'labe
 export type EmptyWindowOutcome = Parameters<React.ComponentProps<typeof EmptyWindowActions>['onChanged']>[0];
 
 /** `stale`: the window's mux cannot be listed now, so mux actions in the menu are disabled. */
-type ContextMenuExtra = { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string };
+type ContextMenuExtra = { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string; paneOrdinal?: number; paneHandle?: string };
 
 /** A window of a session kept from an earlier listing (its mux cannot be listed now): marked like an offline row. */
 function StaleChip() {
@@ -37,7 +38,7 @@ export interface WindowPaneTreeProps {
    * 持つ場合、呼び出し元が物理ターゲットから Map で引き直して取り違えないようにするため）。
    * 既存の呼び出し元（2引数のみ受け取る）は後方互換のため無視して構わない。
    */
-  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
   extra?: (w: WindowItem) => React.ReactNode;
@@ -124,7 +125,7 @@ interface WindowRowProps {
   expandedWindows: Set<string>;
   onToggle: (key: string) => void;
   onUnzoom: (serverName: string, sessionName: string, windowName: string, windowId?: number, ref?: string) => void;
-  onPaneClick: (serverName: string, target: string, w: WindowItem) => void;
+  onPaneClick: (serverName: string, target: string, w: WindowItem, paneOrdinal?: number) => void;
   onContextMenu?: (e: React.MouseEvent, w: WindowItem, extra?: ContextMenuExtra) => void;
   onLongPress?: (x: number, y: number, w: WindowItem, extra?: ContextMenuExtra) => void;
   extra?: React.ReactNode;
@@ -553,17 +554,17 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
         {extra}
       </div>
 
-      {isExpanded && sw.panes.map((pane) => {
+      {isExpanded && sw.panes.map((pane, i) => {
         const planned = panes.find((p) => p.index === pane.index)!;
         const target = planned.target;
         const active = isActive?.(w.serverName, target, 'pane', w.id) ?? false;
         const focused = !active && isFocusedPane(w.serverName, target);
         const paneLabel = pane.title && pane.title !== pane.command ? pane.title : pane.command;
-        const paneCtxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel };
+        const paneCtxExtra: ContextMenuExtra = { online: true, stale: plan.stale, windowName: sw.name, paneTarget: planned.menuPaneTarget, paneTitle: paneLabel, paneOrdinal: i + 1, paneHandle: pane.handle };
         return (
           <div
             key={`${w.id}-${sw.index}-${pane.index}`}
-            onClick={() => onPaneClick(w.serverName, target, w)}
+            onClick={() => onPaneClick(w.serverName, target, w, i + 1)}
             onContextMenu={onContextMenu ? (e) => onContextMenu(e, w, paneCtxExtra) : undefined}
             {...(onLongPress ? bindLongPress((x, y) => onLongPress(x, y, w, paneCtxExtra)) : {})}
             className={`row-hover${(active || focused) ? ' row-selected' : ''}`}
@@ -575,7 +576,7 @@ function WindowRow({ w, sessionData, isActive, expandedWindows, onToggle, onUnzo
             }}
           >
             <span style={{ fontFamily: "'JetBrainsMono Nerd Font', 'JetBrains Mono', monospace", fontSize: 'var(--font-sm)', opacity: isPaneLive(pane) && !plan.stale ? undefined : DIMMED_PANE_OPACITY }}>
-              <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>%{pane.index}</span>
+              <span style={{ color: 'var(--text-dim)', marginRight: 6, fontSize: 'var(--font-xs)' }}>{paneRowBadge(pane)}</span>
               {paneLabel}
             </span>
             {plan.stale ? <StaleChip /> : <PaneStateChip pane={pane} />}

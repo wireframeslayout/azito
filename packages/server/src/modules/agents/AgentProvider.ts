@@ -25,6 +25,8 @@ export interface AgentDefinition {
 export interface LaunchOptions {
   model?: string | null;
   extraArgs?: string | null;
+  /** When false, omit MCP blocking flags. Default true (fail-closed). */
+  blockMcp?: boolean;
 }
 
 // ─── Session strategy injection ───

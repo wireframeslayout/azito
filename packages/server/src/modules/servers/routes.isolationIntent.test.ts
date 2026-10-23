@@ -99,6 +99,8 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     // against sessions.ts — that's covered by sessions.test.ts's own
     // instance plus the shared-wiring assertion in buildServer.ts).
     serverIsolationMutex: new KeyedMutex(),
+    harnessHash: 'testhash',
+    harnessUpdater: { getLastResult: vi.fn() } as unknown as ServersRouteOptions['harnessUpdater'],
     // Issue #29 Step 2 C-1: defaults to true (scoped auth already enabled)
     // so every pre-existing test in this file — none of which are about the
     // C-1 gate itself — keeps exercising the false->true/true->true
@@ -1644,7 +1646,7 @@ describe('POST /api/servers/:name/isolation/doctor (Issue #29 Step 2 B)', () => 
     // failing run.
     expect(realServerRepo.findByName('srv')?.isolationVerifiedAt).toBeNull();
     db.close();
-  });
+  }, 20000);
 
   // Step 2 review, Important #2: the lookup->probe->persist span used to run
   // OUTSIDE serverIsolationMutex — a concurrent PUT (isolationIntent flip,

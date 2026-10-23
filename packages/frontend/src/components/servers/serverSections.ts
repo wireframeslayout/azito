@@ -44,12 +44,18 @@ export interface InstallStatusItem {
   updateAvailable?: boolean;
 }
 
+export interface HarnessAutoUpdateInfo {
+  status: string;
+  message?: string;
+  at?: string;
+}
+
 export interface InstallStatusResponse {
   /** Present for tmux servers; misao servers report `misao` instead. */
   tmux?: InstallStatusItem;
   misao?: InstallStatusItem;
   node: InstallStatusItem;
-  aztHarness: InstallStatusItem;
+  aztHarness: InstallStatusItem & { outdated?: boolean; autoUpdate?: HarnessAutoUpdateInfo };
   tailscale?: InstallStatusItem;
   agent?: InstallStatusItem & { versionMatch?: boolean };
   chromium?: InstallStatusItem;

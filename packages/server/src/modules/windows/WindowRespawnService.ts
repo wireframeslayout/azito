@@ -23,6 +23,7 @@ import type { SessionCaptureService } from './SessionCaptureService';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from '../tasks/execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest, type RespawnManifestInput } from '../tasks/execution/ExecutionManifest';
 import { appendLogAndEmit } from '../tasks/execution/AppendLog';
+import { shouldBlockMcp } from '../agents/shouldBlockMcp';
 import type { TaskPaneEnvironmentService } from '../tasks/execution/TaskPaneEnvironmentService';
 import { resolveMuxWorkspace, resolveBaseBranch, resolveAndDetectBaseBranch } from '../tasks/execution/TaskExecutionEnv';
 import {
@@ -251,6 +252,21 @@ export class WindowRespawnService {
     // window-row check: a window whose owning task was deleted (task is
     // null) has nothing to rotate either.
     const isPrimary = task !== null && isPrimaryTaskWindow(win);
+
+    // Issue #471: resolve MCP blocking for this window.
+    // Use win.isPrimary directly (not the token-scoped `isPrimary` above)
+    // so a window whose task was deleted still triggers fail-closed blocking.
+    // When taskId is set but the task row is gone, treat it as 'unknown'
+    // (fail-closed) rather than null (no task → no block).
+    const mcpLinkedTask: { executionAllowed: boolean } | null | 'unknown' =
+      win.taskId === null
+        ? null
+        : task === null
+          ? 'unknown'
+          : task.inputTrust !== 'untrusted'
+            ? { executionAllowed: true }
+            : (() => { try { return { executionAllowed: this.isTaskExecutionAllowed(task, server.name) }; } catch { return 'unknown' as const; } })();
+    const blockMcp = shouldBlockMcp({ isPrimary: win.isPrimary, linkedTask: mcpLinkedTask });
 
     // Resolve and verify every working directory this respawn will `cd`
     // into before touching tmux or the DB at all. Containment verification
@@ -527,10 +543,10 @@ export class WindowRespawnService {
             await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
           }
         } else if (win.paneLayout) {
-          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv);
+          await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, false, blockMcp);
         } else {
           const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd);
+          await this.setupSinglePane(respawnServer, paneId, baseTarget, win, supervision, resolvedCwds.singleCwd, blockMcp);
         }
       } catch (err) {
         try {
@@ -770,6 +786,37 @@ export class WindowRespawnService {
     // two enforcement sites (nothing to roll back, a human must change the
     // project server's input_policy before a retry can succeed).
     throw new ExecutionGateDeniedError(task.id);
+  }
+
+  /**
+   * Issue #471: lightweight check whether a task's execution gate allows
+   * running (for the MCP blocking decision in launch-agent). Unlike
+   * enforceExecutionGate(), this does NOT throw, block the task, or log —
+   * it only returns whether MCP should be unblocked. Returns `true` when
+   * the gate allows (trusted / policy=allow / fingerprint match), `false`
+   * when denied or pending approval, and `false` on any resolution error
+   * (fail-closed).
+   */
+  isTaskExecutionAllowed(task: Task, serverName: string): boolean {
+    try {
+      const server = this.serverRepo.findByName(serverName);
+      if (!server) return false;
+      const { manifest, projectServer } = resolveExecutionManifest(task, {
+        unitRepo: this.unitRepo,
+        projectRepo: this.projectRepo,
+        projectServerRepo: this.projectServerRepo,
+        serverRepo: this.serverRepo,
+        projectSecretRepo: this.projectSecretRepo,
+        unitTypeLoader: this.unitTypeLoader,
+        sidekickLoader: this.sidekickLoader,
+      }, 'continuation', undefined, serverName);
+      const manifestHash = hashExecutionManifest(manifest);
+      const effective = resolveEffectiveInputPolicy(projectServer, server, this.scopedAuthEnabled);
+      const gate = checkExecutionGate(task, effective.effectivePolicy, manifestHash);
+      return gate.allowed;
+    } catch {
+      return false;
+    }
   }
 
   /**
@@ -1080,6 +1127,8 @@ export class WindowRespawnService {
     // Issue #274: when true, restore layout and working directories but do
     // not launch agent commands — the caller will launch the agent itself.
     skipAgentLaunch = false,
+    // Issue #471: when true, include MCP blocking flags in agent commands.
+    blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     const paneCount = paneLayout.panes.length;
@@ -1115,7 +1164,7 @@ export class WindowRespawnService {
         const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
         if (workerType) {
           const strategy = this.sessionStrategyFactory.create(workerType);
-          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
+          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, blockMcp);
           if (cmd) {
             const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
@@ -1132,6 +1181,7 @@ export class WindowRespawnService {
     win: { id?: number; workerType: string | null; agentSessionId: string | null; workerModel: string | null; workingDirectory: string | null },
     supervision: SupervisionContext,
     singleCwd: string | null,
+    blockMcp = true,
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     if (singleCwd) {
@@ -1145,7 +1195,7 @@ export class WindowRespawnService {
         sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
       }
       const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null);
+      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, blockMcp);
       if (cmd) {
         const sendCmd = this.wrapIfSupervised(cmd, server, supervisorTarget, supervision);
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);

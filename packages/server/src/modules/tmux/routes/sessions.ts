@@ -10,7 +10,7 @@ import type { ResourceGuard } from '../../servers/resources/ResourceGuard';
 import { resolveKillOutcome, type KillOutcome } from '../killOutcome';
 import type { KeyedMutex } from '../../../shared/keyedMutex';
 import { formatMuxRef, parseMuxRef, muxRefFromTmuxTarget, tmuxTargetFromMuxRef, asPaneHandle, type MuxDriverKind, type MuxRef, type MuxUnavailableKind, type PaneOrdinal } from '@azito/shared';
-import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, type KillWindowDeps } from '../../windows/windowPaneOps';
+import { resolveRefForServer, resolvePaneHandle, closePaneInWindow, resolvePaneAddEnv, killWindowCore, execResultError, type KillWindowDeps } from '../../windows/windowPaneOps';
 import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
@@ -913,7 +913,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
-      await muxClient.renameWindowByRef(srv, ref, name);
+      const result = await muxClient.renameWindowByRef(srv, ref, name);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       notifySessionsChanged(request.params.name);
       return { ok: true };
     },
@@ -939,7 +941,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
         const ordinal = (body.ordinal ?? 1) as PaneOrdinal;
         const muxClient = opts.muxDriverRegistry?.resolve(freshSrv) ?? tmux;
         const handle = await resolvePaneHandle(muxClient, freshSrv, ref, ordinal);
-        await muxClient.splitPaneByHandle(freshSrv, handle, direction, paneEnv.extraEnv);
+        const { result } = await muxClient.splitPaneByHandle(freshSrv, handle, direction, paneEnv.extraEnv);
+        const err = execResultError(result);
+        if (err) return reply.status(err.status).send({ error: err.error });
         notifySessionsChanged(request.params.name);
         return { ok: true };
       });
@@ -1024,7 +1028,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.zoomPaneByHandle(srv, handle);
+      const result = await muxClient.zoomPaneByHandle(srv, handle);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       return { ok: true };
     },
   );
@@ -1039,7 +1045,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const muxClient = opts.muxDriverRegistry?.resolve(srv) ?? tmux;
       const ordinal = parseInt(request.params.ordinal, 10) as PaneOrdinal;
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
-      await muxClient.unzoomPaneByHandle(srv, handle);
+      const result = await muxClient.unzoomPaneByHandle(srv, handle);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       return { ok: true };
     },
   );
@@ -1056,7 +1064,9 @@ const sessionsRoutes: FastifyPluginCallback<SessionsRouteOptions> = (fastify, op
       const handle = await resolvePaneHandle(muxClient, srv, ref, ordinal);
       const { name } = request.body as { name?: string };
       if (!name) return reply.status(400).send({ error: 'New name required' });
-      await muxClient.setPaneTitle(srv, handle, name);
+      const result = await muxClient.setPaneTitle(srv, handle, name);
+      const err = execResultError(result);
+      if (err) return reply.status(err.status).send({ error: err.error });
       return { ok: true };
     },
   );

@@ -95,6 +95,12 @@ export async function closePaneInWindow(
   }
 }
 
+export function execResultError(result: ExecResult): { status: number; error: string } | null {
+  if (result.code === 0) return null;
+  const msg = result.stderr || result.stdout || 'operation failed';
+  return { status: /not found|no such|does not exist/i.test(msg) ? 404 : 500, error: msg };
+}
+
 // ─── Adding a pane to an existing window ───
 
 export interface PaneAddEnvDeps {

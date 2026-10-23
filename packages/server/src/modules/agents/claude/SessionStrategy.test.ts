@@ -24,4 +24,22 @@ describe('ClaudeSessionStrategy', () => {
     expect(cmd).toContain(`--resume ${SESSION_ID}`);
     expect(cmd).not.toContain('--session-id');
   });
+
+  it('includes --strict-mcp-config by default', () => {
+    const cmd = strategy.buildRespawnCommand(SESSION_ID, null, null);
+    expect(cmd).toContain('--strict-mcp-config');
+  });
+
+  it('omits --strict-mcp-config when blockMcp is false (Issue #471)', () => {
+    const cmd = strategy.buildRespawnCommand(SESSION_ID, null, null, false);
+    expect(cmd).not.toContain('--strict-mcp-config');
+    expect(cmd).toContain(`--resume ${SESSION_ID}`);
+    expect(cmd).toContain('--dangerously-skip-permissions');
+  });
+
+  it('omits --strict-mcp-config for fresh launch when blockMcp is false', () => {
+    const cmd = strategy.buildRespawnCommand(null, null, null, false);
+    expect(cmd).not.toContain('--strict-mcp-config');
+    expect(cmd).toBe('claude --dangerously-skip-permissions');
+  });
 });

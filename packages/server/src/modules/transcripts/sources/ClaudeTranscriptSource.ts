@@ -588,6 +588,7 @@ function normalizeEntry(
   record: unknown,
   askUserQuestionCache: Map<string, AskUserQuestionItem[]>,
   allowCacheWrite: boolean,
+  keepAskUserQuestionBlocks: boolean,
 ): TranscriptEntry | null {
   if (!isRecord(record)) return null;
   if (record.isSidechain === true) return null;
@@ -597,8 +598,9 @@ function normalizeEntry(
   if (!isRecord(message)) return null;
   if (typeof record.uuid !== 'string') return null;
 
-  const content =
+  const strippedContent =
     record.type === 'assistant' ? extractAskUserQuestionToolUse(message.content, askUserQuestionCache, allowCacheWrite) : message.content;
+  const content = keepAskUserQuestionBlocks && record.type === 'assistant' ? message.content : strippedContent;
 
   const blocks = normalizeBlocks(content);
   if (blocks.length === 0) return null;
@@ -699,12 +701,15 @@ function tryHandleLocalCommandRecord(
  * （Minor 2）を行える。省略時（例: getSessionTailState、fd を早期に close する経路）はスキャンしない。
  * options.allowCacheWrite（既定 true）を false にすると、この読み取りウィンドウでは
  * askUserQuestionCache へ一切書き込まない（Minor 3a: readSessionBefore の後方ページング用）。
+ * options.keepAskUserQuestionBlocks（既定 false）を true にすると、未回答 AskUserQuestion の tool_use
+ * ブロックを除去せず残す（表示用ではなく末尾状態分類用: getSessionTailState）。
  */
 function buildParseLine(
   askUserQuestionCache: Map<string, AskUserQuestionItem[]>,
-  options: { io?: { fd: number; size: number }; allowCacheWrite?: boolean } = {},
+  options: { io?: { fd: number; size: number }; allowCacheWrite?: boolean; keepAskUserQuestionBlocks?: boolean } = {},
 ): (line: string, lineStart: number) => TranscriptEntry | null {
   const allowCacheWrite = options.allowCacheWrite ?? true;
+  const keepAskUserQuestionBlocks = options.keepAskUserQuestionBlocks ?? false;
   let pendingCommand: TranscriptEntry | null = null;
   return (line: string, lineStart: number): TranscriptEntry | null => {
     if (!line) return null;
@@ -729,7 +734,7 @@ function buildParseLine(
     const interactionEntry = tryHandleAskUserQuestionResult(record, askUserQuestionCache, lineStart, options.io);
     if (interactionEntry) return interactionEntry;
 
-    return normalizeEntry(record, askUserQuestionCache, allowCacheWrite);
+    return normalizeEntry(record, askUserQuestionCache, allowCacheWrite, keepAskUserQuestionBlocks);
   };
 }
 
@@ -932,7 +937,9 @@ export class ClaudeTranscriptSource implements TranscriptReader {
         // io を渡さない: AskUserQuestion の tool_use を別途後方スキャンしなくても、未マッチのまま
         // 'tool' 扱いにフォールバックした場合の分類は 'interaction' と同じ in_progress であり、
         // 稼働判定への影響はない（余分な読みを避ける）。allowCacheWrite も既定のまま。
-        const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId));
+        // keepAskUserQuestionBlocks: 未回答の AskUserQuestion を除去すると直前の text が末尾とみなされ
+        // terminal_final になり質問カードが出ないため、tool_use を残して in_progress と分類させる。
+        const parseLine = buildParseLine(this.getAskUserQuestionCache(sessionId), { keepAskUserQuestionBlocks: true });
         return scanSessionTailState(fd, size, parseLine);
       } finally {
         fs.closeSync(fd);

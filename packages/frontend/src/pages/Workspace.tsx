@@ -23,6 +23,7 @@ import { useRecentTasks } from '../hooks/useRecentTasks';
 import { useWorkspaceData } from '../hooks/useWorkspaceData';
 import { useSidebarState } from '../hooks/useSidebarState';
 import { findWindowTerminalTabs } from '../lib/retargetTab';
+import { resolveActiveTabAfterPaneClose } from '../lib/paneCloseActiveTab';
 import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { useWindowActions } from '../hooks/useWindowActions';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
@@ -60,6 +61,7 @@ import { buildObjectSections } from '../lib/workspaceObjects';
 import { GlobalFocusProvider, useGlobalFocus } from '../hooks/useGlobalFocus';
 import { parseTerminalTabId, terminalRefDisplayLabel, type TerminalRef } from '../lib/terminalRef';
 import { resolveWindowDisplay, formatWindowDisplayLabel, buildWindowIndex } from '../lib/windowDisplay';
+import { findTaskByTarget as findTaskByTargetLib } from '../lib/findTaskByTarget';
 export default function Workspace() {
   return (
     <GlobalFocusProvider>
@@ -431,12 +433,10 @@ function WorkspaceInner() {
       const nextActiveTabId = findPane(newRoot, newFocusedPaneId)?.activeTabId ?? null;
 
       layout.close(paneId, tabId);
+      setActiveTabId((prev) => resolveActiveTabAfterPaneClose(prev, tabId, nextActiveTabId));
       closeTabAndRefreshBrowserUnconfirmed(tabId);
-      if (nextActiveTabId && activeTabId !== nextActiveTabId) {
-        setActiveTabId(nextActiveTabId);
-      }
     });
-  }, [layout, closeTabAndRefreshBrowserUnconfirmed, activeTabId, setActiveTabId, confirmTabClose]);
+  }, [layout, closeTabAndRefreshBrowserUnconfirmed, setActiveTabId, confirmTabClose]);
 
   // beforeunload guard: as long as any tab has unsaved edits, warn before the
   // browser tab/window itself is closed or reloaded (Issue #27 review
@@ -581,14 +581,14 @@ function WorkspaceInner() {
     focusProjectById(allTasks.find((t) => t.id === taskId)?.projectId ?? projectId);
   }, [openTask, allTasks, focusProjectById]);
 
-  const findTaskByTarget = useCallback((target: string) => {
-    const parts = target.split(':');
-    if (parts.length < 2) return null;
-    const windowName = parts[1].split('.')[0];
-    return tasks.find(t => t.tmuxWindow === windowName)
-      ?? allTasks.find(t => t.tmuxWindow === windowName)
-      ?? null;
-  }, [tasks, allTasks]);
+  const windowById = useMemo(() =>
+    buildWindowIndex(allProjects, allTasks, project),
+  [allProjects, allTasks, project]);
+
+  const findTaskByTarget = useCallback(
+    (target: string) => findTaskByTargetLib(target, [tasks, allTasks], windowById),
+    [tasks, allTasks, windowById],
+  );
 
   useEffect(() => {
     if (!focusedActiveTabId) {
@@ -654,15 +654,18 @@ function WorkspaceInner() {
     if (mobile) setSidebarOpen(false);
   }, [setSelectedRepoId, project, openIssueListRaw, currentProjectId, mobile, setSidebarOpen]);
 
-  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string) => {
+  const handleSplitFromTarget = useCallback(async (serverName: string, target: string, direction: 'h' | 'v', windowId?: number, ref?: string, ordinal?: number) => {
     try {
       if (windowId != null) {
-        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+        await api(`/windows/${windowId}/panes`, { method: 'POST', body: JSON.stringify({ direction, ordinal }) });
       } else if (ref) {
-        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction }) });
+        await api(`/servers/${encodeURIComponent(serverName)}/mux/windows/${encodeURIComponent(ref)}/panes`, { method: 'POST', body: JSON.stringify({ direction, ordinal }) });
       } else {
         const colonIdx = target.indexOf(':');
-        if (colonIdx < 0) return;
+        if (colonIdx < 0) {
+          showToast(t('workspace:pane.splitTargetUnknown'));
+          return;
+        }
         const sessionName = target.substring(0, colonIdx);
         const rest = target.substring(colonIdx + 1);
         const dotIdx = rest.indexOf('.');
@@ -863,10 +866,6 @@ function WorkspaceInner() {
     const proj = allProjects.find(p => p.id === pid);
     return { projectId: pid, projectName: proj?.name ?? null };
   }, [allTasks, allProjects]);
-
-  const windowById = useMemo(() =>
-    buildWindowIndex(allProjects, allTasks, project),
-  [allProjects, allTasks, project]);
 
   const windowByLegacyKey = useMemo(() => {
     const map = new Map<string, Window>();

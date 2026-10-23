@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { formatWindowId, type MuxRef } from '@azito/shared';
+import { formatWindowId, type MuxDriverKind, type MuxRef } from '@azito/shared';
 import { api } from '../api/client';
 import type { ContextMenuItem } from '../components/ContextMenu';
 import type { PersistedTab } from './useTabPersistence';
@@ -10,14 +10,17 @@ import { useToast } from './useToast';
 import { Icon } from '../components/ui/Icon';
 import type { ResourceStatus } from '../components/ResourceWarningDialog';
 import { isInsufficientResources } from './useAddWindowModal';
-import { refTabMatchesTarget } from '../lib/terminalRef';
-import { canActOnMux, canRenamePane } from '../lib/windowRowPlan';
+import { canRenamePane } from '../lib/windowRowPlan';
+import { buildWindowMenuItems, type WindowMenuItemDescriptor, type WindowMenuParams } from '../lib/windowMenuItems';
+import { paneDeletePath, refTabMatchesTarget, tabsToCloseAfterPaneDelete } from '../lib/terminalRef';
 
 interface ConfirmDialog {
   title: string;
   message: string;
   onConfirm: () => void;
 }
+
+type WindowMenuExtra = Pick<WindowMenuParams, 'online' | 'stale' | 'windowName' | 'paneOrdinal' | 'paneHandle'> & { paneTarget?: string; paneTitle?: string };
 
 interface WindowActionDeps {
   showContextMenu: (e: React.MouseEvent, items: ContextMenuItem[]) => void;
@@ -212,48 +215,74 @@ export function useWindowActions(
     } catch { /* best-effort */ }
   }, [refreshWorkspace]);
 
-  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: { online: boolean; stale?: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }): ContextMenuItem[] => {
-    // A stale row's mux cannot be reached: the actions that go through it stay listed but disabled.
-    const muxDisabled = !canActOnMux(extra);
-    const items: ContextMenuItem[] = [
-      { label: t('windows.renameLabel'), icon: <Icon name="edit" size={16} />, onClick: () => handleRenameLabel(w) },
-    ];
-    if (extra?.online && extra.windowName !== undefined) {
-      items.push({ label: t('windows.renameWindow'), icon: <Icon name="edit" size={16} />, disabled: muxDisabled, onClick: () => handleRenameWindow(w.serverName, w.tmuxTarget, extra.windowName!, w.id) });
-    }
-    if (extra?.online && extra.paneTarget && canRenamePane(w)) {
-      items.push({ label: t('windows.renamePane'), icon: <Icon name="edit" size={16} />, disabled: muxDisabled, onClick: () => handleRenamePane(w.serverName, extra.paneTarget!, extra.paneTitle || '', w.id) });
-    }
-    if (extra?.online) {
-      items.push({ label: t('windows.capturePanes'), icon: <Icon name="camera" size={16} />, disabled: muxDisabled, onClick: () => handleCapturePanes(w.id) });
-    }
-    if (extra?.online && w.windowType === 'agent' && w.agentSessionId && !w.sleeping) {
-      items.push({ label: t('windows.sleep'), icon: <Icon name="moon" size={16} />, disabled: muxDisabled, onClick: () => handleSleepWindow(w.id) });
-    }
-    if (!extra?.online) {
-      const respawnLabel = w.sleeping ? t('terminal.wake', { ns: 'common' }) : t('windows.respawn');
-      items.push({ label: respawnLabel, icon: <Icon name="refresh" size={16} />, onClick: () => handleRespawnWindow(w.id, w.serverName) });
-    }
+  const handleDeletePane = useCallback((serverName: string, windowId: number, ordinal: number, handle: string | undefined, label: string, windowKind: MuxDriverKind | undefined) => {
+    setConfirmDialog({
+      title: t('servers:confirm.killPane'),
+      message: t('servers:confirm.killPaneMessage', { name: label }),
+      onConfirm: async () => {
+        setWindowActionLoading(true);
+        try {
+          await api(paneDeletePath({ kind: 'windowId', serverName, windowId, pane: ordinal }, handle), { method: 'DELETE' });
+          tabsToCloseAfterPaneDelete(tabs, { serverName, windowId, ordinal, windowKind }).forEach((tab) => closeTab(tab.id));
+          setConfirmDialog(null);
+          refreshWorkspace();
+          void refreshSessions?.();
+        } catch (e) {
+          setConfirmDialog(null);
+          showToast(t('windows.deletePaneFailed', { error: (e as Error).message }));
+        } finally {
+          setWindowActionLoading(false);
+        }
+      },
+    });
+  }, [tabs, closeTab, refreshWorkspace, refreshSessions, showToast]);
+
+  const getWindowMenuItems = useCallback((w: { id: number; serverName: string; tmuxTarget: string; label?: string; windowType?: string; agentSessionId?: string; sleeping?: boolean; muxRef?: MuxRef }, extra?: WindowMenuExtra): ContextMenuItem[] => {
     const linkedTask = findTaskByTarget(w.tmuxTarget);
-    if (linkedTask) {
-      items.push({ label: t('windows.showTask'), icon: <Icon name="tasks" size={16} />, onClick: () => openTask(linkedTask.id, linkedTask.title) });
-    }
-    items.push(
-      { label: t('windows.detachFromProject'), icon: <Icon name="external-link" size={16} />, onClick: () => handleDetachWindow(w.id) },
-      { label: t('windows.deleteWindow'), icon: <Icon name="trash" size={16} />, danger: true, disabled: muxDisabled, onClick: () => handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
-    );
+    const descriptors = buildWindowMenuItems({
+      online: extra?.online ?? false,
+      stale: extra?.stale,
+      windowName: extra?.windowName,
+      paneTarget: extra?.paneTarget,
+      paneOrdinal: extra?.paneOrdinal,
+      paneHandle: extra?.paneHandle,
+      canRenamePane: canRenamePane(w),
+      windowType: w.windowType,
+      agentSessionId: w.agentSessionId,
+      sleeping: w.sleeping,
+      hasLinkedTask: linkedTask !== null,
+    });
+    const actions: Record<WindowMenuItemDescriptor['kind'], { icon: React.ReactNode; run: (d: WindowMenuItemDescriptor) => void }> = {
+      'rename-label': { icon: <Icon name="edit" size={16} />, run: () => void handleRenameLabel(w) },
+      'rename-window': { icon: <Icon name="edit" size={16} />, run: () => void handleRenameWindow(w.serverName, w.tmuxTarget, extra!.windowName!, w.id) },
+      'rename-pane': { icon: <Icon name="edit" size={16} />, run: (d) => void handleRenamePane(w.serverName, extra!.paneTarget!, extra!.paneTitle || '', w.id, d.paneOrdinal) },
+      'capture-panes': { icon: <Icon name="camera" size={16} />, run: () => void handleCapturePanes(w.id) },
+      sleep: { icon: <Icon name="moon" size={16} />, run: () => void handleSleepWindow(w.id) },
+      respawn: { icon: <Icon name="refresh" size={16} />, run: () => void handleRespawnWindow(w.id, w.serverName) },
+      'show-task': { icon: <Icon name="tasks" size={16} />, run: () => openTask(linkedTask!.id, linkedTask!.title) },
+      detach: { icon: <Icon name="external-link" size={16} />, run: () => void handleDetachWindow(w.id) },
+      'delete-pane': { icon: <Icon name="trash" size={16} />, run: (d) => handleDeletePane(w.serverName, w.id, d.paneOrdinal!, d.paneHandle, extra!.paneTitle || extra!.paneTarget!, w.muxRef?.kind) },
+      'delete-window': { icon: <Icon name="trash" size={16} />, run: () => void handleDeleteWindow(w.serverName, w.tmuxTarget, w.id) },
+    };
+    const items: ContextMenuItem[] = descriptors.map((d) => ({
+      label: t(d.labelKey),
+      icon: actions[d.kind].icon,
+      danger: d.danger,
+      disabled: d.disabled,
+      onClick: () => actions[d.kind].run(d),
+    }));
     items.push(
       { label: '', separator: true, onClick: () => {} },
       { label: `${formatWindowId(w.id)} · tmux ${w.tmuxTarget}`, disabled: true, onClick: () => {} },
     );
     return items;
-  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);
+  }, [handleRenameLabel, handleRenameWindow, handleRenamePane, handleDetachWindow, handleDeleteWindow, handleDeletePane, handleRespawnWindow, handleSleepWindow, handleCapturePanes, findTaskByTarget, openTask]);
 
-  const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => {
+  const showWindowContextMenu = useCallback((e: React.MouseEvent, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: WindowMenuExtra) => {
     showContextMenu(e, getWindowMenuItems(w, extra));
   }, [showContextMenu, getWindowMenuItems]);
 
-  const showWindowContextMenuAt = useCallback((x: number, y: number, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: { online: boolean; windowName?: string; paneTarget?: string; paneTitle?: string }) => {
+  const showWindowContextMenuAt = useCallback((x: number, y: number, w: { id: number; serverName: string; tmuxTarget: string; label?: string }, extra?: WindowMenuExtra) => {
     showContextMenuAt(x, y, getWindowMenuItems(w, extra));
   }, [showContextMenuAt, getWindowMenuItems]);
 

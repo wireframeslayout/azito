@@ -28,6 +28,7 @@ import { fetchSessionsOrUndefined } from '../lib/fetchServerSessions';
 import { paneDisplayName } from '../lib/paneDisplay';
 import { missingPaneOutcome, resumableWindowId, type PaneUnavailableReason } from '../lib/paneState';
 import { refKindOf } from '../lib/sessionKind';
+import { shouldShowSplitButton } from '../lib/shouldShowSplitButton';
 
 export type WindowViewMode = 'terminal' | 'chat';
 
@@ -78,7 +79,7 @@ interface TerminalContainerProps {
    */
   leading?: React.ReactNode;
   /**
-   * SP コンテンツヘッダー右端（Issue #69 S8: 「∨ Nペイン」チップ等）に差し込む要素。leading と
+   * SP コンテンツヘッダー右端（Issue #69 S8: 「∨ Nウィンドウ」チップ等）に差し込む要素。leading と
    * 対称の位置づけ — SP では WindowStatusDropdown（ワーカーバッジ）の後ろに並べる。デスクトップは
    * 使わない（渡されない）。
    */
@@ -278,6 +279,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
   // The mux the shown window lives in (a server can host tmux and misao windows side by side): its ref's kind. The
   // server's default mux stands in only while the window's ref is not known yet (a bare target is read in the default).
   const windowKind = refKindOf(windowMuxRef) ?? muxKind;
+  const showSplit = shouldShowSplitButton({ windowKind, isMobile });
 
   const sessionsRef = useRef(sessions);
   sessionsRef.current = sessions;
@@ -357,7 +359,7 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
         {leading && <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 4, minWidth: 0 }}>{leading}</div>}
         {/* SP: ウィンドウ名は leading（TaskPanel が「> ウィンドウ名」トリガーとして描画）が
             既に担うため、ここでは pane 名の重複表示をしない（承認済み S8 コンテンツヘッダー:
-            「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nペイン」の1行のみ）。デスクトップは
+            「> ウィンドウ名」＋ワーカーバッジ▾＋右端「∨ Nウィンドウ」の1行のみ）。デスクトップは
             従来どおり activePaneName（pane 名）を表示する。 */}
         {activePaneName && !isMobile && (
           <div
@@ -411,8 +413,8 @@ export function TerminalContainer({ registeredWindow, serverName, target: rawTar
             onOpenTask={onOpenTask}
             onChanged={onWindowChanged}
           />
-          {!isMobile && onSplitPane && <IconButton title={t('terminal.splitHorizontal')} onClick={() => onSplitPane('h')} size="sm"><Icon name="split-h" size={14} /></IconButton>}
-          {!isMobile && onSplitPane && <IconButton title={t('terminal.splitVertical')} onClick={() => onSplitPane('v')} size="sm"><Icon name="split-v" size={14} /></IconButton>}
+          {showSplit && onSplitPane && <IconButton title={t('terminal.splitHorizontal')} onClick={() => onSplitPane('h')} size="sm"><Icon name="split-h" size={14} /></IconButton>}
+          {showSplit && onSplitPane && <IconButton title={t('terminal.splitVertical')} onClick={() => onSplitPane('v')} size="sm"><Icon name="split-v" size={14} /></IconButton>}
           {isMobile && trailing}
         </div>
       </div>

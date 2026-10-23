@@ -65,8 +65,10 @@ export const defaultRegistry = createDefaultRegistry();
 export function listAgentDefinitions(): AgentApiDefinition[] {
   return defaultRegistry.list().map((p) => ({
     ...p.definition,
+    // Issue #471: launchCommand is used for the "Add Window" UI preset
+    // (user-added windows), so it should not include MCP blocking flags.
     launchCommand: p.definition.launchable
-      ? p.buildLaunchCommand({ model: null, extraArgs: null })
+      ? p.buildLaunchCommand({ model: null, extraArgs: null, blockMcp: false })
       : null,
   }));
 }
