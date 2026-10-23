@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
+import { hostTar } from './archive';
 
 /**
  * The misao release the hub ships. Bumping it is a deliberate change here:
@@ -139,6 +140,11 @@ async function extractAsset(asset: MisaoAssetName, destDir: string): Promise<voi
   fs.mkdirSync(destDir, { recursive: true });
   const archive = await resolveAsset(asset);
   if (asset.endsWith('.zip')) {
+    if (process.platform === 'win32') {
+      // A Windows build host has no unzip; the OS's bsdtar reads a zip. --strip-components=1 drops the top directory like `-j`.
+      execFileSync(hostTar(), ['-xf', archive, '-C', destDir, '--strip-components=1']);
+      return;
+    }
     // `-j` drops the archive's top directory (`misao-<ver>-<target>/`), like --strip-components=1 below. unzip is on the
     // ubuntu / macOS build hosts; GNU tar cannot read a zip.
     try {
@@ -151,7 +157,7 @@ async function extractAsset(asset: MisaoAssetName, destDir: string): Promise<voi
     }
   } else {
     // `misao-<ver>-<target>/` is the archive's only top directory.
-    execFileSync('tar', ['xzf', archive, '-C', destDir, '--strip-components=1']);
+    execFileSync(hostTar(), ['xzf', archive, '-C', destDir, '--strip-components=1']);
   }
 }
 
