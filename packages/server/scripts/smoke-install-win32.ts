@@ -82,14 +82,14 @@ function checkVerification(installPs1: string, zip: string, sums: string, work: 
   const bad = path.join(work, 'SHA256SUMS.bad');
   fs.writeFileSync(bad, fs.readFileSync(sums, 'utf-8').replace(/^[0-9a-f]/i, (c) => (c === '0' ? '1' : '0')));
   const prefix = path.join(work, 'mismatch', '.azito');
-  const r = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', bad, '-Prefix', prefix, '-Yes', '-NoPath']);
+  const r = install(installPs1, ['-ZipPath', zip, '-Sha256Sums', bad, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService']);
   assert(r.status !== 0 && /SHA256 mismatch/.test(r.output), 'a checksum mismatch must fail the install', r.output);
   assert(!fs.existsSync(path.join(prefix, 'hub')), 'nothing may be written under the prefix after a mismatch');
 }
 
 function checkInstall(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
   step(`install into ${prefix}`);
-  const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath'];
+  const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService'];
   // A token variable inherited from the calling shell must not decide the token that is shown: the hub uses hub/.env.
   const inherited = 'token-from-the-parent-shell';
   const first = install(installPs1, args, { ...process.env, AZITO_UI_TOKEN: inherited });
@@ -115,7 +115,7 @@ function checkInstall(installPs1: string, zip: string, sums: string, prefix: str
 /** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
 function checkRepairAndDiagnostics(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
   step(`install into ${prefix} (a prefix with &), then repair a half-finished install`);
-  const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath'];
+  const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath', '-NoService'];
   const first = install(installPs1, args);
   assert(first.status === 0, 'install.ps1 failed', first.output);
   const hubDir = path.join(prefix, 'hub');
@@ -157,13 +157,14 @@ function checkCli(azitoCmd: string, prefix: string, version: string): void {
   const expected = readEnvValue(path.join(prefix, 'hub', '.env'), 'AZITO_UI_TOKEN');
   assert(t.status === 0 && t.output.trim() === expected, 'azito token show must print the token in hub/.env', t.output);
 
-  step('azito stop / status / misao / service say why they are not available');
-  for (const command of ['stop', 'status']) {
-    const r = azito(azitoCmd, command);
-    assert(r.status === 1 && /resident service/.test(r.output), `azito ${command} must fail with the reason`, r.output);
-  }
+  // This install was made with -NoService, so there is no task: the commands say so (the registered task is checked by smoke-service-win32.ts).
+  step('azito stop / status / service / misao say what is missing');
+  const stop = azito(azitoCmd, 'stop');
+  assert(stop.status === 1 && /not installed/.test(stop.output) && /azito service install/.test(stop.output), 'azito stop without the task must fail with the way to register it', stop.output);
+  const status = azito(azitoCmd, 'status');
+  assert(status.status === 0 && /service:\s+not installed/.test(status.output), 'azito status without the task must say it is not installed', status.output);
   const service = azito(azitoCmd, 'service status');
-  assert(service.status !== 0 && /Windows/.test(service.output), 'azito service status must fail with its reason', service.output);
+  assert(service.status === 0 && /service:\s+not installed/.test(service.output), 'azito service status without the task', service.output);
   const misao = azito(azitoCmd, 'misao install');
   assert(misao.status !== 0 && misao.output.trim() !== '', 'azito misao install must fail with its reason', misao.output);
   console.log(`[smoke-install] azito service status -> ${service.output.trim()}\n[smoke-install] azito misao install -> ${misao.output.trim()}`);
@@ -172,7 +173,7 @@ function checkCli(azitoCmd: string, prefix: string, version: string): void {
 }
 
 async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
-  step('azito start runs the hub with hub/.env and /api/health answers');
+  step('azito run runs the hub in the foreground with hub/.env and /api/health answers');
   const envFile = path.join(prefix, 'hub', '.env');
   const port = await freePort();
   // The installed file asks for port 3001, which may be taken on a shared runner: edit the value in place (the ACL stays).
@@ -181,11 +182,11 @@ async function checkStart(azitoCmd: string, prefix: string): Promise<void> {
   let output = '';
   let failure: Error | null = null;
   let exited = false;
-  const child: ChildProcess = spawn(CMD, cmdLine(azitoCmd, 'start'), { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true });
+  const child: ChildProcess = spawn(CMD, cmdLine(azitoCmd, 'run'), { stdio: ['ignore', 'pipe', 'pipe'], windowsVerbatimArguments: true });
   child.stdout?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
   child.stderr?.on('data', (chunk: Buffer) => { output += chunk.toString(); });
-  child.on('error', (err) => { failure = new Error(`could not start azito start: ${err.message}`); exited = true; });
-  child.on('exit', (code) => { failure ??= new Error(`azito start exited (code ${code}) before /api/health answered`); exited = true; });
+  child.on('error', (err) => { failure = new Error(`could not start azito run: ${err.message}`); exited = true; });
+  child.on('exit', (code) => { failure ??= new Error(`azito run exited (code ${code}) before /api/health answered`); exited = true; });
   try {
     const status = await waitForHealth(`http://127.0.0.1:${port}/api/health`, () => failure);
     console.log(`[smoke-install] /api/health -> ${status}`);

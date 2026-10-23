@@ -3,11 +3,11 @@ import readline from 'readline';
 import type { MisaoServiceStatus } from '@azito/shared';
 import { getBundleRoot } from '../shared/releaseInfo';
 import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
-import type { HostEnv } from '../shared/os/hostEnv';
-import { createServiceManager, runCommand } from '../modules/system/serviceManager';
+import { runCommand } from '../modules/system/serviceManager';
+import { createMisaoServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
 import { MisaoServiceError } from '../modules/system/misao/MisaoServiceError';
-import { MISAO_SERVICE, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
+import { resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 
 const USAGE = `Usage: azito misao <command> [options]
 
@@ -82,7 +82,7 @@ function printStatus(status: MisaoServiceStatus): void {
 }
 
 /** `azito misao ...`: install, update, start and inspect the AZITO-managed misao service from the bundled hub. */
-export async function misaoCommand(argv: string[], host: Pick<HostEnv, 'platform' | 'homeDir' | 'uid'>, secretFileGuard: SecretFileGuard): Promise<void> {
+export async function misaoCommand(argv: string[], host: ServiceHost, secretFileGuard: SecretFileGuard): Promise<void> {
   try {
     const args = parseArgs(argv);
     if (!args.command || !['status', 'install', 'update', 'start'].includes(args.command)) {
@@ -93,7 +93,7 @@ export async function misaoCommand(argv: string[], host: Pick<HostEnv, 'platform
 
     const bundleRoot = getBundleRoot();
     const prefix = args.prefix ?? resolveInstallPrefix(bundleRoot);
-    const serviceManager = createServiceManager(host, MISAO_SERVICE, runCommand);
+    const serviceManager = createMisaoServiceManager(host, runCommand);
     const service = new MisaoServiceService({
       paths: prefix ? pathsOrUsageError(prefix) : null,
       bundle: readMisaoBundle(bundleRoot),

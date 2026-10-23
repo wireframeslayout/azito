@@ -6,7 +6,7 @@ import { fakeRunTransport, failed, ok } from '../../../shared/exec/testing/comma
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import { rawFromText } from '../../../shared/os/taskScheduler/testing/liveTask';
 import { buildTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
-import { HUB_SERVICE, createServiceManager } from '../serviceManager';
+import { HUB_SERVICE } from '../serviceManager';
 import { createWindowsServiceManager } from '../windowsServiceManager';
 
 const TIMING = { stopTimeoutMs: 200, pollIntervalMs: 5 };
@@ -58,11 +58,6 @@ describe('TaskSchedulerServiceManager', () => {
     const { manager } = fakeScheduler({ registered: false, running: false });
     expect(manager.kind).toBe('taskscheduler');
     expect(manager.templateName).toBeUndefined();
-  });
-
-  it('is not what createServiceManager returns yet: Windows stays unsupported there until #380 B3', () => {
-    expect(createServiceManager({ platform: 'win32', homeDir: home, uid: -1 }, HUB_SERVICE, async () => ({ code: 0, stdout: '', stderr: '' })))
-      .toMatchObject({ error: { code: 'unsupported_os' } });
   });
 
   it('install registers the XML and keeps a UTF-16 copy that readDefinition returns', async () => {

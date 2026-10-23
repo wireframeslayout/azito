@@ -2,7 +2,7 @@ import fs from 'fs';
 import Fastify from 'fastify';
 
 import { resolveDataDir, getLegacyPaths } from './shared/dataDir';
-import { getReleaseInfo } from './shared/releaseInfo';
+import { getBundleRoot, getReleaseInfo } from './shared/releaseInfo';
 import { migrateDataIfNeeded } from './shared/dataMigration';
 import { initSecretBox } from './shared/crypto/SecretBox';
 import { initVapidKeyManager } from './modules/notifications/push/VapidKeyManager';
@@ -28,6 +28,7 @@ import { initEnvCommand } from './cli/initEnvCommand';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { runUpdate } from './modules/system/updateScript';
 import { serializeRequestForLog } from './shared/redactUrlSecrets';
+import { startHubExitWithParent } from './app/hubExitWithParent';
 
 // ─── Graceful shutdown ───
 
@@ -54,7 +55,7 @@ async function main(): Promise<void> {
   }
 
   if (process.argv[2] === 'service') {
-    await serviceCommand(process.argv.slice(3), hostEnv);
+    await serviceCommand(process.argv.slice(3), hostEnv, { env: process.env, bundleRoot: getBundleRoot(), pid: process.pid });
     return;
   }
 
@@ -168,6 +169,19 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
+
+  // A hub started by the Windows Task Scheduler task runs under `conhost.exe --headless`, and "End" (`azito stop`) ends only that
+  // conhost: `run.ps1 -Service` names it in AZITO_HUB_EXIT_WITH_PID, and the hub shuts down when it is gone.
+  startHubExitWithParent({
+    hostEnv,
+    env: process.env,
+    onGone: (reason) => {
+      app.log.info(`${reason}: shutting down`);
+      shutdown('SIGTERM');
+    },
+    warn: (message) => app.log.warn(message),
+    info: (message) => app.log.info(message),
+  });
 
   // ─── Startup: recover a stranded isolation-cleanup pending marker ───
   // Synchronous/local-only (no remote side effects — see the function's own

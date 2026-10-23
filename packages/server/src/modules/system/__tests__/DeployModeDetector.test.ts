@@ -39,7 +39,7 @@ describe('DeployModeDetector', () => {
 
   it('returns "source" when not running in release mode', () => {
     mockedIsReleaseMode.mockReturnValue(false);
-    const detector = new DeployModeDetector(tmpHome);
+    const detector = new DeployModeDetector(tmpHome, false);
     expect(detector.detect()).toBe('source');
     expect(detector.canUpdate()).toBe(false);
     expect(detector.serviceManager()).toBeNull();
@@ -50,7 +50,7 @@ describe('DeployModeDetector', () => {
     setPlatform('darwin');
     fs.mkdirSync(path.join(tmpHome, 'Library', 'LaunchAgents'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, 'Library', 'LaunchAgents', 'com.azito.hub.plist'), '');
-    const detector = new DeployModeDetector(tmpHome);
+    const detector = new DeployModeDetector(tmpHome, false);
     expect(detector.detect()).toBe('launchd');
     expect(detector.canUpdate()).toBe(true);
     expect(detector.serviceManager()).toBe('launchd');
@@ -60,7 +60,7 @@ describe('DeployModeDetector', () => {
     mockedIsReleaseMode.mockReturnValue(true);
     setPlatform('linux');
     mockedExecFileSync.mockReturnValue(Buffer.from('active'));
-    const detector = new DeployModeDetector(tmpHome);
+    const detector = new DeployModeDetector(tmpHome, false);
     expect(detector.detect()).toBe('systemd');
     expect(detector.canUpdate()).toBe(true);
   });
@@ -71,7 +71,7 @@ describe('DeployModeDetector', () => {
     mockedExecFileSync.mockImplementation(() => {
       throw new Error('systemctl not found');
     });
-    const detector = new DeployModeDetector(tmpHome);
+    const detector = new DeployModeDetector(tmpHome, false);
     expect(detector.detect()).toBe('source');
   });
 
@@ -80,17 +80,42 @@ describe('DeployModeDetector', () => {
     setPlatform('darwin');
     fs.mkdirSync(path.join(tmpHome, 'Library', 'LaunchAgents'), { recursive: true });
     fs.writeFileSync(path.join(tmpHome, 'Library', 'LaunchAgents', 'com.azito.hub.plist'), '');
-    const launchdDetector = new DeployModeDetector(tmpHome);
+    const launchdDetector = new DeployModeDetector(tmpHome, false);
     expect(launchdDetector.getDisabledReason()).toBeNull();
 
     mockedIsReleaseMode.mockReturnValue(false);
-    const sourceDetector = new DeployModeDetector(tmpHome);
+    const sourceDetector = new DeployModeDetector(tmpHome, false);
     expect(sourceDetector.getDisabledReason()).toMatch(/開発モード/);
 
     mockedIsReleaseMode.mockReturnValue(true);
     setPlatform('linux');
     mockedExecFileSync.mockReturnValue(Buffer.from('active'));
-    const systemdDetector = new DeployModeDetector(tmpHome);
+    const systemdDetector = new DeployModeDetector(tmpHome, false);
     expect(systemdDetector.getDisabledReason()).toBeNull();
+  });
+
+  it('detects "taskscheduler" on Windows when the hub was started by its task, without spawning anything', () => {
+    mockedIsReleaseMode.mockReturnValue(true);
+    setPlatform('win32');
+    const detector = new DeployModeDetector(tmpHome, true);
+    expect(detector.detect()).toBe('taskscheduler');
+    expect(mockedExecFileSync).not.toHaveBeenCalled();
+  });
+
+  it('does not offer the in-app update on a Windows task (#381), and says why', () => {
+    mockedIsReleaseMode.mockReturnValue(true);
+    setPlatform('win32');
+    const detector = new DeployModeDetector(tmpHome, true);
+    expect(detector.canUpdate()).toBe(false);
+    expect(detector.serviceManager()).toBeNull();
+    expect(detector.getDisabledReason()).toMatch(/#381.*azito service restart/);
+  });
+
+  it('is "source" for a release bundle on Windows that was started by hand, with the way to register the task', () => {
+    mockedIsReleaseMode.mockReturnValue(true);
+    setPlatform('win32');
+    const detector = new DeployModeDetector(tmpHome, false);
+    expect(detector.detect()).toBe('source');
+    expect(detector.getDisabledReason()).toMatch(/install\.ps1/);
   });
 });

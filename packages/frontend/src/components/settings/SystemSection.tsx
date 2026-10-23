@@ -10,6 +10,7 @@ import type { DeployMode, SystemUpdateStatus, VersionEntry } from '../../hooks/u
 const DEPLOY_MODE_LABEL: Record<DeployMode, string> = {
   systemd: 'systemd',
   launchd: 'launchd',
+  taskscheduler: 'Task Scheduler',
   source: 'source (dev)',
 };
 
@@ -64,7 +65,7 @@ export default function SystemSection() {
     if (!res.started) setStartError(res.error ?? t('system.couldNotStart'));
   };
 
-  const canInstall = status?.deployMode !== 'source' && (status?.runningTasks ?? 0) === 0;
+  const canInstall = (status?.deployMode === 'systemd' || status?.deployMode === 'launchd') && (status?.runningTasks ?? 0) === 0;
 
   const handleInstallVersion = async (v: VersionEntry): Promise<void> => {
     if (v.relation === 'older') {

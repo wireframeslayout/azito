@@ -7,7 +7,6 @@ import {
   HUB_SERVICE,
   LaunchdServiceManager,
   SystemdServiceManager,
-  createServiceManager,
   isServiceManagerKind,
   limitToBackgroundSession,
   serviceManagerOfKind,
@@ -33,24 +32,6 @@ describe('isServiceManagerKind', () => {
     expect(isServiceManagerKind('launchd')).toBe(true);
     expect(isServiceManagerKind('source')).toBe(false);
     expect(isServiceManagerKind('')).toBe(false);
-  });
-});
-
-describe('createServiceManager', () => {
-  const run = recorder().run;
-
-  it('picks systemd on Linux and launchd on macOS', () => {
-    expect(createServiceManager({ platform: 'linux', homeDir: '/h', uid: 501 }, HUB_SERVICE, run)).toMatchObject({ manager: { kind: 'systemd' } });
-    expect(createServiceManager({ platform: 'darwin', homeDir: '/h', uid: 501 }, HUB_SERVICE, run)).toMatchObject({ manager: { kind: 'launchd' } });
-  });
-
-  it('refuses Windows with unsupported_os and says why, instead of falling back to another manager', () => {
-    const result = createServiceManager({ platform: 'win32', homeDir: 'C:\\Users\\u', uid: -1 }, HUB_SERVICE, run);
-    expect(result).toMatchObject({ error: { code: 'unsupported_os', message: expect.stringContaining('Windows') } });
-  });
-
-  it('refuses an OS AZITO does not know with unsupported_host', () => {
-    expect(createServiceManager({ platform: 'freebsd', homeDir: '/h', uid: 501 }, HUB_SERVICE, run)).toMatchObject({ error: { code: 'unsupported_host' } });
   });
 });
 

@@ -94,7 +94,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.1
 | `-ZipPath <file>` | ダウンロードの代わりにローカルの `azito-hub-<tag>-win32-x64.zip` を使う（オフライン用）。`-Sha256Sums <file>` を足すと照合する |
 | `-Yes` | 確認を省く |
 | `-NoPath` | `<prefix>\bin` をユーザーの PATH に足さない |
-| `-NoService` | `install.sh` と揃えて受け付ける。ハブはまだサービス登録しないので、常にこの動作 |
+| `-NoService` | タスクスケジューラのタスクを登録しない。`azito run` で起動するか、あとから `azito service install` で登録する |
 
 zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止まります。展開先のフォルダの外に出るエントリを含む zip も拒否します。配置:
 
@@ -104,6 +104,7 @@ zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止�
 <prefix>\hub\.env              設定（版のフォルダの外。更新で消えない）
 <prefix>\data\                 データベース・鍵・トークン
 <prefix>\bin\azito.cmd         CLI
+<prefix>\logs\hub.log         ハブの標準出力・標準エラーのすべて（journal に当たるもの）。約 10 MB で切り替わり、前のファイルは hub.log.1 に残る
 ```
 
 `hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を、BOM の無い ASCII の 1 行で書きます。Windows PowerShell 5.1 の `Set-Content -Encoding UTF8` や `>` は BOM 付き、または UTF-16 で書くため、`azito` は読み取りを拒否します。次のように書いてください:
@@ -118,13 +119,27 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 
 | コマンド | 動作 |
 |---|---|
-| `azito start` | `run.ps1` 経由でハブを前面で実行（Ctrl+C で止める） |
+| `azito start` / `azito stop` / `azito status` | タスクスケジューラのタスク `AzitoHub`（下記）の起動・停止・状態表示。`status` は状態とログの場所を表示し、`stop` はこの導入の `node.exe` が残っていない状態になってから戻る |
+| `azito run` | `run.ps1` 経由でハブを前面で実行（Ctrl+C で止める）。試しに動かすときや、`-NoService` で導入したとき用 |
 | `azito token show` / `token rotate` | UI トークン（`hub\.env` に保存。そこに設定されている間は `rotate` が中止するので、そのファイルの `AZITO_UI_TOKEN` を書き換える） |
 | `azito version` | `current.txt` の版と、配布物自身の版 |
-| `azito misao ...`、`azito service ...` | ハブに渡し、Windows ではいまは拒否される。`service` は「タスクスケジューラは未対応」と表示する。`misao` は、ハブ自身の misao（B3b）が入るまでは導入先の検査（Windows パスのバックスラッシュを拒否する）で止まる |
-| `azito stop` / `azito status` | 理由付きで終了コード 1（常駐がまだ無い） |
+| `azito service status\|start\|stop\|restart\|reload\|install` | Unix のサービスと同じ操作。`install` はタスクを登録する（install.ps1 が呼ぶ）。同じ定義の再登録は何もせず、違う定義はハブが動いている間は拒否される |
+| `azito misao ...` | ハブに渡し、Windows ではいまは拒否される。`misao` は、ハブ自身の misao（B3b）が入るまでは導入先の検査（Windows パスのバックスラッシュを拒否する）で止まる |
 
-**未対応（#380）:** ハブの常駐（タスクスケジューラ）、ハブ自身の misao、アプリ内の更新・アンインストール（#381）。それまでは `azito start` を開いている間だけハブが動きます。
+**未対応（#380）:** ハブ自身の misao（B3b）、アプリ内の更新・アンインストール（#381）。
+
+### タスクスケジューラのタスクとしてのハブ
+
+`-NoService` を付けなければ、install.ps1 がタスク `AzitoHub` を登録し（同梱の `azito-hub.cjs service install` 経由。タスクの XML はハブ自身のコードが作り、PowerShell では書きません）、`/Run` で起動します。このタスクは:
+
+- **あなたのログオン時**に起動します（ブート時ではありません）。あなたの権限（管理者権限なし）で動き、失敗すると 1 分おきに再起動します。ログオフ中はハブは動かず、再起動後はログオンが要ります
+- `conhost.exe --headless powershell.exe <ランチャー>` を実行するので、デスクトップにコンソール窓は出ません。ランチャーは起動のたびに `hub\current.txt` を読み、その版の `run.ps1 -Service` を実行します。つまり**定義に版は含まれず**、手動の更新は `current.txt` を切り替えて `azito service restart` するだけで済み、タスクの再登録は要りません
+- ハブの標準出力・標準エラーを `<prefix>\logs\hub.log` に書きます（`current.txt` が不正でランチャーが止まったときの理由もここ）。場所は `azito status` が表示します
+- タスクと一緒に終わります。タスクスケジューラの「終了」（`azito stop`、`schtasks /End /TN AzitoHub`）が終わらせるのは `conhost.exe` だけなので、`run.ps1 -Service` がその ID をハブに伝え（`AZITO_HUB_EXIT_WITH_PID`）、いなくなって数秒でハブが自分で終了します（Windows の agent が親に付き従うのと同じ仕組み）。`azito stop` は念のため、この導入の `azito-hub.cjs` を動かしている `node.exe`（同じユーザー、コマンドライン引数の完全一致、同じ生成時刻）も終わらせ、それ以外には触れません
+
+設定 › システムには、起動方式「Task Scheduler」と、アプリ内更新が使えない理由（#381）が表示されます。手動の更新は、新しい zip を `hub\<tag>` に展開し、tag を `current.txt` に（BOM の無い ASCII の 1 行で）書いて、`azito service restart` します。
+
+install.ps1 は `current.txt` を書く前にタスクを登録し、書いたあとに起動します。途中で失敗しても、もう一度実行すれば直ります。起動だけが失敗したときは、ファイルは導入済みなので `azito start` を実行してください。導入済みのハブにはインストーラは何もしません（`install.sh` と同じ）。別の prefix 用に登録され、しかも動いているタスクは置き換えません（`azito stop` するまで `azito service install` が拒否します）。タスクを手で消すには `schtasks /Delete /TN AzitoHub /F`（アンインストーラは #381）。
 
 ## 手動インストール（tarball）
 

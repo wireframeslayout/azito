@@ -17,13 +17,16 @@ vi.mock('../modules/system/serviceManager', async (importOriginal) => {
   };
 });
 
-import { serviceCommand } from './serviceCommand';
+import { serviceCommand, type ServiceCommandContext } from './serviceCommand';
+import type { ServiceHost } from '../modules/system/createServiceManager';
 
 describe('azito service', () => {
   let home: string;
   let out: string[];
   let err: string[];
   const uid = os.userInfo().uid;
+  const hostOf = (platform: 'darwin' | 'linux'): ServiceHost => ({ platform, homeDir: home, uid, tmpDir: os.tmpdir(), systemRoot: undefined });
+  const context: ServiceCommandContext = { env: {}, bundleRoot: '/opt/azito/hub/v0.0.0', pid: 1 };
 
   beforeEach(() => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'azsc-'));
@@ -48,17 +51,17 @@ describe('azito service', () => {
   };
 
   it('prints the usage for an unknown command', async () => {
-    await serviceCommand(['bogus'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['bogus'], hostOf('darwin'), context);
     expect(out.join('\n')).toContain('Usage: azito service');
     expect(process.exitCode).toBe(1);
   });
 
   it('says the service is not installed, and refuses to start it', async () => {
-    await serviceCommand(['status'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['status'], hostOf('darwin'), context);
     expect(out.join('\n')).toContain('not installed');
     expect(process.exitCode).toBeUndefined();
 
-    await serviceCommand(['start'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['start'], hostOf('darwin'), context);
     expect(err.join('\n')).toContain('not installed');
     expect(process.exitCode).toBe(1);
   });
@@ -66,7 +69,7 @@ describe('azito service', () => {
   it('shows the launchd domain the hub is loaded into in status', async () => {
     installPlist();
     launchctl.results[`launchctl print gui/${uid}/com.azito.hub`] = 113;
-    await serviceCommand(['status'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['status'], hostOf('darwin'), context);
     expect(out).toEqual(['service:   launchd (active)', 'domain:    user']);
   });
 
@@ -74,26 +77,26 @@ describe('azito service', () => {
     installPlist();
     launchctl.results[`launchctl print gui/${uid}/com.azito.hub`] = 113;
     launchctl.results[`launchctl print user/${uid}/com.azito.hub`] = 113;
-    await serviceCommand(['reload'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['reload'], hostOf('darwin'), context);
     expect(launchctl.calls.filter((c) => /bootstrap|bootout/.test(c))).toEqual([`launchctl bootstrap user/${uid} ${plistPath()}`]);
     expect(process.exitCode).toBeUndefined();
 
     launchctl.results[`launchctl bootstrap user/${uid} ${plistPath()}`] = 37;
-    await serviceCommand(['reload'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['reload'], hostOf('darwin'), context);
     expect(err.join('\n')).toMatch(/launchctl bootstrap user\/-?\d+ failed \(exit 37\)/);
     expect(process.exitCode).toBe(1);
   });
 
   it('warns in status about a job loaded into both domains, and start / reload refuse it with the way out', async () => {
     installPlist();
-    await serviceCommand(['status'], { platform: 'darwin', homeDir: home, uid });
+    await serviceCommand(['status'], hostOf('darwin'), context);
     expect(out).toEqual(['service:   launchd (active)', 'domain:    gui + user', expect.stringContaining('two copies')]);
     expect(process.exitCode).toBeUndefined();
 
     for (const command of ['start', 'reload']) {
       launchctl.calls = [];
       process.exitCode = undefined;
-      await serviceCommand([command], { platform: 'darwin', homeDir: home, uid });
+      await serviceCommand([command], hostOf('darwin'), context);
       expect(err.join('\n')).toMatch(/both gui\/-?\d+ and user\/-?\d+.*azito service stop/);
       expect(process.exitCode).toBe(1);
       expect(launchctl.calls.some((c) => /bootstrap|bootout|kickstart/.test(c))).toBe(false);
@@ -104,14 +107,21 @@ describe('azito service', () => {
     const unit = path.join(home, '.config', 'systemd', 'user', 'azito.service');
     fs.mkdirSync(path.dirname(unit), { recursive: true });
     fs.writeFileSync(unit, '[Unit]\n');
-    await serviceCommand(['reload'], { platform: 'linux', homeDir: home, uid });
+    await serviceCommand(['reload'], hostOf('linux'), context);
     expect(launchctl.calls.filter((c) => !c.includes('is-active'))).toEqual(['systemctl --user daemon-reload', 'systemctl --user restart azito']);
     expect(process.exitCode).toBeUndefined();
   });
 
-  it('reports Windows as unsupported with the reason', async () => {
-    await serviceCommand(['status'], { platform: 'win32', homeDir: home, uid });
-    expect(err.join('\n')).toContain('Windows');
+  it('on Windows, a source checkout has no service to operate: it says so instead of guessing a prefix', async () => {
+    await serviceCommand(['status'], { platform: 'win32', homeDir: home, uid: -1, tmpDir: home, systemRoot: 'C:\\Windows' }, { ...context, bundleRoot: null });
+    expect(err.join('\n')).toContain('not a release install');
     expect(process.exitCode).toBe(1);
+  });
+
+  it('install is for Windows: on Linux it points at install.sh and registers nothing', async () => {
+    await serviceCommand(['install'], hostOf('linux'), context);
+    expect(err.join('\n')).toContain('install.sh');
+    expect(process.exitCode).toBe(1);
+    expect(launchctl.calls.filter((c) => !c.includes('is-active'))).toEqual([]);
   });
 });
