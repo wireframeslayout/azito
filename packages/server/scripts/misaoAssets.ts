@@ -43,6 +43,19 @@ export function misaoExecutableName(target: string): string {
   return target.includes('-windows-') ? 'misao.exe' : 'misao';
 }
 
+/** The on-disk name of a release file (keyed by its logical name in the manifest) under `misao/<target>/`. */
+export function misaoReleaseFileName(target: string, name: MisaoReleaseFile): string {
+  return name === 'misao' ? misaoExecutableName(target) : name;
+}
+
+/** The mode each release file is staged with (same table as MISAO_RELEASE_FILES in agentMisaoSocket.ts). */
+const RELEASE_FILE_MODES: Record<MisaoReleaseFile, number> = {
+  misao: 0o755,
+  LICENSE: 0o644,
+  NOTICE: 0o644,
+  'THIRD-PARTY-LICENSES.txt': 0o644,
+};
+
 /** Where downloaded assets are cached between builds (dist-hub is wiped on every build, so not there). */
 const DEFAULT_CACHE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'misao');
 
@@ -128,7 +141,14 @@ async function extractAsset(asset: MisaoAssetName, destDir: string): Promise<voi
   if (asset.endsWith('.zip')) {
     // `-j` drops the archive's top directory (`misao-<ver>-<target>/`), like --strip-components=1 below. unzip is on the
     // ubuntu / macOS build hosts; GNU tar cannot read a zip.
-    execFileSync('unzip', ['-q', '-o', '-j', archive, '-d', destDir]);
+    try {
+      execFileSync('unzip', ['-q', '-o', '-j', archive, '-d', destDir]);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`extracting the Windows misao (${asset}) needs the \`unzip\` command, which is not installed on this build host`);
+      }
+      throw err;
+    }
   } else {
     // `misao-<ver>-<target>/` is the archive's only top directory.
     execFileSync('tar', ['xzf', archive, '-C', destDir, '--strip-components=1']);
@@ -163,12 +183,13 @@ export async function stageMisao(stageDir: string): Promise<void> {
 
     const hashes = {} as Record<MisaoReleaseFile, string>;
     for (const name of MISAO_RELEASE_FILES) {
-      const fileName = name === 'misao' ? misaoExecutableName(target) : name;
+      const fileName = misaoReleaseFileName(target, name);
       const file = path.join(targetDir, fileName);
       if (!fs.existsSync(file)) throw new Error(`${asset} does not contain ${fileName}`);
+      // unzip leaves 0666 (umask-dependent); every file gets its mode explicitly.
+      fs.chmodSync(file, RELEASE_FILE_MODES[name]);
       hashes[name] = sha256(file);
     }
-    fs.chmodSync(path.join(targetDir, misaoExecutableName(target)), 0o755);
     manifest.targets[target] = hashes;
   }
   fs.writeFileSync(path.join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

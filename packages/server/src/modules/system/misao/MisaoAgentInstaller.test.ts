@@ -463,7 +463,7 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     const status = { ...(await target().fetchMisaoStatus()) };
     status.host = { ...status.host, platform: 'win32' };
     const upload = vi.fn();
-    await expect(installer().install(target({ fetchMisaoStatus: async () => status, uploadMisaoFile: upload }))).rejects.toMatchObject({ code: 'unsupported_os' });
+    await expect(installer().install(target({ hostProfile: null, fetchMisaoStatus: async () => status, uploadMisaoFile: upload }))).rejects.toMatchObject({ code: 'unsupported_os' });
     expect(upload).not.toHaveBeenCalled();
   });
 

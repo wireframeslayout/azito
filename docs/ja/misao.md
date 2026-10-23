@@ -107,14 +107,14 @@ API では `PUT /api/servers/:name` の `defaultMux`（`"misao"` / `"tmux"`。�
 ### エージェントサーバーへの misao の導入
 
 ハブは**同梱の misao**をエージェント経由で送ります（リリースのファイルは、マニフェストの sha256 と両端で照合します。エージェントは何も
-ダウンロードしません）。どのハブも Unix の 4 ターゲットと `x86_64-pc-windows-msvc`（`misao.exe`）の計 5 ターゲットのバイナリを持ち（Windows 版は同梱のみで、導入は Windows のハブ / エージェント対応で入ります。Windows のホストは引き続き `unsupported_os` / `unsupported_platform` で断ります）（ハブ自身も同じ同梱物から自分の misao を入れます。ハブは
+ダウンロードしません）。どのハブも Unix の 4 ターゲットと `x86_64-pc-windows-msvc`（`misao.exe`）の計 5 ターゲットのバイナリを持ち（ハブ自身も同じ同梱物から自分の misao を入れます。ハブは
 Linux x86_64 / arm64 と macOS arm64 で動きます）、エージェント自身の OS / アーキテクチャ（Linux x86_64 / arm64、
 macOS arm64 / x86_64）に合うものを送ります。合うものが無いホストはエラーで断ります（フォールバックはしません）。
 ただし、このリリースのエージェントの自動インストールは x86_64 のホストしか受け付けないため、arm64 のエージェントサーバーは未対応です
 （同梱するバイナリとは別の話です）。
 `~/.azito/misao/<version>/` に、`current` -> `<version>` で配置し、systemd のユーザー unit `azito-misao`（`KillMode=process`）として起動します。
 ユーザー systemd が無いホスト（macOS では常に）では、環境を空にしたバックグラウンドプロセスで起動します（再起動をまたいでは残りません）。
-Node.js も node-pty も使いません。
+Node.js も node-pty も使いません。Windows 版は同梱のみで、導入は Windows のハブ / エージェント対応で入ります。それまでは Windows のエージェントは `unsupported_os` で断り、Windows のハブでは misao の状態が `unsupported_platform`、install / update は `not_managed` で失敗します。リリースのビルドにはこの zip を展開する `unzip` コマンドが必要です。
 
 - エージェントサーバーの追加（自動インストール）では、エージェントのあとに misao を入れます。tmux が無いホストも preflight で止まらなくなり、
   その場合は既定の mux が misao になります。misao だけが失敗しても、エージェントは導入済みのまま、レスポンスの `misaoError` で伝えます。
