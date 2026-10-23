@@ -50,3 +50,12 @@ export type {
   MisaoDaemonInfo,
   MisaoServiceStatus,
 } from './misaoService';
+export {
+  type HostPlatform,
+  type HostPlatformInfo,
+  type HostFeature,
+  type HostFeatureSupport,
+  HOST_FEATURES,
+  hostFeatureSupport,
+} from './hostCapabilities';
+export { pickTaskExecutionServer } from './taskServer';

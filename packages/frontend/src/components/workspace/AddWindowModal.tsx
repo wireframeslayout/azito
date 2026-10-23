@@ -3,11 +3,13 @@ import { useTranslation } from 'react-i18next';
 import Modal from '../Modal';
 import FormField from '../FormField';
 import DirectoryInput from '../DirectoryInput';
-import { FormInput, FormSelect, baseInputStyle, Button, ModelSelect } from '../ui';
+import { FormInput, FormSelect, baseInputStyle, Button, BlockedActionButton, ModelSelect } from '../ui';
 import type { MuxDriverKind } from '@azito/shared';
 import type { Server, Session } from '../../pages/workspace/types';
 import type { MuxKindSelectModel } from '../../lib/muxKindChoice';
 import MuxKindField from './MuxKindField';
+import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
+import { workerLaunchBlock } from '../../lib/workerLaunch';
 import { findSessionByKey, hasMixedKinds, sessionKey, sessionOptionLabel, windowTargetSelectOptions } from '../../lib/sessionKind';
 
 interface AddWindowModalProps {
@@ -58,6 +60,8 @@ function getWindowTargets(awSessionData: Record<string, Session[]>, awServer: st
   return windowTargetSelectOptions(awSessionData[awServer] || []);
 }
 
+const WORKER_BLOCKED_ID = 'add-window-worker-blocked-reason';
+
 export default function AddWindowModal({
   open, onClose, loading, onSubmit,
   awMode, setAwMode,
@@ -82,9 +86,12 @@ export default function AddWindowModal({
   const { t } = useTranslation(['workspace', 'common']);
   const [modelInvalid, setModelInvalid] = useState(false);
   const handleModelValidityChange = useCallback((valid: boolean) => setModelInvalid(!valid), []);
+  // Starting claude / codex (or any command) in a new window needs a pane command; a Windows pane takes none yet, so only a plain shell is offered there.
+  const hostFeatureBlock = useHostFeatureBlock();
+  const workerBlockReason = workerLaunchBlock({ mode: awMode, serverName: awServer, agent: awAgent }, hostFeatureBlock);
 
   return (
-    <Modal title={t('addWindow.title')} open={open} onClose={onClose} actions={<Button variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid} loadingLabel={t('addWindow.adding')}>{awMode === 'new' ? t('addWindow.createAndAdd') : awMode === 'session' ? t('addWindow.addAllWindows') : t('addWindow.add')}</Button>}>
+    <Modal title={t('addWindow.title')} open={open} onClose={onClose} actions={<BlockedActionButton variant="primary" onClick={onSubmit} loading={loading} disabled={modelInvalid} blockedReason={workerBlockReason} reasonId={WORKER_BLOCKED_ID} loadingLabel={t('addWindow.adding')}>{awMode === 'new' ? t('addWindow.createAndAdd') : awMode === 'session' ? t('addWindow.addAllWindows') : t('addWindow.add')}</BlockedActionButton>}>
       {awMode === 'new' ? (
         <>
           {projectServers.length > 1 && (
@@ -132,6 +139,11 @@ export default function AddWindowModal({
                     <option key={key} value={key}>{val.label}</option>
                   ))}
             </FormSelect>
+            {workerBlockReason && (
+              <div id={WORKER_BLOCKED_ID} role="status" style={{ marginTop: 6, fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>
+                {workerBlockReason} {t('addWindow.workerBlockedHint')}
+              </div>
+            )}
             {agentPresetsError && (
               <div role="alert" style={{
                 marginTop: 6, padding: '6px 10px', borderRadius: 'var(--radius-sm)',

@@ -247,5 +247,10 @@
   "paneState": {
     "stopped": "停止中",
     "exited": "終了"
+  },
+  "hostFeature": {
+    "windowsPending": "Windows のエージェントでは、まだ使えません（v0.12.x で対応予定。#{{issue}}）",
+    "windowsNoTmux": "Windows には tmux がありません。ペインサーバーは misao を使います",
+    "apiRefused": "このサーバーの OS では、まだ使えない操作です: {{reason}}"
   }
 }

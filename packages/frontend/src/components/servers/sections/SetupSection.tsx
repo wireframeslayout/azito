@@ -5,7 +5,8 @@ import { InstallSteps, FormSelect, FormInput, Chip, Button } from '../../ui';
 import type { InstallStep, ChipTone } from '../../ui';
 import { Icon } from '../../ui/Icon';
 import type { Server } from '../../../hooks/useServerManagement';
-import { describeMisaoItem, type InstallStatusResponse, type InstallStatusItem } from '../serverSections';
+import { closedSetupRows, describeMisaoItem, type InstallStatusResponse, type InstallStatusItem } from '../serverSections';
+import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs } from '../../../lib/hostFeature';
 import { useToast } from '../../../hooks/useToast';
 import { useConfirm } from '../../../hooks/useConfirm';
 import { MisaoServicePanel } from './MisaoServicePanel';
@@ -95,6 +96,10 @@ export default function SetupSection({ server, installStatus, installStatusError
         `/servers/${encoded}/harness/install`,
         { method: 'POST', body: JSON.stringify({ azito_url: azitoUrl }) },
       );
+      if (isUnsupportedOsAnswer(res)) {
+        setHarnessSteps([{ step: 'error', status: 'error', message: describeUnsupportedOs(res, t) }]);
+        return;
+      }
       setHarnessSteps(res.steps);
       if (res.ok) await refresh();
     } catch (err: unknown) {
@@ -102,7 +107,7 @@ export default function SetupSection({ server, installStatus, installStatusError
     } finally {
       setInstallingHarness(false);
     }
-  }, [server.name, refresh]);
+  }, [server.name, refresh, t]);
 
   const openUrlDialog = useCallback(async () => {
     setShowUrlDialog(true);
@@ -148,6 +153,7 @@ export default function SetupSection({ server, installStatus, installStatusError
     try {
       const encoded = encodeURIComponent(server.name);
       const res = await api<{ ok?: boolean; error?: string }>(`/servers/${encoded}/install-browser-runtime`, { method: 'POST' });
+      if (isUnsupportedOsAnswer(res)) throw new Error(describeUnsupportedOs(res, t));
       if (!res.ok) throw new Error(res.error || 'Install failed');
       await refresh();
     } catch (err: unknown) {
@@ -155,16 +161,21 @@ export default function SetupSection({ server, installStatus, installStatusError
     } finally {
       setInstallingChromium(false);
     }
-  }, [server.name, refresh, showToast]);
+  }, [server.name, refresh, showToast, t]);
 
   const handleApplyTmuxConfig = useCallback(async () => {
-    const res = await api<{ ok?: boolean; error?: string }>(`/servers/${encodeURIComponent(server.name)}/apply-tmux-config`, { method: 'POST' });
-    if (res.error) showToast(res.error);
+    const res = await api<{ ok?: boolean; error?: string; code?: string }>(`/servers/${encodeURIComponent(server.name)}/apply-tmux-config`, { method: 'POST' });
+    if (isUnsupportedOsAnswer(res)) showToast(describeUnsupportedOs(res, t));
+    else if (res.error) showToast(res.error);
     else showToast('Recommended config applied');
-  }, [server.name, showToast]);
+  }, [server.name, showToast, t]);
 
   const isRemote = server.type === 'agent';
   const canInstallAgent = isRemote && server.sshHost;
+  const closedRows = closedSetupRows(server.hostProfile);
+  const harnessBlockReason = hostFeatureBlockReason(server.hostProfile, 'harness', t);
+  const chromiumBlockReason = hostFeatureBlockReason(server.hostProfile, 'browserRuntime', t);
+  const tmuxBlockReason = hostFeatureBlockReason(server.hostProfile, 'tmux', t);
 
   if (!installStatus) {
     if (installStatusError === 'failed') {
@@ -214,13 +225,13 @@ export default function SetupSection({ server, installStatus, installStatusError
   // 進捗計算: 表示中の行のみを母数にする。任意コンポーネント（chromium）も母数に含めるが、
   // 未導入でも異常扱い（赤）にはしない（S1 デザインの決定④）。
   const progressRows: { installed: boolean }[] = [
-    ...(installStatus.tmux && !installStatus.tmux.optional ? [{ installed: installStatus.tmux.installed }] : []),
+    ...(installStatus.tmux && !installStatus.tmux.optional && !closedRows.has('tmux') ? [{ installed: installStatus.tmux.installed }] : []),
     ...(installStatus.misao && !installStatus.misao.optional ? [{ installed: installStatus.misao.installed }] : []),
     { installed: installStatus.node.installed },
     ...(showTailscale ? [{ installed: installStatus.tailscale!.installed }] : []),
-    { installed: installStatus.aztHarness.installed },
+    ...(closedRows.has('aztHarness') ? [] : [{ installed: installStatus.aztHarness.installed }]),
     ...(showAgent ? [{ installed: installStatus.agent?.installed ?? false }] : []),
-    ...(showChromium ? [{ installed: installStatus.chromium!.installed }] : []),
+    ...(showChromium && !closedRows.has('chromium') ? [{ installed: installStatus.chromium!.installed }] : []),
   ];
   const totalCount = progressRows.length;
   const completedCount = progressRows.filter((r) => r.installed).length;
@@ -282,16 +293,16 @@ export default function SetupSection({ server, installStatus, installStatusError
           label="tmux"
           item={installStatus.tmux}
           categoryLabel={t('setup.foundation')}
-          optional={installStatus.tmux.optional}
-          description={installStatus.tmux.optional ? t('setup.tmuxOptionalNote') : undefined}
+          optional={installStatus.tmux.optional || !!tmuxBlockReason}
+          description={tmuxBlockReason ?? (installStatus.tmux.optional ? t('setup.tmuxOptionalNote') : undefined)}
           running={false}
           action={
-            server.muxRuntime === 'system' && installStatus.tmux.installed ? (
+            !tmuxBlockReason && server.muxRuntime === 'system' && installStatus.tmux.installed ? (
               <Button size="sm" variant="ghost" onClick={handleApplyTmuxConfig}>{t('setup.applySettings')}</Button>
             ) : undefined
           }
         >
-          {!installStatus.tmux.installed && <TmuxSetupCards server={server} refresh={refresh} />}
+          {!installStatus.tmux.installed && !tmuxBlockReason && <TmuxSetupCards server={server} refresh={refresh} />}
         </StepRow>
       )}
 
@@ -328,17 +339,18 @@ export default function SetupSection({ server, installStatus, installStatusError
 
       <StepRow
         label="AZITO Harness"
-        item={harnessItem}
+        item={harnessBlockReason ? { installed: false } : harnessItem}
+        optional={!!harnessBlockReason}
         running={installingHarness}
-        stateOverride={harnessStateOverride}
-        description={harnessItem.autoUpdate?.message}
-        action={
+        stateOverride={harnessBlockReason ? { label: t('setup.stateUnavailable'), tone: 'default' } : harnessStateOverride}
+        description={harnessBlockReason ?? harnessItem.autoUpdate?.message}
+        action={harnessBlockReason ? undefined : (
           <InstallActionButton
             installed={harnessItem.installed}
             installing={installingHarness}
             onInstall={isRemote ? openUrlDialog : () => handleInstallHarness(window.location.origin)}
           />
-        }
+        )}
       >
         <StepLog steps={harnessSteps} installing={installingHarness} />
         {showUrlDialog && (
@@ -393,17 +405,18 @@ export default function SetupSection({ server, installStatus, installStatusError
       {showChromium && (
         <StepRow
           label="Browser runtime (Chromium)"
-          item={installStatus.chromium!}
+          item={chromiumBlockReason ? { installed: false } : installStatus.chromium!}
           optional
-          description={t('setup.browserRuntimeDesc')}
+          stateOverride={chromiumBlockReason ? { label: t('setup.stateUnavailable'), tone: 'default' } : undefined}
+          description={chromiumBlockReason ?? t('setup.browserRuntimeDesc')}
           running={installingChromium}
-          action={
+          action={chromiumBlockReason ? undefined : (
             <InstallActionButton
               installed={installStatus.chromium!.installed}
               installing={installingChromium}
               onInstall={handleInstallChromium}
             />
-          }
+          )}
         />
       )}
     </div>

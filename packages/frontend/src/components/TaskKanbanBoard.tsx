@@ -2,8 +2,9 @@ import { StatusBadge, StatusDot } from './StatusBadge';
 import { timeAgo } from '../utils/time';
 import { useGlobalFocus } from '../hooks/useGlobalFocus';
 import TaskRefBadges from './TaskRefBadges';
-import { Button } from './ui';
+import { Button, BlockedActionButton } from './ui';
 import { useTranslation } from 'react-i18next';
+import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 
 interface Task {
   id: number;
@@ -13,6 +14,8 @@ interface Task {
   currentPhase?: string | null;
   projectId: number;
   unitId: number | null;
+  /** Where the task would run, as the hub resolves it (its own server, else the project's only one); null: not known. */
+  executionServerName?: string | null;
   priority: number;
   createdAt: string;
   sourceRef?: string | null;
@@ -79,6 +82,7 @@ export default function TaskKanbanBoard({
   onStop,
 }: TaskKanbanBoardProps) {
   const { isFocusedTask } = useGlobalFocus();
+  const executeBlockReason = useHostFeatureBlock();
   const { t } = useTranslation(['tasks', 'common']);
   const columns = groupTasks(tasks);
 
@@ -203,11 +207,12 @@ export default function TaskKanbanBoard({
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
                     {task.status === 'open' && (
-                      <Button
+                      <BlockedActionButton
                         size="sm" variant="primary"
+                        blockedReason={executeBlockReason(task.executionServerName, 'taskExecution')}
                         onClick={(e) => { e.stopPropagation(); onExecute(task.id, task.unitId); }}
                         style={{ fontSize: 'var(--font-xs)', padding: '2px 8px' }}
-                      >{t('common:actions.execute')}</Button>
+                      >{t('common:actions.execute')}</BlockedActionButton>
                     )}
                     {task.status === 'in_progress' && (
                       <Button

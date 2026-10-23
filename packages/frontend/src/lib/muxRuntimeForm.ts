@@ -1,14 +1,15 @@
-import type { MuxDriverKind, MuxRuntime } from '@azito/shared';
+import { hostFeatureSupport, type HostPlatformInfo, type MuxDriverKind, type MuxRuntime } from '@azito/shared';
 
 /** The tmux binaries a server can run (every server, whatever its default mux). */
 export const TMUX_RUNTIME_OPTIONS: readonly MuxRuntime[] = ['system', 'managed'];
 
 /**
  * Default mux kinds the server form offers: a local and an agent server can both run misao (an agent's through its
- * agent, installed with it) or tmux. Any other type stays on tmux.
+ * agent, installed with it) or tmux. Any other type stays on tmux. A Windows host has no tmux: misao only.
  */
-export function defaultMuxOptions(serverType: string): MuxDriverKind[] {
-  return serverType === 'local' || serverType === 'agent' ? ['misao', 'tmux'] : ['tmux'];
+export function defaultMuxOptions(serverType: string, hostProfile?: HostPlatformInfo | null): MuxDriverKind[] {
+  if (serverType !== 'local' && serverType !== 'agent') return ['tmux'];
+  return hostFeatureSupport(hostProfile, 'tmux').available ? ['misao', 'tmux'] : ['misao'];
 }
 
 /** What the default-mux field tells the user about the selection: entering misao or leaving it. */
@@ -27,9 +28,9 @@ export function tmuxRuntimeNotice(original: MuxRuntime | undefined, value: MuxRu
   return original && original !== value ? 'tmuxMigration' : null;
 }
 
-/** A stored default mux the form does not offer starts as tmux. */
+/** A stored default mux the form does not offer starts as the form's first option (tmux for a server type that only has tmux, misao for a Windows host). */
 export function editableDefaultMux(stored: MuxDriverKind, options: readonly MuxDriverKind[]): MuxDriverKind {
-  return options.find((option) => option === stored) ?? 'tmux';
+  return options.find((option) => option === stored) ?? options[0];
 }
 
 /** A stored tmux runtime the form does not offer starts as system. */

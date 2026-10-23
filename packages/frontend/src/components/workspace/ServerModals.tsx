@@ -6,7 +6,8 @@ import FormField from '../FormField';
 import type { InstallStep } from '../ui';
 import type { Server } from '../../hooks/useServerManagement';
 import { useHealth } from '../../hooks/useHealth';
-import type { MuxDriverKind, MuxRuntime } from '@azito/shared';
+import type { HostPlatformInfo, MuxDriverKind, MuxRuntime } from '@azito/shared';
+import { hostFeatureBlockReason } from '../../lib/hostFeature';
 import { defaultMuxNotice, defaultMuxOptions, tmuxRuntimeNotice, TMUX_RUNTIME_OPTIONS, type DefaultMuxNotice } from '../../lib/muxRuntimeForm';
 
 interface ServerFormFieldsProps {
@@ -15,6 +16,8 @@ interface ServerFormFieldsProps {
   type: 'agent';
   /** The edited server's type; decides whether the default mux is offered and whether connection fields apply. Add mode is always an agent. */
   serverType: string;
+  /** The edited server's OS; absent in add mode (the OS is judged by the install). */
+  hostProfile?: HostPlatformInfo | null;
   host: string;
   port: string;
   token: string;
@@ -56,6 +59,8 @@ interface ServerFormFieldsProps {
 
 interface MuxFieldsProps {
   serverType: string;
+  /** The edited server's OS (null / absent: not recorded, treated as Unix). A Windows host has no tmux. */
+  hostProfile?: HostPlatformInfo | null;
   defaultMux?: MuxDriverKind;
   onDefaultMuxChange?: (v: MuxDriverKind) => void;
   /** Persisted default mux; when it differs from `defaultMux` a note is shown (entering or leaving misao). Omitted in add mode. */
@@ -94,11 +99,12 @@ function MuxNotice({ id, tone, children }: { id: string; tone: 'info' | 'warning
 }
 
 /** Two independent fields: which mux a (local) server uses by default, and which tmux binary it runs. */
-function MuxFields({ serverType, defaultMux, onDefaultMuxChange, originalDefaultMux, muxRuntime, onMuxRuntimeChange, originalMuxRuntime }: MuxFieldsProps) {
+function MuxFields({ serverType, hostProfile, defaultMux, onDefaultMuxChange, originalDefaultMux, muxRuntime, onMuxRuntimeChange, originalMuxRuntime }: MuxFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const defaultMuxNoticeId = useId();
   const runtimeNoticeId = useId();
-  const kindOptions = defaultMuxOptions(serverType);
+  const kindOptions = defaultMuxOptions(serverType, hostProfile);
+  const tmuxBlockReason = hostFeatureBlockReason(hostProfile, 'tmux', t);
   const kindNotice = defaultMux ? defaultMuxNotice(originalDefaultMux, defaultMux) : null;
   const runtimeNotice = tmuxRuntimeNotice(originalMuxRuntime, muxRuntime);
   return (
@@ -117,21 +123,25 @@ function MuxFields({ serverType, defaultMux, onDefaultMuxChange, originalDefault
           {kindNotice && <MuxNotice id={defaultMuxNoticeId} tone={kindNotice === 'enterMisao' ? 'info' : 'warning'}>{t(DEFAULT_MUX_NOTICE_KEY[kindNotice])}</MuxNotice>}
         </>
       )}
-      <FormField label={t('serverModals.muxRuntime')} hint={t('serverModals.muxRuntimeHint')}>
-        <FormSelect
-          value={muxRuntime}
-          onChange={(e) => onMuxRuntimeChange(e.target.value as MuxRuntime)}
-          aria-describedby={runtimeNotice ? runtimeNoticeId : undefined}
-        >
-          {TMUX_RUNTIME_OPTIONS.map((option) => <option key={option} value={option}>{t(MUX_RUNTIME_LABEL_KEY[option])}</option>)}
-        </FormSelect>
-      </FormField>
-      {runtimeNotice && <MuxNotice id={runtimeNoticeId} tone="warning">{t('serverModals.muxMigrationWarning')}</MuxNotice>}
+      {tmuxBlockReason ? (
+        <MuxNotice id={runtimeNoticeId} tone="info">{tmuxBlockReason}</MuxNotice>
+      ) : (
+        <FormField label={t('serverModals.muxRuntime')} hint={t('serverModals.muxRuntimeHint')}>
+          <FormSelect
+            value={muxRuntime}
+            onChange={(e) => onMuxRuntimeChange(e.target.value as MuxRuntime)}
+            aria-describedby={runtimeNotice ? runtimeNoticeId : undefined}
+          >
+            {TMUX_RUNTIME_OPTIONS.map((option) => <option key={option} value={option}>{t(MUX_RUNTIME_LABEL_KEY[option])}</option>)}
+          </FormSelect>
+        </FormField>
+      )}
+      {!tmuxBlockReason && runtimeNotice && <MuxNotice id={runtimeNoticeId} tone="warning">{t('serverModals.muxMigrationWarning')}</MuxNotice>}
     </>
   );
 }
 
-function ServerFormFields({ mode, autoInstall, type, serverType, host, port, token, muxRuntime, defaultMux, onDefaultMuxChange, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, originalDefaultMux, isolationIntent, onIsolationIntentChange, persistedIsolationIntent }: ServerFormFieldsProps) {
+function ServerFormFields({ mode, autoInstall, type, serverType, hostProfile, host, port, token, muxRuntime, defaultMux, onDefaultMuxChange, onAutoInstallChange, onTypeChange, onHostChange, onPortChange, onTokenChange, onMuxRuntimeChange, nameField, tokenPlaceholder, installSteps, originalMuxRuntime, originalDefaultMux, isolationIntent, onIsolationIntentChange, persistedIsolationIntent }: ServerFormFieldsProps) {
   const { t } = useTranslation(['workspace', 'common']);
   const [showToken, setShowToken] = useState(false);
   // Issue #29 Step 2 C-1 (client-side courtesy — the real enforcement is the
@@ -155,6 +165,7 @@ function ServerFormFields({ mode, autoInstall, type, serverType, host, port, tok
   const muxField = (
     <MuxFields
       serverType={serverType}
+      hostProfile={hostProfile}
       defaultMux={defaultMux}
       onDefaultMuxChange={onDefaultMuxChange}
       originalDefaultMux={mode === 'edit' ? originalDefaultMux : undefined}
@@ -376,7 +387,7 @@ export function EditServerModal({
       <ServerFormFields
         mode="edit"
         autoInstall={false}
-        type={type} serverType={server?.type ?? 'agent'} host={host} port={port} token={token} muxRuntime={muxRuntime} defaultMux={defaultMux} onDefaultMuxChange={onDefaultMuxChange}
+        type={type} serverType={server?.type ?? 'agent'} hostProfile={server?.hostProfile} host={host} port={port} token={token} muxRuntime={muxRuntime} defaultMux={defaultMux} onDefaultMuxChange={onDefaultMuxChange}
         onAutoInstallChange={() => {}}
         onTypeChange={onTypeChange} onHostChange={onHostChange} onPortChange={onPortChange} onTokenChange={onTokenChange} onMuxRuntimeChange={onMuxRuntimeChange}
         tokenPlaceholder={server?.hasAgentToken ? t('serverModals.tokenUnchanged') : t('serverModals.tokenPlaceholder')}

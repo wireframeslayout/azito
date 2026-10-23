@@ -12,6 +12,7 @@ import type { PhaseConfig, PhaseEntryConfig } from '../sidekicks/PhaseConfig';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import { resolvePhaseSidekick } from '../sidekicks/resolvePhaseSidekick';
 import { isValidModelId } from '@azito/shared';
+import { HostProfileError } from '../../shared/os/hostProfile';
 import { ResourceExhaustedError } from '../servers/resources/ResourceGuard';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { resolveTaskServerName } from '../tasks/execution/TaskExecutionEnv';
@@ -276,6 +277,9 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         if (err instanceof ResourceExhaustedError)
           return reply.status(409).send({ error: 'insufficient_resources', resources: err.status });
         if (replyToExecutionGateError(err, reply)) return;
+        // Same answer as mapAppError gives: the reason in `error`, the kind in `code` (the UI words it as a host OS limit).
+        if (err instanceof HostProfileError)
+          return reply.status(501).send({ error: err.message, code: err.code });
         return reply.status(400).send({ error: (err as Error).message });
       }
     },

@@ -247,5 +247,10 @@
   "paneState": {
     "stopped": "Stopped",
     "exited": "Exited"
+  },
+  "hostFeature": {
+    "windowsPending": "Not available yet for Windows agents (planned for v0.12.x, #{{issue}})",
+    "windowsNoTmux": "Windows has no tmux. Its pane server is misao",
+    "apiRefused": "This operation is not available yet on this server's OS: {{reason}}"
   }
 }

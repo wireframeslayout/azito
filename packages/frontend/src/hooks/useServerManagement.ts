@@ -294,7 +294,7 @@ export function useServerManagement({ tabs, closeTab }: UseServerManagementParam
     setEditPort(String(srv.agentPort ?? '3002'));
     setEditToken('');
     setEditMuxRuntime(editableMuxRuntime(srv.muxRuntime));
-    setEditDefaultMux(editableDefaultMux(srv.defaultMux, defaultMuxOptions(srv.type)));
+    setEditDefaultMux(editableDefaultMux(srv.defaultMux, defaultMuxOptions(srv.type, srv.hostProfile)));
     setEditIsolationIntent(srv.isolationIntent ?? false);
   }, []);
 

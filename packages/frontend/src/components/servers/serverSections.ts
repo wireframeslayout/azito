@@ -1,6 +1,7 @@
 import { paths } from '../../paths';
 import type { TFunction } from 'i18next';
 import type { ServerStatus } from '../../hooks/useServerManagement';
+import { hostFeatureSupport, type HostFeature, type HostPlatformInfo } from '@azito/shared';
 
 export type { ServerStatus } from '../../hooks/useServerManagement';
 
@@ -93,18 +94,38 @@ export function getOverviewSummary(status: ServerStatus | null): SectionSummary 
   return { text: 'servers:status.error', tone: 'orange' };
 }
 
-export function getSetupSummary(installStatus: InstallStatusResponse | null, installStatusError: 'offline' | 'failed' | null = null): SectionSummary {
+/** The install-status rows that depend on a host feature: they are closed (shown with the reason, no action, not counted) where the feature is. */
+export type SetupRowKey = 'tmux' | 'aztHarness' | 'chromium';
+
+const SETUP_ROW_FEATURE: Record<SetupRowKey, HostFeature> = {
+  tmux: 'tmux',
+  aztHarness: 'harness',
+  chromium: 'browserRuntime',
+};
+
+/** Which Setup rows this host cannot use at all (a Windows agent: no tmux, no setup.sh harness, no sh-script browser runtime). */
+export function closedSetupRows(hostProfile: HostPlatformInfo | null | undefined): ReadonlySet<SetupRowKey> {
+  const closed = (Object.keys(SETUP_ROW_FEATURE) as SetupRowKey[]).filter((key) => !hostFeatureSupport(hostProfile, SETUP_ROW_FEATURE[key]).available);
+  return new Set(closed);
+}
+
+export function getSetupSummary(
+  installStatus: InstallStatusResponse | null,
+  installStatusError: 'offline' | 'failed' | null = null,
+  hostProfile?: HostPlatformInfo | null,
+): SectionSummary {
   if (!installStatus && installStatusError === 'offline') return { text: 'servers:setup.offline', tone: 'orange' };
   if (!installStatus && installStatusError === 'failed') return { text: 'servers:setup.checkFailed', tone: 'red' };
   if (!installStatus) return { text: 'servers:status.checking', tone: 'dim' };
+  const closed = closedSetupRows(hostProfile);
   const items = [
-    installStatus.tmux,
+    closed.has('tmux') ? undefined : installStatus.tmux,
     installStatus.misao,
     installStatus.node,
-    installStatus.aztHarness,
+    closed.has('aztHarness') ? undefined : installStatus.aztHarness,
     installStatus.tailscale,
     installStatus.agent,
-    installStatus.chromium,
+    closed.has('chromium') ? undefined : installStatus.chromium,
   ].filter(Boolean);
   const missing = items.filter((i) => !i!.installed && !i!.optional).length;
   if (missing === 0) return { text: 'servers:setup.allInstalled', tone: 'green' };

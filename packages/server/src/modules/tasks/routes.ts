@@ -36,7 +36,7 @@ import { OPERATOR_PRINCIPAL } from '../../shared/auth/Principal';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import { TaskOriginationService, originFromPrincipal } from './origination/TaskOriginationService';
 import type { ITaskTokenRepository } from './tokens/TaskToken';
-import { isValidModelId } from '@azito/shared';
+import { isValidModelId, pickTaskExecutionServer } from '@azito/shared';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { taskWindowRef } from '../tmux/windowIdentity';
 import { AmbiguousWindowKindError, resolveStoredWindowKind } from '../tmux/storedWindowKind';
@@ -211,8 +211,8 @@ const taskSelfAuth: RouteAuthRequirement = {
  */
 const LIST_OMITTED_FIELDS = ['planMarkdown', 'description', 'summaryJson', 'changedFiles'] as const;
 
-function toListItem(task: Task, windows: unknown[]): Record<string, unknown> {
-  const item: Record<string, unknown> = { ...task, windows };
+function toListItem(task: Task, windows: unknown[], executionServerName: string | null): Record<string, unknown> {
+  const item: Record<string, unknown> = { ...task, windows, executionServerName };
   for (const field of LIST_OMITTED_FIELDS) delete item[field];
   return item;
 }
@@ -237,7 +237,12 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       tasks = taskRepo.findAll();
     }
     const windowsByTask = windowRepo.findByTaskIds(tasks.map((t) => t.id));
-    return tasks.map((t) => toListItem(t, windowsByTask.get(t.id) ?? []));
+    // Where each task would run (the resolved server, not only its own override): the UI judges host features by it. One query for all projects.
+    const needingProjectServers = [...new Set(tasks.filter((t) => !t.serverName).map((t) => t.projectId))];
+    const projectServers = projectServerRepo.findByProjects(needingProjectServers);
+    const executionServerOf = (t: Task): string | null =>
+      t.serverName || pickTaskExecutionServer(null, (projectServers.get(t.projectId) ?? []).map((s) => s.serverName));
+    return tasks.map((t) => toListItem(t, windowsByTask.get(t.id) ?? [], executionServerOf(t)));
   });
 
   // ── POST /api/tasks ──
@@ -383,7 +388,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         }
       }
 
-      return { ...t, paneAlive, windows, unitType: unitTypeInfo };
+      return { ...t, paneAlive, windows, unitType: unitTypeInfo, executionServerName: resolveTaskServerName(t, projectServerRepo) };
     },
   );
 

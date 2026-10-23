@@ -1,6 +1,8 @@
+import type { HostPlatform } from '@azito/shared';
+
 /** The OS and CPU architecture of a server's host (GET /api/servers `hostProfile`). Null / absent: not recorded. */
 export interface HostProfile {
-  platform: 'linux' | 'darwin' | 'win32';
+  platform: HostPlatform;
   arch: 'x64' | 'arm64';
 }
 
