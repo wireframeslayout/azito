@@ -46,7 +46,7 @@ const EXPECTED = [
   '    <RunOnlyIfIdle>false</RunOnlyIfIdle>',
   '    <WakeToRun>false</WakeToRun>',
   '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
-  '    <Priority>7</Priority>',
+  '    <Priority>5</Priority>',
   '    <RestartOnFailure>',
   '      <Interval>PT1M</Interval>',
   '      <Count>3</Count>',
@@ -105,6 +105,9 @@ describe('buildTaskXml', () => {
     ['no restarts', { restartOnFailure: { intervalMinutes: 1, count: 0 } }, /count/],
     ['too many restarts', { restartOnFailure: { intervalMinutes: 1, count: 1000 } }, /count/],
     ['a control character in the description', { description: 'a\u0001b' }, /control character/],
+    ['a % in the executable', { executable: 'C:\\100%\\x.exe' }, /executable must not contain "%"/],
+    ['a %VAR% in an argument', { args: ['ok', '%PATH%'] }, /args\[1\] must not contain "%"/],
+    ['a % in the working directory', { workingDirectory: 'C:\\%TEMP%' }, /workingDirectory must not contain/],
     ['a NUL in an argument', { args: ['a\0b'] }, /NUL/],
   ] satisfies [string, Partial<TaskDefinitionInput>, RegExp][])('rejects %s', (_name, patch, message) => {
     expect(() => buildTaskXml({ ...INPUT, ...patch })).toThrow(message);

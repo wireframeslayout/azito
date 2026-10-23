@@ -22,7 +22,11 @@ const SCHTASKS_OUTPUT_BYTES = 4 * 1024 * 1024;
 
 export type SchtasksOperation = 'create' | 'run' | 'end' | 'delete' | 'query';
 
-/** schtasks ran and failed (exit code, and what it printed to stderr). The text is in the Windows display language. */
+/**
+ * schtasks ran and failed (exit code, and what it printed to stderr). `detail` is in the Windows display language and in the
+ * OEM code page, which `runCommandSpec` decodes as UTF-8: it can be garbled on a non-English Windows (e.g. CP932), so the
+ * exit code is the reliable part. Decoding by the console code page is left to the wiring (#380 B3).
+ */
 export class SchtasksError extends Error {
   constructor(readonly operation: SchtasksOperation, readonly taskName: string, readonly exitCode: number, readonly detail: string) {
     super(`schtasks /${operation} of the task "${taskName}" failed (exit ${exitCode})${detail ? `: ${detail}` : ''}`);

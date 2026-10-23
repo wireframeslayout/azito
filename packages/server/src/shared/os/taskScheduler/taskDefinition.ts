@@ -31,6 +31,14 @@ export function escapeXml(value: string): string {
 /** `C:\dir` / `C:/dir` or a UNC path. A rooted path without a drive (`\dir`) depends on the current drive, so it is refused. */
 const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/])/;
 
+/**
+ * The Task Scheduler expands `%VAR%` in the Command, Arguments and WorkingDirectory of an action when it runs, and no quoting
+ * protects a `%`. A value containing one would turn into something else, so it is refused instead of silently changed.
+ */
+function assertNoEnvExpansion(value: string, what: string): void {
+  if (value.includes('%')) throw new Error(`${what} must not contain "%": the Task Scheduler would expand %VAR% in it (got "${value}")`);
+}
+
 function assertWindowsAbsolutePath(value: string, what: string): void {
   if (!WINDOWS_ABSOLUTE_PATH.test(value)) throw new Error(`${what} must be an absolute Windows path (got "${value}")`);
   if (value.includes('"')) throw new Error(`${what} must not contain a double quote (got "${value}")`);
@@ -52,6 +60,9 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
   if (!Number.isInteger(restartOnFailure.count) || restartOnFailure.count < 1 || restartOnFailure.count > MAX_RESTART_COUNT) {
     throw new Error(`restartOnFailure.count must be a whole number from 1 to ${MAX_RESTART_COUNT}`);
   }
+  assertNoEnvExpansion(input.executable, 'executable');
+  assertNoEnvExpansion(input.workingDirectory, 'workingDirectory');
+  input.args.forEach((arg, i) => assertNoEnvExpansion(arg, `args[${i}]`));
   const user = escapeXml(input.userId);
   const lines = [
     '<?xml version="1.0" encoding="UTF-16"?>',
@@ -89,7 +100,8 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
     '    <RunOnlyIfIdle>false</RunOnlyIfIdle>',
     '    <WakeToRun>false</WakeToRun>',
     '    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>',
-    '    <Priority>7</Priority>',
+    // 4-6 is NORMAL. 7 (the Task Scheduler default) is BELOW_NORMAL, and the class is inherited: the service's children (pane shells, agents, builds) would all run below the user's foreground apps.
+    '    <Priority>5</Priority>',
     '    <RestartOnFailure>',
     `      <Interval>PT${restartOnFailure.intervalMinutes}M</Interval>`,
     `      <Count>${restartOnFailure.count}</Count>`,

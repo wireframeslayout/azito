@@ -1,6 +1,7 @@
 /**
  * The Windows command line that the Task Scheduler `<Arguments>` element holds is ONE string; the program splits it
  * with CommandLineToArgvW rules (what the MSVC runtime and Node follow). This is the only place that builds that string.
+ * Quoting cannot protect `%VAR%`, which the Task Scheduler expands itself: `buildTaskXml` refuses a `%`.
  */
 
 /** One argument as it must appear inside a Windows command line so that CommandLineToArgvW gives back exactly `arg`. */

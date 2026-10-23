@@ -109,7 +109,7 @@ function readIfExists(file: string): string | undefined {
   return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8') : undefined;
 }
 
-export async function mustSucceed(run: CommandRunner, file: string, args: string[], what: string): Promise<CommandResult> {
+async function mustSucceed(run: CommandRunner, file: string, args: string[], what: string): Promise<CommandResult> {
   const result = await run(file, args);
   if (result.code !== 0) {
     const detail = (result.stderr || result.stdout).trim();
