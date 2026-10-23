@@ -11,8 +11,8 @@ import { fileURLToPath } from 'url';
  * would prove nothing). The SDK / protocol tarballs in packages/server/package.json
  * must point at the same version.
  *
- * misao is one native binary per target (the Node `.mjs` build is not shipped). Every hub tarball carries all four Unix
- * targets, whatever platform it is built for: the hub installs its own misao from it (hubs run on linux x64 / arm64 and
+ * misao is one native binary per target (the Node `.mjs` build is not shipped). Every hub tarball carries all five
+ * targets (four Unix ones and `x86_64-pc-windows-msvc`, whose archive is a zip and whose binary is `misao.exe`), whatever platform it is built for: the hub installs its own misao from it (hubs run on linux x64 / arm64 and
  * darwin arm64), and the same bundle shape serves an agent server whose OS / architecture differs. The one that fits the
  * install target is picked at install time. (The agent installer's preflight currently accepts x86_64 hosts only; agent
  * support for other architectures is a separate matter and does not change what is bundled.)
@@ -25,6 +25,7 @@ export const MISAO_RELEASE = {
     'misao-0.3.0-aarch64-unknown-linux-musl.tar.gz': '574e960e1022b582b1ae2604bd8d6126a8e8e55fc9680a10d8e762d07f36a754',
     'misao-0.3.0-aarch64-apple-darwin.tar.gz': '93d87feb08a07cf65841bf16fbb4df817d6a59f32a04d8bab76ff4f7e845719a',
     'misao-0.3.0-x86_64-apple-darwin.tar.gz': 'c6b4066db0bad4897d25538ba8994ce1965fb001a3272f5324a83eb7112f8b4c',
+    'misao-0.3.0-x86_64-pc-windows-msvc.zip': 'b25ef96a5ce60697cf2166d6bcc5d16ee648c4202cabf3231de0bfd52c8cde14',
   },
 } as const;
 
@@ -33,6 +34,27 @@ export type MisaoAssetName = keyof typeof MISAO_RELEASE.assets;
 /** The files an archive carries directly under its top directory (`misao-<ver>-<target>/`). */
 export const MISAO_RELEASE_FILES = ['misao', 'LICENSE', 'NOTICE', 'THIRD-PARTY-LICENSES.txt'] as const;
 export type MisaoReleaseFile = typeof MISAO_RELEASE_FILES[number];
+
+/**
+ * The file name of a target's executable inside its archive and under `misao/<target>/`. The manifest keys it by the
+ * logical name `misao` for every target (the runtime's MisaoBundle.ts has the same rule; a test keeps them in step).
+ */
+export function misaoExecutableName(target: string): string {
+  return target.includes('-windows-') ? 'misao.exe' : 'misao';
+}
+
+/** The on-disk name of a release file (keyed by its logical name in the manifest) under `misao/<target>/`. */
+export function misaoReleaseFileName(target: string, name: MisaoReleaseFile): string {
+  return name === 'misao' ? misaoExecutableName(target) : name;
+}
+
+/** The mode each release file is staged with (same table as MISAO_RELEASE_FILES in agentMisaoSocket.ts). */
+const RELEASE_FILE_MODES: Record<MisaoReleaseFile, number> = {
+  misao: 0o755,
+  LICENSE: 0o644,
+  NOTICE: 0o644,
+  'THIRD-PARTY-LICENSES.txt': 0o644,
+};
 
 /** Where downloaded assets are cached between builds (dist-hub is wiped on every build, so not there). */
 const DEFAULT_CACHE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.cache', 'misao');
@@ -115,8 +137,22 @@ export interface MisaoManifest {
 /** Extracts one pinned archive (verified against its sha256) into `destDir`, flat (the archive's top directory is stripped). */
 async function extractAsset(asset: MisaoAssetName, destDir: string): Promise<void> {
   fs.mkdirSync(destDir, { recursive: true });
-  // `misao-<ver>-<target>/` is the archive's only top directory.
-  execFileSync('tar', ['xzf', await resolveAsset(asset), '-C', destDir, '--strip-components=1']);
+  const archive = await resolveAsset(asset);
+  if (asset.endsWith('.zip')) {
+    // `-j` drops the archive's top directory (`misao-<ver>-<target>/`), like --strip-components=1 below. unzip is on the
+    // ubuntu / macOS build hosts; GNU tar cannot read a zip.
+    try {
+      execFileSync('unzip', ['-q', '-o', '-j', archive, '-d', destDir]);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        throw new Error(`extracting the Windows misao (${asset}) needs the \`unzip\` command, which is not installed on this build host`);
+      }
+      throw err;
+    }
+  } else {
+    // `misao-<ver>-<target>/` is the archive's only top directory.
+    execFileSync('tar', ['xzf', archive, '-C', destDir, '--strip-components=1']);
+  }
 }
 
 /**
@@ -127,14 +163,14 @@ export async function fetchMisaoBinary(target: string, destDir: string): Promise
   const asset = (Object.keys(MISAO_RELEASE.assets) as MisaoAssetName[]).find((name) => targetOf(name) === target);
   if (!asset) throw new Error(`no pinned misao ${MISAO_RELEASE.version} archive for target ${target}`);
   await extractAsset(asset, destDir);
-  return path.join(destDir, 'misao');
+  return path.join(destDir, misaoExecutableName(target));
 }
 
 function targetOf(asset: MisaoAssetName): string {
-  return asset.slice(`misao-${MISAO_RELEASE.version}-`.length, -'.tar.gz'.length);
+  return asset.slice(`misao-${MISAO_RELEASE.version}-`.length).replace(/\.(tar\.gz|zip)$/, '');
 }
 
-/** Stages `misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for every target, plus `misao/manifest.json`, into the hub bundle. */
+/** Stages `misao/<target>/{misao (misao.exe on Windows),LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for every target, plus `misao/manifest.json`, into the hub bundle. */
 export async function stageMisao(stageDir: string): Promise<void> {
   const dest = path.join(stageDir, 'misao');
   fs.mkdirSync(dest, { recursive: true });
@@ -147,11 +183,13 @@ export async function stageMisao(stageDir: string): Promise<void> {
 
     const hashes = {} as Record<MisaoReleaseFile, string>;
     for (const name of MISAO_RELEASE_FILES) {
-      const file = path.join(targetDir, name);
-      if (!fs.existsSync(file)) throw new Error(`${asset} does not contain ${name}`);
+      const fileName = misaoReleaseFileName(target, name);
+      const file = path.join(targetDir, fileName);
+      if (!fs.existsSync(file)) throw new Error(`${asset} does not contain ${fileName}`);
+      // unzip leaves 0666 (umask-dependent); every file gets its mode explicitly.
+      fs.chmodSync(file, RELEASE_FILE_MODES[name]);
       hashes[name] = sha256(file);
     }
-    fs.chmodSync(path.join(targetDir, 'misao'), 0o755);
     manifest.targets[target] = hashes;
   }
   fs.writeFileSync(path.join(dest, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

@@ -8,7 +8,7 @@ import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MISAO_SYSTEMD_UNIT } from './misaoPaths';
-import { assertPosixHost, pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
+import { assertPosixHost, HostProfileError, pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
 import { renderMisaoUnit } from './misaoUnit';
 
 /** What the installer needs of an agent: its shell, what it sees on disk, and a place to put release files. */
@@ -213,6 +213,11 @@ export class MisaoAgentInstaller {
       throw new MisaoServiceError('unsupported_host', `Could not read the agent's misao status (an agent older than this hub has no such route: update the agent first): ${describeError(err)}`);
     }
     const { host } = status;
+    // The bundle now has a win32 binary, so bundleFilesFor would no longer refuse a host that reports win32 (a registration
+    // without a recorded OS): the sh install below is still Unix only.
+    if (host.platform === 'win32') {
+      throw new HostProfileError('unsupported_os', `installing misao is a POSIX shell script, which this agent server (the agent reports ${host.platform}/${host.arch}) does not have. This operation is not available on Windows hosts yet.`);
+    }
     assertSafePath(host.homeDir, 'home directory');
     return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath, target.hostProfile) } };
   }

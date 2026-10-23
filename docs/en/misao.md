@@ -108,12 +108,12 @@ server uses the daemon on its host, reached through the agent.
 ### Installing misao on an agent server
 
 The hub sends **its own bundled misao** through the agent (the release files are checked against the manifest sha256 on both ends; the
-agent downloads nothing). Every hub carries the binary for all four Unix targets (the hub installs its own misao from the same bundle, and hubs run on
+agent downloads nothing). Every hub carries the binary for all five targets: the four Unix ones and `x86_64-pc-windows-msvc` (`misao.exe`). (the hub installs its own misao from the same bundle, and hubs run on
 Linux x86_64 / arm64 and macOS arm64) and sends the one that fits the agent's own OS / architecture
 (Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). In practice the agent
 installer of this release accepts x86_64 hosts only, so an arm64 agent server is not supported yet; that is a separate matter from what the hub bundles. It is installed under
 `~/.azito/misao/<version>/` with `current` -> `<version>` and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background
-process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved.
+process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved. The Windows build is carried only; installing it comes with the Windows hub / agent support. Until then a Windows agent is refused with `unsupported_os`, and on a Windows hub the misao status is `unsupported_platform` while install / update fail with `not_managed`. Building a release needs the `unzip` command to unpack that build.
 
 - When you add an agent server (auto-install), misao is installed after the agent. A host without tmux no longer fails the preflight, and its
   default mux becomes misao. If only the misao step fails, the agent stays installed and the response carries `misaoError`.

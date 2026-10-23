@@ -460,6 +460,12 @@ describe('MisaoServiceService', () => {
       expect(status).toMatchObject({ managed: false, unmanagedReason: 'source_install', serviceInstalled: false, updateAvailable: false, needsHubRestart: false });
     });
 
+    it('reports a host without a service manager (Windows) as unsupported_platform even though its target has a bundled binary', async () => {
+      expect(misaoTargetFor('win32', 'x64')).toBe('x86_64-pc-windows-msvc');
+      const status = await newService({ controller: null, controllerError: 'Windows is not supported yet' }).status();
+      expect(status).toMatchObject({ managed: false, unmanagedReason: 'unsupported_platform', unmanagedDetail: 'Windows is not supported yet' });
+    });
+
     it('reports the launchd domain, and a job loaded into both domains as a duplicate instead of picking one', async () => {
       await newService().install();
       controller.domains = ['user'];
@@ -529,6 +535,6 @@ describe('readMisaoBundle', () => {
   it('reads the files of every target', () => {
     writeHubBundle(root);
     const bundle = readMisaoBundle(root)!;
-    expect(Object.keys(bundle.targets).sort()).toEqual(['aarch64-apple-darwin', 'aarch64-unknown-linux-musl', 'x86_64-apple-darwin', 'x86_64-unknown-linux-musl']);
+    expect(Object.keys(bundle.targets).sort()).toEqual(['aarch64-apple-darwin', 'aarch64-unknown-linux-musl', 'x86_64-apple-darwin', 'x86_64-pc-windows-msvc', 'x86_64-unknown-linux-musl']);
   });
 });

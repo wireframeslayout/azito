@@ -446,7 +446,6 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
   });
 
   it.each([
-    ['on Windows', { platform: 'win32' as const }],
     ['on an architecture without a binary', { arch: 'riscv64' }],
     ['on FreeBSD', { platform: 'freebsd' as const }],
     ['with a home directory that cannot go in a unit', { homeDir: '/home/my user' }],
@@ -456,6 +455,15 @@ describe('MisaoAgentInstaller (against a sandboxed agent host)', () => {
     status.host = { ...status.host, ...change };
     const upload = vi.fn();
     await expect(installer().install(target({ fetchMisaoStatus: async () => status, uploadMisaoFile: upload }))).rejects.toMatchObject({ code: 'unsupported_host' });
+    expect(upload).not.toHaveBeenCalled();
+  });
+
+  it('refuses an agent that reports win32 even though the hub registered no OS for it (unsupported_os, nothing sent)', async () => {
+    installFakeSystemctl('absent');
+    const status = { ...(await target().fetchMisaoStatus()) };
+    status.host = { ...status.host, platform: 'win32' };
+    const upload = vi.fn();
+    await expect(installer().install(target({ hostProfile: null, fetchMisaoStatus: async () => status, uploadMisaoFile: upload }))).rejects.toMatchObject({ code: 'unsupported_os' });
     expect(upload).not.toHaveBeenCalled();
   });
 

@@ -87,14 +87,18 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (config, outside the versioned dir) and `~/.azito/data/` (DB, keys, token).
 - In-app update: Settings → System. Works under systemd and launchd; not for a source checkout, and
   not for pre-releases (GitHub's `releases/latest` returns stable releases only).
-- The tarball also carries the misao **native binary** (Rust, no Node / node-pty needed) for every Unix target
+- The tarball also carries the misao **native binary** (Rust, no Node / node-pty needed) for every target
   (`misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for `x86_64`/`aarch64-unknown-linux-musl` and
-  `aarch64`/`x86_64-apple-darwin`, plus `misao/manifest.json` with each file's sha256) (every hub tarball has all four: the hub installs its own from them, since hubs run on linux x64 / arm64 and
+  `aarch64`/`x86_64-apple-darwin`, plus `x86_64-pc-windows-msvc`, plus `misao/manifest.json` with each file's sha256) (every hub tarball has all five targets, four Unix ones and `x86_64-pc-windows-msvc`: the hub installs its own from them, since hubs run on linux x64 / arm64 and
   darwin arm64, and the same bundle serves an agent host of another OS / architecture; `AgentInstaller`'s preflight currently accepts
   x86_64 agents only, so arm64 agent support is out of scope here). The archives are pinned release assets: version, URL and sha256 are constants in
   `scripts/misaoAssets.ts`, verified at build time (offline builds set `AZITO_MISAO_ASSET_DIR`). The install target is chosen from the
   host's OS / architecture (`misaoTargetFor` in `MisaoBundle.ts`; the hub uses its own, an agent reports its own); a host without a
-  binary is an `unsupported_host` error, never a fallback. Also `deploy/azito-misao.service` / `com.azito.misao.plist`
+  binary is an `unsupported_host` error, never a fallback. The Windows build is a zip asset (extracted with `unzip`, which the
+  build host must have; its absence is an explicit error) whose executable is `misao.exe`, keyed `misao` in the manifest
+  (`misaoFileName` in `MisaoBundle.ts`, `misaoReleaseFileName` in the build script). It is carried only: installing it on Windows
+  is a later PR. A win32 agent is refused with `unsupported_os`; for the hub's own service, `status` reports `unsupported_platform`
+  and `install` / `update` fail with `not_managed`. Also `deploy/azito-misao.service` / `com.azito.misao.plist`
   (`ExecStart=<prefix>/misao/current/misao serve ...`, no `__NODE__`). misao is **a separate service**
   (`azito-misao` / `com.azito.misao`) unpacked to `~/.azito/misao/<version>/` with `misao/current` switched only by an explicit
   `azito misao update` (or the Setup row's update button): stopping the daemon closes every pane, so a hub update or restart never

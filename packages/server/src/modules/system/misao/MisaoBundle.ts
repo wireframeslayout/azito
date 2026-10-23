@@ -6,21 +6,24 @@ import { MISAO_RELEASE_FILE_NAMES, type MisaoReleaseFile } from '../../servers/t
 import { MisaoServiceError } from './MisaoServiceError';
 
 /**
- * The targets a hub release carries a misao binary for (Unix only: AZITO itself does not run on Windows). A hub runs on
- * linux x64 / arm64 and darwin arm64 and installs its own misao from the same bundle; the rest keeps the bundle one shape for
- * every hub and covers an agent host of another OS / architecture (AZITO's own agent installer currently accepts x86_64 only).
+ * The targets a hub release carries a misao binary for. A hub runs on linux x64 / arm64 and darwin arm64 and installs its
+ * own misao from the same bundle; the rest keeps the bundle one shape for every hub and covers an agent host of another
+ * OS / architecture (AZITO's own agent installer currently accepts x86_64 only). The Windows build is only carried here;
+ * installing it is not implemented yet (a win32 host is refused as `unsupported_os` before it gets that far).
  */
 export const MISAO_TARGETS = [
   'x86_64-unknown-linux-musl',
   'aarch64-unknown-linux-musl',
   'aarch64-apple-darwin',
   'x86_64-apple-darwin',
+  'x86_64-pc-windows-msvc',
 ] as const;
 export type MisaoTarget = typeof MISAO_TARGETS[number];
 
 const TARGET_BY_PLATFORM: Record<string, Record<string, MisaoTarget>> = {
   linux: { x64: 'x86_64-unknown-linux-musl', arm64: 'aarch64-unknown-linux-musl' },
   darwin: { arm64: 'aarch64-apple-darwin', x64: 'x86_64-apple-darwin' },
+  win32: { x64: 'x86_64-pc-windows-msvc' },
 };
 
 /**
@@ -34,6 +37,14 @@ export function misaoTargetFor(platform: string, arch: string): MisaoTarget {
     throw new MisaoServiceError('unsupported_host', `misao has no binary for ${platform}/${arch} (available: ${MISAO_TARGETS.join(', ')}).`);
   }
   return target;
+}
+
+/**
+ * The name of a release file on disk under `misao/<target>/`. The manifest and `MisaoTargetFiles` key the executable by
+ * the logical name `misao` for every target; on Windows it is the file `misao.exe`.
+ */
+export function misaoFileName(target: MisaoTarget, name: MisaoReleaseFile): string {
+  return name === 'misao' && target.includes('-windows-') ? 'misao.exe' : name;
 }
 
 const sha256Field = z.string().regex(/^[0-9a-f]{64}$/);
@@ -50,7 +61,7 @@ export interface MisaoTargetFiles {
   sha256: Record<MisaoReleaseFile, string>;
 }
 
-/** The misao a hub release carries: `<bundle>/misao/<target>/{misao,LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for each target, `manifest.json`, and the deploy templates. */
+/** The misao a hub release carries: `<bundle>/misao/<target>/{misao (misao.exe on Windows),LICENSE,NOTICE,THIRD-PARTY-LICENSES.txt}` for each target, `manifest.json`, and the deploy templates. */
 export interface MisaoBundle {
   version: string;
   /** `<bundle>/misao` */
@@ -89,7 +100,7 @@ export function readMisaoBundle(bundleRoot: string | null): MisaoBundle | null {
   for (const target of MISAO_TARGETS) {
     const files = {} as Record<MisaoReleaseFile, string>;
     for (const name of MISAO_RELEASE_FILE_NAMES) {
-      const file = path.join(dir, target, name);
+      const file = path.join(dir, target, misaoFileName(target, name));
       if (!fs.existsSync(file)) throw new Error(`The bundled misao is incomplete: ${file} is missing`);
       if (sha256File(file) !== manifest.targets[target][name]) {
         throw new Error(`The bundled misao is damaged: ${file} does not match its manifest sha256`);

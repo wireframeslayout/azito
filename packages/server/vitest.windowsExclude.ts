@@ -18,7 +18,7 @@ export const WINDOWS_EXCLUDED_UNIT_TESTS: readonly WindowsExcludeEntry[] = [
   },
   {
     file: 'src/modules/system/misao/MisaoServiceService.test.ts',
-    reason: 'misaoTargetFor が win32 の misao バイナリを持たず、ファイルの読み込み時に失敗する（unsupported）',
+    reason: 'win32 の misao バイナリは同梱されるが、導入・常駐は未実装（systemd / launchd 前提のフェイクと POSIX パスで組んだテスト）',
   },
   {
     file: 'src/modules/system/misao/MisaoServiceService.launchd.test.ts',
