@@ -106,16 +106,22 @@ zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止�
 <prefix>\bin\azito.cmd         CLI
 ```
 
-`hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を書きます。
+`hub\.env` と `data\` は同梱のハブ自身（`node.exe azito-hub.cjs init-env`）が作ります。アクセス権（現在のユーザーだけ）は、実行時に守るのと同じコードが付けます。インストーラをもう一度実行すると、導入済みであることを表示して何も変えません。手で更新するときは、新しい zip を `hub\<tag>` に展開して `current.txt` にその tag を、BOM の無い ASCII の 1 行で書きます。Windows PowerShell 5.1 の `Set-Content -Encoding UTF8` や `>` は BOM 付き、または UTF-16 で書くため、`azito` は読み取りを拒否します。次のように書いてください:
+
+```powershell
+[System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", 'v0.12.0')
+```
+
+`current.txt` は、CLI と PATH の登録がすべて終わってから最後に書かれます。途中で止まった導入（`hub\<tag>` はあるが `current.txt` が無い）は、インストーラをもう一度実行すると完了します。`hub\.env` とそのトークンは保たれます。
 
 CLI は `current.txt` を読んで同梱のハブを実行します:
 
 | コマンド | 動作 |
 |---|---|
 | `azito start` | `run.ps1` 経由でハブを前面で実行（Ctrl+C で止める） |
-| `azito token show` / `token rotate` | UI トークン |
+| `azito token show` / `token rotate` | UI トークン（`hub\.env` に保存。そこに設定されている間は `rotate` が中止するので、そのファイルの `AZITO_UI_TOKEN` を書き換える） |
 | `azito version` | `current.txt` の版と、配布物自身の版 |
-| `azito misao ...`、`azito service ...` | ハブに渡す。Windows ではまだ使えない理由が表示される |
+| `azito misao ...`、`azito service ...` | ハブに渡し、Windows ではいまは拒否される。`service` は「タスクスケジューラは未対応」と表示する。`misao` は、ハブ自身の misao（B3b）が入るまでは導入先の検査（Windows パスのバックスラッシュを拒否する）で止まる |
 | `azito stop` / `azito status` | 理由付きで終了コード 1（常駐がまだ無い） |
 
 **未対応（#380）:** ハブの常駐（タスクスケジューラ）、ハブ自身の misao、アプリ内の更新・アンインストール（#381）。それまでは `azito start` を開いている間だけハブが動きます。

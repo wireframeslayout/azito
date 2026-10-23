@@ -28,14 +28,20 @@ $envFile = Join-Path (Split-Path -Parent $bundle) '.env'
 if (-not (Test-Path -LiteralPath $envFile -PathType Leaf)) { $envFile = Join-Path $bundle '.env' }
 if (Test-Path -LiteralPath $envFile -PathType Leaf) { Import-EnvFile $envFile }
 
-# UTF-8 for the console and for what the hub prints. A process without a console (a scheduled task) has no code page to
-# set, so a failure is reported and the hub still starts.
+# UTF-8 for the console and for what the hub prints. Setting [Console]::OutputEncoding / InputEncoding changes the code page of
+# the console this process is attached to, which outlives the process, so the previous ones are put back when the hub ends.
+# A process without a console (a scheduled task) has none to set: that is reported and the hub still starts.
+$restoreOutput = $null
+$restoreInput = $null
 try {
     $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $previousOutput = [Console]::OutputEncoding
+    $previousInput = [Console]::InputEncoding
     [Console]::OutputEncoding = $utf8
+    $restoreOutput = $previousOutput
     [Console]::InputEncoding = $utf8
+    $restoreInput = $previousInput
     $OutputEncoding = $utf8
-    & "$env:SystemRoot\System32\chcp.com" 65001 | Out-Null
 } catch {
     [Console]::Error.WriteLine("run.ps1: could not switch the console to UTF-8: $($_.Exception.Message)")
 }
@@ -58,5 +64,15 @@ if ($front.Count -gt 0) { $env:PATH = ($front -join ';') + ';' + $env:PATH }
 
 $env:NODE_PATH = (Join-Path $bundle 'node_modules') + $(if ($env:NODE_PATH) { ';' + $env:NODE_PATH } else { '' })
 
-& (Join-Path $bundle 'node.exe') (Join-Path $bundle 'azito-hub.cjs')
-exit $LASTEXITCODE
+try {
+    & (Join-Path $bundle 'node.exe') (Join-Path $bundle 'azito-hub.cjs')
+    $hubExit = $LASTEXITCODE
+} finally {
+    try {
+        if ($null -ne $restoreOutput) { [Console]::OutputEncoding = $restoreOutput }
+        if ($null -ne $restoreInput) { [Console]::InputEncoding = $restoreInput }
+    } catch {
+        [Console]::Error.WriteLine("run.ps1: could not restore the console encoding: $($_.Exception.Message)")
+    }
+}
+exit $hubExit

@@ -36,6 +36,9 @@ $script:CliWrapper = @'
 setlocal EnableExtensions DisableDelayedExpansion
 for %%I in ("%~dp0..") do set "AZITO_ROOT=%%~fI"
 if not exist "%AZITO_ROOT%\hub\current.txt" goto :notinstalled
+rem current.txt must be exactly a version such as v0.12.0: a line that is anything else (a BOM, UTF-16, spaces) is refused here.
+findstr /r /x /v /c:"v*[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*[-+.0-9A-Za-z]*" "%AZITO_ROOT%\hub\current.txt" >nul
+if not errorlevel 1 goto :badpointer
 set "AZITO_VER="
 set /p AZITO_VER=<"%AZITO_ROOT%\hub\current.txt"
 if not defined AZITO_VER goto :badpointer
@@ -50,7 +53,8 @@ if /i "%AZITO_CMD%"=="misao" goto :forward
 if /i "%AZITO_CMD%"=="service" goto :forward
 if /i "%AZITO_CMD%"=="version" goto :version
 if not defined AZITO_CMD goto :usage
-echo Unknown command: %AZITO_CMD% 1>&2
+setlocal EnableDelayedExpansion
+echo Unknown command: !AZITO_CMD! 1>&2
 echo. 1>&2
 echo Usage: azito {start^|stop^|status^|token show^|token rotate^|misao status^|service status^|version} 1>&2
 exit /b 1
@@ -84,16 +88,22 @@ echo Usage: azito {start^|stop^|status^|token show^|token rotate^|misao status^|
 exit /b 0
 
 :notinstalled
-echo ERROR: AZITO not found at %AZITO_ROOT%\hub\current.txt 1>&2
+rem The messages below print paths through delayed expansion, so & ^ ( ) in a path are not run as cmd syntax.
+setlocal EnableDelayedExpansion
+echo ERROR: AZITO not found at !AZITO_ROOT!\hub\current.txt 1>&2
 echo Run install.ps1 first. 1>&2
 exit /b 1
 
 :badpointer
-echo ERROR: %AZITO_ROOT%\hub\current.txt is empty. 1>&2
+setlocal EnableDelayedExpansion
+echo ERROR: !AZITO_ROOT!\hub\current.txt must hold one version such as v0.12.0 (ASCII, no BOM, no spaces). 1>&2
+echo Write it from PowerShell with [System.IO.File]::WriteAllText(path, 'v0.12.0'), or delete it and run install.ps1 again. 1>&2
 exit /b 1
 
 :missinghub
-echo ERROR: the hub folder %AZITO_HUB% is incomplete (node.exe or run.ps1 is missing). Re-run install.ps1. 1>&2
+setlocal EnableDelayedExpansion
+echo ERROR: the hub folder !AZITO_HUB! is incomplete (node.exe or run.ps1 is missing) or current.txt names a version that is not installed. 1>&2
+echo Check !AZITO_ROOT!\hub\current.txt, or delete it and run install.ps1 again. 1>&2
 exit /b 1
 '@
 
@@ -270,7 +280,10 @@ function Invoke-Install {
 
     # Same as install.sh: an installed hub is updated from the app (or by hand), not by running the installer again.
     if (Test-Path -LiteralPath $pointer -PathType Leaf) {
-        $installed = (Get-Content -LiteralPath $pointer -TotalCount 1).Trim()
+        $installed = ([System.IO.File]::ReadAllText($pointer)).TrimStart([char]0xFEFF).Trim()
+        if (-not (Test-ReleaseVersion $installed)) {
+            throw "$pointer does not hold a version such as v0.12.0 (it holds '$installed'). Delete it and run this installer again to repair the install."
+        }
         Write-Host "AZITO is already installed at $hubRoot"
         Write-Host "  Version: $installed"
         Write-Host ''
@@ -376,16 +389,17 @@ function Invoke-Install {
         if ($dns) { $initArgs += @('--tailscale-dns', $dns) }
         Invoke-Node $node $initArgs
 
-        # The pointer is written last: it is what marks the install as complete.
-        Write-TextAtomic $pointer "$tag`r`n"
-        Write-Host "Current version: $tag ($pointer)"
-
-        $token = @(& $node $hub 'token' 'show' | Where-Object { $_ -ne '' })
-        if ($LASTEXITCODE -ne 0 -or $token.Count -eq 0) { throw 'azito-hub token show failed' }
-        Write-Host ''
-        Write-Host "  UI Token (save this): $($token[-1])"
-        Write-Host '  Use it to authenticate in the browser. To show it again: azito token show'
-        Write-Host ''
+        # The token the hub will accept is the one in hub\.env (run.ps1 lets .env override the environment), so a token
+        # variable inherited from the calling shell must not decide what is shown here.
+        $inheritedToken = $env:AZITO_UI_TOKEN
+        Remove-Item Env:\AZITO_UI_TOKEN -ErrorAction SilentlyContinue
+        try {
+            $token = @(& $node $hub 'token' 'show' | Where-Object { $_ -ne '' })
+            $tokenExit = $LASTEXITCODE
+        } finally {
+            if ($null -ne $inheritedToken) { $env:AZITO_UI_TOKEN = $inheritedToken }
+        }
+        if ($tokenExit -ne 0 -or $token.Count -eq 0) { throw 'azito-hub token show failed' }
 
         $bin = Join-Path $Prefix 'bin'
         New-Item -ItemType Directory -Force -Path $bin | Out-Null
@@ -401,6 +415,16 @@ function Invoke-Install {
         } else {
             Write-Host "$bin is already in your user PATH."
         }
+
+        # The pointer is written last, after every step that can fail: it is what marks the install as complete, so a run
+        # that stopped earlier (a version folder but no current.txt) is repaired by running the installer again.
+        Write-TextAtomic $pointer "$tag`r`n"
+        Write-Host "Current version: $tag ($pointer)"
+
+        Write-Host ''
+        Write-Host "  UI Token (save this): $($token[-1])"
+        Write-Host '  Use it to authenticate in the browser. To show it again: azito token show'
+        Write-Host ''
     } finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
     }

@@ -106,16 +106,22 @@ It downloads the zip and `SHA256SUMS`, stops if the checksum does not match, and
 <prefix>\bin\azito.cmd         the CLI
 ```
 
-`hub\.env` and `data\` are created by the bundled hub itself (`node.exe azito-hub.cjs init-env`), so their access rules (current user only) come from the same code that protects them at run time. Running the installer again reports the existing install and changes nothing; updating by hand means extracting the new zip into `hub\<tag>` and writing the tag into `current.txt`.
+`hub\.env` and `data\` are created by the bundled hub itself (`node.exe azito-hub.cjs init-env`), so their access rules (current user only) come from the same code that protects them at run time. Running the installer again reports the existing install and changes nothing; updating by hand means extracting the new zip into `hub\<tag>` and writing the tag into `current.txt` as one ASCII line without a BOM. In Windows PowerShell 5.1 `Set-Content -Encoding UTF8` and `>` add a BOM or write UTF-16, which `azito` refuses; use:
+
+```powershell
+[System.IO.File]::WriteAllText("$env:USERPROFILE\.azito\hub\current.txt", 'v0.12.0')
+```
+
+`current.txt` is written last, after the CLI and the PATH entry. If an install stopped part-way (a `hub\<tag>` folder without `current.txt`), run the installer again to finish it; `hub\.env` and its token are kept.
 
 The CLI reads `current.txt` and runs the bundled hub:
 
 | Command | Effect |
 |---|---|
 | `azito start` | Runs the hub in the foreground through `run.ps1` (Ctrl+C stops it) |
-| `azito token show` / `token rotate` | The UI token |
+| `azito token show` / `token rotate` | The UI token (it is stored in `hub\.env`: `rotate` stops while it is set there, so change `AZITO_UI_TOKEN` in that file instead) |
 | `azito version` | The version in `current.txt` and the bundle's own |
-| `azito misao ...`, `azito service ...` | Passed to the hub; they report why they are not available on Windows yet |
+| `azito misao ...`, `azito service ...` | Passed to the hub, which refuses them on Windows for now: `service` says the Task Scheduler is not supported yet; `misao` currently stops at a check of the install prefix (it rejects the backslashes of a Windows path) until the hub's own misao lands (B3b) |
 | `azito stop` / `azito status` | Exit 1 with the reason: there is no resident service yet |
 
 **Not supported yet (#380):** running the hub as a resident service (Task Scheduler), the hub's own misao, and in-app update/uninstall (#381). Until then the hub runs only while `azito start` is open.

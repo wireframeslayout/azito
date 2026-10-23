@@ -29,13 +29,13 @@ function assert(condition: boolean, message: string, detail = ''): void {
   if (!condition) throw new Error(`${message}${detail ? `\n${detail}` : ''}`);
 }
 
-function powershell(args: string[]): Result {
-  const r = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf-8', timeout: 300_000 });
+function powershell(args: string[], env: NodeJS.ProcessEnv = process.env): Result {
+  const r = spawnSync(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { encoding: 'utf-8', timeout: 300_000, env });
   return { status: r.status, output: `${r.stdout}${r.stderr}` };
 }
 
-function install(installPs1: string, args: string[]): Result {
-  return powershell(['-File', installPs1, ...args]);
+function install(installPs1: string, args: string[], env: NodeJS.ProcessEnv = process.env): Result {
+  return powershell(['-File', installPs1, ...args], env);
 }
 
 /** The cmd.exe command line that runs `"<script>" <args>`: /s strips the outer quotes, so the script path keeps its own (spaces, parentheses). */
@@ -90,7 +90,9 @@ function checkVerification(installPs1: string, zip: string, sums: string, work: 
 function checkInstall(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
   step(`install into ${prefix}`);
   const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath'];
-  const first = install(installPs1, args);
+  // A token variable inherited from the calling shell must not decide the token that is shown: the hub uses hub/.env.
+  const inherited = 'token-from-the-parent-shell';
+  const first = install(installPs1, args, { ...process.env, AZITO_UI_TOKEN: inherited });
   assert(first.status === 0, 'install.ps1 failed', first.output);
   const hubDir = path.join(prefix, 'hub');
   for (const file of [`${version}/run.ps1`, `${version}/node.exe`, '.env', 'current.txt']) {
@@ -100,13 +102,51 @@ function checkInstall(installPs1: string, zip: string, sums: string, prefix: str
   assert(fs.readFileSync(path.join(hubDir, 'current.txt'), 'utf-8').trim() === version, 'current.txt must name the installed version');
   const token = readEnvValue(path.join(hubDir, '.env'), 'AZITO_UI_TOKEN');
   assert(/^[0-9a-f]{64}$/.test(token ?? ''), 'hub/.env must hold a 64-hex UI token');
-  assert(first.output.includes(token as string), 'install.ps1 must print the UI token', first.output);
+  assert(first.output.includes(token as string), 'install.ps1 must print the UI token of hub/.env', first.output);
+  assert(!first.output.includes(inherited), 'install.ps1 must not print a token inherited from the calling shell', first.output);
 
   step('running install.ps1 again for the same version changes nothing');
   const envBefore = fs.readFileSync(path.join(hubDir, '.env'), 'utf-8');
   const second = install(installPs1, args);
   assert(second.status === 0 && /already installed/.test(second.output), 'a re-run must report the install and succeed', second.output);
   assert(fs.readFileSync(path.join(hubDir, '.env'), 'utf-8') === envBefore, 'a re-run must not touch hub/.env');
+}
+
+/** An install that stopped part-way (a version folder, no current.txt, no CLI) is repaired by running the installer again; the CLI refuses a bad pointer and survives `&` in the prefix. */
+function checkRepairAndDiagnostics(installPs1: string, zip: string, sums: string, prefix: string, version: string): void {
+  step(`install into ${prefix} (a prefix with &), then repair a half-finished install`);
+  const args = ['-ZipPath', zip, '-Sha256Sums', sums, '-Prefix', prefix, '-Yes', '-NoPath'];
+  const first = install(installPs1, args);
+  assert(first.status === 0, 'install.ps1 failed', first.output);
+  const hubDir = path.join(prefix, 'hub');
+  const pointer = path.join(hubDir, 'current.txt');
+  const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
+  const envBefore = fs.readFileSync(path.join(hubDir, '.env'), 'utf-8');
+
+  fs.writeFileSync(pointer, '');
+  const empty = install(installPs1, args);
+  assert(empty.status !== 0 && /does not hold a version/.test(empty.output), 'an empty current.txt must stop the installer with a reason', empty.output);
+
+  fs.rmSync(pointer);
+  fs.rmSync(azitoCmd);
+  const repaired = install(installPs1, args);
+  assert(repaired.status === 0 && !/already installed/.test(repaired.output), 'a re-run after a part-way install must finish it', repaired.output);
+  assert(fs.existsSync(azitoCmd) && fs.readFileSync(pointer, 'utf-8').trim() === version, 'the re-run must write the CLI and current.txt');
+  assert(fs.readFileSync(path.join(hubDir, '.env'), 'utf-8') === envBefore, 'the repair must keep hub/.env (and its token)');
+  assert(azito(azitoCmd, 'version').status === 0, 'azito version after the repair');
+
+  step('azito.cmd refuses a bad current.txt and reports a failure path that contains &');
+  fs.writeFileSync(pointer, `\uFEFF${version}\r\n`, 'utf-8');
+  const bom = azito(azitoCmd, 'version');
+  assert(bom.status === 1 && /must hold one version/.test(bom.output) && bom.output.includes(prefix), 'a BOM in current.txt must be refused with the path intact', bom.output);
+  fs.writeFileSync(pointer, `${version}\r\n`);
+  const nodeExe = path.join(hubDir, version, 'node.exe');
+  fs.renameSync(nodeExe, `${nodeExe}.off`);
+  const missing = azito(azitoCmd, 'version');
+  assert(missing.status === 1 && /incomplete/.test(missing.output) && missing.output.includes(path.join(hubDir, version)), 'a missing node.exe must be reported with the path intact', missing.output);
+  const unknown = azito(azitoCmd, '"bogus&echo injected"');
+  assert(unknown.status === 1 && unknown.output.includes('Unknown command: bogus&echo injected') && !/^injected/m.test(unknown.output), 'an argument with & must not run as a command', unknown.output);
+  fs.renameSync(`${nodeExe}.off`, nodeExe);
 }
 
 function checkCli(azitoCmd: string, prefix: string, version: string): void {
@@ -226,11 +266,17 @@ async function main(): Promise<void> {
     checkInstall(installPs1, zip, sums, prefix, version as string);
     const azitoCmd = path.join(prefix, 'bin', 'azito.cmd');
     checkCli(azitoCmd, prefix, version as string);
+    checkRepairAndDiagnostics(installPs1, zip, sums, path.join(work, 'Amp&Co', '.azito'), version as string);
     await checkStart(azitoCmd, prefix);
     checkAccessRules(prefix);
     checkUserPath(installPs1, work);
   } finally {
-    fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    // A leftover file must not replace the failure that got us here.
+    try {
+      fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
+    } catch (err) {
+      console.warn(`[smoke-install] could not remove ${work}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
   step('ok');
 }
