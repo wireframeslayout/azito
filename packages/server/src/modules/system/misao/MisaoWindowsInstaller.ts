@@ -120,6 +120,10 @@ export class MisaoWindowsInstaller {
     if (live && status.installedVersion === bundle.version) {
       return { version: bundle.version, runningVersion: bundle.version, startMethod: 'running', updateAvailable: false };
     }
+    // The pipe probe can miss a daemon that is just starting: stopping or restarting around it could not be undone, so nothing is touched.
+    if (!live && (await this.taskIsRunning(session))) {
+      throw new MisaoServiceError('daemon_not_ready', `The task "${this.options.taskName}" is running but ${session.pipe} does not accept connections yet. Nothing was changed; try again in a moment.`);
+    }
 
     // The new release is complete on disk and its task definition is built before anything is stopped: a damaged transfer or a value the task cannot hold leaves the daemon running.
     const xml = await this.buildTask(session, bundle.version);
@@ -304,6 +308,23 @@ export class MisaoWindowsInstaller {
     await this.registerXml(session, xml);
     await session.tasks.start(this.options.taskName);
     await this.waitUntilListening(session);
+    await this.verifyRelease(session, session.bundle.version);
+  }
+
+  /** The pipe being open does not say whose daemon it is: the program running behind it must be the release's own `misao.exe`. */
+  private async verifyRelease(session: Session, version: string): Promise<void> {
+    const q = powershellDialect.quote;
+    const out = await this.script(session, 'Checking which misao is running', [
+      '# AZITO_DAEMON_PATHS',
+      `$pipe = ${q(session.pipe)}`,
+      '$paths = @(Get-CimInstance Win32_Process -Filter "Name = \'misao.exe\'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($pipe) } | ForEach-Object { $_.ExecutablePath })',
+      "[Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes(($paths -join \"`n\")))",
+    ].join('\n'));
+    const running = Buffer.from(out.trim(), 'base64').toString('utf8').split('\n').filter((line) => line !== '');
+    const expected = this.layout(session, version).exe.toLowerCase();
+    if (running.length === 0 || running.some((exe) => exe.toLowerCase() !== expected)) {
+      throw new MisaoServiceError('daemon_not_ready', `The pipe ${session.pipe} answers, but the program behind it is ${running.length === 0 ? 'not found' : running.join(', ')}, not ${expected}.`);
+    }
   }
 
   // ── Stopping ──
@@ -405,8 +426,12 @@ export class MisaoWindowsInstaller {
     } catch (err) {
       return [`stopping the daemon on ${session.pipe}: ${describeError(err)}`];
     }
-    // Best effort: a task that stays "running" with no daemon behind it does not stop the previous task definition from being put back.
-    await this.waitUntilTaskIdle(session).catch(() => undefined);
+    // The task ignores a start while it is running (IgnoreNew): the previous release is only put back and started once it is known to be stopped.
+    try {
+      await this.waitUntilTaskIdle(session);
+    } catch (err) {
+      return [`the task "${this.options.taskName}" did not stop: ${describeError(err)}`];
+    }
     const failed: string[] = [];
     const attempt = async (what: string, action: () => Promise<unknown>): Promise<void> => {
       try {
@@ -470,6 +495,7 @@ export class MisaoWindowsInstaller {
       if (wasRunning) {
         await session.tasks.start(this.options.taskName);
         await this.waitUntilListening(session);
+        await this.verifyRelease(session, previousVersion);
       }
     } catch (restoreErr) {
       throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion} failed (${causeText}) and restoring ${previousVersion} failed too (${describeError(restoreErr)}). misao is not running on this server and every pane has ended. ${manual}`);
