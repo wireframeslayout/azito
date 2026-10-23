@@ -833,15 +833,14 @@ export class AgentActivityMonitor {
   recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string): void {
     if (sessionId) {
       const target = this.windowRepo.findAll().find(
-        (w) => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, tmuxTarget) && isAgentWindow(w),
+        (w): w is AgentWindow => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, tmuxTarget) && isAgentWindow(w),
       );
-      if (target && isAgentWindow(target)) this.updateAgentSessionId(target, sessionId, event);
+      if (target) this.updateAgentSessionId(target, sessionId, event);
     }
-    if (event !== 'session') {
-      const key = windowKey(serverName, tmuxTarget);
-      this.hookStates.set(key, { status: event === 'start' ? 'running' : 'idle', at: Date.now() });
-      this.hookMatchedBy.set(key, 'muxPaneRef');
-    }
+    if (event === 'session') return;
+    const key = windowKey(serverName, tmuxTarget);
+    this.hookStates.set(key, { status: event === 'start' ? 'running' : 'idle', at: Date.now() });
+    this.hookMatchedBy.set(key, 'muxPaneRef');
     this.requestTick();
   }
 
