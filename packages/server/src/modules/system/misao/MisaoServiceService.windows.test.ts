@@ -136,6 +136,25 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(update).toHaveBeenCalledWith(windows.target, BUNDLE, expect.any(Function));
   });
 
+  it('does not update or start a task that starts a misao from another folder (only install --replace-socket moves it)', async () => {
+    taskExists = true;
+    fs.writeFileSync(paths.current, '0.2.0\n');
+    exportedXml = taskXml('D:\\other\\.azito\\misao');
+    await expect(service().update()).rejects.toMatchObject({ code: 'custom_socket', message: expect.stringContaining('another folder') });
+    await expect(service().start()).rejects.toMatchObject({ code: 'custom_socket' });
+    expect(update).not.toHaveBeenCalled();
+    expect(controller.start).not.toHaveBeenCalled();
+  });
+
+  it('asks the Task Scheduler once per status', async () => {
+    taskExists = true;
+    fs.writeFileSync(paths.current, '0.3.0\n');
+    const query = vi.fn(async () => ({ exists: true, running: true, failed: false, lastResult: 0x41301 }));
+    windows = { ...windows, tasks: { query, exportXml: async () => exportedXml } as unknown as LocalMisaoWindows['tasks'] };
+    expect(await service().status()).toMatchObject({ serviceInstalled: true, serviceState: 'active' });
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+
   it('reads the installed version from the current file, and is not installed without the task', async () => {
     fs.writeFileSync(paths.current, '0.3.0\n');
     expect(service().installedVersion()).toBe('0.3.0');

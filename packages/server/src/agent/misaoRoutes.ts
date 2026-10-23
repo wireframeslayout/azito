@@ -1,6 +1,6 @@
 import type { FastifyPluginCallback } from 'fastify';
 import * as crypto from 'crypto';
-import { MISAO_RELEASE_FILES, misaoStagingDir, readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost, type AgentMisaoSocket, type MisaoReleaseFile } from '../modules/servers/transport/agentMisaoSocket';
+import { MISAO_RELEASE_FILES, readMisaoSocketStatus, stageMisaoReleaseFile, type AgentMisaoHost, type AgentMisaoSocket, type MisaoReleaseFile } from '../modules/servers/transport/agentMisaoSocket';
 
 export type MisaoUploadName = MisaoReleaseFile;
 
@@ -18,8 +18,6 @@ export interface MisaoRoutesOptions {
 function isUploadName(value: unknown): value is MisaoUploadName {
   return typeof value === 'string' && Object.hasOwn(MISAO_RELEASE_FILES, value);
 }
-
-export { misaoStagingDir };
 
 /**
  * The agent's side of installing misao: what it sees (`status`) and a place to put the release files (`upload`).

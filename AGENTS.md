@@ -140,7 +140,7 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   (`misao/misaoLocalWindows.ts`: in-process commands, `LocalFileOps`, pipe probe and `stageMisaoReleaseFile`), so there is one misao per user:
   `<prefix>\misao\<version>\misao.exe`, the `current` file, the task `AzitoMisao` and the pipe of that folder, shared with a Windows agent on the same
   machine (a task that starts a misao from another folder is refused without `--replace-socket`). `resolveMisaoPaths(prefix, windowsUser)` takes the
-  Windows branch (drive path; spaces, parentheses and `&` allowed; `"`, `%`, `!`, line breaks refused); the pipe is written to `hub\.env` as
+  Windows branch (drive path; spaces, parentheses, `&`, `%`, `!` allowed: such a path reaches the task through a PowerShell launcher script with the paths in environment variables, `conhost.exe` re-reads a command line with them wrongly; `"` and line breaks refused). The pipe name is made from the folder's real spelling (`canonicalHostPath`, 8.3 names expanded) inside `windowsMisaoPipe`, so the hub, the CLI and an agent land on one pipe. update / start refuse a task of another folder like install; the pipe is written to `hub\.env` as
   `MISAO_SOCKET` after the daemon answers, and `run.ps1` loads it. `install.ps1` runs `azito misao install --prefix` after the hub's task (skipped with
   `-NoService`; a failure is a warning). `hasMisaoToRelyOn` takes `windowsTaskDefined` (the Task Scheduler is asked in `main.ts`). No unit template is
   rendered for Windows. Panes on the hub's own Windows misao stay `unsupported_os` until #370 / #371.

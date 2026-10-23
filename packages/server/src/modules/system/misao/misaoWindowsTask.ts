@@ -61,11 +61,10 @@ export function misaoWindowsReleasePaths(versionDir: string): string[] {
 const PLAIN_COMMAND_LINE_PATH = /^[A-Za-z0-9._:~\\-]+$/;
 
 /**
- * Text that lands inside double quotes in a `cmd.exe /c` line. Inside quotes cmd.exe still expands `%NAME%`, and a quote ends the
- * quoting, so a value with one is refused instead of escaped (the launcher form below has no such limit).
+ * Text that lands inside double quotes in the plain `cmd.exe /c` line. Only paths of plain characters get here (see
+ * {@link PLAIN_COMMAND_LINE_PATH}; a quote or a line break is refused before), so nothing needs escaping.
  */
-function assertCmdQuotable(value: string, what: string): string {
-  if (/["%!\r\n\0]/.test(value)) throw new Error(`${what} cannot be written to the misao task (it contains a quote, "%", "!" or a line break): ${value}`);
+function quoteForCmd(value: string): string {
   return `"${value}"`;
 }
 
@@ -77,7 +76,7 @@ function misaoLauncherScript(input: { systemRoot: string; layout: MisaoWindowsLa
     '$info = New-Object System.Diagnostics.ProcessStartInfo',
     `$info.FileName = ${q(win32.join(input.systemRoot, 'System32', 'cmd.exe'))}`,
     // %NAME% in the cmd line is replaced by cmd.exe from the environment below, once: a path is never re-read as cmd syntax, whatever it holds.
-    `$info.Arguments = ${q('/d /s /c ""%AZITO_MISAO_EXE%" serve --socket "%AZITO_MISAO_PIPE%" --data "%AZITO_MISAO_ROOT%" >>"%AZITO_MISAO_LOG%" 2>&1"')}`,
+    `$info.Arguments = ${q('/d /v:off /s /c ""%AZITO_MISAO_EXE%" serve --socket "%AZITO_MISAO_PIPE%" --data "%AZITO_MISAO_ROOT%" >>"%AZITO_MISAO_LOG%" 2>&1"')}`,
     '$info.UseShellExecute = $false',
     '$info.CreateNoWindow = $true',
     `$info.EnvironmentVariables['AZITO_MISAO_EXE'] = ${q(layout.exe)}`,
@@ -113,7 +112,7 @@ export function misaoTaskArguments(input: { systemRoot: string; layout: MisaoWin
   if (![cmd, layout.exe, layout.root, layout.logFile, pipe].every((value) => PLAIN_COMMAND_LINE_PATH.test(value.replace(/^\\\\\.\\pipe\\/, '')))) {
     return misaoLauncherArguments(input);
   }
-  const inner = `${assertCmdQuotable(layout.exe, 'The misao.exe path')} serve --socket ${assertCmdQuotable(pipe, 'The misao pipe name')} --data ${assertCmdQuotable(layout.root, 'The misao folder')} >> ${assertCmdQuotable(layout.logFile, 'The misao log path')} 2>&1`;
+  const inner = `${quoteForCmd(layout.exe)} serve --socket ${quoteForCmd(pipe)} --data ${quoteForCmd(layout.root)} >> ${quoteForCmd(layout.logFile)} 2>&1`;
   return `--headless ${quoteWindowsArg(cmd)} /d /c "${inner}"`;
 }
 

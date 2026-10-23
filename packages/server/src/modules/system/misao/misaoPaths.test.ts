@@ -88,6 +88,10 @@ describe('resolveMisaoPaths on Windows', () => {
     expect(() => resolveMisaoPaths(prefix, user)).toThrow(/on a drive/);
   });
 
+  it('keeps the root of a drive as a root (C: alone is the current folder of the drive)', () => {
+    expect(resolveMisaoPaths('C:\\', user).root).toBe('C:\\misao');
+  });
+
   it('does not apply the unix socket length limit to a pipe', () => {
     expect(() => resolveMisaoPaths(`C:\\${'a'.repeat(150)}`, user)).not.toThrow();
   });

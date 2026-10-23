@@ -8,7 +8,7 @@ import type { SecretFileGuard } from '../../../shared/os/secretFileGuard';
 import { buildServicePath, versionDir, type MisaoPaths } from './misaoPaths';
 import { bundleFilesFor, sha256File, type MisaoBundle, type MisaoTargetFiles } from './MisaoBundle';
 import { MISAO_RELEASE_FILES, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
-import { DuplicateLoadError, type ServiceManager } from '../serviceManager';
+import { DuplicateLoadError, type ServiceInspection, type ServiceManager } from '../serviceManager';
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 import { taskXmlNamesRoot, type LocalMisaoWindows } from './misaoLocalWindows';
@@ -124,15 +124,26 @@ export class MisaoServiceService {
     return controller?.isInstalled() ?? false;
   }
 
+  /** The service's state and whether it is installed. Windows: from ONE query of the task (a status poll is two process starts otherwise). */
+  private async inspectService(): Promise<{ installed: boolean; inspection?: ServiceInspection }> {
+    const { windows, controller } = this.deps;
+    if (!windows) {
+      const installed = await this.isServiceInstalled();
+      return { installed, ...(controller && installed ? { inspection: await controller.inspect() } : {}) };
+    }
+    const task = await windows.tasks.query(windows.taskName);
+    if (!task.exists) return { installed: false };
+    return { installed: true, inspection: { state: task.running ? 'active' : task.failed ? 'failed' : 'inactive', domains: [] } };
+  }
+
   async status(): Promise<MisaoServiceStatus> {
     const { bundle, controller, hub } = this.deps;
     const reason = this.unmanagedReason();
     const daemon: MisaoDaemonInfo = hub
       ? await hub.probeDaemon()
       : { reachable: this.deps.paths ? await isSocketListening(this.deps.paths.socket) : false };
-    const serviceInstalled = await this.isServiceInstalled();
+    const { installed: serviceInstalled, inspection } = await this.inspectService();
     const unmanagedDetail = this.deps.pathsError ?? (reason === 'unsupported_platform' ? this.deps.controllerError : undefined);
-    const inspection = controller && serviceInstalled ? await controller.inspect() : undefined;
     const installedVersion = this.installedVersion();
     const socketSetting = this.socketSetting();
     const updateAvailable = !!bundle && serviceInstalled && (
@@ -286,6 +297,8 @@ export class MisaoServiceService {
     const { controller } = this.requireManaged();
     await controller.loadedDomain();
     if (!(await this.isServiceInstalled())) throw new MisaoServiceError('not_installed', 'The misao service is not installed. Run `azito misao install` first.');
+    // Starting another install's task would wait for a pipe that never opens: only the folder this hub manages is started.
+    if (this.deps.windows) await this.refuseTaskOfAnotherRoot(this.deps.windows, false);
     if ((await controller.state()) !== 'active') {
       await controller.start();
       await this.waitUntilListening();
@@ -311,6 +324,8 @@ export class MisaoServiceService {
     }
     // Windows: the installer's own stop / switch / start with its rollback (the same steps as an agent's update).
     if (this.deps.windows) {
+      // Moving the task to another folder is `install --replace-socket`, never an update.
+      await this.refuseTaskOfAnotherRoot(this.deps.windows, false);
       await this.deps.windows.installer.update(this.deps.windows.target, bundle, () => undefined);
       return this.status();
     }

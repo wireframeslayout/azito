@@ -49,7 +49,7 @@ describe('the misao task', () => {
     expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_ROOT'] = '${odd.root}'`);
     expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_LOG'] = '${odd.logFile}'`);
     expect(script).toContain(`$info.EnvironmentVariables['AZITO_MISAO_PIPE'] = '${pipe}'`);
-    expect(script).toContain('/d /s /c ""%AZITO_MISAO_EXE%" serve --socket "%AZITO_MISAO_PIPE%" --data "%AZITO_MISAO_ROOT%" >>"%AZITO_MISAO_LOG%" 2>&1"');
+    expect(script).toContain('/d /v:off /s /c ""%AZITO_MISAO_EXE%" serve --socket "%AZITO_MISAO_PIPE%" --data "%AZITO_MISAO_ROOT%" >>"%AZITO_MISAO_LOG%" 2>&1"');
     expect(script).toContain('exit $process.ExitCode');
   });
 
