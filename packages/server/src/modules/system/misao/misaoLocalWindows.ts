@@ -67,8 +67,18 @@ export async function misaoWindowsTaskExists(hostEnv: Pick<HostEnv, 'platform' |
   return (await tasks.query(MISAO_SERVICE.windowsTaskName)).exists;
 }
 
-/** Whether a task definition runs something under `root` (XML entities decoded; paths compare without regard to case, like the file system). */
+/**
+ * Whether a task definition runs something under `root`: in its command line (XML entities decoded), or in the launcher script
+ * a root with a space or a parenthesis goes through (`-EncodedCommand`, where a single quote in a path is doubled). Paths compare
+ * without regard to case, like the file system.
+ */
 export function taskXmlNamesRoot(xml: string, root: string): boolean {
   const decoded = xml.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
-  return decoded.toLowerCase().includes(`${path.win32.normalize(root).toLowerCase()}\\`);
+  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(decoded)?.[1];
+  const launcher = encoded ? Buffer.from(encoded, 'base64').toString('utf16le') : '';
+  const wanted = `${path.win32.normalize(root).toLowerCase()}\\`;
+  return [decoded, launcher].some((text) => {
+    const lower = text.toLowerCase();
+    return lower.includes(wanted) || lower.includes(wanted.replace(/'/g, "''"));
+  });
 }
