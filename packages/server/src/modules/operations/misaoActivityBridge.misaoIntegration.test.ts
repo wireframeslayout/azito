@@ -16,6 +16,7 @@ import { MisaoActivityBridge } from './misaoActivityBridge';
 import { AgentActivityMonitor } from './AgentActivityMonitor';
 import { PaneHandleResolver } from './PaneHandleResolver';
 import { MISAO_CLI } from '../../shared/misaoTestBinary';
+import { hubPaneShell } from '../tmux/misao/paneShell';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const SOCKET_BYTES_MAX = 107;
@@ -119,7 +120,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoActivityBridge against a real m
 
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
-    const driver = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange: () => {}, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
+    const driver = new MisaoMuxClient(connection, { paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), onChange: () => {}, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
     const registry = new MuxDriverRegistry();
     registry.register('misao', driver, () => connection.availability());
     await connection.start();

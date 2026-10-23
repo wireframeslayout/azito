@@ -5,6 +5,7 @@ import type {
   ExecResult,
   IServerTransport,
   IMuxTransport,
+  IHostBoundTransport,
   ITerminalStream,
 } from './ServerTransport';
 import type { IPaneStream } from '../../tmux/PaneStream';
@@ -13,6 +14,7 @@ import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 
 export function execLocal(command: string, args: string[], timeoutMs = 5000): Promise<ExecResult> {
   return new Promise((resolve, reject) => {
@@ -57,12 +59,15 @@ class LocalTerminalStream extends EventEmitter implements ITerminalStream {
   }
 }
 
-export class LocalTransport implements IServerTransport, IMuxTransport {
+export class LocalTransport implements IServerTransport, IMuxTransport, IHostBoundTransport {
   private sessionCounter = 0;
 
-  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles) {}
+  /** `hostProfile`: the host this transport runs commands on (the hub's own, from its HostEnv). Null when the hub's OS / architecture is not one AZITO knows: unknown, treated as POSIX like an unrecorded agent. */
+  constructor(private rt: TmuxRuntime, private publicUrl: string, private homeDir: string, private taskTempFiles: TaskTempFiles, readonly hostProfile: HostProfile | null) {}
 
-  exec(command: string, timeoutMs?: number): Promise<ExecResult> {
+  /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */
+  async exec(command: string, timeoutMs?: number): Promise<ExecResult> {
+    assertPosixHost(this.hostProfile, 'this host');
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
   }
 

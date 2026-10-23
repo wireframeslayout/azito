@@ -62,7 +62,7 @@ const makeServer = (overrides: Partial<ServerConfig> = {}): ServerConfig => ({
   agentToken: null,
   agentVersion: null,
   sshHost: null,
-  sshHostFingerprint: null,
+  hostProfile: null, sshHostFingerprint: null,
   defaultMux: 'tmux' as const, muxRuntime: 'system',
   isolationIntent: false,
   isolationVerifiedAt: null,
@@ -111,7 +111,7 @@ function makeResolver(overrides: {
     findByName: vi.fn(() => makeServer()),
     create: vi.fn(),
     update: vi.fn(),
-    updateAgentVersion: vi.fn(),
+    updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
     delete: vi.fn(),
     ...overrides.serverRepo,
   } as unknown as IServerRepository;

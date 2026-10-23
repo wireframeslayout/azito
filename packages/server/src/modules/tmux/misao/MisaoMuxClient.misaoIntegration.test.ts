@@ -14,6 +14,7 @@ import { MisaoConnection, connectDedicatedMisaoClient } from './MisaoConnection'
 import { MisaoMuxClient } from './MisaoMuxClient';
 import { CHANGE_COALESCE_MS } from './misaoChangeEvents';
 import { MISAO_CLI } from '../../../shared/misaoTestBinary';
+import { hubPaneShell } from './paneShell';
 
 // Drives a real misao daemon started in a throwaway directory (never the resident ~/.misao one).
 const server = { name: 'local', type: 'local', defaultMux: 'misao' as const, muxRuntime: 'system' } as ServerConfig;
@@ -51,7 +52,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('MisaoMuxClient against a real misao 
 
     const sdk = await import('@misao/sdk');
     connection = new MisaoConnection({ socketPath, sdk, log: { warn } });
-    client = new MisaoMuxClient(connection, { shell: '/bin/bash', onChange, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
+    client = new MisaoMuxClient(connection, { paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }), onChange, log: { warn }, hubEnv: { publicUrl: 'http://hub.example', localUrl: 'http://127.0.0.1:3001', webhookToken: 'wh-token' }, connectAttachClient: () => connectDedicatedMisaoClient(sdk, { socketPath }) });
     await connection.start();
     expect(connection.availability()).toEqual({ available: true });
   });

@@ -21,6 +21,7 @@ import { PaneHandleResolver } from './PaneHandleResolver';
 import { composePaneEnv } from '../tmux/hubPaneEnv';
 import { MISAO_CLI } from '../../shared/misaoTestBinary';
 import { TaskTempFiles } from '../../shared/os/taskTempFiles';
+import { hubPaneShell } from '../tmux/misao/paneShell';
 
 // Drives a real agent process (started here, on a throwaway port and token) in front of a real misao daemon started in a
 // throwaway directory (never the resident ~/.misao one). The hub side is the real driver stack over the agent's relay.
@@ -111,12 +112,13 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
     }, { timeout: 30000, interval: 200 });
 
     server = { name: 'agent1', type: 'agent', host: '127.0.0.1', agentPort: port, agentToken: token, defaultMux: 'misao', muxRuntime: 'system', isolationIntent: false } as ServerConfig;
-    transportFactory = new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'));
+    transportFactory = new TransportFactory(HUB_ENV.publicUrl, os.homedir(), new TaskTempFiles('/tmp', 'linux'), { platform: 'linux', arch: 'x64' });
     registry = new MuxDriverRegistry();
     const sdk = await import('@misao/sdk');
-    misao = registerMisaoDriver(registry, { sdk, socketPath: path.join(dir, 'unused-local.sock'), shell: '/bin/bash' }, () => undefined, { warn }, HUB_ENV, {
+    misao = registerMisaoDriver(registry, { sdk, socketPath: path.join(dir, 'unused-local.sock'), paneShell: hubPaneShell('/bin/bash', { platform: 'linux', arch: 'x64' }) }, () => undefined, { warn }, HUB_ENV, {
       target: (srv) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(srv).connectMisaoRelay(signal) }),
       status: (srv) => transportFactory.getAgentTransport(srv).fetchMisaoStatus(),
+      hostInfo: (srv) => transportFactory.getAgentTransport(srv).fetchHostInfo(),
       latest: () => server,
     });
 

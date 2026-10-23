@@ -46,7 +46,7 @@ beforeEach(() => {
 function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
   return {
     name: 'iso-1', type: 'agent', host: '10.0.0.2', agentPort: 4000, agentToken: 't', agentVersion: null,
-    sshHost: 'iso-1', muxRuntime: 'tmux', sshHostFingerprint: null,
+    sshHost: 'iso-1', muxRuntime: 'tmux', hostProfile: null, sshHostFingerprint: null,
     isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null,
     createdAt: '2026-01-01T00:00:00Z', ...overrides,
   } as ServerConfig;
@@ -112,7 +112,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       // `agent_token` anywhere in the table would turn into a 500.
       findAll: vi.fn((): ServerConfig[] => { throw new Error('the listing must never read every server through toEntity()'); }),
       findByName: vi.fn(() => null), create: vi.fn(), update: vi.fn(),
-      updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
+      updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(), updateFingerprint: vi.fn(), clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(),
       findMetaByNames: vi.fn((names: string[]) => [makeServer()].filter((s) => names.includes(s.name)).map(toMeta)),
       delete: vi.fn(),
     },
@@ -444,7 +444,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     db.exec(`
       CREATE TABLE servers (
         name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
-        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', default_mux TEXT NOT NULL DEFAULT 'tmux', ssh_host_fingerprint TEXT,
+        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', default_mux TEXT NOT NULL DEFAULT 'tmux', ssh_host_fingerprint TEXT, host_platform TEXT, host_arch TEXT,
         isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
         isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
       )
@@ -472,7 +472,7 @@ describe('GET /api/projects/:id/servers — distribution status (Issue #87 配�
     db.exec(`
       CREATE TABLE servers (
         name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
-        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', default_mux TEXT NOT NULL DEFAULT 'tmux', ssh_host_fingerprint TEXT,
+        agent_version TEXT, ssh_host TEXT, mux_runtime TEXT DEFAULT 'system', default_mux TEXT NOT NULL DEFAULT 'tmux', ssh_host_fingerprint TEXT, host_platform TEXT, host_arch TEXT,
         isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
         isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
       )

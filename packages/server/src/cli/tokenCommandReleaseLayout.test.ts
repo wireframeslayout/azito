@@ -9,8 +9,10 @@ import { resolveCurrentUiToken } from '../shared/currentUiToken';
 import { tokenCommand } from './tokenCommand';
 import { authDoctorCommand } from './authDoctorCommand';
 import { createSecretFileGuard } from '../shared/os/secretFileGuard';
+import type { HostEnv } from '../shared/os/hostEnv';
 import { TaskTempFiles } from '../shared/os/taskTempFiles';
 const doctorTaskTempFiles = new TaskTempFiles('/tmp', 'linux');
+const doctorHostEnv = (homeDir: string): HostEnv => ({ platform: 'linux', arch: 'x64', homeDir, tmpDir: '/tmp', execPath: process.execPath });
 
 const secretFileGuard = createSecretFileGuard(process.platform, process.env);
 
@@ -103,7 +105,7 @@ describe('release layout (hub/<version>, hub/current symlink, parent .env)', () 
       path.join(tmpDir, '.claude', 'settings.json'),
       JSON.stringify({ mcpServers: { 'azt-mcp': { env: { AZITO_UI_TOKEN: 'parent-token' } } } }),
     );
-    await authDoctorCommand(tmpDir, secretFileGuard, doctorTaskTempFiles);
+    await authDoctorCommand(doctorHostEnv(tmpDir), secretFileGuard, doctorTaskTempFiles);
     const out = vi.mocked(console.log).mock.calls.map(([m]) => String(m)).join('\n');
     expect(out).toContain(`一致元: ${path.join(hubDir, '.env')}`);
   });

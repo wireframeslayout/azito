@@ -4,6 +4,8 @@ import type { MuxDriverRegistry } from '../MuxDriverRegistry';
 import { MisaoConnection, connectDedicatedMisaoClient, type MisaoSdk } from './MisaoConnection';
 import { MuxDriverUnavailableError } from '../MuxCapabilityError';
 import { MisaoMuxClient } from './MisaoMuxClient';
+import { hubPaneShell, type PaneShellResolver } from './paneShell';
+import type { HubHostProfile } from '../../../shared/os/hostProfile';
 import { MisaoServers, type MisaoServersDeps } from './MisaoServers';
 import { MisaoDriverRouter } from './MisaoDriverRouter';
 import type { HubPaneEnvConfig } from '../hubPaneEnv';
@@ -12,7 +14,8 @@ import type { HubPaneEnvConfig } from '../hubPaneEnv';
 export interface MisaoRuntime {
   sdk: MisaoSdk;
   socketPath: string;
-  shell: string;
+  /** Where panes of the hub's own daemon get their shell (and whether this hub can start one at all). */
+  paneShell: PaneShellResolver;
 }
 
 export interface MisaoRuntimeInput {
@@ -20,12 +23,14 @@ export interface MisaoRuntimeInput {
   homeDir: string;
   /** Shell panes run when no command is given, and the interpreter for commands (`<shell> -lc <command>`). */
   shell: string;
+  /** The hub's own host, resolved at the entry point. */
+  hubHost: HubHostProfile;
 }
 
 /** Loads the ESM-only SDK and resolves the daemon socket. Does not touch the daemon: it may be absent. */
-export async function resolveMisaoRuntime({ env, homeDir, shell }: MisaoRuntimeInput): Promise<MisaoRuntime> {
+export async function resolveMisaoRuntime({ env, homeDir, shell, hubHost }: MisaoRuntimeInput): Promise<MisaoRuntime> {
   const sdk = await import('@misao/sdk');
-  return { sdk, socketPath: sdk.resolveSocketPath({ env, homeDir }), shell };
+  return { sdk, socketPath: sdk.resolveSocketPath({ env, homeDir }), paneShell: hubPaneShell(shell, hubHost) };
 }
 
 /** Socket used when the configured one is unusable: nothing listens there, so the driver reports `daemon_unreachable`. */
@@ -47,7 +52,7 @@ export async function resolveMisaoRuntimeForHub(
     if (hasMisaoServers) throw err;
     log.warn(`[misao] the misao socket setting is unusable, so the misao driver stays unavailable (daemon_unreachable): ${err instanceof Error ? err.message : String(err)}`);
     const sdk = await import('@misao/sdk');
-    return { sdk, socketPath: UNUSABLE_SOCKET_PATH, shell: input.shell };
+    return { sdk, socketPath: UNUSABLE_SOCKET_PATH, paneShell: hubPaneShell(input.shell, input.hubHost) };
   }
 }
 
@@ -95,6 +100,7 @@ export async function describeMisaoDaemon(connection: MisaoConnection): Promise<
 export const NO_AGENT_MISAO: MisaoServersDeps['agent'] = {
   target: () => { throw new Error('this process does not open the misao relay of an agent server'); },
   status: async () => ({ socketPresent: false }),
+  hostInfo: () => { throw new Error('this process does not open the misao relay of an agent server'); },
   latest: () => null,
 };
 
@@ -112,8 +118,8 @@ export function registerMisaoDriver(
   agent: MisaoServersDeps['agent'],
 ): MisaoHandle {
   const connection = new MisaoConnection({ socketPath: runtime.socketPath, sdk: runtime.sdk, log });
-  const driver = new MisaoMuxClient(connection, { shell: runtime.shell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, { socketPath: runtime.socketPath }) });
-  const servers = new MisaoServers({ sdk: runtime.sdk, shell: runtime.shell, hubEnv, onChange, log, local: { connection, driver }, agent });
+  const driver = new MisaoMuxClient(connection, { paneShell: runtime.paneShell, onChange, log, hubEnv, connectAttachClient: () => connectDedicatedMisaoClient(runtime.sdk, { socketPath: runtime.socketPath }) });
+  const servers = new MisaoServers({ sdk: runtime.sdk, hubPaneShell: runtime.paneShell, hubEnv, onChange, log, local: { connection, driver }, agent });
   registry.register('misao', new MisaoDriverRouter(servers), (server) => servers.availability(server), (server) => servers.hosts(server));
   return { connection, driver, socketPath: runtime.socketPath, servers };
 }

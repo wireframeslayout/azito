@@ -13,11 +13,14 @@ import { defaultMuxOptions, editableDefaultMux, editableMuxRuntime } from '../li
 import { refUsesMuxRoutes, usesMuxRoutes } from '../lib/sessionKind';
 import { fetchSessionListing, keepUnavailableKinds } from '../lib/fetchServerSessions';
 import { muxCreateFailureText } from '../lib/muxKindChoice';
+import type { HostProfile } from '../lib/hostProfile';
 
 export interface Server {
   name: string;
   type: string;
   host?: string;
+  /** The OS / architecture of the server's host (not `host`, the address). Null: not recorded yet. */
+  hostProfile?: HostProfile | null;
   agentPort?: number;
   hasAgentToken?: boolean;
   agentVersion?: string;

@@ -5,6 +5,7 @@ import type {
   ExecResult,
   IServerTransport,
   IMuxTransport,
+  IHostBoundTransport,
   ITerminalStream,
 } from './ServerTransport';
 import type { IPaneStream } from '../../tmux/PaneStream';
@@ -12,6 +13,8 @@ import { AgentPaneStream } from './AgentPaneStream';
 import { AGENT_PANE_STREAMS_PATH, AgentOutdatedError } from './agentPaneStreamProtocol';
 import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
 import type { MuxRuntime } from '../Server';
+import { AGENT_HOST_PATH, AgentHostOutdatedError, parseAgentHostInfo, type AgentHostInfo } from './agentHostProtocol';
+import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
@@ -89,7 +92,7 @@ class AgentTerminalStream extends EventEmitter implements ITerminalStream {
   }
 }
 
-export class AgentTransport implements IServerTransport, IMuxTransport {
+export class AgentTransport implements IServerTransport, IMuxTransport, IHostBoundTransport {
   private baseUrl: string;
   private wsBaseUrl: string;
   private authHeader: string;
@@ -106,7 +109,8 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
   private nextSeq = 0;
   private appliedSeq = 0;
 
-  constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string) {
+  /** `hostProfile`: the agent's OS / architecture as recorded; null for an agent registered before it was (treated as a Unix one). */
+  constructor(host: string, port: number, token: string, muxRuntime: MuxRuntime, private serverName: string, readonly hostProfile: HostProfile | null) {
     this.token = token;
     this.muxRuntime = muxRuntime;
     this.baseUrl = `http://${host}:${port}`;
@@ -122,7 +126,13 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     return this.muxRuntime === runtime;
   }
 
+  matchesHostProfile(profile: HostProfile | null): boolean {
+    return this.hostProfile?.platform === profile?.platform && this.hostProfile?.arch === profile?.arch;
+  }
+
+  /** @deprecated POSIX-only: the agent runs `command` with `/bin/sh -c`. Rejects when the agent's host is win32. */
   async exec(command: string, timeoutMs?: number): Promise<ExecResult> {
+    assertPosixHost(this.hostProfile, `agent server "${this.serverName}"`);
     return this.post('/api/exec', { command, ...(timeoutMs !== undefined ? { timeoutMs } : {}) }, timeoutMs);
   }
 
@@ -246,6 +256,18 @@ export class AgentTransport implements IServerTransport, IMuxTransport {
     const { status, text } = await this.send('/api/misao/status', { method: 'GET', headers: { authorization: this.authHeader } }, HEALTH_TIMEOUT_MS);
     if (status < 200 || status >= 300) throw new Error(`Agent /api/misao/status failed (${status}): ${text}`);
     return JSON.parse(text) as MisaoSocketStatus;
+  }
+
+  /**
+   * What the agent says about its own host (`GET /api/host`): OS, architecture and default shell. Shares the breaker like
+   * every agent call. Rejects with AgentHostOutdatedError when the agent has no such endpoint (an older agent: `404`).
+   */
+  async fetchHostInfo(): Promise<AgentHostInfo> {
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(AGENT_HOST_PATH, { method: 'GET', headers: { authorization: this.authHeader } }, HEALTH_TIMEOUT_MS);
+    if (status === 404) throw new AgentHostOutdatedError(this.serverName);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_HOST_PATH} failed (${status}): ${text}`);
+    return parseAgentHostInfo(JSON.parse(text));
   }
 
   /**

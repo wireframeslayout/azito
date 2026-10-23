@@ -78,12 +78,12 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       findAll: vi.fn(() => []),
       findByName: vi.fn(() => ({
         name: 'local', type: 'local' as const, host: null, agentPort: null, agentToken: null, agentVersion: null,
-        sshHost: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, sshHostFingerprint: null,
+        sshHost: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, hostProfile: null, sshHostFingerprint: null,
         isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '',
       })),
       create: vi.fn(),
       update: vi.fn(),
-      updateAgentVersion: vi.fn(),
+      updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
       updateFingerprint: vi.fn(),
       clearFingerprint: vi.fn(),
       updateIsolationIntent: vi.fn(),
@@ -960,10 +960,10 @@ describe('POST clone-local', () => {
         findAll: vi.fn(() => []),
         findByName: vi.fn(() => ({
           name: 'remote1', type: 'agent' as const, host: 'x', agentPort: null, agentToken: null, agentVersion: null,
-          sshHost: 'x', defaultMux: 'tmux' as const, muxRuntime: 'system' as const, sshHostFingerprint: null,
+          sshHost: 'x', defaultMux: 'tmux' as const, muxRuntime: 'system' as const, hostProfile: null, sshHostFingerprint: null,
           isolationIntent: false, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '',
         })),
-        create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateFingerprint: vi.fn(),
+        create: vi.fn(), update: vi.fn(), updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(), updateFingerprint: vi.fn(),
         clearFingerprint: vi.fn(), updateIsolationIntent: vi.fn(), findMetaByNames: vi.fn(() => []), delete: vi.fn(),
       },
     });

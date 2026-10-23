@@ -116,7 +116,7 @@ describe('chat API over a real agent process', () => {
     agent = spawn(path.join(REPO_ROOT, 'node_modules/.bin/tsx'), [path.join(SERVER_DIR, 'src/agent/main.ts')], { env, cwd: SERVER_DIR, stdio: 'ignore' });
     await waitForHealth(port, agent);
 
-    transport = new AgentTransport('127.0.0.1', port, TOKEN, 'system', SERVER_NAME);
+    transport = new AgentTransport('127.0.0.1', port, TOKEN, 'system', SERVER_NAME, null);
     // Local sources only name the agent types; the hub's own ~/.claude is never read for an agent server.
     const localSources = [
       new LocalTranscriptSource(new ClaudeTranscriptSource(path.join(tmp, 'hub-claude'))),

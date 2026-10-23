@@ -43,7 +43,7 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
     });
     await app.listen({ port: 0, host: '127.0.0.1' });
     const port = (app.server.address() as AddressInfo).port;
-    return { transport: new AgentTransport('127.0.0.1', port, 'tok', 'system', 'srv'), managed };
+    return { transport: new AgentTransport('127.0.0.1', port, 'tok', 'system', 'srv', null), managed };
   }
 
   it('registers its file, streams what is written to it, and releases it on stop', async () => {

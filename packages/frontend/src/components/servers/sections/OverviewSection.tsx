@@ -14,6 +14,7 @@ import { healthReasonText, formatBytes } from '../../statusbar/ResourceDropdown'
 import { Chip, Button, Notice, DocsLink } from '../../ui';
 import type { MuxDriverStatus } from '../../../lib/muxDriverStatus';
 import { MuxDriverNotice } from './MuxDriverNotice';
+import { describeHostProfile } from '../../../lib/hostProfile';
 
 // Issue #29 Step 2 C: display-side TTL for the isolation doctor's last
 // verification — purely advisory ("要再検証"), not a policy re-evaluation.
@@ -158,6 +159,7 @@ export default function OverviewSection({
   const measurement = resourceEntry?.measurement ?? null;
 
   const isAgent = server.type === 'agent';
+  const hostOs = describeHostProfile(server.hostProfile);
   const isChecking = !status || status.status === 'checking';
   const isOnline = status?.status === 'online';
   const memUsedPercent = measurement ? 100 - measurement.memAvailablePercent : null;
@@ -420,6 +422,18 @@ export default function OverviewSection({
               </span>
             </KvRow>
           )}
+          <KvRow label={t('overview.osLabel')}>
+            {hostOs ? (
+              <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>
+                {t(`overview.os.${hostOs.osKey}`)} {hostOs.arch}
+              </span>
+            ) : (
+              <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: 'var(--font-xs)' }}>{t('overview.osUnknown')}</span>
+                <span style={{ fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{t('overview.osUnknownHint')}</span>
+              </span>
+            )}
+          </KvRow>
           {server.sshHost && (
             <KvRow label={t('overview.sshBootstrap')}>
               <span style={{ fontFamily: 'var(--mono)', fontSize: 'var(--font-xs)' }}>{server.sshHost}</span>

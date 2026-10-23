@@ -19,7 +19,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     isolationVerifiedAt: null,
     isolationReport: null,
     isolationCleanupReport: null,
-    defaultMux: 'tmux' as const, muxRuntime: 'system',
+    defaultMux: 'tmux' as const, muxRuntime: 'system', hostProfile: null,
     createdAt: '2026-01-01T00:00:00Z',
     ...overrides,
   };
@@ -48,6 +48,7 @@ function makeOpts(servers: ServerConfig[] = []): ServersRouteOptions {
     misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
     transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     windowRepo: { findByServer: vi.fn(() => []) } as unknown as ServersRouteOptions['windowRepo'],
     webhookToken: 'wh',
     uiToken: 'ui',

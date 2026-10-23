@@ -477,7 +477,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
   const repoDiscovery = new RepoDiscoveryService(transportFactory);
   const localRepoCloneService = new LocalRepoCloneService(wiring.hubGitSupport);
   await app.register(serversRoutes, {
-    serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, harnessHash: wiring.harnessUpdater.getHarnessHash(), harnessUpdater: wiring.harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
+    serverRepo, serverAliasRepo, tmux: tmuxClient, transportFactory, agentHostRecorder: wiring.agentHostRecorder, agentInstaller, agentBundler, harnessInstaller, tmuxInstaller, projectRepo, projectServerRepo, windowRepo, webhookToken, uiToken: wiring.uiToken, harnessPrefix, harnessHash: wiring.harnessUpdater.getHarnessHash(), harnessUpdater: wiring.harnessUpdater, auditLogService, serverIsolationMutex, scopedAuthEnabled, muxDriverRegistry, repoDiscovery,
     misaoDaemonStatus: async (srv) => {
       if (srv.type === 'local') return describeMisaoDaemon(wiring.misao.connection);
       // An agent server's row also says whether this hub can install misao there, and when its daemon is another release.

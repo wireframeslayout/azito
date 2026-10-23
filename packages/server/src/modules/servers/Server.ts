@@ -1,4 +1,5 @@
 import type { MuxDriverKind, MuxRuntime as SharedMuxRuntime } from '@azito/shared';
+import type { HostProfile } from '../../shared/os/hostProfile';
 
 export type MuxRuntime = SharedMuxRuntime;
 
@@ -17,6 +18,13 @@ export interface ServerConfig {
   name: string;
   type: 'local' | 'agent';
   host: string | null;
+  /**
+   * The OS / architecture of the server's host, not to be confused with `host` (the address the hub connects to).
+   * An agent server's is recorded from its own report or the install preflight; null = not recorded yet, which
+   * means an agent registered before Windows support, i.e. a Unix one. A local server's is the hub's own and is
+   * never stored (always null here; `TransportFactory.hostProfileFor` derives it).
+   */
+  hostProfile: HostProfile | null;
   agentPort: number | null;
   agentToken: string | null;
   agentVersion: string | null;
@@ -112,7 +120,7 @@ export interface IServerRepository {
    * out (no query issued).
    */
   findMetaByNames(names: string[]): ServerMeta[];
-  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void;
+  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind, hostProfile?: HostProfile): void;
   update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void;
   /**
    * Issue #29 review, Important finding 1: atomically combines `update()`
@@ -130,6 +138,8 @@ export interface IServerRepository {
    */
   updateWithIsolationClear?(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void;
   updateAgentVersion(name: string, version: string): void;
+  /** Records the host's OS / architecture of an agent server, or clears it with null (the agent was pointed at another host). */
+  updateHostProfile(name: string, hostProfile: HostProfile | null): void;
   updateFingerprint(name: string, fingerprint: string): void;
   clearFingerprint(name: string): void;
   /**

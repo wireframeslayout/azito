@@ -3,12 +3,22 @@ import type { SqliteDatabase } from '../../shared/db/Database';
 import { seal, open } from '../../shared/crypto/SecretBox';
 import type { ServerConfig, IServerRepository, MuxRuntime, ServerMeta } from './Server';
 import { ISOLATION_CLEANUP_PENDING_REPORT } from './Server';
+import { toHostProfile, type HostProfile } from '../../shared/os/hostProfile';
 
 function parseStoredMuxRuntime(value: unknown): MuxRuntime {
   if (value !== 'system' && value !== 'managed') {
     throw new Error(`Invalid mux_runtime in database: '${String(value)}'. Expected 'system' or 'managed'. Run migration 077 to fix stale data.`);
   }
   return value;
+}
+
+/** Both columns NULL = not recorded. One without the other, or a value the hub does not know, is a damaged row: it throws rather than being read as "not recorded". */
+function parseStoredHostProfile(platform: unknown, arch: unknown): HostProfile | null {
+  if (platform === null && arch === null) return null;
+  if (typeof platform !== 'string' || typeof arch !== 'string') {
+    throw new Error(`Invalid host_platform / host_arch in database: '${String(platform)}' / '${String(arch)}'. Both must be set or both NULL.`);
+  }
+  return toHostProfile(platform, arch);
 }
 
 function parseStoredDefaultMux(value: unknown): MuxDriverKind {
@@ -18,7 +28,7 @@ function parseStoredDefaultMux(value: unknown): MuxDriverKind {
   return value;
 }
 
-const COLUMNS = 'name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
+const COLUMNS = 'name, type, host, host_platform, host_arch, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux, ssh_host_fingerprint, isolation_intent, isolation_verified_at, isolation_report, isolation_cleanup_report, created_at';
 
 export class SqliteServerRepository implements IServerRepository {
   private listStmt;
@@ -27,6 +37,7 @@ export class SqliteServerRepository implements IServerRepository {
   private removeStmt;
   private updateStmt;
   private updateAgentVersionStmt;
+  private updateHostProfileStmt;
   private updateFingerprintStmt;
   private clearFingerprintStmt;
   private updateIsolationIntentStmt;
@@ -38,10 +49,11 @@ export class SqliteServerRepository implements IServerRepository {
   constructor(private db: SqliteDatabase) {
     this.listStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE type IN ('local', 'agent') ORDER BY created_at`);
     this.getStmt = db.prepare(`SELECT ${COLUMNS} FROM servers WHERE name = ? AND type IN ('local', 'agent')`);
-    this.addStmt = db.prepare('INSERT INTO servers (name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+    this.addStmt = db.prepare('INSERT INTO servers (name, type, host, agent_port, agent_token, agent_version, ssh_host, mux_runtime, default_mux, host_platform, host_arch) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
     this.removeStmt = db.prepare('DELETE FROM servers WHERE name = ?');
     this.updateStmt = db.prepare('UPDATE servers SET type = ?, host = ?, agent_port = ?, agent_token = ?, ssh_host = ?, mux_runtime = ?, default_mux = ? WHERE name = ?');
     this.updateAgentVersionStmt = db.prepare('UPDATE servers SET agent_version = ? WHERE name = ?');
+    this.updateHostProfileStmt = db.prepare('UPDATE servers SET host_platform = ?, host_arch = ? WHERE name = ?');
     this.updateFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = ? WHERE name = ?');
     this.clearFingerprintStmt = db.prepare('UPDATE servers SET ssh_host_fingerprint = NULL WHERE name = ?');
     // Issue #29 review, Important finding 3: clears isolation_verified_at
@@ -119,8 +131,8 @@ export class SqliteServerRepository implements IServerRepository {
     return row ? this.toEntity(row) : null;
   }
 
-  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void {
-    this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system', defaultMux ?? 'tmux');
+  create(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, agentVersion?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind, hostProfile?: HostProfile): void {
+    this.addStmt.run(name, type, host ?? null, agentPort ?? null, seal(agentToken ?? null), agentVersion ?? null, sshHost ?? null, muxRuntime ?? 'system', defaultMux ?? 'tmux', hostProfile?.platform ?? null, hostProfile?.arch ?? null);
   }
 
   update(name: string, type: string, host?: string, agentPort?: number, agentToken?: string, sshHost?: string, muxRuntime?: MuxRuntime, defaultMux?: MuxDriverKind): void {
@@ -146,6 +158,10 @@ export class SqliteServerRepository implements IServerRepository {
 
   updateAgentVersion(name: string, version: string): void {
     this.updateAgentVersionStmt.run(version, name);
+  }
+
+  updateHostProfile(name: string, hostProfile: HostProfile | null): void {
+    this.updateHostProfileStmt.run(hostProfile?.platform ?? null, hostProfile?.arch ?? null, name);
   }
 
   updateFingerprint(name: string, fingerprint: string): void {
@@ -195,6 +211,8 @@ export class SqliteServerRepository implements IServerRepository {
       name: row.name as string,
       type: row.type as ServerConfig['type'],
       host: (row.host as string) ?? null,
+      // A local server's host is the hub itself, derived from its HostEnv: whatever a local row holds is not used.
+      hostProfile: row.type === 'local' ? null : parseStoredHostProfile(row.host_platform, row.host_arch),
       agentPort: (row.agent_port as number) ?? null,
       agentToken: open(row.agent_token as string | null),
       agentVersion: (row.agent_version as string) ?? null,

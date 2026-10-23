@@ -78,7 +78,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentToken: null,
     agentVersion: null,
     sshHost: null,
-    sshHostFingerprint: null,
+    hostProfile: null, sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null, isolationCleanupReport: null,

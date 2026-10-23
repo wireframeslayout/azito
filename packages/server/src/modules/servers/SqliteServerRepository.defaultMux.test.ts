@@ -13,7 +13,7 @@ describe('SqliteServerRepository (default_mux / mux_runtime)', () => {
       CREATE TABLE servers (
         name TEXT PRIMARY KEY, type TEXT NOT NULL, host TEXT, agent_port INTEGER, agent_token TEXT,
         agent_version TEXT, ssh_host TEXT, mux_runtime TEXT NOT NULL DEFAULT 'system', default_mux TEXT NOT NULL DEFAULT 'tmux',
-        ssh_host_fingerprint TEXT,
+        ssh_host_fingerprint TEXT, host_platform TEXT, host_arch TEXT,
         isolation_intent INTEGER DEFAULT 0, isolation_verified_at TEXT, isolation_report TEXT,
         isolation_cleanup_report TEXT, created_at TEXT DEFAULT (datetime('now'))
       )

@@ -49,6 +49,8 @@ import { PushNotificationService } from '../modules/notifications/push/PushNotif
 import { AgentBundler } from '../modules/servers/agent-deploy/AgentBundler';
 import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
+import { resolveHubHostProfile, type HubHostProfile } from '../shared/os/hostProfile';
+import { AgentHostRecorder } from '../modules/servers/agent-deploy/AgentHostRecorder';
 import { HarnessInstaller } from '../modules/servers/agent-deploy/HarnessInstaller';
 import { HarnessUpdater } from '../modules/servers/agent-deploy/HarnessUpdater';
 import { TmuxInstaller } from '../modules/servers/agent-deploy/TmuxInstaller';
@@ -228,6 +230,8 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
   harnessUpdater: HarnessUpdater;
+  /** Records an agent server's OS / architecture from the agent's own report (after install / update, and when reached with none recorded). */
+  agentHostRecorder: AgentHostRecorder;
   executeTaskUseCase: ExecuteTaskUseCase;
   agentActivityMonitor: AgentActivityMonitor;
   interactionMonitor: InteractionMonitor;
@@ -246,7 +250,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(hostEnv.homeDir, fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
@@ -256,7 +260,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const muxDriverRegistry = new MuxDriverRegistry();
   const taskTempFiles = TaskTempFiles.fromHostEnv(hostEnv);
   taskTempFiles.assertHubDirShellSafe();
-  const transportFactory = new TransportFactory(publicUrl, hostEnv.homeDir, taskTempFiles);
+  const transportFactory = new TransportFactory(publicUrl, hostEnv.homeDir, taskTempFiles, hubHost);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
@@ -275,6 +279,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
     // the node was built from an older config.
     target: (server) => ({ connect: ({ signal }) => transportFactory.getAgentTransport(findServer(server.name) ?? server).connectMisaoRelay(signal) }),
     status: (server) => transportFactory.getAgentTransport(server).fetchMisaoStatus(),
+    hostInfo: (server) => transportFactory.getAgentTransport(server).fetchHostInfo(),
     latest: findServer,
   });
   const paneStreamFactory = new PaneStreamFactory(transportFactory, (server) => misao.servers.nodeFor(server).connection);
@@ -389,8 +394,8 @@ function buildPushNotificationModule(pushSubRepo: SqlitePushSubscriptionReposito
   return { vapidKeys, pushService };
 }
 
-function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos: Repositories): AgentUpdater {
-  return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo);
+function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos: Repositories, agentHostRecorder: AgentHostRecorder): AgentUpdater {
+  return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo, agentHostRecorder);
 }
 
 // Constructed ONCE and shared between TaskRestoreService and
@@ -620,8 +625,10 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   }
 
   const repos = buildRepositories(db);
+  // The hub's own OS / architecture, resolved once here. A hub on an unsupported host still starts; what needs the host refuses with the reason.
+  const hubHost = resolveHubHostProfile(hostEnv);
   const misaoRuntime = await resolveMisaoRuntimeForHub(
-    { env: process.env, homeDir: hostEnv.homeDir, shell: process.env.SHELL || '/bin/bash' },
+    { env: process.env, homeDir: hostEnv.homeDir, shell: process.env.SHELL || '/bin/bash', hubHost },
     repos.serverRepo.findAll().some((s) => s.type === 'local' && s.defaultMux === 'misao'),
     console,
   );
@@ -661,9 +668,10 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, hubHost, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
-  const agentUpdater = buildAgentUpdater(agentBundler, infra, repos);
+  const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
+  const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);
   const harnessUpdater = new HarnessUpdater(
     infra.harnessInstaller, infra.sshClient, repos.serverRepo,
     { webhookToken, uiToken, harnessPrefix },
@@ -699,6 +707,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...pushNotification,
     agentUpdater,
     harnessUpdater,
+    agentHostRecorder,
     ...appServices,
     executeTaskUseCase,
     agentActivityMonitor,

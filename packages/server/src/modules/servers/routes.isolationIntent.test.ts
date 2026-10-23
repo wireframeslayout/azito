@@ -54,7 +54,7 @@ function makeServer(overrides: Partial<ServerConfig> = {}): ServerConfig {
     agentToken: 'tok',
     agentVersion: '1.0.0',
     sshHost: null,
-    sshHostFingerprint: null,
+    hostProfile: null, sshHostFingerprint: null,
     isolationIntent: false,
     isolationVerifiedAt: null,
     isolationReport: null,
@@ -71,7 +71,7 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
     findByName: vi.fn(() => makeServer()),
     create: vi.fn(),
     update: vi.fn(),
-    updateAgentVersion: vi.fn(),
+    updateAgentVersion: vi.fn(), updateHostProfile: vi.fn(),
     updateFingerprint: vi.fn(),
     clearFingerprint: vi.fn(),
     updateIsolationIntent: vi.fn(),
@@ -85,9 +85,10 @@ function makeOpts(overrides: Partial<ServersRouteOptions> = {}): ServersRouteOpt
   return {
     serverRepo,
     serverAliasRepo: { resolve: (name: string) => name, findAll: () => [] },
+    agentHostRecorder: { recordIfUnknown: vi.fn(async () => null), record: vi.fn(async () => null), forget: vi.fn() } as unknown as ServersRouteOptions['agentHostRecorder'],
     misaoDaemonStatus: vi.fn(async () => ({ installed: false })),
     tmux: { listSessionsForSecurityGate: vi.fn(async () => []) } as unknown as ServersRouteOptions['tmux'],
-    transportFactory: { invalidate: vi.fn() } as unknown as ServersRouteOptions['transportFactory'],
+    transportFactory: { invalidate: vi.fn(), hostProfileFor: (server: { hostProfile: unknown }) => server.hostProfile } as unknown as ServersRouteOptions['transportFactory'],
     // Issue #29 review, Critical finding 1: no windows registered by
     // default, so the false->true gate is a no-op unless a test overrides
     // findByServer to return risky rows.

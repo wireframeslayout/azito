@@ -24,7 +24,7 @@ describe('AgentTransport circuit breaker', () => {
     vi.restoreAllMocks();
   });
 
-  const make = () => new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv7');
+  const make = () => new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv7', null);
 
   it.each([
     ['ECONNREFUSED', 'refused'],

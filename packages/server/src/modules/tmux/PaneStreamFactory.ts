@@ -6,7 +6,7 @@ import { PaneOutputStream } from './PaneOutputStream';
 import type { MisaoLineSource } from './misao/MisaoConnection';
 import { MisaoPaneStream } from './misao/MisaoPaneStream';
 
-type StreamServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime'>;
+type StreamServer = Pick<ServerConfig, 'name' | 'type' | 'host' | 'agentPort' | 'agentToken' | 'muxRuntime' | 'hostProfile'>;
 
 export class PaneStreamFactory implements IPaneStreamFactory {
   /** `misaoLines` is the line stream of the misao daemon a server's panes live in (each agent server has its own). */
@@ -28,6 +28,7 @@ export class PaneStreamFactory implements IPaneStreamFactory {
       name: server.name,
       type: 'local',
       host: null,
+      hostProfile: null, // a local server's host is the hub itself; the factory knows it
       agentPort: null,
       agentToken: null,
       muxRuntime: server.muxRuntime,
