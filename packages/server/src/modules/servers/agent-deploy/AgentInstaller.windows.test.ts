@@ -118,7 +118,7 @@ describe('AgentInstaller on a Windows host', () => {
     expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env.new', 'w806-agent/w806-AzitoAgent.task.xml']);
     expect(host.uploaded.get('w806-agent/agent.env.new')!.toString('utf8')).toContain('PORT="3902"\n');
     expect(host.calls.filter((c) => c.kind === 'schtasks').some((c) => c.schtasksArgs!.includes('w806-AzitoAgent'))).toBe(true);
-    expect(host.calls.find((c) => c.kind === 'firewall')!.text).toContain('$port = 3902');
+    expect(host.calls.find((c) => c.kind === 'firewall')!.text).toContain('$port=3902;');
     expect(fetch).toHaveBeenCalledWith('http://100.64.0.9:3902/health', expect.anything());
   });
 

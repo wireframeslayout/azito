@@ -9,17 +9,25 @@ const IP = '100.64.0.9';
 describe('buildFirewallCommand', () => {
   it('reads inbound rules with their filters, and adds a rule for this program, address and port only when elevated', () => {
     const script = decodeEncodedCommand(buildFirewallCommand(3902, "C:\\Program Files\\node's\\node.exe", IP));
-    expect(script).toContain('$port = 3902');
-    expect(script).toContain("$node = 'C:\\Program Files\\node''s\\node.exe'");
-    expect(script).toContain("$ip = '100.64.0.9'");
+    expect(script).toContain('$port=3902;');
+    expect(script).toContain("$node='C:\\Program Files\\node''s\\node.exe'");
+    expect(script).toContain("$ip='100.64.0.9'");
     expect(script).toContain('Get-NetFirewallPortFilter');
     expect(script).toContain('Get-NetFirewallApplicationFilter');
     expect(script).toContain('Get-NetFirewallAddressFilter');
+    expect(script).toContain('Get-NetFirewallServiceFilter');
     expect(script).toContain("'Block'");
-    expect(script).toContain('if ($found -eq $false -and $elevated -and $blocked.Count -eq 0)');
+    expect(script).toContain('if($found -eq $false -and $el -and !$blocked.Count)');
     expect(script).toContain("-DisplayName 'AZITO Agent (TCP 3902)'");
     expect(script).toContain('-Program $node -LocalAddress $ip');
     expect(script).toContain("-RemoteAddress '100.64.0.0/10'");
+  });
+});
+
+describe('buildFirewallCommand: the command line limit', () => {
+  it('fits one cmd.exe command line (8191 characters) with a long node.exe path', () => {
+    const longPath = `C:\\Users\\${'a'.repeat(100)}\\AppData\\Local\\Programs\\nodejs\\node.exe`;
+    expect(buildFirewallCommand(3002, longPath, '100.64.255.255').length).toBeLessThanOrEqual(8191);
   });
 });
 
