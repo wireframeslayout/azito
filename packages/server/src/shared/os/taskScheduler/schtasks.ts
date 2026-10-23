@@ -3,7 +3,7 @@ import * as path from 'path';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../exec/commandSpec';
 import type { HostEnv } from '../hostEnv';
 import { decodeOemOutput, type DecodedOutput, describeUndecodable, parseOemCodePage } from './oemOutput';
-import { encodeTaskXml } from './taskDefinition';
+import { decodeTaskXml, encodeTaskXml } from './taskDefinition';
 
 /** A finished command with its output as bytes (the OEM code page is decoded here, not by the runner). */
 export interface RawCommandResult {
@@ -129,10 +129,14 @@ const LAST_RESULT_COLUMN = 6;
 export class SchtasksClient {
   private readonly schtasksPath: string;
   private readonly regPath: string;
-  private readonly tmpDir: string;
+  private readonly tmpDir: string | undefined;
   private oemCodePage: Promise<number> | undefined;
 
-  constructor(private readonly run: CommandSpecRunner, host: Pick<HostEnv, 'systemRoot' | 'tmpDir'>) {
+    /**
+   * `host.tmpDir` is where {@link register} stages the XML on THIS machine. A client whose `run` executes on another host (the
+   * hub installing an agent over SSH) has no use for it: it registers with {@link registerFromFile}, a file already on that host.
+   */
+  constructor(private readonly run: CommandSpecRunner, host: Pick<HostEnv, 'systemRoot'> & Partial<Pick<HostEnv, 'tmpDir'>>) {
     if (host.systemRoot === undefined || host.systemRoot === '') {
       throw new Error('Cannot find schtasks.exe: %SystemRoot% is not set');
     }
@@ -182,14 +186,37 @@ export class SchtasksClient {
   /** Registers the task, replacing one of the same name (`/F`). The XML goes through a private temporary directory that is removed afterwards. */
   async register(taskName: string, xml: string): Promise<void> {
     SchtasksClient.assertTaskName(taskName);
+    if (this.tmpDir === undefined) throw new Error('This SchtasksClient has no temporary directory: register the task from a file on its host with registerFromFile');
     const dir = fs.mkdtempSync(path.join(this.tmpDir, 'azito-schtasks-'));
     try {
       const file = path.join(dir, 'task.xml');
       fs.writeFileSync(file, encodeTaskXml(xml));
-      await this.mustSucceed('create', taskName, ['/Create', '/XML', file, '/TN', taskName, '/F']);
+      await this.registerFromFile(taskName, file);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  }
+
+  /** Registers the task from an XML file that already exists on the host `run` executes on ({@link encodeTaskXml}'s UTF-16 form), replacing one of the same name. */
+  async registerFromFile(taskName: string, xmlFile: string): Promise<void> {
+    SchtasksClient.assertTaskName(taskName);
+    await this.mustSucceed('create', taskName, ['/Create', '/XML', xmlFile, '/TN', taskName, '/F']);
+  }
+
+  /**
+   * The registered task's definition as XML text (`/Query /XML`, written in the OEM code page and decoded like every schtasks
+   * output), for putting the same task back later with {@link encodeTaskXml} + {@link registerFromFile}. Output that cannot
+   * be decoded is an error, never a guess: a definition that was misread would be restored wrong.
+   */
+  async exportXml(taskName: string): Promise<string> {
+    SchtasksClient.assertTaskName(taskName);
+    const result = await this.run(this.spec(['/Query', '/TN', taskName, '/XML']));
+    if (result.exitCode !== 0) throw await this.errorOf('query', taskName, result);
+    // A build that writes the UTF-16 file form (BOM) instead of OEM text is read as it declares itself.
+    if (result.stdout[0] === 0xff && result.stdout[1] === 0xfe) return decodeTaskXml(result.stdout);
+    const decoded = await decodeOemOutput(result.stdout, () => this.readOemCodePage());
+    if (!decoded.ok) throw new Error(`Cannot read the definition of the task "${taskName}": ${describeUndecodable(result.stdout, decoded.reason)}`);
+    return decoded.text;
   }
 
   async start(taskName: string): Promise<void> {

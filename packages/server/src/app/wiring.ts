@@ -48,6 +48,7 @@ import { getVapidKeys, type VapidKeys } from '../modules/notifications/push/Vapi
 import { PushNotificationService } from '../modules/notifications/push/PushNotificationService';
 import { AgentBundler } from '../modules/servers/agent-deploy/AgentBundler';
 import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
+import { resolveWindowsAgentOptions, type WindowsAgentOptions } from '../modules/servers/agent-deploy/windowsAgentConfig';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
 import { resolveHubHostProfile, type HubHostProfile } from '../shared/os/hostProfile';
 import { AgentHostRecorder } from '../modules/servers/agent-deploy/AgentHostRecorder';
@@ -250,11 +251,11 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 // ─── Per-module factories ───
 
-function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
+function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(hostEnv.homeDir, fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
-  const agentInstaller = new AgentInstaller(sshClient, agentBundler, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
+  const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
   const tmuxInstaller = new TmuxInstaller();
   const muxDriverRegistry = new MuxDriverRegistry();
@@ -675,7 +676,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   // resolved flag instead of re-reading process.env itself.
   const scopedAuthEnabled = resolveScopedAuthEnabled();
   const harnessPrefix = process.env.AZITO_HARNESS_PREFIX || undefined;
-  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, hubHost, (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
+  const infra = buildSharedInfra(agentBundler, publicUrl, localUrl, dataPaths, uiToken, webhookToken, scopedAuthEnabled, misaoRuntime, hostEnv, hubHost, resolveWindowsAgentOptions(process.env), (name) => repos.serverRepo.findByName(name), db, fingerprintStore, repos.auditLogService);
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);

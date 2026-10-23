@@ -32,14 +32,18 @@ if ($tailscalePath) {
 $arch = $null
 try { $arch = (Get-ItemProperty -LiteralPath 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment' -Name PROCESSOR_ARCHITECTURE -ErrorAction Stop).PROCESSOR_ARCHITECTURE } catch { $arch = $null }
 $caption = $null
-try { $caption = (Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop).Caption } catch { $caption = $null }
+$build = $null
+try { $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop; $caption = $os.Caption; $build = $os.BuildNumber } catch { $caption = $null; $build = $null }
 $info = [ordered]@{
   nodePath = $nodePath
   nodeVersion = $nodeVersion
   arch = $arch
   windowsCaption = $caption
+  buildNumber = $build
   tailscaleIp = $tailscaleIp
   home = $env:USERPROFILE
+  systemRoot = $env:SystemRoot
+  userId = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
 }
 $global:LASTEXITCODE = 0
 Write-Output '${BEGIN_MARKER}'
@@ -59,8 +63,11 @@ const rawSchema = z.object({
   nodeVersion: z.string().nullable(),
   arch: z.string().nullable(),
   windowsCaption: z.string().nullable(),
+  buildNumber: z.string().nullable(),
   tailscaleIp: z.string().nullable(),
   home: z.string().min(1),
+  systemRoot: z.string().min(1),
+  userId: z.string().min(1),
 });
 
 export interface WindowsPreflightInfo {
@@ -71,8 +78,14 @@ export interface WindowsPreflightInfo {
   arch: string | null;
   /** The OS name as Windows gives it (`Windows 11 Pro`, `Windows Server 2022 Datacenter`), for display only; null = unreadable. */
   windowsVersion: string | null;
+  /** The Windows build number (`17763` is Windows 10 1809 / Server 2019); null = unreadable. */
+  buildNumber: number | null;
   tailscaleIp: string | null;
   home: string;
+  /** `%SystemRoot%` of the host (where `schtasks.exe` lives). */
+  systemRoot: string;
+  /** The user the SSH session runs as, `DOMAIN\user` (or `COMPUTER\user`): the user the agent's task is registered for. */
+  userId: string;
 }
 
 const ARCH_BY_REGISTRY_VALUE: Readonly<Record<string, string>> = { AMD64: 'x64', ARM64: 'arm64', x86: 'x86' };
@@ -99,10 +112,16 @@ export function parseWindowsPreflight(output: string, stderr = '', code: number 
     nodeVersion: v.nodeVersion ? v.nodeVersion.trim().replace(/^v/, '') : null,
     arch: v.arch === null ? null : (ARCH_BY_REGISTRY_VALUE[v.arch] ?? v.arch),
     windowsVersion: v.windowsCaption ? v.windowsCaption.trim().replace(/^Microsoft\s+/, '') : null,
+    buildNumber: v.buildNumber && /^\d+$/.test(v.buildNumber.trim()) ? Number(v.buildNumber.trim()) : null,
     tailscaleIp: v.tailscaleIp ? v.tailscaleIp.trim() : null,
     home: v.home,
+    systemRoot: v.systemRoot,
+    userId: v.userId,
   };
 }
+
+/** Windows 10 1809 / Server 2019: the first build with `conhost.exe --headless` (ConPTY), which keeps the agent's console window from appearing. */
+const MIN_WINDOWS_BUILD = 17763;
 
 const IPV4 = /^\d+\.\d+\.\d+\.\d+$/;
 
@@ -117,6 +136,11 @@ export function checkWindowsPreflight(info: WindowsPreflightInfo): string[] {
     missing.push('Could not read the OS architecture (HKLM PROCESSOR_ARCHITECTURE); x86_64 is required');
   } else if (info.arch !== 'x64') {
     missing.push(`x86_64 architecture required (found: ${info.arch}; Windows on ARM is not supported)`);
+  }
+  if (info.buildNumber === null) {
+    missing.push(`Could not read the Windows build number; Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later is required`);
+  } else if (info.buildNumber < MIN_WINDOWS_BUILD) {
+    missing.push(`Windows 10 version 1809 (build ${MIN_WINDOWS_BUILD}) or later required (found: build ${info.buildNumber}); the agent runs under \`conhost.exe --headless\``);
   }
   if (!info.tailscaleIp || !IPV4.test(info.tailscaleIp)) {
     missing.push(`Tailscale IP not found (got: ${info.tailscaleIp || 'empty'}; install Tailscale for Windows and sign in)`);

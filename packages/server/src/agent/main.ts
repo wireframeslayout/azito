@@ -29,6 +29,7 @@ import fileOpsRoutes from './fileOpsRoutes';
 import { LocalFileOps, localFileOpsHost } from '../shared/fs/LocalFileOps';
 import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
+import { processExists, readWindowsProcessCreation, startParentWatch } from './parentWatch';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
 import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
@@ -37,15 +38,32 @@ import { toHostProfile } from '../shared/os/hostProfile';
 import { runHostOf } from '../shared/exec/runCommandSpec';
 import { resolveLoginShell } from '../shared/os/loginShell';
 
+// ─── Fatal errors ───
+
+/**
+ * A fatal error before the server's own logger exists. A task has nowhere to send stderr, so when the settings name a log file
+ * (`AZITO_AGENT_LOG_FILE`) the error is appended there too: otherwise the log a failed install points to would be empty.
+ */
+function reportFatal(message: string): void {
+  console.error(message);
+  const logFile = process.env.AZITO_AGENT_LOG_FILE;
+  if (!logFile) return;
+  try {
+    fs.appendFileSync(logFile, `${JSON.stringify({ level: 60, time: Date.now(), msg: message })}\n`);
+  } catch (err) {
+    console.error(`Could not write to AZITO_AGENT_LOG_FILE (${logFile}): ${(err as Error).message}`);
+  }
+}
+
 // ─── Environment validation ───
 
 const bind = process.env.AZITO_AGENT_BIND;
 if (!bind) {
-  console.error('AZITO_AGENT_BIND is required');
+  reportFatal('AZITO_AGENT_BIND is required');
   process.exit(1);
 }
 if (bind === '0.0.0.0') {
-  console.error('AZITO_AGENT_BIND must not be 0.0.0.0 — bind to a Tailscale IP instead');
+  reportFatal('AZITO_AGENT_BIND must not be 0.0.0.0 — bind to a Tailscale IP instead');
   process.exit(1);
 }
 /** Same value as `bind`, restated so its non-undefined type survives into main(). */
@@ -53,7 +71,7 @@ const BIND_ADDRESS: string = bind;
 
 const token = process.env.AZITO_AGENT_TOKEN;
 if (!token) {
-  console.error('AZITO_AGENT_TOKEN is required');
+  reportFatal('AZITO_AGENT_TOKEN is required');
   process.exit(1);
 }
 
@@ -90,6 +108,8 @@ function describeMisaoHost(hostEnv: HostEnv): AgentMisaoHost {
 // ─── Graceful shutdown ───
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
+const PARENT_WATCH_INTERVAL_MS = 3000;
+const PARENT_VERIFY_INTERVAL_MS = 30_000;
 
 // ─── Bootstrap ───
 
@@ -97,11 +117,16 @@ async function main(): Promise<void> {
   const hostEnv = resolveCurrentHostEnv();
   const agentHostProfile = toHostProfile(hostEnv.platform, hostEnv.arch);
   const startedAt = Date.now();
+  // A Windows agent runs as a Task Scheduler task, which has nowhere to send its output: its settings name a log file.
+  const logFile = process.env.AZITO_AGENT_LOG_FILE;
   const app = Fastify({
     logger: {
       serializers: { req: serializeRequestForLog },
+      ...(logFile ? { file: logFile } : {}),
     },
   });
+  // tmux and misao (a unix-socket daemon) do not exist on Windows yet: the agent runs without a pane server there (misao on Windows is #369 A3).
+  const hasPaneServer = hostEnv.platform !== 'win32';
   const agentEventBus = new EventEmitter();
   const browserSessionManager = new BrowserSessionManager(
     path.resolve(hostEnv.homeDir, '.azito', 'browser-profile'),
@@ -131,10 +156,14 @@ async function main(): Promise<void> {
   // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
   // socket path disables the relay (tmux keeps working) rather than stopping the agent.
   let misaoSocket: AgentMisaoSocket | null = null;
-  try {
-    misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir);
-  } catch (err) {
-    app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+  if (hasPaneServer) {
+    try {
+      misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir);
+    } catch (err) {
+      app.log.warn(`misao relay disabled: ${(err as Error).message}`);
+    }
+  } else {
+    app.log.info(`misao relay disabled: no misao on ${hostEnv.platform} hosts yet`);
   }
   const relayMisao = createMisaoRelay(misaoSocket, app.log);
 
@@ -260,7 +289,7 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    for (const event of hookEvents) {
+    for (const event of hasPaneServer ? hookEvents : []) {
       await new Promise<void>((resolve) => {
         execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
       });
@@ -273,7 +302,7 @@ async function main(): Promise<void> {
   // tmux hook cleanup + interval clear), then exits. A hard cap forces exit if close() hangs
   // (e.g. a stuck Chromium process), and a running flag ignores a second signal during shutdown.
   let shuttingDown = false;
-  const shutdown = (signal: NodeJS.Signals): void => {
+  const shutdown = (signal: string): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     app.log.info(`Received ${signal}, shutting down gracefully`);
@@ -287,6 +316,25 @@ async function main(): Promise<void> {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGHUP', () => shutdown('SIGHUP'));
+
+  // A Windows agent runs under `conhost.exe --headless` (see the task the hub registers), and the Task Scheduler's "End" ends only
+  // that conhost: the agent would be left running with a valid token. Its settings ask it to follow its parent, so when the
+  // parent is gone it shuts down. Only when asked: a `node azito-agent.cjs` started by hand has no such setting.
+  if (hostEnv.platform === 'win32' && process.env.AZITO_AGENT_EXIT_WITH_PARENT === '1') {
+    const systemRoot = hostEnv.systemRoot;
+    // The parent's creation time is read once now and again every 30 s, so that a process id handed to another process after the
+    // parent ended is noticed (the 3 s probe alone would take it for the parent). If it cannot be read, only the existence of
+    // the pid is watched: then the worst case is an agent that stays up (the hub's stop sweeps it), never one that ends early.
+    void startParentWatch({
+      pid: process.ppid,
+      aliveIntervalMs: PARENT_WATCH_INTERVAL_MS,
+      verifyIntervalMs: PARENT_VERIFY_INTERVAL_MS,
+      isAlive: processExists,
+      readCreation: (pid) => (systemRoot ? readWindowsProcessCreation(systemRoot, pid) : Promise.resolve(null)),
+      onGone: shutdown,
+      onUnverifiable: (message) => app.log.warn(message),
+    });
+  }
 
   // Install tmux hooks to notify on window/pane changes. `set-hook -g` is idempotent, so this is
   // re-run periodically to survive a tmux server that starts/restarts after the agent (in which case
@@ -309,11 +357,15 @@ async function main(): Promise<void> {
     }
   };
 
-  installTmuxHooks();
-  hookInstallInterval = setInterval(installTmuxHooks, 60000);
+  if (hasPaneServer) {
+    installTmuxHooks();
+    hookInstallInterval = setInterval(installTmuxHooks, 60000);
+  } else {
+    app.log.info(`tmux hooks not installed: no tmux on ${hostEnv.platform} hosts`);
+  }
 }
 
 main().catch((err) => {
-  console.error('Fatal error starting agent:', err);
+  reportFatal(`Fatal error starting agent: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   process.exit(1);
 });

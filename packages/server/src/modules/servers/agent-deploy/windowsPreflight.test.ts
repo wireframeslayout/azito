@@ -13,8 +13,11 @@ function output(over: Record<string, unknown> = {}, wrap = (json: string) => `${
     nodeVersion: 'v24.14.0',
     arch: 'AMD64',
     windowsCaption: 'Microsoft Windows 11 Pro',
+    buildNumber: '22631',
     tailscaleIp: '100.64.0.9',
     home: 'C:\\Users\\dev',
+    systemRoot: 'C:\\Windows',
+    userId: 'DESKTOP-1\\dev',
     ...over,
   }));
 }
@@ -32,6 +35,18 @@ describe('buildWindowsPreflightCommand', () => {
   });
 });
 
+describe('checkWindowsPreflight: the Windows build', () => {
+  const info = (buildNumber: number | null): WindowsPreflightInfo => ({ nodePath: 'C:\\node.exe', nodeVersion: '24.14.0', arch: 'x64', windowsVersion: 'Windows 10', buildNumber, tailscaleIp: '100.64.0.9', home: 'C:\\Users\\d', systemRoot: 'C:\\Windows', userId: 'PC\\d' });
+  it('accepts 1809 (build 17763) and later', () => {
+    expect(checkWindowsPreflight(info(17763))).toEqual([]);
+    expect(checkWindowsPreflight(info(26100))).toEqual([]);
+  });
+  it('refuses an older build and an unreadable one, with the reason', () => {
+    expect(checkWindowsPreflight(info(17134))).toEqual([expect.stringMatching(/1809.*found: build 17134.*conhost\.exe --headless/)]);
+    expect(checkWindowsPreflight(info(null))).toEqual([expect.stringMatching(/Could not read the Windows build number/)]);
+  });
+});
+
 describe('parseWindowsPreflight', () => {
   it('reads node, architecture, Windows version, Tailscale IP and home', () => {
     expect(parseWindowsPreflight(output())).toEqual({
@@ -39,8 +54,11 @@ describe('parseWindowsPreflight', () => {
       nodeVersion: '24.14.0',
       arch: 'x64',
       windowsVersion: 'Windows 11 Pro',
+      buildNumber: 22631,
       tailscaleIp: '100.64.0.9',
       home: 'C:\\Users\\dev',
+      systemRoot: 'C:\\Windows',
+      userId: 'DESKTOP-1\\dev',
     });
   });
 
@@ -57,7 +75,7 @@ describe('parseWindowsPreflight', () => {
   });
 
   it('reads \\uXXXX-escaped non-ASCII text (the script prints ASCII only)', () => {
-    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8"}\n${END}\n`);
+    const noisy = output({}, () => `${BEGIN}\n{"nodePath":null,"nodeVersion":null,"arch":"AMD64","windowsCaption":null,"buildNumber":null,"tailscaleIp":null,"home":"C:\\\\Users\\u30c6\\u30b9\\u30c8","systemRoot":"C:\\\\Windows","userId":"PC\\\\\\u30c6"}\n${END}\n`);
     expect(parseWindowsPreflight(noisy).home).toBe('C:\\Users\u30c6\u30b9\u30c8');
   });
 
@@ -138,8 +156,11 @@ describe.skipIf(!isWindows)('the preflight script on a real PowerShell', () => {
     expect(info.nodePath).toMatch(/node(\.exe)?$/i);
     expect(info.arch).toBe('x64');
     expect(info.windowsVersion).toMatch(/^Windows /);
+    expect(info.buildNumber).toBeGreaterThanOrEqual(17763);
     expect(info.tailscaleIp).toBeNull();
     expect(info.home.length).toBeGreaterThan(0);
+    expect(info.systemRoot.toLowerCase()).toBe((process.env.SystemRoot ?? '').toLowerCase());
+    expect(info.userId).toMatch(/^[^\\]+\\[^\\]+$/);
     expect(checkWindowsPreflight(info)).toEqual([expect.stringMatching(/^Tailscale IP not found/)]);
   }, 120_000);
 
