@@ -84,6 +84,16 @@ export const NODE_LAUNCHER_SOURCE = 'const a=JSON.parse(Buffer.from(process.argv
 /** PowerShell also reads these typographic quotes as single quotes; one is escaped by doubling it, like `'`. */
 const POWERSHELL_QUOTE_CHARS = /['‘’‚‛]/g;
 
+/**
+ * The arguments of `powershell.exe` that run `script`: the same script text reaches PowerShell unchanged whatever shell (or no
+ * shell) starts it. A cmdlet error stops the script (exit 1); a native command's exit code is what `exit` returns, as the steps
+ * after a failure are skipped.
+ */
+export function powershellEncodedArgs(script: string): string[] {
+  const body = `$ErrorActionPreference = 'Stop'\n$global:LASTEXITCODE = 0\n${script}\nexit $LASTEXITCODE\n`;
+  return ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(body, 'utf16le').toString('base64')];
+}
+
 class PowerShellDialect implements ShellDialect {
   readonly kind = 'powershell';
 
@@ -113,10 +123,7 @@ class PowerShellDialect implements ShellDialect {
   }
 
   wrapScript(script: string): string {
-    // A cmdlet error stops the script (exit 1); a native command's exit code is what `exit` returns, as the steps after a failure are skipped.
-    const body = `$ErrorActionPreference = 'Stop'\n$global:LASTEXITCODE = 0\n${script}\nexit $LASTEXITCODE\n`;
-    const encoded = Buffer.from(body, 'utf16le').toString('base64');
-    const line = `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
+    const line = ['powershell.exe', ...powershellEncodedArgs(script)].join(' ');
     if (line.length > MAX_WINDOWS_COMMAND_LINE) {
       throw new Error(`The PowerShell script is too long for one command line (${line.length} > ${MAX_WINDOWS_COMMAND_LINE} characters once encoded).`);
     }

@@ -65,16 +65,25 @@ export function parseRunOutput(stdout: string, stderr: string, code: number): Ra
   return { exitCode: parsed.data.exitCode, stdout: Buffer.from(parsed.data.stdout, 'base64'), stderr: Buffer.from(parsed.data.stderr, 'base64') };
 }
 
+/** Runs one PowerShell script on the Windows host (however it is reached) with a time limit for the whole call. */
+export type RemoteScriptExec = (script: string, timeoutMs: number) => Promise<{ stdout: string; stderr: string; code: number }>;
+
 /**
  * A {@link CommandSpecRunner} that runs the program on the Windows host `exec` reaches, so `SchtasksClient` (and its OEM
- * code page decoding) works against another machine. The spec's `cwd`, `env` and `stdin` are not carried: a spec using them is refused.
+ * code page decoding) works against another machine: through SSH here, through the agent's own `/api/run` for misao. The spec's
+ * `cwd`, `env` and `stdin` are not carried: a spec using them is refused.
  */
-export function createSshCommandSpecRunner(exec: RemoteExec): CommandSpecRunner {
+export function createScriptCommandSpecRunner(exec: RemoteScriptExec): CommandSpecRunner {
   return async (spec) => {
     if (spec.cwd !== undefined || spec.env !== undefined || spec.stdin !== undefined) {
-      throw new Error('The SSH command runner does not support cwd, env or stdin');
+      throw new Error('The remote command runner does not support cwd, env or stdin');
     }
-    const result = await exec(powershellDialect.wrapScript(buildRunScript(spec)), spec.timeoutMs + SSH_OVERHEAD_MS);
+    const result = await exec(buildRunScript(spec), spec.timeoutMs + SSH_OVERHEAD_MS);
     return parseRunOutput(result.stdout, result.stderr, result.code);
   };
+}
+
+/** {@link createScriptCommandSpecRunner} over an SSH login shell (cmd.exe or PowerShell): the script goes as one EncodedCommand line. */
+export function createSshCommandSpecRunner(exec: RemoteExec): CommandSpecRunner {
+  return createScriptCommandSpecRunner((script, timeoutMs) => exec(powershellDialect.wrapScript(script), timeoutMs));
 }

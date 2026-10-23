@@ -5,17 +5,20 @@ import * as os from 'os';
 import * as path from 'path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import misaoRoutes, { misaoStagingDir } from './misaoRoutes';
+import type { AgentMisaoHost } from '../modules/servers/transport/agentMisaoSocket';
 
 describe('agent misao routes', () => {
   let home: string;
   let app: FastifyInstance;
+  let host: AgentMisaoHost;
 
   beforeEach(async () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), 'azmr-'));
+    host = { homeDir: home, nodePath: process.execPath, servicePath: '/usr/bin', platform: 'linux', arch: 'x64' };
     app = Fastify();
     await app.register(misaoRoutes, {
       socket: { path: path.join(home, '.azito', 'misao', 'misao.sock') },
-      host: { homeDir: home, nodePath: process.execPath, servicePath: '/usr/bin', platform: 'linux', arch: 'x64' },
+      host,
     });
     await app.ready();
   });
@@ -44,7 +47,7 @@ describe('agent misao routes', () => {
     const res = await upload('version=0.3.0&name=misao', 'binary-bytes');
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ name: 'misao', size: 12, sha256: crypto.createHash('sha256').update('binary-bytes').digest('hex') });
-    const staged = path.join(misaoStagingDir(home, '0.3.0'), 'misao');
+    const staged = path.join(misaoStagingDir(host, '0.3.0'), 'misao');
     expect(fs.readFileSync(staged, 'utf-8')).toBe('binary-bytes');
     expect(fs.statSync(staged).mode & 0o777).toBe(0o755);
     expect(fs.statSync(path.join(home, '.azito', 'misao')).mode & 0o777).toBe(0o700);
@@ -54,7 +57,7 @@ describe('agent misao routes', () => {
   it.skipIf(process.platform === 'win32')('stages a license file without the execute bit', async () => {
     const res = await upload('version=0.3.0&name=NOTICE');
     expect(res.statusCode).toBe(200);
-    expect(fs.statSync(path.join(misaoStagingDir(home, '0.3.0'), 'NOTICE')).mode & 0o777).toBe(0o644);
+    expect(fs.statSync(path.join(misaoStagingDir(host, '0.3.0'), 'NOTICE')).mode & 0o777).toBe(0o644);
   });
 
   it.each([

@@ -355,7 +355,7 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 ## Windows ホストをエージェントとして追加する
 
-Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent は動きますが、**Windows には misao も tmux もまだ入りません**（#369 A3）。そのためペインサーバーが無く、導入結果には misao の `unsupported_os` の理由が、導入成功と並べて出ます。Windows でのファイル・git・タスク実行は #370 / #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
+Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。Windows でのファイル・git・タスク実行は #370 / #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
 
 Windows 側の準備:
 

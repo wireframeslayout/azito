@@ -2,12 +2,13 @@ import * as path from 'path';
 import type { ExecResult } from '../transport/ServerTransport';
 import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSnapshot } from '../../../shared/os/windowsSecretFileGuard';
 import { powershellDialect } from '../../../shared/os/shellDialect';
+import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
 import { buildTaskXml, encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
-import type { WindowsAgentOptions } from './windowsAgentConfig';
+import { MISAO_WINDOWS_DIR, type WindowsAgentOptions } from './windowsAgentConfig';
 import type { WindowsPreflightInfo } from './windowsPreflight';
 
 /** Runs one command line on the Windows host through its SSH login shell. */
@@ -121,7 +122,7 @@ export function quoteDotenvValue(name: string, value: string): string {
 }
 
 /** The agent's settings, the file `node --env-file` reads (the same values the Unix install passes through its unit / nohup environment). */
-export function buildAgentEnvFile(env: { token: string; bindAddress: string; port: number; logFile: string }): string {
+export function buildAgentEnvFile(env: { token: string; bindAddress: string; port: number; logFile: string; misaoDir: string }): string {
   const values: Array<[string, string]> = [
     ['AZITO_AGENT_TOKEN', env.token],
     ['AZITO_AGENT_BIND', env.bindAddress],
@@ -130,6 +131,8 @@ export function buildAgentEnvFile(env: { token: string; bindAddress: string; por
     ['AZITO_AGENT_LOG_FILE', env.logFile],
     // Set only here, so only an agent started by the task ends when its parent (the conhost.exe the task runs) is gone: a `node azito-agent.cjs` started by hand has no such setting.
     ['AZITO_AGENT_EXIT_WITH_PARENT', '1'],
+    // Where the agent looks for the misao the hub installs beside it. Only written for a folder other than the default (a trial): the agent has the default itself.
+    ...(env.misaoDir === MISAO_WINDOWS_DIR ? [] : [['AZITO_MISAO_DIR', env.misaoDir] as [string, string]]),
   ];
   return values.map(([name, value]) => `${name}=${quoteDotenvValue(name, value)}`).join('\n') + '\n';
 }
@@ -191,7 +194,7 @@ export class WindowsAgentDeployer {
    */
   async deploy(input: WindowsDeployInput): Promise<WindowsDeployment> {
     const layout = windowsAgentLayout(input.host.home, this.options, input.version);
-    const envContent = buildAgentEnvFile({ token: input.token, bindAddress: input.bindAddress, port: this.options.port, logFile: layout.logFile });
+    const envContent = buildAgentEnvFile({ token: input.token, bindAddress: input.bindAddress, port: this.options.port, logFile: layout.logFile, misaoDir: this.options.misaoDir });
     const taskXml = this.buildTask(input, layout);
     const client = this.schtasks(input.sshHost, input.host);
     let previous: Previous | undefined;
@@ -306,29 +309,7 @@ export class WindowsAgentDeployer {
    * creation time: the time is checked again just before it is ended, and "has it ended?" asks the same question.
    */
   private async endStrayProcesses(sshHost: string, envFile: string): Promise<void> {
-    const q = powershellDialect.quote;
-    await this.script(sshHost, 'Ending the agent processes', [
-      `$envArgument = '--env-file=' + ${q(envFile)}`,
-      "$pattern = '(^|[\\s\"])' + [regex]::Escape($envArgument) + '([\\s\"]|$)'",
-      '$me = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value',
-      'function Test-Mine($process) { try { (Invoke-CimMethod -InputObject $process -MethodName GetOwnerSid -ErrorAction Stop).Sid -eq $me } catch { $false } }',
-      'function Test-Argument($process) { $process.CommandLine -and ($process.CommandLine -match $pattern) }',
-      'function Get-AgentNodes { @(Get-CimInstance Win32_Process -Filter "Name = \'node.exe\'" | Where-Object { (Test-Argument $_) -and (Test-Mine $_) }) }',
-      'function Get-Same($target) { $current = Get-CimInstance Win32_Process -Filter "ProcessId = $($target.Id)"; if ($current -and $current.CreationDate -eq $target.Created) { $current } }',
-      '$targets = @()',
-      'foreach ($node in Get-AgentNodes) {',
-      '  $targets += [pscustomobject]@{ Id = $node.ProcessId; Created = $node.CreationDate }',
-      '  $parent = Get-CimInstance Win32_Process -Filter "ProcessId = $($node.ParentProcessId)"',
-      "  if ($parent -and $parent.Name -eq 'conhost.exe' -and $parent.CreationDate -le $node.CreationDate -and (Test-Argument $parent) -and (Test-Mine $parent)) {",
-      '    $targets += [pscustomobject]@{ Id = $parent.ProcessId; Created = $parent.CreationDate }',
-      '  }',
-      '}',
-      'foreach ($target in $targets) { if (Get-Same $target) { Stop-Process -Id $target.Id -Force -ErrorAction SilentlyContinue } }',
-      'function Get-Alive { @($targets | Where-Object { Get-Same $_ }) }',
-      'for ($i = 0; $i -lt 20 -and (Get-Alive).Count -gt 0; $i++) { Start-Sleep -Milliseconds 500 }',
-      '$left = Get-Alive',
-      'if ($left.Count -gt 0) { throw "An agent process did not end: $(($left | ForEach-Object { $_.Id }) -join \', \')" }',
-    ].join('\n'), QUICK_MS);
+    await this.script(sshHost, 'Ending the agent processes', buildEndProcessesScript({ image: 'node.exe', argument: `--env-file=${envFile}`, label: 'agent', endParentConhost: true }), QUICK_MS);
   }
 
   /** Runs a PowerShell script on the host; a non-zero exit is an error carrying the script's own message. */

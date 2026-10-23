@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { decodeEncodedCommand, FakeWindowsHost, type FakeWindowsHostOptions } from './testing/fakeWindowsHost';
-import { AgentInstaller, type InstallProgress } from './AgentInstaller';
+import { AgentInstaller, type AgentMisaoInstaller, type InstallProgress } from './AgentInstaller';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
 const VERSION = 'bundlehash1';
@@ -19,10 +19,10 @@ function makeBundler() {
 
 type SftpFake = { sftpUpload: (host: string, local: string, remote: string) => Promise<void>; sftpWrite: (host: string, data: Buffer, remote: string) => Promise<void> };
 
-function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS) {
+function make(hostOptions: Partial<FakeWindowsHostOptions> = {}, windowsAgent: WindowsAgentOptions = DEFAULT_WINDOWS_AGENT_OPTIONS, misao?: AgentMisaoInstaller) {
   const host = new FakeWindowsHost({ sha256: SHA, taskName: windowsAgent.taskName, ...hostOptions });
   const execIsolated = vi.fn(async (sshHost: string, command: string) => host.exec(sshHost, command));
-  const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, windowsAgent, undefined);
+  const installer = new AgentInstaller({ execIsolated } as never, makeBundler() as never, windowsAgent, misao);
   const sftp = installer as unknown as SftpFake;
   const uploads: string[] = [];
   sftp.sftpUpload = async (_h, _local, remote) => { uploads.push(remote); host.uploaded.set(remote, Buffer.from('tarball')); };
@@ -51,11 +51,10 @@ describe('AgentInstaller on a Windows host', () => {
 
     expect(result).toMatchObject({ success: true, host: '100.64.0.9', port: 3002, version: VERSION, startMethod: 'taskscheduler', tmuxFound: false, hostProfile: { platform: 'win32', arch: 'x64' } });
     expect(steps.map((s) => `${s.step}:${s.status}`)).toEqual([
-      'preflight:running', 'preflight:ok', 'transfer:running', 'transfer:ok', 'start:running', 'start:ok', 'health:running', 'health:ok', 'misao:ok',
+      'preflight:running', 'preflight:ok', 'transfer:running', 'transfer:ok', 'start:running', 'start:ok', 'health:running', 'health:ok',
     ]);
-    // misao is not installed on Windows yet: the step says so and the reason travels beside the successful result.
-    expect(steps.at(-1)!.message).toMatch(/Skipped: unsupported_os.*misao.*Windows/);
-    expect(result.misaoError).toMatch(/^unsupported_os:/);
+    // This hub has no misao to install (none was given): there is no misao step and no error about it.
+    expect(result).not.toHaveProperty('misaoError');
 
     // Files go over SFTP into the owner-only folder under the home: the bundle, the settings, the task XML.
     // The settings are written into agent.env.new, which was created owner-only first, and swapped in after its ACL was checked.
@@ -94,6 +93,39 @@ describe('AgentInstaller on a Windows host', () => {
     expect(host.taskState).toBe('running');
   });
 
+  describe('misao', () => {
+    const okMisao = (): AgentMisaoInstaller & { install: ReturnType<typeof vi.fn> } => ({
+      install: vi.fn(async (_transport, onProgress) => {
+        onProgress?.('transfer');
+        return { version: '0.3.0', startMethod: 'taskscheduler' as const, updateAvailable: false };
+      }),
+    });
+
+    it('is put on the agent once it is healthy, through a transport to the configured port with the new token and the Windows host profile', async () => {
+      const misao = okMisao();
+      const { installer } = make({}, { ...DEFAULT_WINDOWS_AGENT_OPTIONS, port: 3902 }, misao);
+      const steps: InstallProgress[] = [];
+      const result = await installer.install('user@win', (p) => steps.push(p));
+      expect(result.success).toBe(true);
+      expect(result).not.toHaveProperty('misaoError');
+      expect(steps.filter((s) => s.step === 'misao').map((s) => `${s.status}:${s.message}`)).toEqual(['running:Installing misao...', 'running:Transferring misao...', 'ok:misao 0.3.0 (taskscheduler)']);
+      const transport = misao.install.mock.calls[0]![0] as { matchesToken(token: string): boolean; hostProfile: unknown; fetchMisaoStatus: unknown };
+      expect(transport.matchesToken(result.token)).toBe(true);
+      expect(transport.hostProfile).toEqual({ platform: 'win32', arch: 'x64' });
+      // The agent of a Windows host listens on its configured port, not the Unix one.
+      expect(String((transport as unknown as { baseUrl: string }).baseUrl)).toBe('http://100.64.0.9:3902');
+    });
+
+    it('keeps the agent installed and healthy, and reports why, when misao could not be installed', async () => {
+      const misao: AgentMisaoInstaller = { install: vi.fn(async () => { throw new Error('The pipe did not open'); }) };
+      const { installer } = make({}, DEFAULT_WINDOWS_AGENT_OPTIONS, misao);
+      const steps: InstallProgress[] = [];
+      const result = await installer.install('user@win', (p) => steps.push(p));
+      expect(result).toMatchObject({ success: true, startMethod: 'taskscheduler', tmuxFound: false, misaoError: 'The pipe did not open' });
+      expect(steps.at(-1)).toMatchObject({ step: 'misao', status: 'error', message: 'The pipe did not open' });
+    });
+  });
+
   it('never sends the POSIX bootstrap (tar, nohup, systemctl, a sha256sum pipeline) to a Windows host', async () => {
     const { installer, host } = make();
     await installer.install('user@win');
@@ -112,7 +144,7 @@ describe('AgentInstaller on a Windows host', () => {
   });
 
   it('uses the configured task name, folder and port', async () => {
-    const { installer, host, uploads } = make({ firewall: { ruleFound: false, elevated: true, created: true, problem: null } }, { taskName: 'w806-AzitoAgent', dir: 'w806-agent', port: 3902 });
+    const { installer, host, uploads } = make({ firewall: { ruleFound: false, elevated: true, created: true, problem: null } }, { taskName: 'w806-AzitoAgent', dir: 'w806-agent', port: 3902, misaoTaskName: 'w806-AzitoMisao', misaoDir: 'w806-misao' });
     const result = await installer.install('user@win');
     expect(result).toMatchObject({ success: true, port: 3902 });
     expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env.new', 'w806-agent/w806-AzitoAgent.task.xml']);

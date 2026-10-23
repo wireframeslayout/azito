@@ -23,7 +23,7 @@ describe('windowsAgentLayout', () => {
 });
 
 describe('buildAgentEnvFile', () => {
-  const env = (over: Partial<Parameters<typeof buildAgentEnvFile>[0]> = {}) => ({ token: 'tok', bindAddress: '100.64.0.9', port: 3002, logFile: 'C:\\Users\\a b\\agent.log', ...over });
+  const env = (over: Partial<Parameters<typeof buildAgentEnvFile>[0]> = {}) => ({ token: 'tok', bindAddress: '100.64.0.9', port: 3002, logFile: 'C:\\Users\\a b\\agent.log', misaoDir: '.azito\\misao', ...over });
 
   it('writes the values node --env-file reads, double-quoted', () => {
     expect(buildAgentEnvFile(env()))

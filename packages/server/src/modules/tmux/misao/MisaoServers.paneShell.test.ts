@@ -76,13 +76,13 @@ describe('MisaoServers pane shell per node', () => {
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('agent_outdated'));
   });
 
-  it('fails for an agent with no default shell and for a Windows agent', async () => {
+  it('fails for an agent with no default shell, and gives a Windows agent its own shell without command arguments', async () => {
     const noShell = build(async () => ({ platform: 'linux', arch: 'x64', shell: null }));
     noShell.servers.ensureAgentNode(agent('a1'));
     await expect(captured[0].paneShell()).rejects.toThrow(/no default shell/);
 
     const windows = build(async () => ({ platform: 'win32', arch: 'x64', shell: 'cmd.exe' }));
     windows.servers.ensureAgentNode(agent('w1', { platform: 'win32', arch: 'x64' }));
-    await expect(captured[1].paneShell()).rejects.toMatchObject({ code: 'unsupported_os' });
+    expect(await captured[1].paneShell()).toEqual({ shell: 'cmd.exe', commandArgs: null });
   });
 });
