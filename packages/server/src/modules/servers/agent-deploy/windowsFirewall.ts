@@ -45,9 +45,9 @@ $found=$null;$blocked=@();$by=@();$created=$false;$problem=$null
 function A($v){"$v" -in '','Any','*'}
 function L($c){$h=@{};foreach($x in & $c){$h[$x.InstanceID]=$x};$h}
 try{
-$P=L Get-NetFirewallPortFilter;$Ap=L Get-NetFirewallApplicationFilter;$Ad=L Get-NetFirewallAddressFilter;$S=L Get-NetFirewallServiceFilter;$ok=$false
+$hP=L Get-NetFirewallPortFilter;$hA=L Get-NetFirewallApplicationFilter;$hD=L Get-NetFirewallAddressFilter;$hS=L Get-NetFirewallServiceFilter;$ok=$false
 foreach($r in Get-NetFirewallRule -Direction Inbound -Enabled True){
-$n=$r.Name;$pf=$P[$n];$af=$Ap[$n];$ad=$Ad[$n];$sf=$S[$n]
+$n=$r.Name;$pf=$hP[$n];$af=$hA[$n];$ad=$hD[$n];$sf=$hS[$n]
 if(!($pf -and $af -and $ad -and $sf)){continue}
 if(!(A $af.Package) -or !(A $r.Owner) -or !(A $sf.Service)){continue}
 $lp=@($pf.LocalPort|%{"$_"});$tcp="$($pf.Protocol)" -in 'TCP','Any'
@@ -56,7 +56,7 @@ $gn="$($af.Program)" -ieq $node;$ga="$($af.Program)" -ieq 'Any'
 if("$($r.Action)" -eq 'Block'){if((($pn -or $pa) -and $gn) -or ($pn -and $ga) -or ($tcp -and $gn)){$blocked+=$r.DisplayName}}elseif("$($r.Action)" -eq 'Allow'){
 $rm=@($ad.RemoteAddress|%{"$_"});$lo=@($ad.LocalAddress|%{"$_"})
 if(($pn -or $pa) -and ($gn -or $ga) -and ($rm -contains 'Any' -or @($rm|?{$ours -contains $_}).Count) -and ($lo -contains 'Any' -or $lo -contains $ip)){$ok=$true;$by+=$r.DisplayName}}}
-$found=$ok}catch{$found=$null}
+$found=$ok}catch{$found=$null;$problem='reading the rules failed: '+$_.Exception.Message}
 if($found -eq $false -and $el -and !$blocked.Count){try{$null=New-NetFirewallRule -DisplayName ${q(firewallRuleName(port))} -Direction Inbound -Action Allow -Protocol TCP -LocalPort $port -Program $node -LocalAddress $ip -RemoteAddress ${q(TAILNET_RANGE)} -Profile Any;$created=$true}catch{$problem=$_.Exception.Message}}
 $info=[ordered]@{ruleFound=$found;elevated=$el;created=$created;problem=$problem;blockedBy=@($blocked);allowedBy=@($by|select -First 5)}
 $global:LASTEXITCODE=0
