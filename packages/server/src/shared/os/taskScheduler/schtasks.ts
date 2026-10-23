@@ -3,7 +3,7 @@ import * as path from 'path';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../exec/commandSpec';
 import type { HostEnv } from '../hostEnv';
 import { decodeOemOutput, type DecodedOutput, describeUndecodable, parseOemCodePage } from './oemOutput';
-import { encodeTaskXml } from './taskDefinition';
+import { decodeTaskXml, encodeTaskXml } from './taskDefinition';
 
 /** A finished command with its output as bytes (the OEM code page is decoded here, not by the runner). */
 export interface RawCommandResult {
@@ -201,6 +201,22 @@ export class SchtasksClient {
   async registerFromFile(taskName: string, xmlFile: string): Promise<void> {
     SchtasksClient.assertTaskName(taskName);
     await this.mustSucceed('create', taskName, ['/Create', '/XML', xmlFile, '/TN', taskName, '/F']);
+  }
+
+  /**
+   * The registered task's definition as XML text (`/Query /XML`, written in the OEM code page and decoded like every schtasks
+   * output), for putting the same task back later with {@link encodeTaskXml} + {@link registerFromFile}. Output that cannot
+   * be decoded is an error, never a guess: a definition that was misread would be restored wrong.
+   */
+  async exportXml(taskName: string): Promise<string> {
+    SchtasksClient.assertTaskName(taskName);
+    const result = await this.run(this.spec(['/Query', '/TN', taskName, '/XML']));
+    if (result.exitCode !== 0) throw await this.errorOf('query', taskName, result);
+    // A build that writes the UTF-16 file form (BOM) instead of OEM text is read as it declares itself.
+    if (result.stdout[0] === 0xff && result.stdout[1] === 0xfe) return decodeTaskXml(result.stdout);
+    const decoded = await decodeOemOutput(result.stdout, () => this.readOemCodePage());
+    if (!decoded.ok) throw new Error(`Cannot read the definition of the task "${taskName}": ${describeUndecodable(result.stdout, decoded.reason)}`);
+    return decoded.text;
   }
 
   async start(taskName: string): Promise<void> {

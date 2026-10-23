@@ -9,8 +9,8 @@ import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, 
 import { HOST_OS_PROBE_COMMAND, parseHostOsProbe } from './hostOsProbe';
 import { buildWindowsPreflightCommand, checkWindowsPreflight, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
-import { WindowsAgentDeployer, windowsAgentLayout } from './WindowsAgentDeployer';
-import type { WindowsAgentOptions } from './windowsAgentConfig';
+import { WindowsAgentDeployer, windowsAgentLayout, type WindowsDeployment } from './WindowsAgentDeployer';
+import { DEFAULT_WINDOWS_AGENT_OPTIONS, type WindowsAgentOptions } from './windowsAgentConfig';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
 
@@ -81,7 +81,13 @@ export class AgentInstaller {
     private windowsAgent: WindowsAgentOptions,
     /** Absent for a hub that cannot install misao (no bundled copy): the agent is installed without it. */
     private misaoInstaller?: AgentMisaoInstaller,
-  ) {}
+  ) {
+    // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
+    // looks for the default task: say so once when they are in use.
+    if (JSON.stringify(windowsAgent) !== JSON.stringify(DEFAULT_WINDOWS_AGENT_OPTIONS)) {
+      console.warn(`[AgentInstaller] Windows agent settings differ from the defaults (task ${windowsAgent.taskName}, folder ~\\${windowsAgent.dir}, port ${windowsAgent.port}): this is for trials, they are not saved per server`);
+    }
+  }
 
   async install(
     sshHost: string,
@@ -182,10 +188,11 @@ export class AgentInstaller {
     const failed = (error: string): InstallResult => ({ success: false, host: ip, port, token, version, startMethod: 'taskscheduler', steps, error });
 
     report('transfer', 'running', 'Transferring agent bundle...');
+    let deployment: WindowsDeployment;
     try {
       const tarballPath = this.bundler.getTarballPath();
       if (!fs.existsSync(tarballPath)) throw new Error('Agent tarball not found — run build first');
-      await deployer.deploy({
+      deployment = await deployer.deploy({
         sshHost, host, nodePath: host.nodePath!, version, tarballPath, token, bindAddress: ip,
         expectedSha256: readSha256FromSumsFile(this.bundler.getSha256sumsPath(), 'azito-agent.tar.gz'),
       });
@@ -196,12 +203,13 @@ export class AgentInstaller {
       return failed(msg);
     }
 
+    // From here the previous install (if any) is kept aside; it is deleted only after the new agent has answered, and put back if it never does.
     report('start', 'running', 'Starting agent...');
     try {
       await deployer.start(sshHost, host);
       report('start', 'ok', `Started via Task Scheduler (runs while ${host.userId} is logged on)`);
     } catch (err) {
-      const msg = (err as Error).message;
+      const msg = `${(err as Error).message} (${await deployment.rollback().catch((e: unknown) => `the previous install could not be restored: ${(e as Error).message}`)})`;
       report('start', 'error', msg);
       return failed(msg);
     }
@@ -209,14 +217,15 @@ export class AgentInstaller {
     report('health', 'running', 'Verifying agent health...');
     try {
       await this.healthCheck(ip, port, version);
-      report('health', 'ok', 'Agent healthy');
     } catch (err) {
-      // A broken agent must not keep restarting itself (the task restarts it on failure): stop it, and say why it may be unreachable.
-      const stopped = await deployer.stop(sshHost, host).then(() => '', (e: unknown) => ` (it could not be stopped: ${(e as Error).message})`);
-      const msg = `${(err as Error).message}. ${await deployer.describeTask(sshHost, host)}. Check that ${host.userId} is logged on to Windows (the agent starts at logon) and that Windows Firewall allows TCP ${port}; the agent's log is ${windowsAgentLayout(host.home, this.windowsAgent, version).logFile}${stopped}`;
+      const taskState = await deployer.describeTask(sshHost, host);
+      const restored = await deployment.rollback().catch((e: unknown) => `the previous install could not be restored: ${(e as Error).message}`);
+      const msg = `${(err as Error).message}. ${taskState}. Check that ${host.userId} is logged on to Windows (the agent starts at logon) and that Windows Firewall allows TCP ${port}; the agent's log is ${windowsAgentLayout(host.home, this.windowsAgent, version).logFile}. Rolled back: ${restored}`;
       report('health', 'error', msg);
       return failed(msg);
     }
+    const leftovers = await deployment.commit().then(() => '', (e: unknown) => ` (the previous install could not be removed: ${(e as Error).message})`);
+    report('health', 'ok', `Agent healthy${leftovers}`);
 
     // misao on a Windows agent is #369 A3. Reported like a misao that could not be installed: the agent stays installed and healthy.
     const misaoError = 'unsupported_os: installing misao on a Windows agent is not supported yet (planned for the next release)';
@@ -302,7 +311,7 @@ export class AgentInstaller {
       throw new Error(`Preflight failed:\n${missing.map(m => `  - ${m}`).join('\n')}`);
     }
     // checkWindowsPreflight passed: node, x64 and the Tailscale IP are there.
-    await this.windowsDeployer().ensureFirewall(sshHost, info.nodePath!);
+    await this.windowsDeployer().ensureFirewall(sshHost, info.nodePath!, info.tailscaleIp!);
     return {
       tailscaleIp: info.tailscaleIp!,
       nodeVersion: info.nodeVersion!,

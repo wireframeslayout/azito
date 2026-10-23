@@ -37,15 +37,32 @@ import { toHostProfile } from '../shared/os/hostProfile';
 import { runHostOf } from '../shared/exec/runCommandSpec';
 import { resolveLoginShell } from '../shared/os/loginShell';
 
+// ─── Fatal errors ───
+
+/**
+ * A fatal error before the server's own logger exists. A task has nowhere to send stderr, so when the settings name a log file
+ * (`AZITO_AGENT_LOG_FILE`) the error is appended there too: otherwise the log a failed install points to would be empty.
+ */
+function reportFatal(message: string): void {
+  console.error(message);
+  const logFile = process.env.AZITO_AGENT_LOG_FILE;
+  if (!logFile) return;
+  try {
+    fs.appendFileSync(logFile, `${JSON.stringify({ level: 60, time: Date.now(), msg: message })}\n`);
+  } catch (err) {
+    console.error(`Could not write to AZITO_AGENT_LOG_FILE (${logFile}): ${(err as Error).message}`);
+  }
+}
+
 // ─── Environment validation ───
 
 const bind = process.env.AZITO_AGENT_BIND;
 if (!bind) {
-  console.error('AZITO_AGENT_BIND is required');
+  reportFatal('AZITO_AGENT_BIND is required');
   process.exit(1);
 }
 if (bind === '0.0.0.0') {
-  console.error('AZITO_AGENT_BIND must not be 0.0.0.0 — bind to a Tailscale IP instead');
+  reportFatal('AZITO_AGENT_BIND must not be 0.0.0.0 — bind to a Tailscale IP instead');
   process.exit(1);
 }
 /** Same value as `bind`, restated so its non-undefined type survives into main(). */
@@ -53,7 +70,7 @@ const BIND_ADDRESS: string = bind;
 
 const token = process.env.AZITO_AGENT_TOKEN;
 if (!token) {
-  console.error('AZITO_AGENT_TOKEN is required');
+  reportFatal('AZITO_AGENT_TOKEN is required');
   process.exit(1);
 }
 
@@ -327,6 +344,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error('Fatal error starting agent:', err);
+  reportFatal(`Fatal error starting agent: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`);
   process.exit(1);
 });

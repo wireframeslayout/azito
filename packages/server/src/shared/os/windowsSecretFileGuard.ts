@@ -48,7 +48,7 @@ export const PROTECT_CHANGED = 'protected';
  * 読み出した明示的な許可（他のユーザーのもの）は PurgeAccessRules で全部除く
  * （`icacls /inheritance:r /grant:r` だけでは他の主体の明示的な許可が残る）。所有者を変えられなければ失敗する。
  */
-// PROTECT_SCRIPT / INSPECT_SCRIPT are also run on ANOTHER Windows host over SSH (the hub installing an agent), with AZITO_GUARD_PATH set by the caller's script.
+// PROTECT_SCRIPT / CREATE_SCRIPT / INSPECT_SCRIPT are also run on ANOTHER Windows host over SSH (the hub installing an agent), with AZITO_GUARD_PATH set by the caller's script.
 export const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
   `$acl=$info.GetAccessControl(${ACL_SECTIONS}); ` +
   "if($isDir){$inh=[System.Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'}else{$inh=[System.Security.AccessControl.InheritanceFlags]'None'}; " +
@@ -66,7 +66,7 @@ export const PROTECT_SCRIPT = PS_PREAMBLE + OPEN_INFO +
  * 空のファイルを、作成の時点から保護 DACL と所有者を付けて排他作成する（CreateNew）。
  * 親の ACL のまま作ってから保護すると、その間に開かれたハンドルから秘密が読めてしまう。
  */
-const CREATE_SCRIPT = PS_PREAMBLE +
+export const CREATE_SCRIPT = PS_PREAMBLE +
   '$acl=New-Object System.Security.AccessControl.FileSecurity; ' +
   "$inh=[System.Security.AccessControl.InheritanceFlags]'None'; $ownerOk=$false; " +
   BUILD_RULE +

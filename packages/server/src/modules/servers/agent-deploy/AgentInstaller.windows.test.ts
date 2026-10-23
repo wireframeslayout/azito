@@ -58,9 +58,10 @@ describe('AgentInstaller on a Windows host', () => {
     expect(result.misaoError).toMatch(/^unsupported_os:/);
 
     // Files go over SFTP into the owner-only folder under the home: the bundle, the settings, the task XML.
-    expect(uploads).toEqual([`.azito/agent/azito-agent-${VERSION}.tar.gz`, '.azito/agent/agent.env', '.azito/agent/AzitoAgent.task.xml']);
-    const env = host.uploaded.get('.azito/agent/agent.env')!.toString('utf8');
-    expect(env).toBe(`AZITO_AGENT_TOKEN=${result.token}\nAZITO_AGENT_BIND=100.64.0.9\nPORT=3002\nAZITO_AGENT_LOG_FILE=C:\\Users\\dev\\.azito\\agent\\agent.log\n`);
+    // The settings are written into agent.env.new, which was created owner-only first, and swapped in after its ACL was checked.
+    expect(uploads).toEqual([`.azito/agent/azito-agent-${VERSION}.tar.gz`, '.azito/agent/agent.env.new', '.azito/agent/AzitoAgent.task.xml']);
+    const env = host.uploaded.get('.azito/agent/agent.env.new')!.toString('utf8');
+    expect(env).toBe(`AZITO_AGENT_TOKEN="${result.token}"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\dev\\.azito\\agent\\agent.log"\n`);
 
     const scripts = host.calls.filter((c) => c.kind === 'script').map((c) => c.text);
     expect(scripts[0]).toContain("New-Item -ItemType Directory -Force -Path 'C:\\Users\\dev\\.azito\\agent'");
@@ -69,14 +70,22 @@ describe('AgentInstaller on a Windows host', () => {
     const extract = scripts.find((s) => s.includes('tar.exe'))!;
     expect(extract).toContain("$tar = 'C:\\Windows\\System32\\tar.exe'");
     expect(extract).toContain("$dest = 'C:\\Users\\dev\\.azito\\agent\\bundlehash1'");
-    expect(scripts.filter((s) => s.includes("$env:AZITO_GUARD_PATH = 'C:\\Users\\dev\\.azito\\agent\\agent.env'")).length).toBe(2); // protect, then inspect
+    const guarded = scripts.filter((s) => s.includes("$env:AZITO_GUARD_PATH = 'C:\\Users\\dev\\.azito\\agent\\agent.env.new'"));
+    expect(guarded.length).toBe(2); // create (owner-only, exclusive), then inspect
+    expect(guarded[0]).toContain('FileMode]\'CreateNew\'');
+    expect(guarded[1]).toContain('ConvertTo-Json -Depth 4');
+    // The order on the host: created owner-only, THEN the token is written, then checked, then swapped in.
+    const order = host.calls.map((c) => (c.kind === 'script' && c.text.includes('CreateNew') ? 'create' : c.kind === 'script' && c.text.includes('Depth 4') ? 'inspect' : c.kind === 'script' && c.text.includes('Move-Item -LiteralPath \'C:\\Users\\dev\\.azito\\agent\\agent.env.new\'') ? 'swap' : c.kind));
+    expect(order.indexOf('create')).toBeLessThan(order.indexOf('inspect'));
+    expect(order.indexOf('inspect')).toBeLessThan(order.indexOf('swap'));
     // The token is only ever in the SFTP-written file: no script (and so no command line) carries it.
     expect(JSON.stringify(host.calls)).not.toContain(result.token);
 
     // The task: logon trigger for the SSH user, node.exe --env-file=<settings> <entry>, working folder = the version folder.
     expect(host.registeredXml).toContain('<UserId>PC\\dev</UserId>');
-    expect(host.registeredXml).toContain('<Command>C:\\Program Files\\nodejs\\node.exe</Command>');
-    expect(host.registeredXml).toContain('<Arguments>--env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\bundlehash1\\azito-agent.cjs</Arguments>');
+    // Under conhost --headless: node.exe has a console without a window, so nothing appears on the user's desktop.
+    expect(host.registeredXml).toContain('<Command>C:\\Windows\\System32\\conhost.exe</Command>');
+    expect(host.registeredXml).toContain('<Arguments>--headless "C:\\Program Files\\nodejs\\node.exe" --env-file=C:\\Users\\dev\\.azito\\agent\\agent.env C:\\Users\\dev\\.azito\\agent\\bundlehash1\\azito-agent.cjs</Arguments>');
     expect(host.registeredXml).toContain('<WorkingDirectory>C:\\Users\\dev\\.azito\\agent\\bundlehash1</WorkingDirectory>');
     expect(host.registeredXml).toContain('<LogonTrigger>');
     const schtasks = host.calls.filter((c) => c.kind === 'schtasks').map((c) => c.schtasksArgs![0]);
@@ -106,8 +115,8 @@ describe('AgentInstaller on a Windows host', () => {
     const { installer, host, uploads } = make({}, { taskName: 'w806-AzitoAgent', dir: 'w806-agent', port: 3902 });
     const result = await installer.install('user@win');
     expect(result).toMatchObject({ success: true, port: 3902 });
-    expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env', 'w806-agent/w806-AzitoAgent.task.xml']);
-    expect(host.uploaded.get('w806-agent/agent.env')!.toString('utf8')).toContain('PORT=3902\n');
+    expect(uploads).toEqual([`w806-agent/azito-agent-${VERSION}.tar.gz`, 'w806-agent/agent.env.new', 'w806-agent/w806-AzitoAgent.task.xml']);
+    expect(host.uploaded.get('w806-agent/agent.env.new')!.toString('utf8')).toContain('PORT="3902"\n');
     expect(host.calls.filter((c) => c.kind === 'schtasks').some((c) => c.schtasksArgs!.includes('w806-AzitoAgent'))).toBe(true);
     expect(host.calls.find((c) => c.kind === 'firewall')!.text).toContain('$port = 3902');
     expect(fetch).toHaveBeenCalledWith('http://100.64.0.9:3902/health', expect.anything());
@@ -119,9 +128,9 @@ describe('AgentInstaller on a Windows host', () => {
       const steps: InstallProgress[] = [];
       const result = await installer.install('user@win', (p) => steps.push(p));
       expect(result.success).toBe(false);
-      expect(result.error).toContain('Windows Firewall has no enabled inbound rule that allows TCP 3002');
+      expect(result.error).toContain('Windows Firewall has no enabled inbound rule that lets the hub reach the agent (TCP 3002 for C:\\Program Files\\nodejs\\node.exe on 100.64.0.9');
       expect(result.error).toContain('not elevated');
-      expect(result.error).toContain('New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -RemoteAddress 100.64.0.0/10');
+      expect(result.error).toContain('New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "C:\\Program Files\\nodejs\\node.exe" -LocalAddress 100.64.0.9 -RemoteAddress 100.64.0.0/10');
       expect(steps.map((s) => `${s.step}:${s.status}`)).toEqual(['preflight:running', 'preflight:error']);
       expect(uploads).toEqual([]);
       expect(host.calls.some((c) => c.kind === 'script')).toBe(false);
@@ -201,6 +210,104 @@ describe('AgentInstaller on a Windows host', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('a failed reinstall puts the previous install back', () => {
+    it('restores the previous files, definition and running state when the new agent never answers, and deletes nothing before that', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('401'); }));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+      try {
+        const { installer, host } = make({ existingTask: 'running' });
+        const pending = installer.install('user@win');
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await pending;
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Rolled back:');
+        expect(result.error).toContain('restored the previous files');
+        expect(result.error).toContain('restored the previous task definition');
+        expect(result.error).toContain('started the previous agent again');
+        // The definition on the host is the previous one again, and the previous agent is running.
+        expect(host.registeredXml).toBe('<Task>previous definition</Task>');
+        expect(host.taskState).toBe('running');
+        const scripts = host.calls.filter((c) => c.kind === 'script').map((c) => c.text);
+        // The previous folder and settings are moved aside on the way in (never deleted) and moved back on the way out.
+        expect(scripts.some((s) => s.includes('Move-Item -LiteralPath $dest -Destination $prev'))).toBe(true);
+        expect(scripts.some((s) => s.includes("agent.env' -Destination 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev'"))).toBe(true);
+        expect(scripts.some((s) => s.includes("Move-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev' -Destination 'C:\\Users\\dev\\.azito\\agent\\agent.env'"))).toBe(true);
+        // Nothing of the previous install was deleted for good.
+        expect(scripts.some((s) => s.includes("Remove-Item -LiteralPath 'C:\\Users\\dev\\.azito\\agent\\agent.env.prev' -Recurse -Force }"))).toBe(false);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('restores the previous install when registering the new task fails', async () => {
+      const { installer, host } = make({ existingTask: 'running' });
+      const original = host.exec;
+      let created = 0;
+      (host as { exec: typeof host.exec }).exec = async (h, command) => {
+        const out = await original(h, command);
+        if (command.includes('-EncodedCommand') && decodeEncodedCommand(command).includes('AZITO_RUN_BEGIN') && decodeEncodedCommand(command).includes('/Create') && created++ === 0) {
+          return { stdout: `<<AZITO_RUN_BEGIN>>\n${JSON.stringify({ exitCode: 1, stdout: '', stderr: Buffer.from('ERROR: No mapping between account names').toString('base64') })}\n<<AZITO_RUN_END>>\n`, stderr: '', code: 0 };
+        }
+        return out;
+      };
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('No mapping between account names');
+      expect(result.error).toContain('restored the previous task definition');
+      expect(host.taskState).toBe('running');
+    });
+
+    it('removes the new task of a failed first install (nothing to restore)', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('refused'); }));
+      vi.useFakeTimers({ toFake: ['setTimeout', 'Date'] });
+      try {
+        const { installer, host } = make();
+        const pending = installer.install('user@win');
+        await vi.advanceTimersByTimeAsync(20_000);
+        const result = await pending;
+        expect(result.error).toContain('removed the new task');
+        expect(host.taskState).toBe('absent');
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('builds the settings and the task definition before it stops anything: a home the dotenv format cannot hold changes nothing on the host', async () => {
+      const { installer, host } = make({ existingTask: 'running', home: 'C:\\Users\\a\\n"b\'c`d' });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('cannot be written to the agent\'s env file');
+      expect(host.calls.some((c) => c.kind === 'schtasks' && ['/End', '/Create'].includes(c.schtasksArgs![0]!))).toBe(false);
+      expect(host.calls.some((c) => c.kind === 'script')).toBe(false);
+      expect(host.taskState).toBe('running');
+    });
+
+    it('installs under a home with a quote, a hash sign and a backtick in its path', async () => {
+      const { installer, host } = make({ home: "C:\\Users\\O'Brien #1 `x`" });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(true);
+      expect(host.registeredXml).toContain("O'Brien #1 `x`");
+    });
+  });
+
+  describe('the host is refused or fixed before anything is sent', () => {
+    it('refuses Windows older than 1809 (no conhost --headless)', async () => {
+      const { installer, host } = make({ buildNumber: '17134' });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/1809.*found: build 17134/);
+      expect(host.calls.some((c) => c.kind === 'firewall' || c.kind === 'script')).toBe(false);
+    });
+
+    it('stops with the name of an enabled inbound Block rule', async () => {
+      const { installer, host } = make({ firewall: { ruleFound: true, elevated: true, created: false, problem: null, blockedBy: ['node.js JavaScript Runtime'] } });
+      const result = await installer.install('user@win');
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('"node.js JavaScript Runtime"');
+      expect(host.calls.some((c) => c.kind === 'script')).toBe(false);
     });
   });
 

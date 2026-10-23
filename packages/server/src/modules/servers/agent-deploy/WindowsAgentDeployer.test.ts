@@ -1,6 +1,7 @@
+import { parseEnv } from 'util';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_WINDOWS_AGENT_OPTIONS } from './windowsAgentConfig';
-import { buildAgentEnvFile, powershellErrorText, windowsAgentLayout } from './WindowsAgentDeployer';
+import { buildAgentEnvFile, powershellErrorText, quoteDotenvValue, windowsAgentLayout } from './WindowsAgentDeployer';
 
 describe('windowsAgentLayout', () => {
   it('puts everything under <home>\\<dir>, and gives the SFTP path relative to the home with forward slashes', () => {
@@ -9,6 +10,9 @@ describe('windowsAgentLayout', () => {
     expect(l.rootRelative).toBe('.azito/agent');
     expect(l.entry).toBe('C:\\Users\\Server User\\.azito\\agent\\abc123\\azito-agent.cjs');
     expect(l.envFile).toBe('C:\\Users\\Server User\\.azito\\agent\\agent.env');
+    expect(l.envFileNew).toBe('C:\\Users\\Server User\\.azito\\agent\\agent.env.new');
+    expect(l.envFilePrev).toBe('C:\\Users\\Server User\\.azito\\agent\\agent.env.prev');
+    expect(l.versionDirPrev).toBe('C:\\Users\\Server User\\.azito\\agent\\abc123.prev');
     expect(l.taskXml).toBe('C:\\Users\\Server User\\.azito\\agent\\AzitoAgent.task.xml');
   });
 
@@ -18,13 +22,35 @@ describe('windowsAgentLayout', () => {
 });
 
 describe('buildAgentEnvFile', () => {
-  it('writes the values node --env-file reads', () => {
-    expect(buildAgentEnvFile({ token: 'tok', bindAddress: '100.64.0.9', port: 3002, logFile: 'C:\\Users\\a b\\agent.log' }))
-      .toBe('AZITO_AGENT_TOKEN=tok\nAZITO_AGENT_BIND=100.64.0.9\nPORT=3002\nAZITO_AGENT_LOG_FILE=C:\\Users\\a b\\agent.log\n');
+  const env = (over: Partial<Parameters<typeof buildAgentEnvFile>[0]> = {}) => ({ token: 'tok', bindAddress: '100.64.0.9', port: 3002, logFile: 'C:\\Users\\a b\\agent.log', ...over });
+
+  it('writes the values node --env-file reads, double-quoted', () => {
+    expect(buildAgentEnvFile(env()))
+      .toBe('AZITO_AGENT_TOKEN="tok"\nAZITO_AGENT_BIND="100.64.0.9"\nPORT="3002"\nAZITO_AGENT_LOG_FILE="C:\\Users\\a b\\agent.log"\n');
   });
 
-  it.each(['a\nb', 'a"b', "a'b", 'a#b', ''])('refuses a value that would end or change a dotenv line (%j)', (token) => {
-    expect(() => buildAgentEnvFile({ token, bindAddress: '100.64.0.9', port: 3002, logFile: 'C:\\a.log' })).toThrow(/AZITO_AGENT_TOKEN/);
+  it.each([
+    ["C:\\Users\\O'Brien\\agent.log"],
+    ['C:\\Users\\a#1\\agent.log'],
+    ['C:\\Users\\`tick`\\agent.log'],
+    ["C:\\Users\\O'Brien #1 `x` 日本語 café\\agent.log"],
+    ['C:\\Users\\new\\next\\agent.log'], // a literal \n: Node expands it inside double quotes
+    ["C:\\Users\\new's\\agent.log"],
+  ])("reads %j back unchanged through Node's own parseEnv", (logFile) => {
+    expect(parseEnv(buildAgentEnvFile(env({ logFile }))).AZITO_AGENT_LOG_FILE).toBe(logFile);
+  });
+
+  it('reads every setting back', () => {
+    const parsed = parseEnv(buildAgentEnvFile(env({ token: 'a'.repeat(64) })));
+    expect(parsed).toEqual({ AZITO_AGENT_TOKEN: 'a'.repeat(64), AZITO_AGENT_BIND: '100.64.0.9', PORT: '3002', AZITO_AGENT_LOG_FILE: 'C:\\Users\\a b\\agent.log' });
+  });
+
+  it.each(['a\nb', ''])('refuses a value that cannot be written (%j)', (token) => {
+    expect(() => buildAgentEnvFile(env({ token }))).toThrow(/AZITO_AGENT_TOKEN/);
+  });
+
+  it('refuses a value that fits no quote', () => {
+    expect(() => quoteDotenvValue('X', 'a\\n"b\'c`d')).toThrow(/cannot be written/);
   });
 });
 

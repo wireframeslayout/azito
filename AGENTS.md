@@ -234,7 +234,9 @@ packages/
   EncodedCommand over SSH; the Unix sh bootstrap is untouched). The bundle is unpacked by `tar.exe` into `%USERPROFILE%\.azito\agent\<version>\`
   (owner-only folder, no symlink: the task names the version folder), the settings go to an owner-only `agent.env`, and the service is a
   Task Scheduler logon task (`AzitoAgent`, Q2's `buildTaskXml` + `SchtasksClient` run on the host through `windowsSshRunner`) that starts
-  `node.exe --env-file=<agent.env> <entry>`: the agent runs only while that user is logged on. `windowsFirewall.ts` checks (and, when the
+  `conhost.exe --headless node.exe --env-file=<agent.env> <entry>` (no console window; Windows 10 1809+): the agent runs only while that user is
+  logged on. A reinstall is transactional (`WindowsDeployment.commit/rollback`: the previous task XML, `agent.env`, same-version folder and
+  running state are kept aside until the new agent answers). `windowsFirewall.ts` checks (and, when the
   SSH session is elevated, adds) the inbound rule first. `AZITO_WIN_AGENT_TASK_NAME` / `AZITO_WIN_AGENT_DIR` / `AZITO_WIN_AGENT_PORT`
   (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks and the
   misao relay on win32 and writes `AZITO_AGENT_LOG_FILE`. misao on Windows (A3) and update / removal (#372) are not done: `update()` stays `unsupported_os`.
