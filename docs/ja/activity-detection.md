@@ -178,7 +178,19 @@ env ファイルの**別ハブのトークン**を注入された URL へ送っ�
 
 解決後、`AZITO_WEBHOOK_TOKEN` または `AZITO_SERVER_NAME` が空なら hook は何もせず exit 0 します。
 
-対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`。
+対象スクリプト: `harness/hooks/azito-activity.sh`、`azito-interaction.sh`、`azito-question.sh`、`azito-session.sh`。
+
+### セッション ID の追従（SessionStart フック / `sessionId`）
+
+`/resume` や `/subtask` などで Claude Code のセッション ID が会話の途中で変わると、`windows.agent_session_id`
+がウィンドウ作成時の値のまま残り、再起動時の `--resume` が古いセッションを開いてしまいます。これを防ぐため、
+フックは stdin の JSON から `session_id` を読み、UUID 形式のときだけ webhook ボディに `sessionId` を付けます
+（`azito-activity.sh` の `start`/`stop` も同様）。`SessionStart` フック（`azito-session.sh`、`setup.sh` が登録）は
+`event: "session"` で送ります。
+
+- ハブは突合した**エージェントウィンドウ**（`window_type = 'agent'`）の `agent_session_id` が `sessionId` と異なるときだけ更新する
+- `event: "session"` は稼働状態（Tier 1 の hook 状態）を変更しない
+- 更新は `GET /api/debug/activity` の `sessionUpdate`（`from` / `to` / `at` / `event`）に現れる
 
 ### ウィンドウ同定方式（段階4: muxPaneRef 優先）
 

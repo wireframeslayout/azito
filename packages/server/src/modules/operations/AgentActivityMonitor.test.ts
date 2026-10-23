@@ -2746,3 +2746,95 @@ describe('AgentActivityMonitor', () => {
     });
   });
 });
+
+describe('AgentActivityMonitor session id updates (hook sessionId)', () => {
+  const OLD_ID = '11111111-1111-4111-8111-111111111111';
+  const NEW_ID = '22222222-2222-4222-8222-222222222222';
+  let findAll: ReturnType<typeof vi.fn>;
+  let updateAgentSessionIdByWindow: ReturnType<typeof vi.fn>;
+  let onSessionIdUpdated: ReturnType<typeof vi.fn<(serverName: string, target: string, windowId: number, from: string | null, to: string, event: string) => void>>;
+  let monitor: AgentActivityMonitor;
+
+  function signal(overrides: Partial<Parameters<AgentActivityMonitor['recordHookSignal']>[0]> = {}) {
+    return {
+      serverName: 'local',
+      sessionName: 'azito',
+      windowIndex: 3,
+      windowName: 'agent-1',
+      paneIndex: 1,
+      event: 'session' as const,
+      sessionId: NEW_ID,
+      ...overrides,
+    };
+  }
+
+  beforeEach(() => {
+    findAll = vi.fn().mockReturnValue([makeWindow({ id: 9, tmuxTarget: 'azito:agent-1', agentSessionId: OLD_ID })]);
+    updateAgentSessionIdByWindow = vi.fn();
+    onSessionIdUpdated = vi.fn<(serverName: string, target: string, windowId: number, from: string | null, to: string, event: string) => void>();
+    monitor = new AgentActivityMonitor(
+      { getRunning: vi.fn().mockReturnValue({}) } as unknown as ExecuteTaskUseCase,
+      { findAll, updateAgentSessionIdByWindow } as unknown as IWindowRepository,
+      mockRegistry(vi.fn().mockResolvedValue([]), vi.fn().mockResolvedValue({ stdout: '', stderr: '', code: 0 })),
+      { findByName: vi.fn().mockReturnValue({ name: 'local', type: 'local' }) } as unknown as IServerRepository,
+      { emit: vi.fn() } as unknown as NotificationBus,
+      undefined,
+      undefined,
+      undefined,
+      onSessionIdUpdated,
+    );
+  });
+
+  it('updates the agent session id of the matched window on a session event', () => {
+    monitor.recordHookSignal(signal());
+
+    expect(updateAgentSessionIdByWindow).toHaveBeenCalledWith('local', 'azito:agent-1', NEW_ID);
+  });
+
+  it('does not touch the hook activity state on a session event', () => {
+    monitor.recordHookSignal(signal());
+
+    expect((monitor as unknown as { hookStates: Map<string, unknown> }).hookStates.size).toBe(0);
+  });
+
+  it('also updates the session id on a start event that carries one', () => {
+    monitor.recordHookSignal(signal({ event: 'start' }));
+
+    expect(updateAgentSessionIdByWindow).toHaveBeenCalledWith('local', 'azito:agent-1', NEW_ID);
+  });
+
+  it('does not update a non-agent window', () => {
+    findAll.mockReturnValue([makeWindow({ windowType: 'terminal', workerType: null, tmuxTarget: 'azito:agent-1', agentSessionId: OLD_ID })]);
+
+    monitor.recordHookSignal(signal());
+
+    expect(updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+  });
+
+  it('does not update when the session id is unchanged', () => {
+    monitor.recordHookSignal(signal({ sessionId: OLD_ID }));
+
+    expect(updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+    expect(onSessionIdUpdated).not.toHaveBeenCalled();
+  });
+
+  it('does nothing when no window matches', () => {
+    monitor.recordHookSignal(signal({ windowName: 'other' }));
+
+    expect(updateAgentSessionIdByWindow).not.toHaveBeenCalled();
+    expect(onSessionIdUpdated).not.toHaveBeenCalled();
+  });
+
+  it('calls onSessionIdUpdated and records the update in diagnostics', () => {
+    monitor.recordHookSignal(signal());
+
+    expect(onSessionIdUpdated).toHaveBeenCalledWith('local', 'azito:agent-1', 9, OLD_ID, NEW_ID, 'session');
+  });
+
+  it('updates through recordResolvedHookSignal (misao / muxPaneRef path) without changing hook state', () => {
+    monitor.recordResolvedHookSignal('local', 'azito:agent-1', 'session', NEW_ID);
+
+    expect(updateAgentSessionIdByWindow).toHaveBeenCalledWith('local', 'azito:agent-1', NEW_ID);
+    expect(onSessionIdUpdated).toHaveBeenCalledWith('local', 'azito:agent-1', 9, OLD_ID, NEW_ID, 'session');
+  });
+});
