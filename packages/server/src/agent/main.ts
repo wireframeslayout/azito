@@ -34,6 +34,7 @@ import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } f
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
 import { serializeRequestForLog } from '../shared/redactUrlSecrets';
 import { toHostProfile } from '../shared/os/hostProfile';
+import { runHostOf } from '../shared/exec/runCommandSpec';
 import { resolveLoginShell } from '../shared/os/loginShell';
 
 // ─── Environment validation ───
@@ -110,7 +111,7 @@ async function main(): Promise<void> {
 
   // Health endpoint (no auth) + tmux hook receiver + browser routes
   await app.register(agentRoutes, {
-    agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS, homeDir: hostEnv.homeDir, hostProfile: agentHostProfile,
+    agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress: BIND_ADDRESS, homeDir: hostEnv.homeDir, hostProfile: agentHostProfile, runHost: runHostOf(hostEnv),
   });
 
   // Auth hook for all routes except /health and /api/hooks/tmux (localhost-only)
@@ -121,7 +122,7 @@ async function main(): Promise<void> {
   const muxKind = 'tmux';
   const hookRt = resolveTmuxRuntime(muxRuntime, hostEnv.homeDir);
 
-  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv.homeDir, TaskTempFiles.fromHostEnv(hostEnv), agentHostProfile);
+  const agentTransport = new LocalTransport(hookRt, process.env.AZITO_URL ?? '', hostEnv, TaskTempFiles.fromHostEnv(hostEnv), agentHostProfile);
 
   // Files the hub has registered for tailing (`/ws?mode=file-tail` serves nothing else). The hub names them under /tmp for now.
   const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir], { logger: app.log });

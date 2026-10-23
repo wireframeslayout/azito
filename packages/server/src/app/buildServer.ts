@@ -603,7 +603,7 @@ export async function buildServer(app: FastifyInstance, wiring: Wiring, port: nu
     },
   });
   await app.register(windowsRoutes, {
-    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo,
+    windowRepo, projectRepo, taskRepo, tmux: tmuxClient, muxDriverRegistry, serverRepo, transportFactory,
     respawnService: windowRespawnService, sleepService: windowSleepService,
     sessionStrategyFactory, sessionCaptureService, supervisorRegistry,
     windowActivityStatusService, notificationBus, resourceGuard, harnessPrefix, invalidateSessionCache,

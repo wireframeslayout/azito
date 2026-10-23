@@ -4,7 +4,7 @@ import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import type { AgentBundler } from './AgentBundler';
 import { AgentTransport } from '../transport/AgentTransport';
-import { HOST_PROBE_COMMAND, HostProfileError, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
+import { HOST_PROBE_COMMAND, HostProfileError, assertPosixHost, parseHostProbe, type HostProfile } from '../../../shared/os/hostProfile';
 import { buildSha256VerifyCommand, buildSafeExtractCommand, readSha256FromSumsFile } from './integrityVerifier';
 
 export type InstallStep = 'preflight' | 'transfer' | 'start' | 'health' | 'misao';
@@ -167,9 +167,20 @@ export class AgentInstaller {
     }
   }
 
-  async update(sshHost: string, tailscaleIp: string, existingToken: string, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
+  /**
+   * Redeploys the agent over SSH with the Unix bootstrap (tar, nohup, systemd). A win32 agent (`hostProfile`; null = a Unix agent
+   * registered before the OS was recorded) is refused with the `unsupported_os` reason as the error, before anything is sent.
+   */
+  async update(sshHost: string, tailscaleIp: string, existingToken: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<{ success: boolean; version: string; error?: string }> {
     await this.bundler.ensureBuild();
     const version = this.bundler.getBundleHash();
+
+    try {
+      assertPosixHost(hostProfile, 'this agent server', 'updating the agent over SSH');
+    } catch (err) {
+      if (!(err instanceof HostProfileError)) throw err;
+      return { success: false, version, error: `${err.code}: ${err.message}` };
+    }
 
     try {
       await this.transferAndDeploy(sshHost, version);
@@ -392,7 +403,8 @@ export class AgentInstaller {
    * (e.g. SSH connection failure) — the caller is expected to catch and re-check health
    * afterward regardless of outcome.
    */
-  async recoverAgent(sshHost: string, tailscaleIp: string, token: string, muxRuntime?: string): Promise<'systemd' | 'nohup'> {
+  async recoverAgent(sshHost: string, tailscaleIp: string, token: string, hostProfile: HostProfile | null, muxRuntime?: string): Promise<'systemd' | 'nohup'> {
+    assertPosixHost(hostProfile, 'this agent server', 'restarting the agent over SSH');
     return this.startAgent(sshHost, tailscaleIp, token, muxRuntime);
   }
 

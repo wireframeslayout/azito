@@ -16,7 +16,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { parsePsOutput, argsContainSessionId } from '../transcripts/agentProcessDetection';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { assertDirectoryContained } from '../git/PathContainment';
-import { shellQuote } from '../../shared/shellQuote';
+import { shellDialectFor, type ShellDialect } from '../../shared/os/shellDialect';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -536,7 +536,7 @@ export class WindowRespawnService {
           // The caller (follow-up) will launch the agent itself.
           if (!win.paneLayout && resolvedCwds.singleCwd) {
             const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-            await restoreDriver.sendKeysToHandle(respawnServer, paneId, [`cd -- ${shellQuote(resolvedCwds.singleCwd)}`, 'Enter']);
+            await restoreDriver.sendKeysToHandle(respawnServer, paneId, [this.dialectOf(respawnServer).changeDirectory(resolvedCwds.singleCwd), 'Enter']);
           } else if (win.paneLayout) {
             // Multi-pane: restore layout and cds, but no agent commands.
             await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
@@ -931,6 +931,7 @@ export class WindowRespawnService {
         const sendCmd = isSupervised
           ? wrapWithSupervisor(resumeCommand, {
               server,
+              dialect: this.dialectOf(server),
               target: windowTarget,
               taskId: task.id,
               unitId: task.unitId ?? undefined,
@@ -1074,11 +1075,17 @@ export class WindowRespawnService {
     return { paneCwds: new Map(), singleCwd: null };
   }
 
+  /** The shell of the server's panes: what the lines typed into them are written in. */
+  private dialectOf(server: ServerConfig): ShellDialect {
+    return shellDialectFor(this.transportFactory.hostProfileFor(server));
+  }
+
   private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {
     if (!supervision.supervise) return cmd;
     this.supervisorRegistry.clearExitMarker(server.name, supervisorTarget);
     return wrapWithSupervisor(cmd, {
       server,
+      dialect: this.dialectOf(server),
       target: supervisorTarget,
       taskId: supervision.taskId ?? undefined,
       unitId: supervision.unitId ?? undefined,
@@ -1153,7 +1160,7 @@ export class WindowRespawnService {
       if (!paneId) continue;
       const cwd = paneCwds.get(pane.index);
       if (cwd) {
-        await driver.sendKeysToHandle(server, paneId, [`cd -- ${shellQuote(cwd)}`, 'Enter']);
+        await driver.sendKeysToHandle(server, paneId, [this.dialectOf(server).changeDirectory(cwd), 'Enter']);
         await sleep(300);
       }
 
@@ -1162,7 +1169,7 @@ export class WindowRespawnService {
         const sessionId = pane.agentSessionId || (pane.index === paneLayout.panes[0]?.index ? win.agentSessionId : null);
         if (workerType) {
           const strategy = this.sessionStrategyFactory.create(workerType);
-          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, blockMcp);
+          const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, this.dialectOf(server), blockMcp);
           if (cmd) {
             const sendCmd = this.wrapIfSupervised(cmd, server, baseTarget, supervision);
             await driver.sendKeysToHandle(server, paneId, [sendCmd, 'Enter']);
@@ -1183,7 +1190,7 @@ export class WindowRespawnService {
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     if (singleCwd) {
-      await driver.sendKeysToHandle(server, handle, [`cd -- ${shellQuote(singleCwd)}`, 'Enter']);
+      await driver.sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(singleCwd), 'Enter']);
       await sleep(300);
     }
 
@@ -1193,7 +1200,7 @@ export class WindowRespawnService {
         sessionId = await this.sessionCaptureService.tryScanForWindow(win.id);
       }
       const strategy = this.sessionStrategyFactory.create(win.workerType);
-      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, blockMcp);
+      const cmd = strategy.buildRespawnCommand(sessionId, win.workerModel, null, this.dialectOf(server), blockMcp);
       if (cmd) {
         const sendCmd = this.wrapIfSupervised(cmd, server, supervisorTarget, supervision);
         await driver.sendKeysToHandle(server, handle, [sendCmd, 'Enter']);

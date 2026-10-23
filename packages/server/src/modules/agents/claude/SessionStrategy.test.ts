@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { ClaudeSessionStrategy } from './SessionStrategy';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
+import { posixDialect } from '../../../shared/os/shellDialect';
 
 const SESSION_ID = '71f25140-240d-4720-a01c-3888b3732806';
 
@@ -20,25 +21,25 @@ describe('ClaudeSessionStrategy', () => {
   });
 
   it('builds the respawn command with --resume <id>', () => {
-    const cmd = strategy.buildRespawnCommand(SESSION_ID, 'claude-opus-4-6[1m]', null);
+    const cmd = strategy.buildRespawnCommand(SESSION_ID, 'claude-opus-4-6[1m]', null, posixDialect);
     expect(cmd).toContain(`--resume ${SESSION_ID}`);
     expect(cmd).not.toContain('--session-id');
   });
 
   it('includes --strict-mcp-config by default', () => {
-    const cmd = strategy.buildRespawnCommand(SESSION_ID, null, null);
+    const cmd = strategy.buildRespawnCommand(SESSION_ID, null, null, posixDialect);
     expect(cmd).toContain('--strict-mcp-config');
   });
 
   it('omits --strict-mcp-config when blockMcp is false (Issue #471)', () => {
-    const cmd = strategy.buildRespawnCommand(SESSION_ID, null, null, false);
+    const cmd = strategy.buildRespawnCommand(SESSION_ID, null, null, posixDialect, false);
     expect(cmd).not.toContain('--strict-mcp-config');
     expect(cmd).toContain(`--resume ${SESSION_ID}`);
     expect(cmd).toContain('--dangerously-skip-permissions');
   });
 
   it('omits --strict-mcp-config for fresh launch when blockMcp is false', () => {
-    const cmd = strategy.buildRespawnCommand(null, null, null, false);
+    const cmd = strategy.buildRespawnCommand(null, null, null, posixDialect, false);
     expect(cmd).not.toContain('--strict-mcp-config');
     expect(cmd).toBe('claude --dangerously-skip-permissions');
   });

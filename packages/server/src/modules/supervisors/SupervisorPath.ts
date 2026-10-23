@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { ServerConfig } from '../servers/Server';
-import { shellQuote } from '../../shared/shellQuote';
+import type { ShellDialect } from '../../shared/os/shellDialect';
 import { resolveRoot } from '../../shared/releaseInfo';
 
 const REPO_ROOT = resolveRoot();
@@ -63,20 +63,20 @@ const AGENT_SUPERVISOR_PATH = '~/.azito/agent/current/azito-supervisor.cjs';
  *
  * `repoRoot` is injectable for tests only; production callers use the default.
  */
-export function resolveSupervisorCommand(server: Pick<ServerConfig, 'type'>, repoRoot: string = REPO_ROOT): string {
+export function resolveSupervisorCommand(server: Pick<ServerConfig, 'type'>, dialect: ShellDialect, repoRoot: string = REPO_ROOT): string {
   if (server.type === 'local') {
     const releasePath = releaseSupervisorPath(repoRoot);
     if (fs.existsSync(releasePath)) {
       // Bundled node rather than the pane's `node`: a release install does not
       // require host Node.js, so the pane may have none on PATH.
-      return `${shellQuote(releaseNodePath(repoRoot))} ${shellQuote(releasePath)}`;
+      return `${dialect.quote(releaseNodePath(repoRoot))} ${dialect.quote(releasePath)}`;
     }
 
     const distPath = localSupervisorDistPath(repoRoot);
     if (fs.existsSync(distPath)) {
-      return `node ${shellQuote(distPath)}`;
+      return `node ${dialect.quote(distPath)}`;
     }
-    return `npx tsx ${shellQuote(localSupervisorSrcPath(repoRoot))}`;
+    return `npx tsx ${dialect.quote(localSupervisorSrcPath(repoRoot))}`;
   }
 
   if (server.type === 'agent') {

@@ -27,7 +27,7 @@ export async function openDoctorMux(hostEnv: HostEnv, taskTempFiles: TaskTempFil
   const { homeDir } = hostEnv;
   const hubHost = resolveHubHostProfile(hostEnv);
   const registry = new MuxDriverRegistry();
-  registry.register('tmux', new TmuxClient(new TransportFactory('', homeDir, taskTempFiles, hubHost), '', '', '', ''));
+  registry.register('tmux', new TmuxClient(new TransportFactory('', hostEnv, taskTempFiles, hubHost), '', '', '', ''));
 
   const configuredSocket = process.env.MISAO_SOCKET || readEnvValue(resolveServerEnvPath(), 'MISAO_SOCKET');
   const runtime = await resolveMisaoRuntimeForHub(

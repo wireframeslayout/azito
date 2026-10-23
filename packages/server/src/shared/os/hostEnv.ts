@@ -18,7 +18,12 @@ export interface HostEnv {
   execPath: string;
   /** このプロセスのユーザー ID（launchd のドメイン `gui/<uid>` / `user/<uid>` に使う）。Windows には無く、Node は -1 を返す。 */
   uid: number;
+  /** Windows の `%SystemRoot%`（`taskkill.exe` の絶対パスに使う）。Windows 以外、または未設定なら undefined。プロセスの入口で 1 回読み、使う側は `process.env` を読まない。 */
+  systemRoot: string | undefined;
 }
+
+/** ローカルのホスト（LocalTransport が使う分）。ハブ / agent の入口で解決した HostEnv から渡す。 */
+export type LocalHost = Pick<HostEnv, 'platform' | 'homeDir' | 'systemRoot'>;
 
 /** 純粋関数。homeDir / tmpDir が空のときだけ投げる（フォールバックしない）。 */
 export function resolveHostEnv(input: HostEnv): HostEnv {
@@ -28,7 +33,7 @@ export function resolveHostEnv(input: HostEnv): HostEnv {
   if (input.tmpDir === '') {
     throw new Error('Cannot resolve the temp directory: os.tmpdir() returned an empty string');
   }
-  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath, uid: input.uid };
+  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath, uid: input.uid, systemRoot: input.systemRoot };
 }
 
 /** 実プロセスから読む。`process.platform` を読んでよいのはここだけ。各プロセスの入口で 1 回呼ぶ。 */
@@ -41,5 +46,6 @@ export function resolveCurrentHostEnv(): HostEnv {
     execPath: process.execPath,
     // os.userInfo() throws when the uid has no passwd entry (docker run -u <uid>); only launchd needs the uid anyway.
     uid: typeof process.getuid === 'function' ? process.getuid() : -1,
+    systemRoot: process.env.SystemRoot,
   });
 }

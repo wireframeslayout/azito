@@ -8,12 +8,12 @@ import {
   buildCommandSpec,
   parseCommandSpec,
 } from './commandSpec';
-import { runCommandSpec } from './runCommandSpec';
+import { runCommandSpec, runHostOf } from './runCommandSpec';
 import type { CommandSpec } from './commandSpec';
 
 const isWindows = process.platform === 'win32';
 /** A short grace period, so a command that ignores the polite stop is killed within the test's patience. */
-const run = (spec: CommandSpec) => runCommandSpec(spec, { windows: isWindows, killGraceMs: 150 });
+const run = (spec: CommandSpec) => runCommandSpec(spec, { ...runHostOf({ platform: process.platform, systemRoot: process.env.SystemRoot }), killGraceMs: 150 });
 
 /** Settles within `ms` or fails the test: the point of these tests is that a call never hangs. */
 async function within<T>(ms: number, promise: Promise<T>): Promise<T> {
@@ -26,6 +26,15 @@ async function within<T>(ms: number, promise: Promise<T>): Promise<T> {
 function node(script: string, args: string[] = [], options: Parameters<typeof buildCommandSpec>[2] = {}) {
   return buildCommandSpec(process.execPath, ['-e', script, ...args], options);
 }
+
+describe('runHostOf', () => {
+  it('is a Windows host with the SystemRoot the entry resolved, and a Unix host otherwise', () => {
+    expect(runHostOf({ platform: 'win32', systemRoot: 'C:\\Windows' })).toEqual({ windows: true, systemRoot: 'C:\\Windows' });
+    expect(runHostOf({ platform: 'win32', systemRoot: undefined })).toEqual({ windows: true, systemRoot: undefined });
+    expect(runHostOf({ platform: 'linux', systemRoot: 'C:\\ignored' })).toEqual({ windows: false });
+    expect(runHostOf({ platform: 'darwin', systemRoot: undefined })).toEqual({ windows: false });
+  });
+});
 
 describe('runCommandSpec', () => {
   it('returns stdout and stderr with exit code 0', async () => {

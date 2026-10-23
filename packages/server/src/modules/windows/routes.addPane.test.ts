@@ -47,6 +47,7 @@ describe('POST /api/windows/:id/panes', () => {
       tmux: {} as TmuxClient,
       muxDriverRegistry: { resolve: () => driver } as never,
       serverRepo: { findByName: (name: string) => (name === server.name ? server : null) } as unknown as IServerRepository,
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService,
       sleepService: {} as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory,
@@ -134,6 +135,7 @@ describe('DELETE /api/windows/:id/panes/:ordinal', () => {
       projectRepo: {} as IProjectRepository, taskRepo: {} as ITaskRepository, tmux: {} as TmuxClient,
       muxDriverRegistry: { resolve: () => driver } as never,
       serverRepo: { findByName: () => server } as unknown as IServerRepository,
+      transportFactory: { hostProfileFor: () => null },
       respawnService: {} as WindowRespawnService, sleepService: {} as WindowSleepService,
       sessionStrategyFactory: {} as ISessionStrategyFactory, sessionCaptureService: {} as SessionCaptureService,
       supervisorRegistry: {} as SupervisorRegistry, windowActivityStatusService: {} as WindowActivityStatusService,
@@ -185,6 +187,7 @@ describe('windows change notification', () => {
     await app.register(windowsRoutes, {
       windowRepo: { findById: (id: number) => (id === 5 ? makeWindow() : undefined) } as unknown as IWindowRepository,
       projectRepo: {} as IProjectRepository, taskRepo: {} as ITaskRepository, tmux: {} as TmuxClient,
+      transportFactory: { hostProfileFor: () => null } as never,
       muxDriverRegistry: { resolve: () => driver } as never,
       serverRepo: { findByName: () => server } as unknown as IServerRepository,
       respawnService: {} as WindowRespawnService, sleepService: {} as WindowSleepService,

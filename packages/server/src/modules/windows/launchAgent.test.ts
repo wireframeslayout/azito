@@ -1,7 +1,7 @@
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import windowsRoutes from './routes';
+import windowsRoutes, { type WindowsRouteOptions } from './routes';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
 import type { TmuxClient } from '../tmux/TmuxClient';
@@ -168,6 +168,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
       projectRepo: {} as IProjectRepository,
       taskRepo: { findById: (id: number) => taskStore.get(id) ?? null } as unknown as ITaskRepository,
       tmux: mux as unknown as TmuxClient,
+      transportFactory: { hostProfileFor: () => null } as unknown as WindowsRouteOptions['transportFactory'],
       muxDriverRegistry: { resolve: () => mux } as any,
       serverRepo: serverRepo as IServerRepository,
       respawnService: respawnService as unknown as WindowRespawnService,

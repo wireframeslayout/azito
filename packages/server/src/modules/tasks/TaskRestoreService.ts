@@ -22,7 +22,7 @@ import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
-import { shellQuote } from '../../shared/shellQuote';
+import { shellDialectFor } from '../../shared/os/shellDialect';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
@@ -634,7 +634,7 @@ export class TaskRestoreService {
           // effectiveDir is a resolved (symlink-free) real path — must be
           // shell-quoted before being typed into the pane; see the matching
           // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [`cd -- ${shellQuote(effectiveDir)}`, 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [shellDialectFor(transportFactory.hostProfileFor(server)).changeDirectory(effectiveDir), 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);
@@ -660,7 +660,7 @@ export class TaskRestoreService {
         workerType: unit?.workerType ?? null,
         workerModel: unit?.workerModel ?? null,
         agentSessionId: null,
-        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs) : null,
+        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, shellDialectFor(transportFactory.hostProfileFor(server))) : null,
         workingDirectory: effectiveDir || null,
         paneLayout: null,
         sleeping: false,

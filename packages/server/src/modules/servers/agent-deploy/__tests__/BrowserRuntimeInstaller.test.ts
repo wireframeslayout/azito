@@ -5,17 +5,24 @@ import { promisify } from 'util';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import type { IServerTransport } from '../../transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport } from '../../transport/ServerTransport';
+import type { HostProfile } from '../../../../shared/os/hostProfile';
 
-function createMockTransport(responses: Record<string, { stdout: string; stderr?: string; code?: number }>): IServerTransport {
+/**
+ * `hostProfile` null is an agent from before the OS was recorded: the installer asks it with `uname -s`, answered here from the
+ * `'uname -s'` response. A recorded profile is read without a probe.
+ */
+function createMockTransport(responses: Record<string, { stdout: string; stderr?: string; code?: number }>, hostProfile: HostProfile | null = null): IServerTransport & IHostBoundTransport {
   return {
+    hostProfile,
+    run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: responses['uname -s']?.stdout ?? '', stderr: '' })),
     exec: vi.fn(async (cmd: string) => {
       for (const [key, value] of Object.entries(responses)) {
         if (cmd.includes(key)) return { stdout: value.stdout, stderr: value.stderr ?? '', code: value.code ?? 0 };
       }
       return { stdout: '', stderr: '', code: 0 };
     }),
-  } as unknown as IServerTransport;
+  } as unknown as IServerTransport & IHostBoundTransport;
 }
 
 describe('BrowserRuntimeInstaller', () => {
@@ -32,6 +39,25 @@ describe('BrowserRuntimeInstaller', () => {
     const result = await installer.install(transport);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Linux/macOS');
+  });
+
+  it('reads the OS from a recorded profile without probing', async () => {
+    const transport = createMockTransport({
+      'playwright@': { stdout: 'Downloading chromium\n' },
+      'chrome-mac*/*.app': { stdout: '/Users/user/Library/Caches/ms-playwright/chromium-1234/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing\n' },
+    }, { platform: 'darwin', arch: 'arm64' });
+    const result = await installer.install(transport);
+    expect(result.success).toBe(true);
+    expect(transport.run as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    const calls = (transport.exec as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0] as string);
+    expect(calls.some((c) => c.includes('uname'))).toBe(false);
+  });
+
+  it('refuses a win32 server with unsupported_os before running anything', async () => {
+    const transport = createMockTransport({}, { platform: 'win32', arch: 'x64' });
+    await expect(installer.install(transport)).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('installing the browser runtime') });
+    expect(transport.exec as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    expect(transport.run as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
   });
 
   it('installs chromium on macOS without font processing', async () => {

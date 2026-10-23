@@ -187,7 +187,7 @@ function makeDeps(overrides: Partial<TaskRestoreDeps> = {}): TaskRestoreDeps {
       })),
     } as unknown as TaskRestoreDeps['worktreeServiceFactory'],
     transportFactory: {
-      getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({})),
+      getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({})),
     } as unknown as TaskRestoreDeps['transportFactory'],
     contentExtractor: {
       extractPlan: vi.fn(async () => ({ planMarkdown: null })),
@@ -838,7 +838,7 @@ describe('TaskRestoreService', () => {
     // directories these tests use exist), so the check these tests don't otherwise care about doesn't throw.
     function agentTransportFactory(): TaskRestoreDeps['transportFactory'] {
       return {
-        getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+        getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({
                   })),
       } as unknown as TaskRestoreDeps['transportFactory'];
     }

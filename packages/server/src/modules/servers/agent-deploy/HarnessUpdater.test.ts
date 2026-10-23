@@ -254,6 +254,20 @@ describe('HarnessUpdater', () => {
     expect(results[0].name).toBe('agent-1');
   });
 
+  it('checkAllServers skips Windows agents in the auto-update, logs it and records the reason', async () => {
+    mocks.serverRepo.findAll.mockReturnValue([
+      makeServer({ name: 'win-agent', type: 'agent', hostProfile: { platform: 'win32', arch: 'x64' } }),
+      makeServer({ name: 'linux-agent', type: 'agent', sshHost: null, hostProfile: { platform: 'linux', arch: 'x64' } }),
+    ]);
+    const results = await updater.checkAllServers();
+    expect(results.map((r) => r.name)).toEqual(['win-agent', 'linux-agent']);
+    expect(results[0]).toMatchObject({ status: 'skipped', message: 'Windows agent: harness auto-update runs POSIX commands' });
+    expect(updater.getLastResult('win-agent')).toEqual(results[0]);
+    expect(mocks.sshClient.execIsolated).not.toHaveBeenCalled();
+    expect(mocks.harnessInstaller.install).not.toHaveBeenCalled();
+    expect(mocks.logger.info).toHaveBeenCalledWith(expect.stringContaining('win-agent: skipped'));
+  });
+
   it('parses shell-quoted AZITO_URL from azitoctl env', async () => {
     const srv = makeServer();
     mocks.serverRepo.findByName.mockReturnValue(srv);

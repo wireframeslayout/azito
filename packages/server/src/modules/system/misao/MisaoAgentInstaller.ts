@@ -8,7 +8,7 @@ import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MISAO_SYSTEMD_UNIT } from './misaoPaths';
-import { pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
+import { assertPosixHost, pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
 import { renderMisaoUnit } from './misaoUnit';
 
 /** What the installer needs of an agent: its shell, what it sees on disk, and a place to put release files. */
@@ -106,6 +106,7 @@ export class MisaoAgentInstaller {
   }
 
   async install(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
+    this.assertSupported(target);
     const bundle = this.requireBundle();
 
     onProgress('inspect');
@@ -150,6 +151,7 @@ export class MisaoAgentInstaller {
    * unit, starts the new one, and on failure puts the previous link and unit back and starts the previous release.
    */
   async update(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
+    this.assertSupported(target);
     const bundle = this.requireBundle();
 
     onProgress('inspect');
@@ -183,6 +185,11 @@ export class MisaoAgentInstaller {
     } catch (err) {
       return this.recoverFromFailedUpdate(err, target, host, root, socket, previous, bundle.version, status.installedVersion, live);
     }
+  }
+
+  /** The install is sh (chmod, mv, ln, systemd, nohup): a win32 agent is refused with `unsupported_os` (its install is a separate function, added with the Windows agent). */
+  private assertSupported(target: MisaoInstallTarget): void {
+    assertPosixHost(target.hostProfile, 'this agent server', 'installing misao');
   }
 
   private requireBundle(): MisaoBundle {

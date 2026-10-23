@@ -9,6 +9,7 @@ import {
   type CommandSpec,
 } from './commandSpec';
 import { trimIncompleteUtf8 } from './utf8';
+import type { HostEnv } from '../os/hostEnv';
 
 /**
  * `.cmd` / `.bat` are run by cmd.exe, and Node's `execFile` cannot start one without a shell (and starting one through a shell
@@ -22,12 +23,21 @@ export const DEFAULT_KILL_GRACE_MS = 2000;
 /** After the outright kill, how long to wait for the pipes to close before the call gives up on them and settles anyway. */
 const ABANDON_PIPES_MS = 1000;
 
-export interface RunCommandOptions {
-  /** The host is Windows: a command is stopped with `taskkill /T /F` (its whole tree), where Unix signals its process group. */
-  windows: boolean;
+/**
+ * The host the command runs on, resolved at the process's entry (`runHostOf(hostEnv)`): this module reads no `process.env`.
+ * On Windows a command is stopped with `taskkill /T /F` (its whole tree, by the absolute path under `systemRoot`; without
+ * one only the direct child is killed), where Unix signals its process group.
+ */
+export type RunHost = { windows: false } | { windows: true; systemRoot: string | undefined };
+
+export function runHostOf(hostEnv: Pick<HostEnv, 'platform' | 'systemRoot'>): RunHost {
+  return hostEnv.platform === 'win32' ? { windows: true, systemRoot: hostEnv.systemRoot } : { windows: false };
+}
+
+export type RunCommandOptions = RunHost & {
   /** Overrides {@link DEFAULT_KILL_GRACE_MS}. */
   killGraceMs?: number;
-}
+};
 
 /** One output stream, kept as bytes and cut at the byte limit (`exceeded`: more than the limit was written). */
 class Capture {
@@ -102,9 +112,8 @@ function reapGroup(child: ChildProcess, graceMs: number): void {
  * program of that name). Not when the direct child has already exited — its pid may belong to another process by now — and
  * a failed taskkill falls back to killing the direct child; both are reported.
  */
-function killWindowsTree(child: ChildProcess): void {
+function killWindowsTree(child: ChildProcess, systemRoot: string | undefined): void {
   if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
-  const systemRoot = process.env.SystemRoot;
   if (!systemRoot) {
     console.warn('[exec] SystemRoot is not set; killing only the direct child of a stopped command');
     child.kill();
@@ -178,7 +187,7 @@ export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): P
       if (stopReason) return;
       stopReason = reason;
       if (options.windows) {
-        killWindowsTree(child);
+        killWindowsTree(child, options.systemRoot);
       } else {
         signalGroup(child, 'SIGTERM');
         // Not one of `timers`: the call may settle (the leader closes) while members of the group are still running.

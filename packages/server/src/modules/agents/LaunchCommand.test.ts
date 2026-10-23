@@ -1,70 +1,82 @@
 import { describe, it, expect } from 'vitest';
 import { buildHeadlessLaunchCommand, buildWorkerLaunchCommand } from './LaunchCommand';
+import { posixDialect, powershellDialect } from '../../shared/os/shellDialect';
 
 describe('buildWorkerLaunchCommand', () => {
   it('builds claude command with no model or extra args', () => {
-    expect(buildWorkerLaunchCommand('claude', null, null)).toBe(
+    expect(buildWorkerLaunchCommand('claude', null, null, posixDialect)).toBe(
       'claude --dangerously-skip-permissions --strict-mcp-config',
     );
   });
 
   it('builds claude command with model', () => {
-    expect(buildWorkerLaunchCommand('claude', 'claude-opus-4-5', null)).toBe(
+    expect(buildWorkerLaunchCommand('claude', 'claude-opus-4-5', null, posixDialect)).toBe(
       "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-5'",
     );
   });
 
   it('single-quotes Claude 1M context model suffix to avoid shell glob expansion', () => {
-    const result = buildWorkerLaunchCommand('claude', 'claude-opus-4-6[1m]', null);
+    const result = buildWorkerLaunchCommand('claude', 'claude-opus-4-6[1m]', null, posixDialect);
     expect(result).toBe(
       "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-opus-4-6[1m]'",
     );
   });
 
   it('appends extraArgs after model flag (shell-quoted)', () => {
-    const result = buildWorkerLaunchCommand('claude', 'claude-sonnet-4-6', '--verbose');
+    const result = buildWorkerLaunchCommand('claude', 'claude-sonnet-4-6', '--verbose', posixDialect);
     expect(result).toBe(
       "claude --dangerously-skip-permissions --strict-mcp-config --model 'claude-sonnet-4-6' '--verbose'",
     );
   });
 
   it('trims whitespace from extraArgs', () => {
-    const result = buildWorkerLaunchCommand('claude', null, '  --verbose  ');
+    const result = buildWorkerLaunchCommand('claude', null, '  --verbose  ', posixDialect);
     expect(result).toBe("claude --dangerously-skip-permissions --strict-mcp-config '--verbose'");
   });
 
   it('builds codex command with model', () => {
-    expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null)).toBe(
+    expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null, posixDialect)).toBe(
       "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol'",
     );
   });
 
   it('builds codex command with no model', () => {
-    expect(buildWorkerLaunchCommand('codex', null, null)).toBe(
+    expect(buildWorkerLaunchCommand('codex', null, null, posixDialect)).toBe(
       'codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false',
     );
   });
 
   it('returns extraArgs as-is for generic type', () => {
-    expect(buildWorkerLaunchCommand('generic', null, 'my-custom-tool --flag')).toBe(
+    expect(buildWorkerLaunchCommand('generic', null, 'my-custom-tool --flag', posixDialect)).toBe(
       'my-custom-tool --flag',
     );
   });
 
   it('returns null for generic type with no extraArgs', () => {
-    expect(buildWorkerLaunchCommand('generic', null, null)).toBeNull();
+    expect(buildWorkerLaunchCommand('generic', null, null, posixDialect)).toBeNull();
   });
 
   it('returns null for null type with no extraArgs', () => {
-    expect(buildWorkerLaunchCommand(null, null, null)).toBeNull();
+    expect(buildWorkerLaunchCommand(null, null, null, posixDialect)).toBeNull();
   });
 
   it('returns extraArgs for unknown type', () => {
-    expect(buildWorkerLaunchCommand('unknown-tool', null, 'some-cmd')).toBe('some-cmd');
+    expect(buildWorkerLaunchCommand('unknown-tool', null, 'some-cmd', posixDialect)).toBe('some-cmd');
   });
 
   it('returns null for unknown type with empty extraArgs', () => {
-    expect(buildWorkerLaunchCommand('unknown-tool', null, '   ')).toBeNull();
+    expect(buildWorkerLaunchCommand('unknown-tool', null, '   ', posixDialect)).toBeNull();
+  });
+});
+
+describe('buildWorkerLaunchCommand for a PowerShell pane', () => {
+  it('quotes the model and extra arguments the PowerShell way', () => {
+    expect(buildWorkerLaunchCommand('claude', "o'brien", '--verbose', powershellDialect)).toBe(
+      "claude --dangerously-skip-permissions --strict-mcp-config --model 'o''brien' '--verbose'",
+    );
+    expect(buildWorkerLaunchCommand('codex', 'gpt-5.6-sol', null, powershellDialect)).toBe(
+      "codex --dangerously-bypass-approvals-and-sandbox -c mcp_servers.azt-mcp.enabled=false --model 'gpt-5.6-sol'",
+    );
   });
 });
 

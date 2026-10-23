@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { asPaneHandle } from '@azito/shared';
 import { TuiWorkerRuntime } from './TuiWorkerRuntime';
+import { posixDialect } from '../../../../shared/os/shellDialect';
 
 function makeRuntime(capturePaneResponses: string[]) {
   let callIndex = 0;
@@ -33,6 +34,7 @@ function makeLaunchCtx(tmux: any) {
     windowKind: 'tmux' as const,
     windowType: 'agent',
     workerExecutionMode: 'tmux-pipe' as const,
+    dialect: posixDialect,
   };
 }
 

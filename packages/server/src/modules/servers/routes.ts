@@ -35,6 +35,7 @@ import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort'
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
+import { assertPosixHost } from '../../shared/os/hostProfile';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
 import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
@@ -274,6 +275,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       } else {
         try {
           const result = await harnessInstaller.install(sshHost, {
+            hostProfile: transportFactory.hostProfileFor(srv),
             webhookToken,
             uiToken,
             serverName: srv.name,
@@ -922,7 +924,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const steps: HarnessInstallProgress[] = [];
       let result: HarnessInstallResult;
-      const installOptions = buildHarnessInstallOptions(srv, { webhookToken, uiToken, harnessPrefix }, { azitoUrl: azito_url, version: harnessHash });
+      const installOptions = buildHarnessInstallOptions(srv, transportFactory.hostProfileFor(srv), { webhookToken, uiToken, harnessPrefix }, { azitoUrl: azito_url, version: harnessHash });
 
       if (srv.type === 'local') {
         result = await harnessInstaller.installLocal(installOptions);
@@ -1314,6 +1316,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       const transport = transportFactory.getTransport(srv);
+      assertPosixHost(transport.hostProfile, `server "${srv.name}"`, 'applying the tmux config');
       const { buildApplyTmuxConfigCommands } = await import('./agent-deploy/TmuxInstaller.js');
       const commands = buildApplyTmuxConfigCommands('$HOME');
       for (const cmd of commands) {

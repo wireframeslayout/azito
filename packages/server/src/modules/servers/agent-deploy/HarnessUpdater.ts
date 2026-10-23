@@ -58,6 +58,18 @@ export class HarnessUpdater {
     const servers = this.serverRepo.findAll().filter((s) => s.type === 'agent');
     const results: HarnessUpdateResult[] = [];
     for (const server of servers) {
+      // The update reads and installs the harness with POSIX shell strings; a Windows agent cannot run them.
+      if (server.hostProfile?.platform === 'win32') {
+        this.logger.info(`${server.name}: skipped (Windows agent; the harness auto-update runs POSIX commands)`);
+        const r: HarnessUpdateResult = {
+          name: server.name, status: 'skipped',
+          message: 'Windows agent: harness auto-update runs POSIX commands',
+          at: new Date().toISOString(),
+        };
+        this.lastResults.set(server.name, r);
+        results.push(r);
+        continue;
+      }
       results.push(await this.checkAndUpdate(server));
     }
     return results;
@@ -122,7 +134,7 @@ export class HarnessUpdater {
         return r;
       }
 
-      const installOptions = buildHarnessInstallOptions(srv, this.options, {
+      const installOptions = buildHarnessInstallOptions(srv, srv.hostProfile, this.options, {
         azitoUrl,
         version: localHash,
       });

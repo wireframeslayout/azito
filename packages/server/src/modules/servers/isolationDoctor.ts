@@ -1,5 +1,6 @@
-import type { IServerTransport } from './transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport } from './transport/ServerTransport';
 import { shellQuote } from '../../shared/shellQuote';
+import { assertPosixHost } from '../../shared/os/hostProfile';
 import { isAzitoctlEnvFilename } from '../../shared/azitoctlEnv';
 import { extractClaudeMcpUiToken, hasCodexConfigUiToken } from '../../shared/mcpTokenStores';
 import type { HubCanary } from './hubCanary';
@@ -1283,7 +1284,9 @@ async function checkNoSshAgent(transport: IServerTransport): Promise<IsolationCh
   };
 }
 
-export async function runIsolationDoctor(transport: IServerTransport, hub: HubIdentity): Promise<IsolationDoctorResult> {
+export async function runIsolationDoctor(transport: IServerTransport & IHostBoundTransport, hub: HubIdentity): Promise<IsolationDoctorResult> {
+  // Every check is a POSIX shell probe (`command -v`, `find`, `stat`...): a win32 server is refused with `unsupported_os` (its own doctor is a separate function).
+  assertPosixHost(transport.hostProfile, 'this server', 'the isolation doctor');
   const checks = await Promise.all([
     checkFsAndHostBoundary(transport, hub),
     checkNoPrivateKeys(transport),

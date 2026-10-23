@@ -143,8 +143,8 @@ function defaultProjectServerRepo(): Pick<IProjectServerRepository, 'find' | 'fi
   return { find: vi.fn(() => null), findByProject: vi.fn(() => []) };
 }
 
-function defaultTransportFactory(): Pick<TransportFactory, 'getTransport' | 'getFileOps'> {
-  return { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps'>;
+function defaultTransportFactory(): Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'> {
+  return { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
 }
 
 // resolveExecutionManifest() (Issue #328 fifth-round review) needs a
@@ -162,7 +162,7 @@ function buildService(opts: {
   unit?: Unit | null;
   projectServerRepo?: Pick<IProjectServerRepository, 'find' | 'findByProject'>;
   projectRepo?: Pick<IProjectRepository, 'findById'>;
-  transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps'>;
+  transportFactory?: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
 }) {
   const windowRepo: IWindowRepository = {
     add: vi.fn(() => 1),
@@ -1012,8 +1012,8 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     return { find: vi.fn(() => row), findByProject: vi.fn(() => [row]) };
   }
 
-  function makeTransportFactory(): Pick<TransportFactory, 'getTransport' | 'getFileOps'> {
-    return { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps'>;
+  function makeTransportFactory(): Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'> {
+    return { getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null) } as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
   }
 
   beforeEach(() => {
@@ -2073,9 +2073,10 @@ function buildServiceWithProcessDetection(opts: {
     ? vi.fn(async () => { throw new Error('ps failed'); })
     : vi.fn(async () => ({ stdout: opts.psOutput ?? '', stderr: '', code: 0 }));
 
-  const transportFactory: Pick<TransportFactory, 'getTransport' | 'getFileOps'> = {
+  const transportFactory: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'> = {
     getTransport: vi.fn(() => ({ exec })) as any,
     getFileOps: vi.fn(() => hostFiles),
+    hostProfileFor: vi.fn(() => null),
   };
 
   const result = buildService({

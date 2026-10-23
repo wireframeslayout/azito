@@ -7,6 +7,7 @@ import { HOOK_EVENTS } from '../modules/tmux/tmuxHooks';
 import { HostProfileError, assertPosixHost, type HostProfile } from '../shared/os/hostProfile';
 import { commandSpecSchema } from '../shared/exec/commandSpec';
 import { AGENT_RUN_PATH, runToResponse } from '../shared/exec/runWire';
+import type { RunHost } from '../shared/exec/runCommandSpec';
 import type { BrowserSessionManager } from '../modules/browser/BrowserSessionManager';
 import { openBrowserTab } from '../modules/browser/openBrowserTab';
 
@@ -25,6 +26,8 @@ export interface AgentRoutesOptions {
   homeDir: string;
   /** The OS / architecture of this agent's host, resolved once at startup. */
   hostProfile: HostProfile;
+  /** How a command is stopped on this host (`runHostOf(hostEnv)`), resolved once at startup. */
+  runHost: RunHost;
 }
 
 function execCommand(command: string, timeoutMs: number): Promise<{ stdout: string; stderr: string; code: number }> {
@@ -69,7 +72,7 @@ function execMuxCommand(req: { kind: string; args?: string[]; method?: string; p
 const VALID_HOOK_EVENTS = new Set<string>(HOOK_EVENTS);
 
 const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, done) => {
-  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress, homeDir, hostProfile } = opts;
+  const { agentVersion, startedAt, agentEventBus, browserSessionManager, bindAddress, homeDir, hostProfile, runHost } = opts;
 
   // ── GET /health (no auth required — registered before auth hook) ──
   fastify.get('/health', async () => {
@@ -98,7 +101,7 @@ const agentRoutes: FastifyPluginCallback<AgentRoutesOptions> = (fastify, opts, d
     if (!parsed.success) {
       return reply.status(400).send({ error: 'invalid_command_spec', issues: parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`) });
     }
-    return runToResponse(parsed.data, { windows: hostProfile.platform === 'win32' });
+    return runToResponse(parsed.data, runHost);
   });
 
   // ── POST /api/tmux (compatibility wrapper) ──

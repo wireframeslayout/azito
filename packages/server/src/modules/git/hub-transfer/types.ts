@@ -1,6 +1,6 @@
 import type { CanonicalRepositoryIdentity } from '../resolveCanonicalRepositoryIdentity';
 import type { ServerConfig } from '../../servers/Server';
-import type { IServerTransport } from '../../servers/transport/ServerTransport';
+import type { IHostBoundTransport, IServerTransport } from '../../servers/transport/ServerTransport';
 import type { ProjectRepositoryWithToken } from '../../projects/Project';
 
 // ── Distribution state (Phase 1) ──
@@ -52,7 +52,7 @@ export interface IDistributionStateRepository {
 
 export interface FetchDistributionParams {
   server: ServerConfig;
-  transport: IServerTransport;
+  transport: IServerTransport & IHostBoundTransport;
   repoIdentity: CanonicalRepositoryIdentity;
   token: string;
   branch: string;
@@ -101,7 +101,7 @@ export interface PushNotaryParams {
   taskId: number;
   unitId: number;
   server: ServerConfig;
-  transport: IServerTransport;
+  transport: IServerTransport & IHostBoundTransport;
   worktreePath: string;
   branch: string;
   baseBranch: string | null;

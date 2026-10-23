@@ -5,6 +5,7 @@ import type { WorkerExecutionMode } from '../../../units/Unit';
 import type { IPaneStream } from '../../../tmux/PaneStream';
 import type { AgentTurn } from '../../turns/AgentTurn';
 import type { PhaseSignalCapability } from '../../../prompt/executionEnvelope';
+import type { ShellDialect } from '../../../../shared/os/shellDialect';
 
 export interface WorkerLaunchContext {
   server: ServerConfig;
@@ -19,6 +20,8 @@ export interface WorkerLaunchContext {
   windowType: string;
   workerExecutionMode: WorkerExecutionMode;
   effectiveLaunchCommand: string;
+  /** The shell of the launched pane (the target host's), for the supervisor wrapper. */
+  dialect: ShellDialect;
 }
 
 export interface WorkerContext {

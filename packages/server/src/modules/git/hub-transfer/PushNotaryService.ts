@@ -21,6 +21,11 @@ export class PushNotaryService {
 
   async notarize(params: PushNotaryParams): Promise<PushNotaryResult> {
     const { server, transport, worktreePath, branch, baseBranch, repo, token } = params;
+    try {
+      this.remoteBundleOps.assertSupported(transport);
+    } catch (err) {
+      return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+    }
     const sshHost = server.sshHost;
     if (!sshHost) {
       return { status: 'failed', error: 'Server has no sshHost configured for SFTP transfer' };

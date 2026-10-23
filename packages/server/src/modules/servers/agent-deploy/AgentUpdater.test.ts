@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import { AgentUpdater } from './AgentUpdater';
 import type { ServerConfig } from '../Server';
 
@@ -125,7 +126,7 @@ describe('AgentUpdater', () => {
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
-    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', 'system');
+    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', null, 'system');
     expect(result.status).toBe('up_to_date');
     expect(result.currentVersion).toBe(sha);
 
@@ -147,7 +148,7 @@ describe('AgentUpdater', () => {
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
-    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', 'system');
+    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', null, 'system');
     expect(result.status).toBe('error');
     expect(result.message).toContain('unreachable');
     expect(result.message).toContain('SSH 経由の復旧も失敗');
@@ -172,12 +173,29 @@ describe('AgentUpdater', () => {
     await vi.runAllTimersAsync();
     const result = await resultPromise;
 
-    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', 'system');
+    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', null, 'system');
     expect(result.status).toBe('error');
     expect(result.message).toContain('SSH 経由の復旧も失敗');
 
     vi.unstubAllGlobals();
     vi.useRealTimers();
+  });
+
+  it('reports the unsupported_os reason when the SSH restart of a Windows agent is refused', async () => {
+    const mocks = makeMocks('new-sha');
+    mocks.installer.recoverAgent.mockRejectedValue(new HostProfileError('unsupported_os', 'restarting the agent over SSH is a POSIX shell script'));
+    const updater = new AgentUpdater(
+      mocks.bundler as any, mocks.installer as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+    );
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
+
+    const result = await updater.checkAndUpdate(makeServer({ hostProfile: { platform: 'win32', arch: 'x64' } }));
+
+    expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', { platform: 'win32', arch: 'x64' }, 'system');
+    expect(result.status).toBe('error');
+    expect(result.message).toContain('unsupported_os: restarting the agent over SSH');
+    vi.unstubAllGlobals();
   });
 
   it('returns up_to_date when versions match', async () => {
@@ -307,7 +325,7 @@ describe('AgentUpdater', () => {
 
     const result = await updater.checkAndUpdate(makeServer());
     expect(result.status).toBe('updated');
-    expect(mocks.installer.update).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', 'system');
+    expect(mocks.installer.update).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', null, 'system');
     expect(mocks.serverRepo.updateAgentVersion).toHaveBeenCalledWith('test-server', 'new-sha');
 
     vi.unstubAllGlobals();

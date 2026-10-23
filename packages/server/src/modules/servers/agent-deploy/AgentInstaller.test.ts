@@ -145,7 +145,7 @@ describe('AgentInstaller', () => {
   it('never stops, restarts or reconfigures the misao daemon when the agent is updated', async () => {
     const misao = okMisao();
     const { installer, commands } = make(misao);
-    const result = await installer.update('user@host', '100.64.0.9', 'tok', 'system');
+    const result = await installer.update('user@host', '100.64.0.9', 'tok', null, 'system');
     expect(result).toEqual({ success: true, version: VERSION });
     expect(misao.install).not.toHaveBeenCalled();
     // The agent is stopped and started by its own unit and process name; the daemon has its own unit and a different process.
@@ -153,6 +153,14 @@ describe('AgentInstaller', () => {
     expect(text).not.toMatch(/azito-misao/);
     expect(text).not.toMatch(/pkill[^\n]*misao/);
     expect(text).toContain('pkill -f azito-agent.cjs');
+  });
+
+  it('refuses to update a win32 agent with the Unix bootstrap, with the unsupported_os reason and nothing sent', async () => {
+    const { installer, commands } = make(okMisao());
+    const result = await installer.update('user@host', '100.64.0.9', 'tok', { platform: 'win32', arch: 'x64' }, 'system');
+    expect(result.success).toBe(false);
+    expect(result.error).toMatch(/^unsupported_os: .*updating the agent over SSH/);
+    expect(commands).toEqual([]);
   });
 
   describe('host OS / architecture preflight', () => {

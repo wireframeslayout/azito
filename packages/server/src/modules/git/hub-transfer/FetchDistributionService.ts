@@ -225,6 +225,12 @@ export class FetchDistributionService {
   async distribute(params: FetchDistributionParams): Promise<FetchDistributionResult> {
     const { server, transport, repoIdentity } = params;
 
+    try {
+      this.remoteBundleOps.assertSupported(transport);
+    } catch (err) {
+      return { status: 'failed', error: err instanceof Error ? err.message : String(err) };
+    }
+
     // #124 Bug 5: isolated servers MUST have a hub git identity configured.
     // Without it, commits use the server's local default (whoami@hostname),
     // leaking internal hostnames into public repository history.

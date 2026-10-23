@@ -3,12 +3,13 @@ import { EventEmitter } from 'node:events';
 import Fastify, { type FastifyInstance } from 'fastify';
 import agentRoutes from './routes';
 import type { HostProfile } from '../shared/os/hostProfile';
+import { runHostOf } from '../shared/exec/runCommandSpec';
 
 async function build(hostProfile: HostProfile): Promise<FastifyInstance> {
   const app = Fastify();
   await app.register(agentRoutes, {
     agentVersion: 'v', startedAt: Date.now(), agentEventBus: new EventEmitter(), browserSessionManager: {} as never,
-    bindAddress: '127.0.0.1', homeDir: '/home/u', hostProfile,
+    bindAddress: '127.0.0.1', homeDir: '/home/u', hostProfile, runHost: runHostOf({ platform: hostProfile.platform, systemRoot: undefined }),
   });
   await app.ready();
   return app;

@@ -2,6 +2,7 @@ import type { ISessionStrategy } from '../SessionStrategy';
 import type { ServerConfig } from '../../servers/Server';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import { buildListCandidatesWithMeta, normalizePath, parseCandidates } from '../sessionScanUtils';
+import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildCodexLaunchCommand, buildCodexRespawnCommand } from './launchCommand';
 
 export class CodexSessionStrategy implements ISessionStrategy {
@@ -23,11 +24,11 @@ export class CodexSessionStrategy implements ISessionStrategy {
     return `resume ${sessionId}`;
   }
 
-  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, blockMcp = true): string | null {
+  buildRespawnCommand(agentSessionId: string | null, model: string | null, extraArgs: string | null, dialect: ShellDialect, blockMcp = true): string | null {
     if (agentSessionId) {
-      return buildCodexRespawnCommand(agentSessionId, { model, extraArgs, blockMcp });
+      return buildCodexRespawnCommand(agentSessionId, { model, extraArgs, blockMcp, dialect });
     }
-    return buildCodexLaunchCommand({ model, extraArgs, blockMcp });
+    return buildCodexLaunchCommand({ model, extraArgs, blockMcp, dialect });
   }
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {

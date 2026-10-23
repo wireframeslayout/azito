@@ -260,7 +260,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const muxDriverRegistry = new MuxDriverRegistry();
   const taskTempFiles = TaskTempFiles.fromHostEnv(hostEnv);
   taskTempFiles.assertHubDirShellSafe();
-  const transportFactory = new TransportFactory(publicUrl, hostEnv.homeDir, taskTempFiles, hubHost);
+  const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
   muxDriverRegistry.register('tmux', tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();

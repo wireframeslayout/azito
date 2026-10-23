@@ -30,6 +30,15 @@ export async function resolveOsName(transport: Pick<IServerTransport, 'run'>, ho
   return (await probeOutput(transport, 'uname', ['-s'])).trim();
 }
 
+/**
+ * `uname -m` as the architecture name the managed tmux binaries are keyed by (`x86_64` / `aarch64`), for a host with a
+ * recorded profile — no probe. A host with no recorded profile is asked, like {@link resolveOsName}.
+ */
+export async function resolveArchName(transport: Pick<IServerTransport, 'run'>, hostProfile: HostProfile | null): Promise<string> {
+  if (hostProfile) return hostProfile.arch === 'arm64' ? 'aarch64' : 'x86_64';
+  return (await probeOutput(transport, 'uname', ['-m'])).trim();
+}
+
 function osNameOf(hostProfile: HostProfile): string {
   switch (hostProfile.platform) {
     case 'darwin': return 'Darwin';
