@@ -8,7 +8,7 @@ import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { NotificationBus } from '../notifications/NotificationBus';
 import type { AgentActivityStopReason } from '../notifications/NotificationEvent';
 import { classifyPaneState, CLASSIFIABLE_AGENT_TYPES, type PaneAgentState } from './paneStateClassifier';
-import { windowKey, asPaneHandle, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef, type MuxDriverKind } from '@azito/shared';
+import { windowKey, asPaneHandle, isSameWindowTarget, muxRefFromTmuxTarget, type PaneOrdinal, type MuxWorkspace, type MuxRef, type MuxDriverKind } from '@azito/shared';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { resolveInterval } from '../../shared/testIntervals';
@@ -202,8 +202,10 @@ export interface AgentHookSignal {
   windowIndex: number;
   windowName: string;
   paneIndex: number;
-  event: 'start' | 'stop';
+  event: 'start' | 'stop' | 'session';
   muxPaneRef?: string;
+  /** Claude Code session id from the hook's stdin; updates the agent window's agent_session_id when it changed. */
+  sessionId?: string;
 }
 
 interface HookState {
@@ -429,6 +431,14 @@ interface ActivityDecision {
   refinedBy?: ActivityRefinedBy;
 }
 
+/** A hook-driven change of a window's agent_session_id (`from` is null when none was recorded). */
+export interface SessionUpdate {
+  from: string | null;
+  to: string;
+  at: number;
+  event: AgentHookSignal['event'];
+}
+
 /** One key's read-only diagnostic view — see AgentActivityMonitor.diagnostics(). */
 export interface ActivityDiagnosticEntry {
   serverName: string;
@@ -462,6 +472,8 @@ export interface ActivityDiagnosticEntry {
   hook?: { lastSignalAt: number; lastEvent: 'start' | 'stop'; matchedBy?: 'muxPaneRef' | 'windowSpec' };
   /** The mux's last reported agent state; `decidedBy` is the mux's own rule name (e.g. misao's exit / title / bytes / a profile). */
   mux?: { status: MuxAgentStatus; decidedBy?: string; at: number };
+  /** The last agent_session_id update a hook signal caused for this key. */
+  sessionUpdate?: SessionUpdate;
   probe?: {
     status: 'working' | 'idle' | 'offline';
     tailState?: string;
@@ -679,6 +691,8 @@ export class AgentActivityMonitor {
 
   private hookMatchedBy = new Map<string, 'muxPaneRef' | 'windowSpec'>();
 
+  private sessionUpdates = new Map<string, SessionUpdate>();
+
   // Last MuxDriverUnavailableError reason logged per server, so a server whose driver is
   // unavailable is reported once (and again only if the reason changes) instead of every tick.
   private unavailableDriverReasons = new Map<string, string>();
@@ -695,6 +709,7 @@ export class AgentActivityMonitor {
     private processProbe?: ProcessActivityProbe,
     private onActivityDetected?: (serverName: string, target: string) => void,
     private paneHandleResolver?: PaneHandleResolver,
+    private onSessionIdUpdated?: (serverName: string, target: string, windowId: number, from: string | null, to: string, event: AgentHookSignal['event']) => void,
   ) {}
 
   start(): void {
@@ -743,6 +758,7 @@ export class AgentActivityMonitor {
         heldForStopHook: decision.heldForStopHook,
         hook: hook ? { lastSignalAt: hook.at, lastEvent: hook.status === 'running' ? 'start' as const : 'stop' as const, matchedBy: this.hookMatchedBy.get(key) } : undefined,
         mux: mux ? { status: mux.status, decidedBy: mux.decidedBy, at: mux.at } : undefined,
+        sessionUpdate: this.sessionUpdates.get(key),
         probe: probe
           ? {
             status: probe.status,
@@ -779,7 +795,7 @@ export class AgentActivityMonitor {
     if (signal.muxPaneRef && this.paneHandleResolver) {
       const resolved = this.paneHandleResolver.getCached(signal.serverName, asPaneHandle(signal.muxPaneRef));
       if (resolved) {
-        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event);
+        this.recordResolvedHookSignal(signal.serverName, resolved.tmuxTarget, signal.event, signal.sessionId);
         return;
       }
       if (resolved === undefined) {
@@ -799,6 +815,9 @@ export class AgentActivityMonitor {
       const paneIndex = extractPaneIndex(windowSpec, signal.windowIndex, signal.windowName);
       if (paneIndex !== null && paneIndex !== signal.paneIndex) continue;
 
+      this.updateAgentSessionId(w, signal.sessionId, signal.event);
+      if (signal.event === 'session') continue;
+
       const key = windowKey(w.serverName, w.tmuxTarget);
       this.hookStates.set(key, { status, at });
       this.hookMatchedBy.set(key, 'windowSpec');
@@ -811,11 +830,27 @@ export class AgentActivityMonitor {
    * Record a Tier 1 hook signal for a window the caller already resolved
    * (by mux pane handle), then tick immediately.
    */
-  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event']): void {
-    const key = windowKey(serverName, tmuxTarget);
-    this.hookStates.set(key, { status: event === 'start' ? 'running' : 'idle', at: Date.now() });
-    this.hookMatchedBy.set(key, 'muxPaneRef');
+  recordResolvedHookSignal(serverName: string, tmuxTarget: string, event: AgentHookSignal['event'], sessionId?: string): void {
+    if (sessionId) {
+      const target = this.windowRepo.findAll().find(
+        (w) => w.serverName === serverName && isSameWindowTarget(w.tmuxTarget, tmuxTarget) && isAgentWindow(w),
+      );
+      if (target && isAgentWindow(target)) this.updateAgentSessionId(target, sessionId, event);
+    }
+    if (event !== 'session') {
+      const key = windowKey(serverName, tmuxTarget);
+      this.hookStates.set(key, { status: event === 'start' ? 'running' : 'idle', at: Date.now() });
+      this.hookMatchedBy.set(key, 'muxPaneRef');
+    }
     this.requestTick();
+  }
+
+  /** Persist a changed Claude Code session id on an agent window so a respawn `--resume`s the live session. */
+  private updateAgentSessionId(w: AgentWindow, sessionId: string | undefined, event: AgentHookSignal['event']): void {
+    if (!sessionId || w.agentSessionId === sessionId) return;
+    this.windowRepo.updateAgentSessionIdByWindow(w.serverName, w.tmuxTarget, sessionId);
+    this.sessionUpdates.set(windowKey(w.serverName, w.tmuxTarget), { from: w.agentSessionId, to: sessionId, at: Date.now(), event });
+    this.onSessionIdUpdated?.(w.serverName, w.tmuxTarget, w.id, w.agentSessionId, sessionId, event);
   }
 
   /**
