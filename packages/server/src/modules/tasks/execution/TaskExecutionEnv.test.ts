@@ -6,6 +6,7 @@ import type { ProjectDetail } from '../../projects/Project';
 function makeProjectServerRepo(overrides: Partial<IProjectServerRepository> = {}): IProjectServerRepository {
   return {
     findByProject: vi.fn(() => []),
+    findByProjects: vi.fn(() => new Map()),
     findByServer: vi.fn(() => []),
     find: vi.fn(() => null),
     upsert: vi.fn(),

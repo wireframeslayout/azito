@@ -44,10 +44,16 @@ export function muxKindAvailability(state: MuxAvailabilityState): MuxAvailabilit
   return map;
 }
 
-/** The kind a new window starts on: the server's default, or the other one when the default is down. */
+/**
+ * The kind a new window starts on: the server's default when this server offers it and it is up, else the first offered
+ * kind that is up. A default the server does not offer (a Windows agent with a stored tmux default) is never used: only
+ * an offered kind is returned, so a hidden select cannot send a kind the host does not have.
+ */
 export function initialMuxKind(defaultMux: MuxDriverKind, availability: MuxAvailabilityMap, kinds: readonly MuxDriverKind[]): MuxDriverKind {
-  if (availability[defaultMux].ok) return defaultMux;
-  return kinds.find((kind) => availability[kind].ok) ?? defaultMux;
+  if (kinds.includes(defaultMux) && availability[defaultMux].ok) return defaultMux;
+  const usable = kinds.find((kind) => availability[kind].ok);
+  if (usable) return usable;
+  return kinds.includes(defaultMux) ? defaultMux : kinds[0];
 }
 
 /** The kind to create the window in: the user's pick while it is still usable, else the initial one. `choice` is null until the user picks. */

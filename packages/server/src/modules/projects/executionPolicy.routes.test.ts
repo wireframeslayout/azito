@@ -54,6 +54,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     },
     projectServerRepo: {
       findByProject: vi.fn(() => []),
+      findByProjects: vi.fn(() => new Map()),
       findByServer: vi.fn(() => []),
       find: vi.fn(() => null),
       upsert: vi.fn(),
@@ -229,6 +230,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
     const opts = makeOpts({
       projectServerRepo: {
         findByProject: vi.fn(() => []),
+        findByProjects: vi.fn(() => new Map()),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
           projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
@@ -259,6 +261,7 @@ describe('PUT /api/projects/:id/servers/:serverName — input_policy (Issue #328
     const opts = makeOpts({
       projectServerRepo: {
         findByProject: vi.fn(() => []),
+        findByProjects: vi.fn(() => new Map()),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
           projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null,
@@ -416,6 +419,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribute_code (Issue #
     const opts = makeOpts({
       projectServerRepo: {
         findByProject: vi.fn(() => []),
+        findByProjects: vi.fn(() => new Map()),
         findByServer: vi.fn(() => []),
         find: vi.fn(() => ({
           projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: null,
@@ -612,6 +616,7 @@ describe('PUT /api/projects/:id/servers/:serverName — distribution_repository_
     const opts = optsWithProjectRepositories([{ id: 5, name: 'widgets', url: 'https://github.com/acme/widgets', provider: 'github', owner: 'acme', repoName: 'widgets', hasToken: true }]);
     opts.projectServerRepo = {
       findByProject: vi.fn(() => []),
+      findByProjects: vi.fn(() => new Map()),
       findByServer: vi.fn(() => []),
       find: vi.fn(() => ({
         projectId: 10, serverName: 'test-server', workingDirectory: '/srv/repo', branch: 'main', tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: true, distributionRepositoryId: 5,

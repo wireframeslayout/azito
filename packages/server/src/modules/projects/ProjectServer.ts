@@ -47,6 +47,8 @@ export type UpsertProjectServerInput = ProjectServer;
 
 export interface IProjectServerRepository {
   findByProject(projectId: number): ProjectServer[];
+  /** The servers of several projects in one query, grouped by project id (a project with none is absent). */
+  findByProjects(projectIds: readonly number[]): Map<number, ProjectServer[]>;
   findByServer(serverName: string): ProjectServer[];
   find(projectId: number, serverName: string): ProjectServer | null;
   upsert(data: UpsertProjectServerInput): void;

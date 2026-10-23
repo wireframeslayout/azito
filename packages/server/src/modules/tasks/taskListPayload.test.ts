@@ -61,7 +61,7 @@ function makeOpts(tasks: Task[], findByTaskIds = vi.fn(() => new Map()), project
       findByTaskIds,
     },
     projectServerRepo: {
-      findByProject: vi.fn(() => projectServers.map((serverName) => ({ serverName }))),
+      findByProjects: vi.fn((ids: number[]) => new Map(ids.map((id) => [id, projectServers.map((serverName) => ({ serverName }))]))),
     },
   } as unknown as TasksRouteOptions;
 }
@@ -136,13 +136,14 @@ describe('GET /api/tasks executionServerName', () => {
     expect(((await none.inject({ method: 'GET', url: '/api/tasks' })).json() as Record<string, unknown>[])[0].executionServerName).toBeNull();
   });
 
-  it('looks a project\'s servers up once for all its tasks', async () => {
-    const tasks = [1, 2, 3].map((id) => ({ ...makeTask(id), serverName: null }) as unknown as Task);
+  it('looks the servers of all projects up in one query, however many projects and tasks', async () => {
+    const tasks = [1, 2, 3, 4].map((id) => ({ ...makeTask(id), projectId: id % 2 ? 10 : 11, serverName: null }) as unknown as Task);
     const opts = makeOpts(tasks, undefined, ['win-box']);
     const app = Fastify();
     await app.register(tasksRoutes, opts);
     await app.inject({ method: 'GET', url: '/api/tasks' });
-    expect(opts.projectServerRepo.findByProject).toHaveBeenCalledTimes(1);
+    expect(opts.projectServerRepo.findByProjects).toHaveBeenCalledTimes(1);
+    expect(opts.projectServerRepo.findByProjects).toHaveBeenCalledWith([10, 11]);
   });
 });
 

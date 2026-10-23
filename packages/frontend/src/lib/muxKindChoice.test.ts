@@ -64,6 +64,23 @@ describe('initial and effective kind', () => {
     expect(effectiveMuxKind(null, 'misao', allOk, kinds)).toBe('misao');
   });
 
+  it('never starts on a default the server does not offer (a Windows agent with a stored tmux default)', () => {
+    const win32 = { platform: 'win32' as const };
+    const winKinds = ['misao'] as const;
+    expect(initialMuxKind('tmux', allOk, winKinds)).toBe('misao');
+    expect(initialMuxKind('tmux', misaoDown, winKinds)).toBe('misao');
+    for (const state of [{ status: 'loading' } as const, ready(), { status: 'error' } as const]) {
+      const model = muxKindSelectModel({ type: 'agent', defaultMux: 'tmux', hostProfile: win32 }, state, null);
+      expect(model.value).toBe('misao');
+      expect(model.visible).toBe(false);
+    }
+    expect(muxKindSelectModel({ type: 'agent', defaultMux: 'tmux', hostProfile: win32 }, ready(), 'tmux').value).toBe('misao');
+  });
+
+  it('keeps tmux for a Linux agent whose default is tmux', () => {
+    expect(muxKindSelectModel({ type: 'agent', defaultMux: 'tmux', hostProfile: { platform: 'linux' } }, ready(), null).value).toBe('tmux');
+  });
+
   it('ignores a pick the server does not offer', () => {
     expect(effectiveMuxKind('misao', 'tmux', allOk, ['tmux'])).toBe('tmux');
   });

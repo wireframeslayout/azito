@@ -54,6 +54,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     },
     projectServerRepo: {
       findByProject: vi.fn(() => []),
+      findByProjects: vi.fn(() => new Map()),
       findByServer: vi.fn(() => []),
       find: vi.fn(() => null),
       upsert: vi.fn(),

@@ -39,6 +39,17 @@ export class SqliteProjectServerRepository implements IProjectServerRepository {
     return (this.findByProjectStmt.all(projectId) as ProjectServerRow[]).map(this.toEntity);
   }
 
+  findByProjects(projectIds: readonly number[]): Map<number, ProjectServer[]> {
+    const grouped = new Map<number, ProjectServer[]>();
+    if (projectIds.length === 0) return grouped;
+    const rows = this.db.prepare(`SELECT * FROM project_servers WHERE project_id IN (${projectIds.map(() => '?').join(',')})`).all(...projectIds) as ProjectServerRow[];
+    for (const row of rows) {
+      const entity = this.toEntity(row);
+      grouped.set(entity.projectId, [...(grouped.get(entity.projectId) ?? []), entity]);
+    }
+    return grouped;
+  }
+
   findByServer(serverName: string): ProjectServer[] {
     return (this.findByServerStmt.all(serverName) as ProjectServerRow[]).map(this.toEntity);
   }

@@ -59,6 +59,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     },
     projectServerRepo: {
       findByProject: vi.fn(() => []),
+      findByProjects: vi.fn(() => new Map()),
       findByServer: vi.fn(() => []),
       find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: null, tmuxSession: '', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),

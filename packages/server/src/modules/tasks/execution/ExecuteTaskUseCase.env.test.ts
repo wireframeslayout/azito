@@ -322,6 +322,7 @@ function buildUseCase(opts: {
 
   const projectServerRepo: IProjectServerRepository = {
     findByProject: vi.fn(() => (opts.projectServersList ?? (opts.projectServer ? [{ projectId: 1, serverName: 'local-server', ...opts.projectServer }] : [])).map((ps) => ({ inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null, ...ps }))),
+    findByProjects: vi.fn(() => new Map()),
     findByServer: vi.fn(() => []),
     find: vi.fn(() => (opts.projectServer ? { projectId: 1, serverName: 'local-server', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null, ...opts.projectServer } : null)),
     upsert: vi.fn(),
@@ -1543,6 +1544,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     };
     const projectServerRepo: IProjectServerRepository = {
       findByProject: vi.fn(() => [{ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null }]),
+      findByProjects: vi.fn(() => new Map()),
       findByServer: vi.fn(() => []),
       find: vi.fn(() => ({ projectId: 1, serverName: 'local-server', workingDirectory: '/work', branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       upsert: vi.fn(),
@@ -2725,6 +2727,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
     };
     const projectServerRepo: IProjectServerRepository = {
       findByProject: vi.fn(() => []),
+      findByProjects: vi.fn(() => new Map()),
       findByServer: vi.fn(() => []),
       find: vi.fn(() => null),
       upsert: vi.fn(),

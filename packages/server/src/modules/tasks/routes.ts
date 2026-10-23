@@ -237,17 +237,11 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       tasks = taskRepo.findAll();
     }
     const windowsByTask = windowRepo.findByTaskIds(tasks.map((t) => t.id));
-    // Where each task would run (the resolved server, not only its own override): the UI judges host features by it. One lookup per project.
-    const projectServerNames = new Map<number, string[]>();
-    const executionServerOf = (t: Task): string | null => {
-      if (t.serverName) return t.serverName;
-      let names = projectServerNames.get(t.projectId);
-      if (!names) {
-        names = projectServerRepo.findByProject(t.projectId).map((s) => s.serverName);
-        projectServerNames.set(t.projectId, names);
-      }
-      return pickTaskExecutionServer(null, names);
-    };
+    // Where each task would run (the resolved server, not only its own override): the UI judges host features by it. One query for all projects.
+    const needingProjectServers = [...new Set(tasks.filter((t) => !t.serverName).map((t) => t.projectId))];
+    const projectServers = projectServerRepo.findByProjects(needingProjectServers);
+    const executionServerOf = (t: Task): string | null =>
+      t.serverName || pickTaskExecutionServer(null, (projectServers.get(t.projectId) ?? []).map((s) => s.serverName));
     return tasks.map((t) => toListItem(t, windowsByTask.get(t.id) ?? [], executionServerOf(t)));
   });
 

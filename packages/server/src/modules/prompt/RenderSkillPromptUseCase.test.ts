@@ -196,6 +196,7 @@ function makeRepos(overrides: {
 
   const projectServerRepo: IProjectServerRepository = {
     findByProject: vi.fn(() => []),
+    findByProjects: vi.fn(() => new Map()),
     findByServer: vi.fn(() => []),
     find: vi.fn(() => ({ projectId: 10, serverName: 'local', workingDirectory: '/work', branch: 'feat', tmuxSession: 'sess', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
     upsert: vi.fn(),
