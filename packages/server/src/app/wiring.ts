@@ -253,7 +253,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(hostEnv.homeDir, fingerprintStore);
-  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()));
+  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);

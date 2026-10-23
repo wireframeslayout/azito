@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import { EventEmitter } from 'node:events';
 import { execFile, execFileSync } from 'child_process';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { resolveCurrentHostEnv, type HostEnv } from '../shared/os/hostEnv';
 import { resolveTmuxRuntime } from '../modules/servers/transport/TmuxRuntime';
@@ -31,7 +32,8 @@ import transcriptRoutes from './transcriptRoutes';
 import { agentAuthHook } from './authHook';
 import { processExists, readWindowsProcessCreation, startParentWatch } from './parentWatch';
 import { TRANSCRIPT_READERS } from '../modules/transcripts/sources/registry';
-import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
+import { resolveAgentMisaoSocket, type AgentMisaoHost, type AgentMisaoSocket, type AgentMisaoWindowsHost } from '../modules/servers/transport/agentMisaoSocket';
+import { MISAO_WINDOWS_DIR, parseHomeRelativeDir } from '../modules/servers/agent-deploy/windowsAgentConfig';
 import { buildServicePath } from '../modules/system/misao/misaoPaths';
 import { serializeRequestForLog } from '../shared/redactUrlSecrets';
 import { toHostProfile } from '../shared/os/hostProfile';
@@ -94,14 +96,29 @@ function resolveVersion(): string {
 }
 const agentVersion = resolveVersion();
 
+/**
+ * What a Windows agent adds to its misao report: where the system programs are, the account name (the named pipe is named
+ * after it) and the misao folder, `<home>\<AZITO_MISAO_DIR>` (the default unless the hub's settings file names another one for a
+ * trial). A Windows process without `%SystemRoot%` is refused: the install would have no `conhost.exe` to name.
+ */
+function describeWindowsMisaoHost(hostEnv: HostEnv): AgentMisaoWindowsHost {
+  if (!hostEnv.systemRoot) throw new Error('%SystemRoot% is not set, so the agent cannot tell the hub where the Windows programs are');
+  return {
+    systemRoot: hostEnv.systemRoot,
+    userName: os.userInfo().username,
+    misaoRoot: path.win32.join(hostEnv.homeDir, parseHomeRelativeDir(process.env.AZITO_MISAO_DIR || MISAO_WINDOWS_DIR, 'AZITO_MISAO_DIR')),
+  };
+}
+
 /** What the hub's misao installer needs to know about this host: its OS / architecture (to pick the binary), the node this agent runs on, and its PATH. */
-function describeMisaoHost(hostEnv: HostEnv): AgentMisaoHost {
+function describeMisaoHost(hostEnv: HostEnv, windows: AgentMisaoWindowsHost | undefined): AgentMisaoHost {
   return {
     homeDir: hostEnv.homeDir,
     nodePath: hostEnv.execPath,
     servicePath: buildServicePath(process.env, hostEnv.homeDir, fs.existsSync),
     platform: hostEnv.platform,
     arch: hostEnv.arch,
+    ...(windows ? { windows } : {}),
   };
 }
 
@@ -125,8 +142,8 @@ async function main(): Promise<void> {
       ...(logFile ? { file: logFile } : {}),
     },
   });
-  // tmux and misao (a unix-socket daemon) do not exist on Windows yet: the agent runs without a pane server there (misao on Windows is #369 A3).
-  const hasPaneServer = hostEnv.platform !== 'win32';
+  // tmux does not exist on Windows: the agent runs without it there. The pane server of a Windows host is misao (a named pipe).
+  const hasTmux = hostEnv.platform !== 'win32';
   const agentEventBus = new EventEmitter();
   const browserSessionManager = new BrowserSessionManager(
     path.resolve(hostEnv.homeDir, '.azito', 'browser-profile'),
@@ -153,24 +170,23 @@ async function main(): Promise<void> {
   const managedStreamFiles = new ManagedStreamFiles(['/tmp', hostEnv.tmpDir], { logger: app.log });
   await app.register(paneStreamRoutes, { managed: managedStreamFiles });
 
-  // The misao daemon's socket is fixed here, at startup, from the agent's own environment. A setting that cannot be a
-  // socket path disables the relay (tmux keeps working) rather than stopping the agent.
+  // The misao daemon's socket (a named pipe on Windows) is fixed here, at startup, from the agent's own environment. A setting that
+  // cannot be a socket path disables the relay (tmux keeps working) rather than stopping the agent.
+  let windowsMisao: AgentMisaoWindowsHost | undefined;
   let misaoSocket: AgentMisaoSocket | null = null;
-  if (hasPaneServer) {
-    try {
-      misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir);
-    } catch (err) {
-      app.log.warn(`misao relay disabled: ${(err as Error).message}`);
-    }
-  } else {
-    app.log.info(`misao relay disabled: no misao on ${hostEnv.platform} hosts yet`);
+  try {
+    if (hostEnv.platform === 'win32') windowsMisao = describeWindowsMisaoHost(hostEnv);
+    misaoSocket = resolveAgentMisaoSocket(process.env, hostEnv.homeDir, windowsMisao);
+  } catch (err) {
+    app.log.warn(`misao relay disabled: ${(err as Error).message}`);
   }
+  const misaoHost = describeMisaoHost(hostEnv, windowsMisao);
   const relayMisao = createMisaoRelay(misaoSocket, app.log);
 
   // Registered after the auth hook above, so it is covered by it like every other /api route.
-  await app.register(misaoRoutes, { socket: misaoSocket, host: describeMisaoHost(hostEnv) });
-  // The host's own report (OS, architecture, default shell) for the hub, behind the same token check.
-  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: resolveLoginShell(process.env) } });
+  await app.register(misaoRoutes, { socket: misaoSocket, host: misaoHost });
+  // The host's own report (OS, architecture, default shell) for the hub, behind the same token check. A Windows host's default shell is its command interpreter (%ComSpec%), the one misao itself starts without a setting.
+  await app.register(hostRoutes, { host: { platform: hostEnv.platform, arch: hostEnv.arch, shell: hostEnv.platform === 'win32' ? process.env.ComSpec || null : resolveLoginShell(process.env) } });
   // File operations on this host (list / read / write / create / remove / rename / realpath / which), the hub's files API for an agent server.
   await app.register(fileOpsRoutes, { ops: new LocalFileOps(localFileOpsHost(hostEnv)) });
 
@@ -289,7 +305,7 @@ async function main(): Promise<void> {
       hookInstallInterval = null;
     }
     await browserSessionManager.stopAll();
-    for (const event of hasPaneServer ? hookEvents : []) {
+    for (const event of hasTmux ? hookEvents : []) {
       await new Promise<void>((resolve) => {
         execFile(hookRt.bin, [...hookRt.baseArgs, ...buildHookUnsetArgs(event)], { timeout: 5000 }, () => resolve());
       });
@@ -322,10 +338,11 @@ async function main(): Promise<void> {
   // parent is gone it shuts down. Only when asked: a `node azito-agent.cjs` started by hand has no such setting.
   if (hostEnv.platform === 'win32' && process.env.AZITO_AGENT_EXIT_WITH_PARENT === '1') {
     const systemRoot = hostEnv.systemRoot;
-    // The parent's creation time is read once now and again every 30 s, so that a process id handed to another process after the
-    // parent ended is noticed (the 3 s probe alone would take it for the parent). If it cannot be read, only the existence of
-    // the pid is watched: then the worst case is an agent that stays up (the hub's stop sweeps it), never one that ends early.
-    void startParentWatch({
+    // The 3 s probe starts at once. The parent's creation time is read in the background and again every 30 s, so that a process id
+    // handed to another process after the parent ended is noticed (the probe alone would take it for the parent). If it cannot be
+    // read, only the existence of the pid is watched (said once): then the worst case is an agent that stays up (the hub's stop
+    // sweeps it), never one that ends early.
+    startParentWatch({
       pid: process.ppid,
       aliveIntervalMs: PARENT_WATCH_INTERVAL_MS,
       verifyIntervalMs: PARENT_VERIFY_INTERVAL_MS,
@@ -333,6 +350,7 @@ async function main(): Promise<void> {
       readCreation: (pid) => (systemRoot ? readWindowsProcessCreation(systemRoot, pid) : Promise.resolve(null)),
       onGone: shutdown,
       onUnverifiable: (message) => app.log.warn(message),
+      onVerifiable: (message) => app.log.info(message),
     });
   }
 
@@ -357,7 +375,7 @@ async function main(): Promise<void> {
     }
   };
 
-  if (hasPaneServer) {
+  if (hasTmux) {
     installTmuxHooks();
     hookInstallInterval = setInterval(installTmuxHooks, 60000);
   } else {

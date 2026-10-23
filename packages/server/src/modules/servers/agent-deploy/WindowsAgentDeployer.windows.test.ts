@@ -23,7 +23,7 @@ import type { WindowsAgentOptions } from './windowsAgentConfig';
  * be removed the suite FAILS.
  */
 const SUFFIX = crypto.randomBytes(4).toString('hex');
-const OPTIONS: WindowsAgentOptions = { taskName: `AzitoCiAgent-${SUFFIX}`, dir: `azito-ci-${SUFFIX}`, port: 0 };
+const OPTIONS: WindowsAgentOptions = { taskName: `AzitoCiAgent-${SUFFIX}`, dir: `azito-ci-${SUFFIX}`, port: 0, misaoTaskName: `AzitoCiMisao-${SUFFIX}`, misaoDir: `azito-ci-misao-${SUFFIX}` };
 const BIND = '127.0.0.1';
 const NO_INTERACTIVE_LOGON = new Set([0x8004130f, 0x80070520]);
 const FIREWALL_RULE_PREFIX = `AZITO CI ${SUFFIX}`;
@@ -297,7 +297,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(fs.existsSync(layout.tarball)).toBe(false);
       expect(fs.existsSync(layout.extractDir)).toBe(false);
       expect(fs.existsSync(layout.taskXml)).toBe(false);
-      expect(fs.readFileSync(layout.envFile, 'utf8')).toBe(`AZITO_AGENT_TOKEN="${input.token}"\nAZITO_AGENT_BIND="${BIND}"\nPORT="${OPTIONS.port}"\nAZITO_AGENT_LOG_FILE="${layout.logFile}"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\n`);
+      expect(fs.readFileSync(layout.envFile, 'utf8')).toBe(`AZITO_AGENT_TOKEN="${input.token}"\nAZITO_AGENT_BIND="${BIND}"\nPORT="${OPTIONS.port}"\nAZITO_AGENT_LOG_FILE="${layout.logFile}"\nAZITO_AGENT_EXIT_WITH_PARENT="1"\nAZITO_MISAO_DIR="${OPTIONS.misaoDir}"\n`);
       // The previous (broad) file is kept aside until the deploy is committed; the live one and its folder are owner-only.
       expect(fs.readFileSync(layout.envFilePrev, 'utf8')).toContain('old-token');
       for (const [target, kind] of [[layout.envFile, 'file'], [layout.root, 'dir']] as const) expect(await ownerOnly(target, kind)).toBe(true);
@@ -336,7 +336,7 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       try {
         const logFile = path.join(odd, 'agent.log');
         const file = path.join(odd, 'agent.env');
-        fs.writeFileSync(file, buildAgentEnvFile({ token: 't', bindAddress: BIND, port: 1234, logFile }));
+        fs.writeFileSync(file, buildAgentEnvFile({ token: 't', bindAddress: BIND, port: 1234, logFile, misaoDir: '.azito\\misao' }));
         const out = await new Promise<string>((resolve, reject) => {
           const child = spawn(process.execPath, [`--env-file=${file}`, '-e', 'process.stdout.write(process.env.AZITO_AGENT_LOG_FILE)'], { stdio: ['ignore', 'pipe', 'inherit'] });
           let text = '';

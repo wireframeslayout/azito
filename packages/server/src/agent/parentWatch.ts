@@ -5,11 +5,14 @@ import * as path from 'path';
  * Follows a parent process: `onGone` is called once when it is not there any more.
  *
  * Two checks, because a process id can be handed to another process once the first one has ended:
- * - every `aliveIntervalMs`, `isAlive(pid)` (a signal-0 probe: cheap). Only a pid nobody holds any more fails it.
- * - every `verifyIntervalMs`, the parent's creation time is read again and compared with the one remembered at the start. A different
- *   one means the pid now belongs to another process, so the parent is gone. Reading it starts a program, so it is done rarely;
- *   until it runs, a reused pid keeps the agent alive for at most `verifyIntervalMs` more. An unreadable time is "not known", never "gone".
- * When the creation time cannot be read at the start there is nothing to compare: only the first check runs.
+ * - every `aliveIntervalMs`, `isAlive(pid)` (a signal-0 probe: cheap). Only a pid nobody holds any more fails it. It starts at
+ *   once; it does not wait for the creation time to be read (reading it starts a program and can take a while).
+ * - the parent's creation time, read once at the start and again every `verifyIntervalMs`, and compared with the first one
+ *   that could be read. A different one means the pid now belongs to another process, so the parent is gone. Until it is
+ *   known, a reused pid is not noticed: if the parent ends and its pid is reused before the first read worked, the new process's time
+ *   becomes the reference and the agent stays up as long as that process does. An unreadable time is "not known", never "gone".
+ * When reading it fails `UNREADABLE_WARN_AFTER` times in a row, `onUnverifiable` is called once (only the pid is being
+ * watched); when a read works again, `onVerifiable` is, and a later streak of failures warns again.
  */
 export interface ParentWatchOptions {
   pid: number;
@@ -20,18 +23,23 @@ export interface ParentWatchOptions {
   readCreation: (pid: number) => Promise<string | null>;
   onGone: (reason: string) => void;
   onUnverifiable?: (message: string) => void;
+  onVerifiable?: (message: string) => void;
 }
 
 export interface ParentWatch {
   stop(): void;
 }
 
-export async function startParentWatch(options: ParentWatchOptions): Promise<ParentWatch> {
-  const { pid } = options;
-  const original = await options.readCreation(pid);
-  if (original === null) options.onUnverifiable?.(`the creation time of the parent process ${pid} cannot be read: only its existence is watched`);
+const UNREADABLE_WARN_AFTER = 3;
 
+export function startParentWatch(options: ParentWatchOptions): ParentWatch {
+  const { pid } = options;
+  let original: string | null = null;
+  let unreadable = 0;
+  let warned = false;
   let gone = false;
+  let sampling = false;
+
   const finish = (reason: string): void => {
     if (gone) return;
     gone = true;
@@ -39,19 +47,36 @@ export async function startParentWatch(options: ParentWatchOptions): Promise<Par
     clearInterval(verifyTimer);
     options.onGone(reason);
   };
+  const sample = (): void => {
+    if (sampling || gone) return;
+    sampling = true;
+    options.readCreation(pid).then((current) => {
+      if (gone) return;
+      if (current === null) {
+        unreadable += 1;
+        if (unreadable >= UNREADABLE_WARN_AFTER && !warned) {
+          warned = true;
+          options.onUnverifiable?.(`the creation time of the parent process ${pid} cannot be read: only its existence is watched`);
+        }
+        return;
+      }
+      unreadable = 0;
+      if (warned) {
+        warned = false;
+        options.onVerifiable?.(`the creation time of the parent process ${pid} can be read again`);
+      }
+      if (original === null) original = current;
+      else if (current !== original) finish(`process id ${pid} now belongs to another process (the parent is gone)`);
+    }).finally(() => { sampling = false; });
+  };
+
   const aliveTimer = setInterval(() => {
     if (!options.isAlive(pid)) finish(`parent process ${pid} is gone`);
   }, options.aliveIntervalMs);
-  let verifying = false;
-  const verifyTimer = setInterval(() => {
-    if (original === null || verifying || gone) return;
-    verifying = true;
-    options.readCreation(pid).then((current) => {
-      if (current !== null && current !== original) finish(`process id ${pid} now belongs to another process (the parent is gone)`);
-    }).finally(() => { verifying = false; });
-  }, options.verifyIntervalMs);
+  const verifyTimer = setInterval(sample, options.verifyIntervalMs);
   aliveTimer.unref();
   verifyTimer.unref();
+  sample();
   return { stop: () => { gone = true; clearInterval(aliveTimer); clearInterval(verifyTimer); } };
 }
 

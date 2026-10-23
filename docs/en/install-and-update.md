@@ -358,7 +358,7 @@ To update manually, use Servers → target server → Setup → Agent Server →
 
 ## Adding a Windows host as an agent
 
-Servers → Add → Agent works for a Windows host over SSH. The agent runs, but **misao and tmux are not installed on Windows yet** (#369 A3), so the server has no pane server and the install reports the `unsupported_os` reason for misao beside a successful install. File, git and task features on Windows come with #370 / #371; updating and removing a Windows agent comes with #372 (a Windows agent is reinstalled from the Setup row, which replaces it in place).
+Servers → Add → Agent works for a Windows host over SSH. The bundled **misao** is installed after the agent (the Task Scheduler task `AzitoMisao`; see `misao.md`). Windows has no tmux, so misao is the only pane server and the default mux of a new server is misao. If only misao fails, the agent stays installed and the reason is reported as `misaoError` beside the successful install. Windows panes are cmd.exe; launching a worker (claude / codex) is #371. File, git and task features on Windows come with #370 / #371; updating and removing a Windows agent comes with #372 (a Windows agent is reinstalled from the Setup row, which replaces it in place).
 
 Prepare the Windows host:
 

@@ -114,7 +114,27 @@ macOS arm64 / x86_64）に合うものを送ります。合うものが無いホ
 （同梱するバイナリとは別の話です）。
 `~/.azito/misao/<version>/` に、`current` -> `<version>` で配置し、systemd のユーザー unit `azito-misao`（`KillMode=process`）として起動します。
 ユーザー systemd が無いホスト（macOS では常に）では、環境を空にしたバックグラウンドプロセスで起動します（再起動をまたいでは残りません）。
-Node.js も node-pty も使いません。Windows 版は同梱のみで、導入は Windows のハブ / エージェント対応で入ります。それまでは Windows のエージェントは `unsupported_os` で断り、Windows のハブでは misao の状態が `unsupported_platform`、install / update は `not_managed` で失敗します。リリースのビルドにはこの zip を展開する `unzip` コマンドが必要です。
+Node.js も node-pty も使いません。Windows のハブへの導入は Windows のハブ対応で入ります（それまで Windows のハブでは misao の状態が `unsupported_platform`、install / update は `not_managed` で失敗します）。リリースのビルドにはこの zip を展開する `unzip` コマンドが必要です。Windows のエージェントへの導入は次の節です。
+
+#### Windows のエージェントへの導入
+
+Windows のエージェント（`x86_64-pc-windows-msvc`）には、同じくエージェント経由（`PUT /api/misao/upload`。ファイル名は `misao.exe`）で送り、sha256 を両端で照合して
+`%USERPROFILE%\.azito\misao\<version>\` に置きます。シンボリックリンクは使わず、現在の版は **`<root>\current`（版を書いたファイル）** と、**タスクの定義に書いた `misao.exe` の絶対パス**で表します。
+`<root>` は所有者だけのフォルダーにします（A2 と同じ ACL の仕組み）。ホスト上の作業は、エージェントの `/api/run` で動かす PowerShell（`-EncodedCommand`）と `schtasks.exe`、
+ファイル API だけです（sh は使いません）。
+
+- **常駐**は、タスクスケジューラのタスク `AzitoMisao`（ログオン時に起動）です。実行内容は `conhost.exe --headless cmd.exe /d /c ""<root>\<version>\misao.exe" serve --socket "<pipe>" --data "<root>" >> "<root>\misao.log" 2>&1"`
+  で、窓が出ず、ログ（misao 自身にはログのファイルを指定する引数が無い）は `cmd.exe` が追記します。作業ディレクトリはユーザーのホームフォルダーです（ペインがリリースのフォルダー内で始まって削除を妨げないように）。
+  失敗（非ゼロ終了）のときだけ 1 分後に再起動し、`misao stop`（終了コード 0）では再起動しません。ログオフ中はタスクが動かないので、デーモンも動きません。
+- **接続口**は名前付きパイプ `\\.\pipe\misao-<ユーザー>-<sha256(<root> の小文字)の先頭 16 桁>` です（`MISAO_DIR=<root>` のときに SDK の `resolveSocketPath` が返す名前と同じ。テストが照合します）。
+  エージェントは起動時に 1 回だけこれを決め、`MISAO_SOCKET` にパイプの名前が入っていればそれを使います。リレー（`/ws?mode=misao`）と `GET /api/misao/status` / `PUT /api/misao/upload` は Windows でも有効です。
+  `socketPresent` は「パイプに接続できる」で、パイプはサーバーの終了とともに消えるので「デーモンが動いている」と同じです。
+- `install()` の約束は Unix と同じです。**動いているデーモンを止めも切り替えもしません**（古い版が動いていれば新しい版を横に置くだけで、`updateAvailable` で伝えます。AZITO が入れたものではないデーモンは断ります）。何も動いていなければ起動します。
+- `update()`（`POST /api/servers/:name/update-misao`）は、前の版の `misao.exe stop`（パイプ経由。デーモンはペインを閉じてから終了コード 0 で終わります）→ `current` とタスクの切り替え → 起動、の順です。
+  止まらなければ、タスクの End と、`--socket <パイプ>` を引数に持つこのユーザーの `misao.exe` の掃除を行い、それでも止まらなければ何も変えずに失敗します。切り替えで失敗したら、前の `current` とタスクの定義を戻し、前の版を起動します（Unix と同じ約束）。
+- **ペイン**は、エージェントが報告する `%ComSpec%`（cmd.exe。misao 自身の既定と同じ）で、コマンドを付けずに開きます。ワーカーの起動行（claude / codex）を載せた窓は #371 の範囲で、今は `unsupported_os` です。
+- 試験用に、タスク名とフォルダーは環境変数 `AZITO_WIN_MISAO_TASK_NAME` / `AZITO_WIN_MISAO_DIR`（ハブ側。A2 の `AZITO_WIN_AGENT_*` と同じ仕組み）で変えられます。フォルダーはエージェントの設定ファイルの `AZITO_MISAO_DIR` に書かれます（既定以外のときだけ）。
+- ログイン中のユーザーが居ないホスト（ログオンセッションが無い）では、タスクが起動せず（最後の結果が `0x8004130f`）、導入は `daemon_not_ready` で失敗して、作ったタスクと `current` を取り除きます。
 
 - エージェントサーバーの追加（自動インストール）では、エージェントのあとに misao を入れます。tmux が無いホストも preflight で止まらなくなり、
   その場合は既定の mux が misao になります。misao だけが失敗しても、エージェントは導入済みのまま、レスポンスの `misaoError` で伝えます。

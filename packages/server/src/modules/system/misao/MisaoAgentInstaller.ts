@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import type { AgentMisaoHost, MisaoSocketStatus } from '../../servers/transport/agentMisaoSocket';
 import { agentMisaoManagedSocket, agentMisaoRoot, MISAO_RELEASE_FILE_NAMES } from '../../servers/transport/agentMisaoSocket';
-import type { AgentTransport } from '../../servers/transport/AgentTransport';
 import { shellQuote } from '../../../shared/shellQuote';
 import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
@@ -10,30 +9,20 @@ import { MisaoServiceError } from './MisaoServiceError';
 import { MISAO_SYSTEMD_UNIT } from './misaoPaths';
 import { assertPosixHost, HostProfileError, pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
 import { renderMisaoUnit } from './misaoUnit';
+import { MisaoWindowsInstaller } from './MisaoWindowsInstaller';
+import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
-/** What the installer needs of an agent: its shell, what it sees on disk, and a place to put release files. */
-export type MisaoInstallTarget = Pick<AgentTransport, 'exec' | 'fetchMisaoStatus' | 'uploadMisaoFile' | 'hostProfile'>;
-
-export type MisaoAgentStartMethod = 'systemd' | 'nohup' | 'running';
-
-/** What the installer is doing, in order. A code (not a sentence) so each reader can say it in its own language. `stop` is only part of an update. */
-export type MisaoInstallStep = 'inspect' | 'transfer' | 'prepare' | 'stop' | 'start';
-
-export interface MisaoAgentInstallResult {
-  /** The release this install put on the host (the bundled one). */
-  version: string;
-  /** The release the daemon runs: the one that was already running, when it is not the bundled one. */
-  runningVersion: string;
-  startMethod: MisaoAgentStartMethod;
-  /** A daemon of an older release was running and is left alone: switching it closes every pane (an explicit update). */
-  updateAvailable: boolean;
-}
+export type { MisaoAgentInstallResult, MisaoAgentStartMethod, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
 export interface MisaoAgentInstallerOptions {
   /** How long a started daemon gets to open its socket (and a stopped one to close it). */
   readyTimeoutMs?: number;
   /** Pause between two socket checks. */
   pollIntervalMs?: number;
+  /** The Task Scheduler task of the misao on a Windows agent (the hub's settings; a trial's own). A Windows agent is refused without it. */
+  windowsTaskName?: string;
+  /** How long a stopped Windows daemon's task gets to leave the running state before it is ended. */
+  taskIdleTimeoutMs?: number;
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
@@ -94,6 +83,8 @@ function describeError(err: unknown): string {
  * error type) are the same code.
  */
 export class MisaoAgentInstaller {
+  private windowsInstaller: MisaoWindowsInstaller | undefined;
+
   constructor(
     /** Null for a hub that carries no misao (a source checkout, or a release without one). */
     private readonly bundle: MisaoBundle | null,
@@ -106,8 +97,9 @@ export class MisaoAgentInstaller {
   }
 
   async install(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
-    this.assertSupported(target);
     const bundle = this.requireBundle();
+    if (target.hostProfile?.platform === 'win32') return this.windows().install(target, bundle, onProgress);
+    this.assertSupported(target);
 
     onProgress('inspect');
     const status = await this.inspect(target);
@@ -151,8 +143,9 @@ export class MisaoAgentInstaller {
    * unit, starts the new one, and on failure puts the previous link and unit back and starts the previous release.
    */
   async update(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
-    this.assertSupported(target);
     const bundle = this.requireBundle();
+    if (target.hostProfile?.platform === 'win32') return this.windows().update(target, bundle, onProgress);
+    this.assertSupported(target);
 
     onProgress('inspect');
     const status = await this.inspect(target);
@@ -187,9 +180,15 @@ export class MisaoAgentInstaller {
     }
   }
 
-  /** The install is sh (chmod, mv, ln, systemd, nohup): a win32 agent is refused with `unsupported_os` (its install is a separate function, added with the Windows agent). */
+  /** The install below is sh (chmod, mv, ln, systemd, nohup): a win32 agent has been handed to {@link MisaoWindowsInstaller} before this. */
   private assertSupported(target: MisaoInstallTarget): void {
     assertPosixHost(target.hostProfile, 'this agent server', 'installing misao');
+  }
+
+  private windows(): MisaoWindowsInstaller {
+    const { windowsTaskName, readyTimeoutMs, pollIntervalMs, taskIdleTimeoutMs } = this.options;
+    if (!windowsTaskName) throw new MisaoServiceError('not_managed', 'This hub was not given a task name for the misao of a Windows agent.');
+    return (this.windowsInstaller ??= new MisaoWindowsInstaller({ taskName: windowsTaskName, ...(readyTimeoutMs !== undefined ? { readyTimeoutMs } : {}), ...(pollIntervalMs !== undefined ? { pollIntervalMs } : {}), ...(taskIdleTimeoutMs !== undefined ? { taskIdleTimeoutMs } : {}) }));
   }
 
   private requireBundle(): MisaoBundle {
@@ -213,10 +212,10 @@ export class MisaoAgentInstaller {
       throw new MisaoServiceError('unsupported_host', `Could not read the agent's misao status (an agent older than this hub has no such route: update the agent first): ${describeError(err)}`);
     }
     const { host } = status;
-    // The bundle now has a win32 binary, so bundleFilesFor would no longer refuse a host that reports win32 (a registration
-    // without a recorded OS): the sh install below is still Unix only.
+    // A Windows agent is handed to the Windows install by its recorded OS. One that reports win32 without having it recorded (a
+    // registration from before the OS was) is not guessed at: the sh install below is Unix only.
     if (host.platform === 'win32') {
-      throw new HostProfileError('unsupported_os', `installing misao is a POSIX shell script, which this agent server (the agent reports ${host.platform}/${host.arch}) does not have. This operation is not available on Windows hosts yet.`);
+      throw new HostProfileError('unsupported_os', `installing misao on this agent server (registered without its OS; the agent reports ${host.platform}/${host.arch}) needs its host to be recorded first: reinstall or update the agent.`);
     }
     assertSafePath(host.homeDir, 'home directory');
     return { ...status, host: { ...host, servicePath: sanitizeServicePath(host.servicePath, target.hostProfile) } };

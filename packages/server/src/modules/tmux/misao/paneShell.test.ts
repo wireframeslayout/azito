@@ -48,11 +48,19 @@ describe('agentPaneShell', () => {
     expect(await resolve()).toEqual({ shell: '/bin/sh', commandArgs: ['-lc'] });
   });
 
-  it('refuses a Windows agent as unsupported_os without asking it (PowerShell panes are not implemented)', async () => {
-    const fetchHostInfo = vi.fn();
+  it('gives a Windows agent the shell it reports (%ComSpec%), bare: no command arguments', async () => {
+    const fetchHostInfo = vi.fn(async () => ({ platform: 'win32', arch: 'x64', shell: 'C:\\Windows\\System32\\cmd.exe' }));
     const resolve = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), fetchHostInfo, hub, log());
-    await expect(resolve()).rejects.toMatchObject({ code: 'unsupported_os' });
-    expect(fetchHostInfo).not.toHaveBeenCalled();
+    expect(await resolve()).toEqual({ shell: 'C:\\Windows\\System32\\cmd.exe', commandArgs: null });
+    await resolve();
+    expect(fetchHostInfo).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails for a Windows agent that reports no shell, and never uses the hub shell for one', async () => {
+    const noShell = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), async () => ({ platform: 'win32', arch: 'x64', shell: null }), hub, log());
+    await expect(noShell()).rejects.toThrow(/ComSpec/);
+    const outdated = agentPaneShell(server({ platform: 'win32', arch: 'x64' }), async () => { throw new AgentHostOutdatedError('a1'); }, hub, log());
+    await expect(outdated()).rejects.toBeInstanceOf(AgentHostOutdatedError);
   });
 
   it('refuses an agent that reports win32 even though none was recorded', async () => {

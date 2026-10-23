@@ -12,7 +12,13 @@ export interface TaskDefinitionInput {
   description: string;
   /** Absolute Windows path of the program. */
   executable: string;
-  args: readonly string[];
+  /** The program's arguments, quoted into one command line by {@link joinWindowsArgs}. Exactly one of `args` and `argumentsLine`. */
+  args?: readonly string[];
+  /**
+   * The whole command line as it is written to the task, for what `args` cannot say: a `cmd.exe /c` line with `>>` and `2>&1`
+   * redirects. The caller quotes it for the program that reads it. Exactly one of `args` and `argumentsLine`.
+   */
+  argumentsLine?: string;
   /** Absolute Windows path. */
   workingDirectory: string;
   restartOnFailure: { intervalMinutes: number; count: number };
@@ -72,7 +78,8 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
   }
   assertNoEnvExpansion(input.executable, 'executable');
   assertNoEnvExpansion(input.workingDirectory, 'workingDirectory');
-  const argumentsLine = joinWindowsArgs(input.args);
+  if ((input.args === undefined) === (input.argumentsLine === undefined)) throw new Error('Give exactly one of args and argumentsLine');
+  const argumentsLine = input.args !== undefined ? joinWindowsArgs(input.args) : input.argumentsLine!;
   assertNoEnvExpansion(argumentsLine, 'args');
   const user = escapeXml(input.userId);
   const lines = [

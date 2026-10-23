@@ -62,6 +62,18 @@ export class FakeWindowsHost {
     if (options.existingTask !== undefined) this.registeredXml = '<Task>previous definition</Task>';
   }
 
+  /** The task is running, as the Task Scheduler reports it (a test that starts the program itself calls this). */
+  markRunning(): void {
+    this.taskState = 'running';
+    this.lastResult = 0x41301;
+  }
+
+  /** The task's run ended (stopped by the Task Scheduler's End, or the program exited): not running, with this last result (default: terminated). */
+  markEnded(lastResult = 0x41306): void {
+    this.taskState = 'stopped';
+    this.lastResult = lastResult;
+  }
+
   readonly exec = async (_host: string, command: string): Promise<ExecResult> => {
     if (!command.includes('-EncodedCommand')) {
       this.calls.push({ kind: 'os-probe', text: command });

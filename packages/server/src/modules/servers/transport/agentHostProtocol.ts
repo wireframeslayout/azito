@@ -5,8 +5,8 @@ export const AGENT_HOST_PATH = '/api/host';
 
 /**
  * What an agent says about its own host. `platform` / `arch` are Node's values as they are (the hub narrows them with
- * `toHostProfile`, so an OS the hub does not know is `unsupported_host` there). `shell` is the agent process's `$SHELL`,
- * null when the process has none.
+ * `toHostProfile`, so an OS the hub does not know is `unsupported_host` there). `shell` is the agent process's `$SHELL`
+ * (a Windows host: `%ComSpec%`), null when the process has none.
  */
 const agentHostInfoSchema = z.object({
   platform: z.string().min(1),

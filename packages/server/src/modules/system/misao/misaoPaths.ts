@@ -1,5 +1,6 @@
 import path from 'path';
 import type { ServiceSpec } from '../serviceManager';
+import { MISAO_WINDOWS_TASK_NAME } from '../../servers/agent-deploy/windowsAgentConfig';
 
 /** sockaddr_un.sun_path on Linux holds 108 bytes including the terminating NUL (same limit as @misao/sdk). */
 const MAX_SOCKET_PATH_BYTES = 107;
@@ -12,7 +13,7 @@ export const MISAO_LAUNCHD_LABEL = 'com.azito.misao';
 export const MISAO_SERVICE: ServiceSpec = {
   systemdUnit: MISAO_SYSTEMD_UNIT,
   launchdLabel: MISAO_LAUNCHD_LABEL,
-  windowsTaskName: 'AzitoMisao',
+  windowsTaskName: MISAO_WINDOWS_TASK_NAME,
   templates: { systemd: 'azito-misao.service', launchd: 'com.azito.misao.plist' },
   duplicateLoadFix: 'Boot both copies out (`launchctl bootout gui/<uid>/com.azito.misao` and `launchctl bootout user/<uid>/com.azito.misao`; this closes every pane misao hosts), then run `azito misao start`.',
 };

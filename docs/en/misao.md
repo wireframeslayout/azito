@@ -113,7 +113,26 @@ Linux x86_64 / arm64 and macOS arm64) and sends the one that fits the agent's ow
 (Linux x86_64 / arm64, macOS arm64 / x86_64; any other host is refused with an error, there is no fallback). In practice the agent
 installer of this release accepts x86_64 hosts only, so an arm64 agent server is not supported yet; that is a separate matter from what the hub bundles. It is installed under
 `~/.azito/misao/<version>/` with `current` -> `<version>` and started as the `azito-misao` systemd user unit (`KillMode=process`), or as a background
-process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved. The Windows build is carried only; installing it comes with the Windows hub / agent support. Until then a Windows agent is refused with `unsupported_os`, and on a Windows hub the misao status is `unsupported_platform` while install / update fail with `not_managed`. Building a release needs the `unzip` command to unpack that build.
+process (cleared environment, no reboot survival) when the host has no user systemd (always the case on macOS). No Node.js or node-pty is involved. Installing on a Windows hub comes with the Windows hub support (until then a Windows hub reports the misao status `unsupported_platform` and install / update fail with `not_managed`). Building a release needs the `unzip` command to unpack the Windows build. Installing on a Windows agent is the next section.
+
+#### Installing on a Windows agent
+
+The Windows build (`x86_64-pc-windows-msvc`) goes through the agent the same way (`PUT /api/misao/upload`; the file is `misao.exe`), is checked by sha256 on both ends and
+placed in `%USERPROFILE%\.azito\misao\<version>\`. There is no symbolic link: the current release is the **file `<root>\current` (it holds the version)** and the **absolute path of
+`misao.exe` written into the task definition**. `<root>` is made owner-only (the ACL mechanism of the Windows agent install). Everything done on the host goes through the agent: PowerShell
+(`-EncodedCommand`, run by `/api/run`), `schtasks.exe` and the file API. No sh is involved.
+
+- **Service**: the Task Scheduler task `AzitoMisao`, started at the user's logon. It runs `conhost.exe --headless cmd.exe /d /c ""<root>\<version>\misao.exe" serve --socket "<pipe>" --data "<root>" >> "<root>\misao.log" 2>&1"`:
+  no window appears, and `cmd.exe` appends the log (misao has no option of its own for a log file). The working directory is the user's home folder (so that no pane starts inside a release folder and
+  keeps it from being deleted). It is restarted after one minute only on a failure (non-zero exit), not after `misao stop` (exit 0). The task does not run while the user is logged off, so neither does the daemon.
+- **Endpoint**: the named pipe `\\.\pipe\misao-<user>-<first 16 hex digits of sha256(lower-cased <root>)>` (the name @misao/sdk's `resolveSocketPath` gives for `MISAO_DIR=<root>`; a test compares them). The agent decides it once at startup and uses
+  `MISAO_SOCKET` if that names a pipe. The relay (`/ws?mode=misao`) and `GET /api/misao/status` / `PUT /api/misao/upload` work on Windows too. `socketPresent` means "the pipe accepts a connection"; a pipe does not outlive its server, so that is "the daemon is up".
+- `install()` makes the same promises as on Unix. It **never stops or switches a running daemon** (an older release running is left alone, the new one is put beside it and `updateAvailable` says so; a daemon AZITO did not install is refused). When nothing is running it starts one.
+- `update()` (`POST /api/servers/:name/update-misao`): `misao.exe stop` of the previous release (through the pipe; the daemon closes the panes and exits with code 0) -> switch `current` and the task -> start. If it does not stop, the task is ended and the
+  `misao.exe` processes of this user whose command line has `--socket <pipe>` are ended; if it still does not stop, nothing is changed and the update fails. If the switch fails, the previous `current` and task definition are put back and the previous release is started (as on Unix).
+- **Panes** open the shell the agent reports (`%ComSpec%`, cmd.exe: misao's own default), without a command. A window that launches a worker (claude / codex) is #371 and is `unsupported_os` for now.
+- For trials, the task name and the folder can be changed with `AZITO_WIN_MISAO_TASK_NAME` / `AZITO_WIN_MISAO_DIR` on the hub (the same mechanism as `AZITO_WIN_AGENT_*`). The folder is written into the agent's settings file as `AZITO_MISAO_DIR`, only when it is not the default.
+- On a host with no logon session the task cannot start (last result `0x8004130f`); the install then fails with `daemon_not_ready` and removes the task and `current` it made.
 
 - When you add an agent server (auto-install), misao is installed after the agent. A host without tmux no longer fails the preflight, and its
   default mux becomes misao. If only the misao step fails, the agent stays installed and the response carries `misaoError`.

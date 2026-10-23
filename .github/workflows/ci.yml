@@ -127,6 +127,32 @@ jobs:
       - name: misao integration tests
         run: npx -w packages/server vitest run --project misao-integration
 
+  # misao on a real Windows agent: the very Windows binary the hub ships (misao.exe, pinned in packages/server/scripts/misaoAssets.ts),
+  # installed through a real agent process, started by the Task Scheduler under conhost.exe --headless, reached through the agent's
+  # relay (a named pipe). The test removes its task, processes and folders and fails if any is left.
+  misao-integration-windows:
+    name: misao integration tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Fetch the pinned misao binary
+        run: |
+          $bin = npx -w packages/server tsx scripts/fetch-misao-binary.ts x86_64-pc-windows-msvc "$env:RUNNER_TEMP\misao" | Select-Object -Last 1
+          & $bin --version
+          if ($LASTEXITCODE -ne 0) { throw "misao --version failed ($LASTEXITCODE)" }
+          "MISAO_CLI=$bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: misao integration tests (Windows)
+        run: npx -w packages/server vitest run --project misao-integration src/modules/system/misao/MisaoWindowsInstaller.misaoIntegration.test.ts
+
   shell:
     name: Shell scripts
     runs-on: ubuntu-24.04

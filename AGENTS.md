@@ -103,10 +103,9 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   `scripts/misaoAssets.ts`, verified at build time (offline builds set `AZITO_MISAO_ASSET_DIR`). The install target is chosen from the
   host's OS / architecture (`misaoTargetFor` in `MisaoBundle.ts`; the hub uses its own, an agent reports its own); a host without a
   binary is an `unsupported_host` error, never a fallback. The Windows build is a zip asset (extracted with `unzip`, which the
-  build host must have; its absence is an explicit error) whose executable is `misao.exe`, keyed `misao` in the manifest
-  (`misaoFileName` in `MisaoBundle.ts`, `misaoReleaseFileName` in the build script). It is carried only: installing it on Windows
-  is a later PR. A win32 agent is refused with `unsupported_os`; for the hub's own service, `status` reports `unsupported_platform`
-  and `install` / `update` fail with `not_managed`. Also `deploy/azito-misao.service` / `com.azito.misao.plist`
+  build host must have; its absence is an explicit error; a Windows build host reads it with `hostTar()` of `scripts/archive.ts`) whose executable is `misao.exe`, keyed `misao` in the manifest
+  (`misaoFileName` in `MisaoBundle.ts`, `misaoReleaseFileName` in the build script). It is installed on Windows **agents** (below); for the hub's own
+  service on a Windows hub, `status` reports `unsupported_platform` and `install` / `update` fail with `not_managed` (the Windows hub, #380). Also `deploy/azito-misao.service` / `com.azito.misao.plist`
   (`ExecStart=<prefix>/misao/current/misao serve ...`, no `__NODE__`). misao is **a separate service**
   (`azito-misao` / `com.azito.misao`) unpacked to `~/.azito/misao/<version>/` with `misao/current` switched only by an explicit
   `azito misao update` (or the Setup row's update button): stopping the daemon closes every pane, so a hub update or restart never
@@ -123,6 +122,16 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
   jobs are booted out before a definition changes, since a loaded job keeps its old one). `AgentInstaller.install` runs the install after the agent is healthy, and
   `POST /api/servers/:name/install-misao` (`system/misao/agentMisaoRoutes.ts`, operator only even in compat mode; `GET` = progress for both) runs it on demand.
   `AgentUpdater` never touches the daemon.
+  **Windows agents** (#369 A3; `MisaoAgentInstaller` hands a `hostProfile.platform === 'win32'` target to `MisaoWindowsInstaller`, the Unix path is unchanged): the same upload route
+  (the agent stores `misao` as `misao.exe`) puts the release in `%USERPROFILE%\.azito\misao\<version>\` (the root is made owner-only with `PROTECT_SCRIPT` first); there is no link — `<root>\current`
+  is a file holding the version and the Task Scheduler task `AzitoMisao` (logon trigger, `misaoWindowsTask.ts`: `conhost.exe --headless cmd.exe /d /c ""<exe>" serve --socket "<pipe>" --data "<root>" >> "<log>" 2>&1"`,
+  `TaskDefinitionInput.argumentsLine`) names the release's `misao.exe` directly. Everything on the host runs through the agent's `/api/run` (PowerShell `-EncodedCommand` via `powershellEncodedArgs`, `SchtasksClient`
+  over `createScriptCommandSpecRunner`) and its file API. The endpoint is the named pipe `windowsMisaoPipe(root, user)` (= the SDK's default for `MISAO_DIR=<root>`); the agent decides it once at startup
+  (`resolveAgentMisaoSocket(env, home, windows)`, `MISAO_SOCKET` may name another pipe) and reports `host.windows` (`systemRoot`, `userName`, `misaoRoot`) in `GET /api/misao/status`, whose `socketPresent` is a
+  pipe connect probe. `install()` still never stops a running daemon; `update()` = `misao.exe stop` (through the pipe) -> End the task + sweep (`shared/os/windowsProcessSweep.ts`, the process sweep the agent install shares) if it stays up
+  -> switch -> start, restoring the previous `current` + task XML on failure. Trials: hub env `AZITO_WIN_MISAO_TASK_NAME` / `AZITO_WIN_MISAO_DIR` (in `WindowsAgentOptions`; the folder reaches the agent as `AZITO_MISAO_DIR` in its settings file when not the
+  default). A Windows agent's panes are `%ComSpec%` opened bare (`PaneShell.commandArgs === null`; a launch command is `unsupported_os` until #371). Tests: `MisaoAgentInstaller.windows.test.ts` (fake agent host, Linux-safe) and
+  `MisaoWindowsInstaller.misaoIntegration.test.ts` (real `misao.exe` + real agent on Windows CI, job "misao integration tests (Windows)").
 
 ## Architecture
 
@@ -133,7 +142,7 @@ packages/
       main.ts                      # Composition root: wires repositories/services, registers routes, starts Fastify
       agent/                       # Lightweight agent entry point (deployed to remote servers)
         main.ts, routes.ts         # Agent process HTTP/WS surface
-        misaoRelay.ts, misaoRoutes.ts  # `/ws?mode=misao` byte relay to the agent's own misao socket (fixed at startup, 128 at once) + `GET /api/misao/status` / `PUT /api/misao/upload` (the two release files, staged under `~/.azito/misao/<version>.upload/`) — all behind the agent token
+        misaoRelay.ts, misaoRoutes.ts  # `/ws?mode=misao` byte relay to the agent's own misao socket (fixed at startup, 128 at once) + `GET /api/misao/status` / `PUT /api/misao/upload` (the release files, staged under `~/.azito/misao/<version>.upload/`; on Windows the pipe replaces the socket) — all behind the agent token
       modules/                     # Feature modules (1 module = 1 responsibility; routes+service+repository together)
         tmux/                      # [base] TmuxClient, PaneOutputStream/PaneStream(Factory), TmuxHookManager
           routes/, ws/             # HTTP routes (sessions, hooks) + WS handlers (terminal, agent-terminal)
@@ -208,7 +217,7 @@ packages/
   NULL = an agent registered before the OS was kept = a Unix agent (existing sh paths keep working; a 404 from `/api/host` is `agent_outdated`
   and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
-  (neither is an error; an agent too old to report keeps the hub's shell); a win32 node is `unsupported_os` until PowerShell panes (#369)
+  (neither is an error; an agent too old to report keeps the hub's shell); a Windows agent's node opens its reported `%ComSpec%` bare (a pane with a launch command is `unsupported_os` until #371); a Windows hub is `unsupported_os` (#380)
 
 ### Shell text (ShellDialect, #379 P9)
 - `shared/os/shellDialect.ts`: `ShellDialect` (POSIX sh / PowerShell 5.1) is for the two places text goes through a shell on the target — a fixed SSH bootstrap script and the line typed
@@ -216,7 +225,7 @@ packages/
   `quote`. Pane lines (`buildWorkerLaunchCommand`, `ISessionStrategy.buildRespawnCommand`, `wrapWithSupervisor`, the `cd` before a launch) take the server's dialect
   (`shellDialectFor(transportFactory.hostProfileFor(server))`). PowerShell `wrapScript` is the fixed `powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand <UTF-16LE base64>`
   (≤ 8191 characters, cmd.exe's limit); a native program with arbitrary arguments is `invoke`d through a fixed `node -e` launcher given `{ file, args }` as base64 JSON (nothing is placed on the host; `node` must be on PATH).
-  A win32 node's pane is still `unsupported_os` (`paneShell.ts`) until #370 / #371.
+  A Windows agent's bare cmd.exe pane works (`paneShell.ts`); a pane that launches a command is `unsupported_os` until #371.
 - Unix-only install scripts (tmux / browser runtime / harness `setup.sh` / misao on an agent / hub-transfer `RemoteBundleOps` / isolation doctor / agent redeploy over SSH) stay sh; each entry point starts with
   `assertPosixHost(transport.hostProfile, label, operation)` and a win32 server gets `HostProfileError('unsupported_os')`, which `mapAppError` answers as 501 `{ error: <reason>, code }` (the UI shows `error`).
   A host with no recorded OS is a Unix one. Their Windows versions are separate functions (#369 / #380).
@@ -246,8 +255,7 @@ packages/
   logged on. A reinstall is transactional (`WindowsDeployment.commit/rollback`: the previous task XML, `agent.env`, same-version folder and
   running state are kept aside until the new agent answers). `windowsFirewall.ts` checks (and, when the
   SSH session is elevated, adds) the inbound rule first. `AZITO_WIN_AGENT_TASK_NAME` / `AZITO_WIN_AGENT_DIR` / `AZITO_WIN_AGENT_PORT`
-  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks and the
-  misao relay on win32 and writes `AZITO_AGENT_LOG_FILE`. misao on Windows (A3) and update / removal (#372) are not done: `update()` stays `unsupported_os`.
+  (`windowsAgentConfig.ts`, resolved in `app/wiring.ts`) move the task, folder and port for a trial. The agent skips tmux hooks on win32, relays misao over its named pipe (A3, above) and writes `AZITO_AGENT_LOG_FILE`. Agent update / removal (#372) is not done: `update()` stays `unsupported_os`.
 
 ### Subagent Delegation
 - Worker delegation can route by worker type; per-task overrides are stored via `024_subagent_config`

@@ -300,7 +300,7 @@ describe('MisaoMuxClient reads', () => {
 });
 
 describe('MisaoMuxClient pane shell (per node)', () => {
-  function clientWithShell(paneShell: () => Promise<{ shell: string; commandArgs: readonly string[] }>) {
+  function clientWithShell(paneShell: () => Promise<{ shell: string; commandArgs: readonly string[] | null }>) {
     const daemon = new FakeDaemon();
     const client = new MisaoMuxClient(daemon, { paneShell, onChange: vi.fn(), log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: vi.fn(async () => { throw new Error('not expected'); }) }, vi.fn(async () => {}));
     return { daemon, client };
@@ -311,6 +311,16 @@ describe('MisaoMuxClient pane shell (per node)', () => {
     await client.openWorkspace(server, 'proj', { command: 'claude', windowName: 'w', exactName: true });
     await client.openWorkspace(server, 'proj2', { windowName: 'w2', exactName: true });
     expect(daemon.callsTo('pane.open').map((p) => p.cmd)).toEqual([['/usr/bin/fish', '-c', 'claude'], ['/usr/bin/fish']]);
+  });
+
+  it('opens a bare pane on a node whose shell cannot be handed a command (Windows), and refuses a command there without leaving a window', async () => {
+    const { daemon, client } = clientWithShell(async () => ({ shell: 'C:\\Windows\\System32\\cmd.exe', commandArgs: null }));
+    await client.openWorkspace(server, 'proj', { windowName: 'w', exactName: true });
+    expect(daemon.callsTo('pane.open').map((p) => p.cmd)).toEqual([['C:\\Windows\\System32\\cmd.exe']]);
+
+    const before = daemon.callsTo('window.create').length;
+    await expect(client.openWorkspace(server, 'proj2', { command: 'claude', windowName: 'w2', exactName: true })).rejects.toMatchObject({ code: 'unsupported_os' });
+    expect(daemon.callsTo('window.create').length).toBe(before);
   });
 
   it('does not leave an empty window behind when the node has no usable shell', async () => {

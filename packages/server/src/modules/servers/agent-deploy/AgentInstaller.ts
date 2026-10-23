@@ -35,7 +35,7 @@ const MISAO_STEP_MESSAGES: Record<AgentMisaoInstallStep, string> = {
 };
 
 export interface AgentMisaoInstaller {
-  install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'running'; updateAvailable: boolean }>;
+  install(transport: AgentTransport, onProgress?: (step: AgentMisaoInstallStep) => void): Promise<{ version: string; startMethod: 'systemd' | 'nohup' | 'taskscheduler' | 'running'; updateAvailable: boolean }>;
 }
 
 export interface InstallResult {
@@ -85,7 +85,7 @@ export class AgentInstaller {
     // The overrides exist to try a second agent beside the real one; they are not saved per server, so a hub started without them
     // looks for the default task: say so once when they are in use.
     if (JSON.stringify(windowsAgent) !== JSON.stringify(DEFAULT_WINDOWS_AGENT_OPTIONS)) {
-      console.warn(`[AgentInstaller] Windows agent settings differ from the defaults (task ${windowsAgent.taskName}, folder ~\\${windowsAgent.dir}, port ${windowsAgent.port}): this is for trials, they are not saved per server`);
+      console.warn(`[AgentInstaller] Windows agent settings differ from the defaults (task ${windowsAgent.taskName}, folder ~\\${windowsAgent.dir}, port ${windowsAgent.port}, misao task ${windowsAgent.misaoTaskName}, misao folder ~\\${windowsAgent.misaoDir}): this is for trials, they are not saved per server`);
     }
   }
 
@@ -157,7 +157,7 @@ export class AgentInstaller {
     }
 
     // ── misao ──
-    const misaoError = await this.installMisao(preflight.tailscaleIp, token, preflight.hostProfile, report);
+    const misaoError = await this.installMisao(preflight.tailscaleIp, AGENT_PORT, token, preflight.hostProfile, report);
     const tmuxFound = preflight.tmuxVersion !== '';
     // A host with neither tmux nor an installed misao has no mux at all: fail as before instead of registering a server nothing can run on.
     if (!tmuxFound && (!this.misaoInstaller || misaoError)) {
@@ -171,7 +171,7 @@ export class AgentInstaller {
 
   /**
    * The Windows install (the Unix sh bootstrap is not used): transfer and unpack over SFTP + PowerShell, settings in an owner-only
-   * file, a Task Scheduler logon task as the service, then the same health check. misao is not installed on Windows yet (#369 A3).
+   * file, a Task Scheduler logon task as the service, then the same health check. misao is installed beside it (MisaoAgentInstaller, #369 A3).
    */
   private async installOnWindows(
     sshHost: string,
@@ -228,10 +228,9 @@ export class AgentInstaller {
     const leftovers = await deployment.commit().then(() => '', (e: unknown) => ` WARNING: the previous install could not be removed (${(e as Error).message}). The next install on this host stops while ${layout.envFilePrev} or any other *.prev in ${layout.root} exists: once the agent works, delete them by hand.`);
     report('health', 'ok', `Agent healthy.${leftovers}`);
 
-    // misao on a Windows agent is #369 A3. Reported like a misao that could not be installed: the agent stays installed and healthy.
-    const misaoError = 'unsupported_os: installing misao on a Windows agent is not supported yet (planned for the next release)';
-    report('misao', 'ok', `Skipped: ${misaoError}`);
-    return { success: true, host: ip, port, token, version, startMethod: 'taskscheduler', steps, tmuxFound: false, hostProfile: preflight.hostProfile, misaoError };
+    // A misao that could not be installed is reported beside the install, not as its failure: the agent stays installed and healthy.
+    const misaoError = await this.installMisao(ip, port, token, preflight.hostProfile, report);
+    return { success: true, host: ip, port, token, version, startMethod: 'taskscheduler', steps, tmuxFound: false, hostProfile: preflight.hostProfile, ...(misaoError ? { misaoError } : {}) };
   }
 
   private windowsDeployer(): WindowsAgentDeployer {
@@ -243,11 +242,11 @@ export class AgentInstaller {
   }
 
   /** Puts misao on the agent that just came up. A failure is reported, not thrown: the agent stays installed. */
-  private async installMisao(host: string, token: string, hostProfile: HostProfile, report: (step: InstallStep, status: InstallProgress['status'], message: string) => void): Promise<string | undefined> {
+  private async installMisao(host: string, port: number, token: string, hostProfile: HostProfile, report: (step: InstallStep, status: InstallProgress['status'], message: string) => void): Promise<string | undefined> {
     if (!this.misaoInstaller) return undefined;
     report('misao', 'running', 'Installing misao...');
     try {
-      const transport = new AgentTransport(host, AGENT_PORT, token, 'system', host, hostProfile);
+      const transport = new AgentTransport(host, port, token, 'system', host, hostProfile);
       const result = await this.misaoInstaller.install(transport, (step) => report('misao', 'running', MISAO_STEP_MESSAGES[step]));
       report('misao', 'ok', `misao ${result.version} (${result.startMethod})`);
       return undefined;
