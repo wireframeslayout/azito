@@ -2,7 +2,7 @@ import fs from 'fs';
 import * as path from 'path';
 import { buildCommandSpec, type CommandResult, type CommandSpec } from '../../exec/commandSpec';
 import type { HostEnv } from '../hostEnv';
-import { decodeOemOutput, describeUndecodable, parseOemCodePage } from './oemOutput';
+import { decodeOemOutput, type DecodedOutput, describeUndecodable, parseOemCodePage } from './oemOutput';
 import { encodeTaskXml } from './taskDefinition';
 
 /** A finished command with its output as bytes (the OEM code page is decoded here, not by the runner). */
@@ -157,7 +157,11 @@ export class SchtasksClient {
   /** A failed run as an error: stderr (or stdout) decoded from the OEM code page, bytes kept. */
   private async errorOf(operation: SchtasksOperation, taskName: string, result: RawCommandResult): Promise<SchtasksError> {
     const raw = result.stderr.length > 0 ? result.stderr : result.stdout;
-    const decoded = await decodeOemOutput(raw, () => this.readOemCodePage());
+    // Not being able to learn the code page must not hide the failure being reported: it becomes the reason for "undecodable".
+    const decoded = await decodeOemOutput(raw, () => this.readOemCodePage()).catch((err: unknown): DecodedOutput => ({
+      ok: false,
+      reason: `the OEM code page could not be read (${err instanceof Error ? err.message : String(err)})`,
+    }));
     const detail = decoded.ok ? decoded.text.trim() : describeUndecodable(raw, decoded.reason);
     return new SchtasksError(operation, taskName, result.exitCode, detail, raw);
   }

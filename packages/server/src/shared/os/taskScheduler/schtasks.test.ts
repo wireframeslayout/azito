@@ -167,15 +167,24 @@ describe('SchtasksClient output decoding (OEM code page)', () => {
     expect(err.rawDetail).toEqual(Buffer.from([0x82, 0x41]));
   });
 
+  it('reads UTF-8 output when the OEM code page is 65001', async () => {
+    const { client: c } = oemClient(65001, Buffer.from('エラー: 見つかりません。', 'utf-8'));
+    await expect(c.start('AzitoTest')).rejects.toMatchObject({ detail: 'エラー: 見つかりません。' });
+  });
+
   it('says so when the bytes are not valid in the code page', async () => {
     const { client: c } = oemClient(932, Buffer.from([0x81]));
     await expect(c.start('AzitoTest')).rejects.toMatchObject({ detail: expect.stringContaining('not valid shift_jis (OEM code page 932); bytes 81') });
   });
 
-  it('fails with the registry problem when the code page cannot be read, and tries again next time', async () => {
+  it('keeps the original error when the code page cannot be read, with the cause, and tries again next time', async () => {
     const { client: c, regCalls } = oemClient('unreadable', CP932_ERROR);
-    await expect(c.start('AzitoTest')).rejects.toThrow(/OEM code page/);
-    await expect(c.start('AzitoTest')).rejects.toThrow(/OEM code page/);
+    const err = await c.start('AzitoTest').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(SchtasksError);
+    expect(err).toMatchObject({ operation: 'run', taskName: 'AzitoTest', exitCode: 1, rawDetail: CP932_ERROR });
+    expect((err as SchtasksError).detail).toContain('the OEM code page could not be read (Cannot read the OEM code page: reg query failed (exit 1))');
+    expect((err as SchtasksError).detail).toContain('bytes 83478389815b3a20');
+    await expect(c.start('AzitoTest')).rejects.toBeInstanceOf(SchtasksError);
     expect(regCalls()).toBe(2);
   });
 

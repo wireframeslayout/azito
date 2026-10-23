@@ -38,12 +38,15 @@ export function escapeXml(value: string): string {
 /** `C:\dir` / `C:/dir` or a UNC path. A rooted path without a drive (`\dir`) depends on the current drive, so it is refused. */
 const WINDOWS_ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\[^\\/])/;
 
+/** `%NAME%`: the form the Task Scheduler expands. A lone `%` (`C:\\100%\\x.exe`, `100%`) is left as it is. */
+const ENV_REFERENCE = /%[^%\r\n]+%/;
+
 /**
  * The Task Scheduler expands `%VAR%` in the Command, Arguments and WorkingDirectory of an action when it runs, and no quoting
- * protects a `%`. A value containing one would turn into something else, so it is refused instead of silently changed.
+ * protects it. A value containing one would turn into something else, so it is refused instead of silently changed.
  */
 function assertNoEnvExpansion(value: string, what: string): void {
-  if (value.includes('%')) throw new Error(`${what} must not contain "%": the Task Scheduler would expand %VAR% in it (got "${value}")`);
+  if (ENV_REFERENCE.test(value)) throw new Error(`${what} must not contain a %NAME% reference: the Task Scheduler would expand it (got "${value}")`);
 }
 
 function assertWindowsAbsolutePath(value: string, what: string): void {
@@ -69,7 +72,8 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
   }
   assertNoEnvExpansion(input.executable, 'executable');
   assertNoEnvExpansion(input.workingDirectory, 'workingDirectory');
-  input.args.forEach((arg, i) => assertNoEnvExpansion(arg, `args[${i}]`));
+  const argumentsLine = joinWindowsArgs(input.args);
+  assertNoEnvExpansion(argumentsLine, 'args');
   const user = escapeXml(input.userId);
   const lines = [
     '<?xml version="1.0" encoding="UTF-16"?>',
@@ -117,7 +121,7 @@ export function buildTaskXml(input: TaskDefinitionInput): string {
     '  <Actions Context="Author">',
     '    <Exec>',
     `      <Command>${escapeXml(input.executable)}</Command>`,
-    `      <Arguments>${escapeXml(joinWindowsArgs(input.args))}</Arguments>`,
+    `      <Arguments>${escapeXml(argumentsLine)}</Arguments>`,
     `      <WorkingDirectory>${escapeXml(input.workingDirectory)}</WorkingDirectory>`,
     '    </Exec>',
     '  </Actions>',

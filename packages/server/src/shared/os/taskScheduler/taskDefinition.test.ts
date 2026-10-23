@@ -108,6 +108,12 @@ describe('buildTaskXml', () => {
     expect(parseXmlText(written)).toBe('"a\r\nb\rc"');
   });
 
+  it('lets a lone % through (it is not an environment reference)', () => {
+    const xml = buildTaskXml({ ...INPUT, executable: 'C:\\100%\\node.exe', args: ['100%'], workingDirectory: 'C:\\ab' });
+    expect(xml).toContain('<Command>C:\\100%\\node.exe</Command>');
+    expect(xml).toContain('<Arguments>100%</Arguments>');
+  });
+
   it('writes no Arguments text for no arguments', () => {
     expect(buildTaskXml({ ...INPUT, args: [] })).toContain('<Arguments></Arguments>');
   });
@@ -125,9 +131,10 @@ describe('buildTaskXml', () => {
     ['no restarts', { restartOnFailure: { intervalMinutes: 1, count: 0 } }, /count/],
     ['too many restarts', { restartOnFailure: { intervalMinutes: 1, count: 1000 } }, /count/],
     ['a control character in the description', { description: 'a\u0001b' }, /control character/],
-    ['a % in the executable', { executable: 'C:\\100%\\x.exe' }, /executable must not contain "%"/],
-    ['a %VAR% in an argument', { args: ['ok', '%PATH%'] }, /args\[1\] must not contain "%"/],
-    ['a % in the working directory', { workingDirectory: 'C:\\%TEMP%' }, /workingDirectory must not contain/],
+    ['a %NAME% in the executable', { executable: 'C:\\%ProgramFiles%\\x.exe' }, /executable must not contain a %NAME%/],
+    ['a %VAR% in an argument', { args: ['ok', '%PATH%'] }, /args must not contain a %NAME%/],
+    ['a %VAR% split across arguments by quoting', { args: ['"%PA', 'TH%"'] }, /args must not contain/],
+    ['a %NAME% in the working directory', { workingDirectory: 'C:\\%TEMP%' }, /workingDirectory must not contain/],
     ['a lone high surrogate', { args: ['a\uD800b'] }, /unpaired surrogate/],
     ['a lone low surrogate', { description: '\uDC00' }, /unpaired surrogate/],
     ['a NUL in an argument', { args: ['a\0b'] }, /NUL/],

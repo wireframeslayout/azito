@@ -7,6 +7,7 @@
 /** Windows code page -> WHATWG label. Only the pages that `TextDecoder` implements (437 / 850 and the like are not among them). */
 const CODE_PAGE_LABELS: Readonly<Record<number, string>> = {
   866: 'ibm866',
+  65001: 'utf-8',
   874: 'windows-874',
   932: 'shift_jis',
   936: 'gbk',
