@@ -3,13 +3,21 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { shellQuote } from '../../shared/shellQuote';
 import { FileBrowseError } from './FileBrowseService';
 import { parseRipgrepJson } from './parseRipgrepJson';
+import { buildCommandSpec, CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandResult } from '../../shared/exec/commandSpec';
 
 const MAX_RESULTS = 200;
 const SEARCH_TIMEOUT_MS = 10_000;
 const RG_CHECK_TTL_MS = 5 * 60 * 1000;
+const RG_CHECK_TIMEOUT_MS = 3000;
+/**
+ * rg / grep are stopped here: room for the 200 hits that are used, with long lines. A search that matches more is cut
+ * (the old `| head -200` ended it early the same way), and the hits read so far are used and reported as `truncated`.
+ */
+const SEARCH_MAX_OUTPUT_BYTES = 1024 * 1024;
 const EXCLUDED_DIRS = ['node_modules', '.git', 'dist', '.worktrees'];
 
 function isTimeoutError(err: unknown): boolean {
+  if (err instanceof CommandTimeoutError) return true;
   if (!(err instanceof Error)) return false;
   return (err as Error & { killed?: boolean }).killed === true || err.message.includes('timed out');
 }
@@ -51,15 +59,14 @@ export class FileSearchService {
     const hasRg = await this.checkRgAvailable(server);
     const engine: 'rg' | 'grep' = hasRg ? 'rg' : 'grep';
 
-    const tasks: [Promise<string[]>, Promise<SearchHit[]>] = [
+    const [nameMatches, content] = await Promise.all([
       this.searchByName(server, opts),
       this.searchContent(server, opts, engine),
-    ];
-
-    const [nameMatches, contentHits] = await Promise.all(tasks);
+    ]);
+    const contentHits = content.hits;
 
     const totalCount = nameMatches.length + contentHits.length;
-    const truncated = totalCount >= MAX_RESULTS;
+    const truncated = totalCount >= MAX_RESULTS || content.truncated;
 
     return {
       nameMatches: nameMatches.slice(0, MAX_RESULTS),
@@ -77,13 +84,20 @@ export class FileSearchService {
     }
     const transport = this.transportFactory.getTransport(server);
     try {
-      const result = await transport.exec('command -v rg', 3000);
-      const available = result.code === 0 && result.stdout.trim().length > 0;
-      this.rgCache.set(server.name, { available, checkedAt: Date.now() });
-      return available;
-    } catch {
-      this.rgCache.set(server.name, { available: false, checkedAt: Date.now() });
-      return false;
+      const result = await transport.run(buildCommandSpec('rg', ['--version'], { timeoutMs: RG_CHECK_TIMEOUT_MS }));
+      // rg is there but does not run: that is a problem to report, not a reason to search with something else.
+      if (result.exitCode !== 0) throw new Error(`rg --version exited with ${result.exitCode}: ${result.stderr.trim()}`);
+      this.rgCache.set(server.name, { available: true, checkedAt: Date.now() });
+      return true;
+    } catch (err) {
+      // grep stands in only when rg is not installed (remembered). A timeout, an unreachable host or an rg that cannot run
+      // is an error of this search: failing is better than quietly searching differently.
+      if (err instanceof CommandSpawnError && err.code === 'ENOENT') {
+        this.rgCache.set(server.name, { available: false, checkedAt: Date.now() });
+        return false;
+      }
+      if (isTimeoutError(err)) throw new FileBrowseError('Search timed out', 504);
+      throw err;
     }
   }
 
@@ -106,36 +120,25 @@ export class FileSearchService {
     }
   }
 
-  private async searchContent(server: ServerConfig, opts: SearchOptions, engine: 'rg' | 'grep'): Promise<SearchHit[]> {
-    const cmd = engine === 'rg'
-      ? this.buildRgCommand(opts)
-      : this.buildGrepCommand(opts);
+  private async searchContent(server: ServerConfig, opts: SearchOptions, engine: 'rg' | 'grep'): Promise<{ hits: SearchHit[]; truncated: boolean }> {
+    const spec = engine === 'rg'
+      ? buildCommandSpec('rg', this.buildRgArgs(opts), { timeoutMs: SEARCH_TIMEOUT_MS, maxOutputBytes: SEARCH_MAX_OUTPUT_BYTES })
+      : buildCommandSpec('grep', this.buildGrepArgs(opts), { timeoutMs: SEARCH_TIMEOUT_MS, maxOutputBytes: SEARCH_MAX_OUTPUT_BYTES });
 
     const transport = this.transportFactory.getTransport(server);
     try {
-      const result = await transport.exec(cmd, SEARCH_TIMEOUT_MS);
-      if (!result.stdout.trim()) return [];
-
-      const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
-
-      if (engine === 'rg') {
-        const matches = parseRipgrepJson(result.stdout);
-        return matches.slice(0, MAX_RESULTS).map(m => ({
-          path: m.path.startsWith(root) ? m.path.slice(root.length) : m.path,
-          line: m.line,
-          column: m.column,
-          text: m.text,
-          matchStart: m.matchStart,
-          matchEnd: m.matchEnd,
-        }));
-      }
-
-      return this.parseGrepOutput(result.stdout, root, opts).slice(0, MAX_RESULTS);
+      // rg and grep exit 1 for "no match" and 2 for an error that may still have produced hits: the output decides.
+      const { stdout, cut, timedOut } = await this.readSearchOutput(transport.run(spec));
+      const hits = stdout.trim() ? this.parseHits(stdout, opts, engine) : [];
+      // A deadline is a partial success only when the whole lines read hold a usable hit (rg's `begin` records alone are not one).
+      if (timedOut && hits.length === 0) throw new FileBrowseError('Search timed out', 504);
+      return { hits, truncated: cut };
     } catch (err: unknown) {
       if (isTimeoutError(err)) {
         throw new FileBrowseError('Search timed out', 504);
       }
-      return [];
+      // The output cap hit before even one whole line: nothing usable, but the search was cut.
+      return { hits: [], truncated: err instanceof CommandOutputLimitError };
     }
   }
 
@@ -162,8 +165,38 @@ export class FileSearchService {
     return `LC_ALL=C command find ${root} \\( ${pruneExprs} \\) -prune -o -type f${includeExpr} ${nameFlag} ${sq(pattern)} -print | head -${MAX_RESULTS}`;
   }
 
-  buildRgCommand(opts: SearchOptions): string {
-    const sq = shellQuote;
+  private parseHits(stdout: string, opts: SearchOptions, engine: 'rg' | 'grep'): SearchHit[] {
+    const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
+    if (engine === 'rg') {
+      return parseRipgrepJson(stdout).slice(0, MAX_RESULTS).map(m => ({
+        path: m.path.startsWith(root) ? m.path.slice(root.length) : m.path,
+        line: m.line,
+        column: m.column,
+        text: m.text,
+        matchStart: m.matchStart,
+        matchEnd: m.matchEnd,
+      }));
+    }
+    return this.parseGrepOutput(stdout, root, opts).slice(0, MAX_RESULTS);
+  }
+
+  /**
+   * The stdout of a search. One the output cap cut, or the deadline ended, is returned as the whole lines read so far with
+   * `cut` set (the caller reports `truncated`) and `timedOut` for a deadline; with not even one whole line the error stands.
+   */
+  private async readSearchOutput(running: Promise<CommandResult>): Promise<{ stdout: string; cut: boolean; timedOut: boolean }> {
+    try {
+      return { stdout: (await running).stdout, cut: false, timedOut: false };
+    } catch (err) {
+      const partial = err instanceof CommandOutputLimitError || err instanceof CommandTimeoutError ? err : null;
+      if (partial && partial.stdout.includes('\n')) {
+        return { stdout: partial.stdout.slice(0, partial.stdout.lastIndexOf('\n') + 1), cut: true, timedOut: err instanceof CommandTimeoutError };
+      }
+      throw err;
+    }
+  }
+
+  buildRgArgs(opts: SearchOptions): string[] {
     const flags: string[] = ['--json', '--line-number', '--color', 'never', '--max-count', '5'];
 
     if (!opts.regex) flags.push('-F');
@@ -171,22 +204,21 @@ export class FileSearchService {
     if (opts.wholeWord) flags.push('-w');
 
     for (const dir of EXCLUDED_DIRS) {
-      flags.push('-g', sq('!' + dir));
+      flags.push('-g', '!' + dir);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.include)) {
-      flags.push('-g', sq(pattern));
+      flags.push('-g', pattern);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.excludeExtra)) {
-      flags.push('-g', sq('!' + pattern));
+      flags.push('-g', '!' + pattern);
     }
 
-    return `rg ${flags.join(' ')} -- ${sq(opts.query)} ${sq(opts.root)}`;
+    return [...flags, '--', opts.query, opts.root];
   }
 
-  buildGrepCommand(opts: SearchOptions): string {
-    const sq = shellQuote;
+  buildGrepArgs(opts: SearchOptions): string[] {
     const flags: string[] = ['-rn', '-H', '--binary-files=without-match'];
 
     if (!opts.regex) flags.push('-F');
@@ -194,18 +226,18 @@ export class FileSearchService {
     if (opts.wholeWord) flags.push('-w');
 
     for (const dir of EXCLUDED_DIRS) {
-      flags.push(`--exclude-dir=${sq(dir)}`);
+      flags.push(`--exclude-dir=${dir}`);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.include)) {
-      flags.push(`--include=${sq(pattern)}`);
+      flags.push(`--include=${pattern}`);
     }
 
     for (const pattern of this.splitGlobPatterns(opts.excludeExtra)) {
-      flags.push(`--exclude=${sq(pattern)}`, `--exclude-dir=${sq(pattern)}`);
+      flags.push(`--exclude=${pattern}`, `--exclude-dir=${pattern}`);
     }
 
-    return `grep ${flags.join(' ')} -- ${sq(opts.query)} ${sq(opts.root)} | head -${MAX_RESULTS}`;
+    return [...flags, '--', opts.query, opts.root];
   }
 
   private splitGlobPatterns(patterns: string | undefined): string[] {

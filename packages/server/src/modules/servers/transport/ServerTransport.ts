@@ -2,6 +2,7 @@ import type { EventEmitter } from 'events';
 import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
 import type { HostProfile } from '../../../shared/os/hostProfile';
+import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 
 export interface ExecResult {
   stdout: string;
@@ -25,6 +26,13 @@ export interface IHostBoundTransport {
 }
 
 export interface IServerTransport {
+  /**
+   * Runs a program with arguments on the server's host, without a shell (see `CommandSpec`). A non-zero exit is a result;
+   * a program that cannot start, a timeout and too much output reject with a `CommandError` that keeps the output so far,
+   * and an unreachable agent with `AgentUnreachableError`.
+   */
+  run(spec: CommandSpec): Promise<CommandResult>;
+
   /**
    * シェルコマンド実行（現行 TmuxClient.execCommand 相当）
    * @deprecated POSIX-only: runs `command` with `/bin/sh -c`, so a win32 host rejects it with an `unsupported_os` HostProfileError.

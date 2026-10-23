@@ -1538,7 +1538,7 @@ describe('TaskRestoreService base-branch detection and persistence (Issue #63 re
       },
       transportFactory: {
         getTransport: vi.fn(() => ({
-          exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/develop', stderr: '', code: 0 })),
+          run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: 'refs/remotes/origin/develop', stderr: '' })),
         })),
       } as unknown as TaskRestoreDeps['transportFactory'],
     };

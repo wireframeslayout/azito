@@ -11,7 +11,9 @@ import { MuxDriverUnavailableError, type MuxDriverUnavailableReason } from '../t
 import { supportedMuxKinds } from './muxKinds';
 import { checkIsolationBlockers as checkIsolationBlockersFor } from './isolationBlockers';
 import type { MuxCapabilities, MuxDriverKind, MuxStatusItem, MuxWorkspace } from '@azito/shared';
-import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem, tmuxVersionCommand } from './muxStatus';
+import { checkTmuxStatus, describeDefaultMuxProblem, misaoStatusItem } from './muxStatus';
+import { probeOutput, resolveOsName } from './installProbe';
+import { buildCommandSpec } from '../../shared/exec/commandSpec';
 import type { AgentInstaller, InstallProgress } from './agent-deploy/AgentInstaller';
 import type { AgentBundler } from './agent-deploy/AgentBundler';
 import type { AgentHostRecorder } from './agent-deploy/AgentHostRecorder';
@@ -1120,7 +1122,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         const checkMuxKind = (kind: MuxDriverKind): Promise<MuxStatusItem> => (
           kind === 'misao'
             ? misaoDaemonStatus(srv).then(misaoStatusItem)
-            : checkTmuxStatus(transportFactory.getTransport(srv), srv.muxRuntime)
+            : checkTmuxStatus(transportFactory.getTransport(srv))
         );
         const checkMuxes = async (): Promise<Partial<Record<MuxDriverKind, MuxStatusItem>>> => {
           const kinds = supportedMuxKinds(srv);
@@ -1174,7 +1176,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkTmux = async () => {
         try {
-          const r = await transport.exec(tmuxVersionCommand(srv.muxRuntime));
+          // The transport's own tmux (it knows the runtime and where the managed binary lives on its host).
+          const r = await transport.execMux({ kind: 'tmux', args: ['-V'] });
           return { ...parseTmuxVersion(stripTerminalArtifacts(r.stdout), r.code), mode: srv.muxRuntime };
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message, mode: srv.muxRuntime };
@@ -1183,8 +1186,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkNode = async () => {
         try {
-          const r = await transport.exec('node --version');
-          return parseNodeVersion(stripTerminalArtifacts(r.stdout));
+          return parseNodeVersion(stripTerminalArtifacts(await probeOutput(transport, 'node', ['--version'])));
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message };
         }
@@ -1202,8 +1204,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const checkTailscale = async () => {
         try {
-          const r = await transport.exec('tailscale ip -4');
-          return parseTailscaleCheck(stripTerminalArtifacts(r.stdout));
+          return parseTailscaleCheck(stripTerminalArtifacts(await probeOutput(transport, 'tailscale', ['ip', '-4'])));
         } catch (err: unknown) {
           return { installed: false, detail: (err as Error).message };
         }
@@ -1235,7 +1236,10 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const isRemote = srv.type === 'agent';
       let osName: string;
       try {
-        osName = (await transport.exec('uname -s')).stdout.trim();
+        // An agent that cannot be reached is answered here, before any row is built (the OS probe used to be the first
+        // contact). Any other health failure is left to the agent row below to report.
+        if (agentTransport) await agentTransport.fetchHealth().catch((err: unknown) => { if (err instanceof AgentUnreachableError) throw err; });
+        osName = await resolveOsName(transport, transportFactory.hostProfileFor(srv));
       } catch (err: unknown) {
         if (err instanceof AgentUnreachableError) {
           return reply.status(503).send({ error: 'agent_unreachable', server: err.serverName, reason: err.reason, status: 'offline' });
@@ -1338,9 +1342,8 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       if (!workingDir) return { branches: [] };
 
       try {
-        const safeDir = workingDir.replace(/'/g, "'\\''");
-        const cmd = `cd '${safeDir}' && git branch -a --format='%(refname:short)' 2>/dev/null`;
-        const result = await transportFactory.getTransport(srv).exec(cmd);
+        const result = await transportFactory.getTransport(srv).run(buildCommandSpec('git', ['branch', '-a', '--format=%(refname:short)'], { cwd: workingDir }));
+        if (result.exitCode !== 0) return { branches: [] };
         const lines = stripTerminalArtifacts(result.stdout).trim().split('\n').filter(Boolean);
 
         const seen = new Set<string>();

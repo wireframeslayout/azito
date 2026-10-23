@@ -4186,10 +4186,10 @@ describe('ExecuteTaskUseCase base_branch_unresolvable fail-fast (Issue #63 revie
       units: [unit],
       projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
     });
-    // resolveAndDetectBaseBranch calls transport.exec for `git remote show origin`;
-    // simulate a repo with no HEAD branch detected.
+    // resolveAndDetectBaseBranch runs git through transport.run (detectDefaultBranch);
+    // simulate a repo with no origin/HEAD and neither main nor master (every git command exits 1).
     (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
-      exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })),
+      run: vi.fn(async () => ({ exitCode: 1, signal: null, stdout: '', stderr: '' })),
     });
 
     await expect(useCase.execute(70, 70)).rejects.toThrow('ベースブランチを自動検出できません');
@@ -4213,7 +4213,7 @@ describe('ExecuteTaskUseCase base_branch_unresolvable fail-fast (Issue #63 revie
     // detectDefaultBranch first tries `git symbolic-ref refs/remotes/origin/HEAD`,
     // then falls back to checking main/master refs.
     (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
-      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/develop', stderr: '', code: 0 })),
+      run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: 'refs/remotes/origin/develop', stderr: '' })),
     });
 
     // execute() will throw later (phase loop mock), but baseBranch persistence
@@ -4242,7 +4242,7 @@ describe('ExecuteTaskUseCase.followUp base-branch detection safety net (Issue #6
       projectServer: { workingDirectory: '/work', branch: null, tmuxSession: 'test' },
     });
     (transportFactory.getTransport as ReturnType<typeof vi.fn>).mockReturnValue({
-      exec: vi.fn(async () => ({ stdout: 'refs/remotes/origin/main', stderr: '', code: 0 })),
+      run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: 'refs/remotes/origin/main', stderr: '' })),
     });
 
     // followUp throws later (phase loop mock), but detection+persistence
@@ -4359,10 +4359,10 @@ describe('ExecuteTaskUseCase.isPushCompleted fails closed when a required distri
     });
     const fakeSha = 'a'.repeat(40);
     harness.transportFactory.getTransport = vi.fn(() => ({
-      exec: vi.fn(async (cmd: string) => {
-        if (cmd.includes('rev-parse HEAD')) return { stdout: `${fakeSha}\n`, stderr: '', code: 0 };
-        if (cmd.includes('ls-remote')) return { stdout: `${fakeSha}\trefs/heads/task/1-slug\n`, stderr: '', code: 0 };
-        return { stdout: '', stderr: '', code: 0 };
+      run: vi.fn(async (spec: { args: string[] }) => {
+        if (spec.args[0] === 'rev-parse') return { exitCode: 0, signal: null, stdout: `${fakeSha}\n`, stderr: '' };
+        if (spec.args[0] === 'ls-remote') return { exitCode: 0, signal: null, stdout: `${fakeSha}\trefs/heads/task/1-slug\n`, stderr: '' };
+        return { exitCode: 0, signal: null, stdout: '', stderr: '' };
       }),
     })) as unknown as typeof harness.transportFactory.getTransport;
 

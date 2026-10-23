@@ -15,6 +15,10 @@ import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnrea
 import type { MuxRuntime } from '../Server';
 import { AGENT_HOST_PATH, AgentHostOutdatedError, parseAgentHostInfo, type AgentHostInfo } from './agentHostProtocol';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
+import { CommandOutputLimitError, CommandSpawnError, type CommandResult, type CommandSpec } from '../../../shared/exec/commandSpec';
+import { truncateUtf8 } from '../../../shared/exec/utf8';
+import { toPosixCommandLine } from '../../../shared/exec/posixCommandLine';
+import { AGENT_RUN_PATH, responseToResult } from '../../../shared/exec/runWire';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
@@ -128,6 +132,38 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
 
   matchesHostProfile(profile: HostProfile | null): boolean {
     return this.hostProfile?.platform === profile?.platform && this.hostProfile?.arch === profile?.arch;
+  }
+
+  /**
+   * Runs `spec` on the agent's host. The route is chosen here, once, from what is recorded of the host: an agent whose
+   * host is recorded has `POST /api/run` (it ships with `GET /api/host`, which is what recorded it); an unrecorded one
+   * predates both, so the spec is turned into a quoted POSIX command line for its `POST /api/exec`. A failed `/api/run`
+   * is never retried through the shell.
+   */
+  async run(spec: CommandSpec): Promise<CommandResult> {
+    if (this.hostProfile === null) return this.runThroughShell(spec);
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(AGENT_RUN_PATH, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: this.authHeader },
+      body: JSON.stringify(spec),
+    }, spec.timeoutMs + HTTP_SLACK_MS);
+    if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_RUN_PATH} failed (${status}): ${text}`);
+    return responseToResult(JSON.parse(text));
+  }
+
+  /** The run of an agent without `/api/run`: the quoted command line through `exec`. See `toPosixCommandLine` for what a shell cannot report. */
+  private async runThroughShell(spec: CommandSpec): Promise<CommandResult> {
+    const result = await this.exec(toPosixCommandLine(spec), spec.timeoutMs);
+    // The limit is in bytes, like the shared runner's, and a character is never cut in half.
+    if (Buffer.byteLength(result.stdout) > spec.maxOutputBytes || Buffer.byteLength(result.stderr) > spec.maxOutputBytes) {
+      throw new CommandOutputLimitError(spec.maxOutputBytes, truncateUtf8(result.stdout, spec.maxOutputBytes), truncateUtf8(result.stderr, spec.maxOutputBytes));
+    }
+    // sh: 127 = command not found. The program's own 127 is told apart by sh having named it on stderr.
+    if (result.code === 127 && /not found/i.test(result.stderr)) {
+      throw new CommandSpawnError('ENOENT', `spawn ${spec.file} ENOENT`, result.stdout, result.stderr);
+    }
+    return { exitCode: result.code, signal: null, stdout: result.stdout, stderr: result.stderr };
   }
 
   /** @deprecated POSIX-only: the agent runs `command` with `/bin/sh -c`. Rejects when the agent's host is win32. */

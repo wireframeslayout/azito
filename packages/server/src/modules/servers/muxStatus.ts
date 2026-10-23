@@ -1,20 +1,17 @@
-import type { MuxDriverKind, MuxRuntime, MuxStatusItem } from '@azito/shared';
-import type { IServerTransport } from './transport/ServerTransport';
+import type { MuxDriverKind, MuxStatusItem } from '@azito/shared';
+import type { IMuxTransport } from './transport/ServerTransport';
 import type { ServerConfig } from './Server';
 import { parseTmuxVersion } from './installStatusParsers';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 
-/** The command that prints the tmux version for a server's tmux runtime (hub-managed binary or the system one). */
-export function tmuxVersionCommand(muxRuntime: MuxRuntime): string {
-  return muxRuntime === 'managed'
-    ? '$HOME/.azito/tmux/bin/tmux -L azito -f $HOME/.azito/tmux/azito.conf -V'
-    : 'tmux -V';
-}
-
-/** tmux's status on a server: it runs and prints a version, or why not. Never throws: a failure is the status. */
-export async function checkTmuxStatus(transport: Pick<IServerTransport, 'exec'>, muxRuntime: MuxRuntime): Promise<MuxStatusItem> {
+/**
+ * tmux's status on a server: it runs and prints a version, or why not. Never throws: a failure is the status.
+ * The version is asked of the transport's own tmux (`execMux`), which already knows the server's tmux runtime: the
+ * managed binary lives under the home directory of the host the server is on, a path only that host can resolve.
+ */
+export async function checkTmuxStatus(transport: Pick<IMuxTransport, 'execMux'>): Promise<MuxStatusItem> {
   try {
-    const result = await transport.exec(tmuxVersionCommand(muxRuntime));
+    const result = await transport.execMux({ kind: 'tmux', args: ['-V'] });
     const parsed = parseTmuxVersion(stripTerminalArtifacts(result.stdout), result.code);
     return parsed.installed ? { available: true, version: parsed.version } : { available: false, detail: parsed.detail };
   } catch (err) {

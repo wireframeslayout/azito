@@ -2,6 +2,8 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import { parseRemoteUrl, normalizeRemoteUrl, type ParsedRemote, type RepositoryProvider } from './parseRemoteUrl';
 import { shellQuote } from '../../shared/shellQuote';
+import { CommandSpawnError, type CommandResult } from '../../shared/exec/commandSpec';
+import { runGit } from './runGit';
 import { sanitizeDiscoveredRemoteUrl } from './sanitizeDiscoveredRemoteUrl';
 
 export interface DiscoveredRemote {
@@ -73,7 +75,8 @@ export interface PathStatus {
   isGitRepository: boolean;
 }
 
-const SECTION_MARKER = '---AZITO_REPO_SECTION---';
+/** How many candidate repositories are inspected at once (each is two short git commands). */
+const CANDIDATE_CONCURRENCY = 8;
 
 export class RepoDiscoveryService {
   constructor(private transportFactory: TransportFactory) {}
@@ -130,7 +133,9 @@ export class RepoDiscoveryService {
     // entry itself is still matched by `-name .git`; only paths inside it
     // (its internals) are excluded.
     const findCmd = `find ${safeDir} -maxdepth ${depth + 1} \\( -type d -o -type f \\) -name .git -not -path '*/node_modules/*' -not -path '*/.git/*' 2>/dev/null`;
-    const findResult = await this.transportFactory.getTransport(server).exec(findCmd);
+    const transport = this.transportFactory.getTransport(server);
+    // The scan itself is a shell `find` (a file operation), so it stays on exec until IFileOps (#379 P7).
+    const findResult = await transport.exec(findCmd);
     if (findResult.code !== 0) {
       throw new Error(`Repository scan failed while searching '${workingDirectory}' (exit code ${findResult.code})`);
     }
@@ -143,65 +148,35 @@ export class RepoDiscoveryService {
 
     if (candidateDirs.length === 0) return [];
 
-    // Verify `git` itself is runnable BEFORE batching, as an independent,
-    // single command. The batch below joins one shell group per candidate
-    // with `;`, so its aggregate exit code previously reflected only the
-    // LAST group in the chain — a broken/unreadable repo (or a missing
-    // `git` binary) was only caught when it happened to be the final
-    // candidate `find` returned, and `find`'s order is filesystem-
-    // dependent (unstable across runs). The same input could therefore
-    // either abort the whole scan or silently drop a candidate, depending
-    // on unrelated ordering (Issue #19 third-party review round 3,
-    // Important finding 1). Checking `git`'s availability here, on its
-    // own command, makes that specific failure mode (git missing/
-    // unusable on the target) unconditional — it is a command-level
-    // failure and the whole scan is intentionally failed rather than
-    // silently degraded.
-    const gitCheckResult = await this.transportFactory.getTransport(server).exec('git --version');
-    if (gitCheckResult.code !== 0) {
-      throw new Error(
-        `Repository remote lookup failed: 'git' is not usable on '${workingDirectory}' (exit code ${gitCheckResult.code})`,
-      );
+    // `git` itself must be runnable before any candidate is inspected: with it missing, every candidate would look like a
+    // broken repository and be dropped, and the scan would report "nothing found" instead of failing. This is an
+    // unconditional, command-level failure of the whole scan.
+    const gitUnusable = (detail: string): Error =>
+      new Error(`Repository remote lookup failed: 'git' is not usable on '${workingDirectory}' (${detail})`);
+    let gitCheckResult: CommandResult;
+    try {
+      gitCheckResult = await runGit(transport, undefined, ['--version']);
+    } catch (err) {
+      if (err instanceof CommandSpawnError) throw gitUnusable(err.message);
+      throw err;
     }
+    if (gitCheckResult.exitCode !== 0) throw gitUnusable(`exit code ${gitCheckResult.exitCode}`);
 
-    // Resolve each candidate to its actual repository root via
-    // `git rev-parse --show-toplevel` (this is what correctly turns a
-    // worktree's `.git` *file* location into that worktree's own root,
-    // rather than the main checkout's), then fetch its remotes. Both run
-    // in the same batched command to avoid one round-trip per candidate.
+    // Resolve each candidate to its actual repository root via `git rev-parse --show-toplevel` (this is what correctly
+    // turns a worktree's `.git` *file* location into that worktree's own root, rather than the main checkout's), then fetch
+    // its remotes.
     //
-    // Chosen semantics for a broken/unreadable candidate found WITHIN the
-    // batch (as opposed to `git` being unusable at all, handled above):
-    // that single candidate is dropped from the result, and every other
-    // candidate is still returned — the scan as a whole does not fail.
-    // Each candidate's shell group ends with `|| true` specifically so
-    // that its own failure can never determine the batch command's
-    // aggregate exit code (which previously only reflected whichever
-    // candidate happened to run last). `rev-parse` failing for a
-    // candidate still shows up in its own section as empty output, which
-    // `parseBatchOutput` already treats as "skip this candidate" — so a
-    // broken candidate at the FIRST position and one at the LAST position
-    // now behave identically (see the position-independence test).
-    const batchCmd = candidateDirs
-      .map((d) => {
-        const safe = shellQuote(d);
-        return `echo '${SECTION_MARKER}' && (git -C ${safe} rev-parse --show-toplevel 2>/dev/null; git -C ${safe} remote -v 2>/dev/null; true)`;
-      })
-      .join(' ; ');
+    // A broken/unreadable candidate (its `rev-parse` exits non-zero) is dropped and every other candidate is still
+    // returned, wherever it sits in `find`'s (filesystem-dependent) order. `git` being unusable at all was handled above;
+    // a failure to run the command (transport, timeout) is thrown, never turned into an empty result.
+    const inspected = await mapWithConcurrency(candidateDirs, CANDIDATE_CONCURRENCY, async (dir) => {
+      const toplevel = await runGit(transport, undefined, ['-C', dir, 'rev-parse', '--show-toplevel']);
+      if (toplevel.exitCode !== 0) return null;
+      const remotes = await runGit(transport, undefined, ['-C', dir, 'remote', '-v']);
+      return { toplevel: toplevel.stdout, remoteLines: remotes.exitCode === 0 ? remotes.stdout.split('\n') : [] };
+    });
 
-    const batchResult = await this.transportFactory.getTransport(server).exec(batchCmd);
-    // With `git` confirmed usable above and every per-candidate group
-    // forced to exit 0, a nonzero code here can only mean the transport
-    // itself failed to run the batched command (not any single
-    // candidate's git failure) — still propagated as a command-level
-    // failure rather than an empty/success result.
-    if (batchResult.code !== 0) {
-      throw new Error(
-        `Repository remote lookup failed while searching '${workingDirectory}' (exit code ${batchResult.code})`,
-      );
-    }
-
-    return dedupeByAbsolutePath(parseBatchOutput(batchResult.stdout, workingDirectory));
+    return dedupeByAbsolutePath(toDiscoveredRepos(inspected, workingDirectory));
   }
 }
 
@@ -223,30 +198,32 @@ function dedupeByAbsolutePath(repos: DiscoveredRepo[]): DiscoveredRepo[] {
   return [...byPath.values()];
 }
 
-function parseBatchOutput(stdout: string, workingDirectory: string): DiscoveredRepo[] {
-  const repos: DiscoveredRepo[] = [];
-  let sectionLines: string[] = [];
+/** Runs `fn` over `items` with at most `limit` in flight, keeping the results in the order of `items`. */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
 
-  const flush = () => {
-    if (sectionLines.length === 0) return;
-    const absolutePath = sectionLines[0].trim();
-    if (!absolutePath || !absolutePath.startsWith('/')) return; // rev-parse failed for this candidate
+function toDiscoveredRepos(inspected: Array<{ toplevel: string; remoteLines: string[] } | null>, workingDirectory: string): DiscoveredRepo[] {
+  const repos: DiscoveredRepo[] = [];
+  for (const candidate of inspected) {
+    if (!candidate) continue;
+    const absolutePath = candidate.toplevel.split('\n')[0].trim();
+    if (!absolutePath || !absolutePath.startsWith('/')) continue; // rev-parse printed nothing usable for this candidate
     repos.push({
       relativePath: relativize(workingDirectory, absolutePath),
       absolutePath,
-      remotes: parseRemoteLines(sectionLines.slice(1)),
+      remotes: parseRemoteLines(candidate.remoteLines),
     });
-  };
-
-  for (const line of stdout.split('\n')) {
-    if (line === SECTION_MARKER) {
-      flush();
-      sectionLines = [];
-    } else {
-      sectionLines.push(line);
-    }
   }
-  flush();
   return repos;
 }
 

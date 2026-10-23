@@ -3,7 +3,9 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import type { ServerConfig } from '../../servers/Server';
 import type { ProjectRepositoryWithToken as ProjectRepository } from '../../projects/Project';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
-import { shellQuote } from '../../../shared/shellQuote';
+import { runGit } from '../../git/runGit';
+
+const REMOTE_GIT_TIMEOUT_MS = 15_000;
 
 /**
  * Verifies that a push (and, unless skipped, a PR/MR) has actually landed by
@@ -59,18 +61,15 @@ export class PushVerifier {
 
   private async readShasRemote(server: ServerConfig, workingDir: string, branch: string): Promise<{ localSha: string; remoteSha: string } | null> {
     try {
-      // `workingDir` comes from `assertPathContained`'s resolved output and
-      // `branch` from task/worktree metadata — neither is restricted to a
-      // safe character set anymore (Issue #27 review finding 2 removed the
-      // global `assertSafePath` gate from PathContainment), so this call
-      // site is now the one responsible for quoting its own shell
-      // interpolation, same as every other `cd -- <path>` call in this
-      // codebase.
-      const quotedDir = shellQuote(workingDir);
-      const quotedBranch = shellQuote(branch);
-      const r1 = await this.transportFactory.getTransport(server).exec(`cd -- ${quotedDir} && git rev-parse HEAD`);
+      // `workingDir` comes from `assertPathContained`'s resolved output and `branch` from task/worktree metadata —
+      // neither is restricted to a safe character set (Issue #27 review finding 2). No shell is involved: both reach
+      // git as whole arguments (`workingDir` as the cwd), and `--` keeps a branch that starts with `-` from being an
+      // option, the same as the local variant above.
+      const transport = this.transportFactory.getTransport(server);
+      const r1 = await runGit(transport, workingDir, ['rev-parse', 'HEAD'], { timeoutMs: REMOTE_GIT_TIMEOUT_MS });
+      const r2 = await runGit(transport, workingDir, ['ls-remote', '--heads', '--', 'origin', branch], { timeoutMs: REMOTE_GIT_TIMEOUT_MS });
+      if (r1.exitCode !== 0 || r2.exitCode !== 0) return null;
       const localSha = r1.stdout.trim();
-      const r2 = await this.transportFactory.getTransport(server).exec(`cd -- ${quotedDir} && git ls-remote --heads origin ${quotedBranch}`);
       const remoteShaLine = r2.stdout.trim();
       if (!localSha || !remoteShaLine) return null;
       return { localSha, remoteSha: remoteShaLine.slice(0, 40) };

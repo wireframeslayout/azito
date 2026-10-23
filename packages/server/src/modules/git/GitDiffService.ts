@@ -3,8 +3,10 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { parseUnifiedDiff, unquoteGitPath, type FileDiff } from './DiffParser';
 import { stripTerminalArtifacts } from '../../shared/utils/stripTerminalArtifacts';
 import { shellQuote } from '../../shared/shellQuote';
+import type { CommandResult } from '../../shared/exec/commandSpec';
+import { runGit, combinedOutput } from './runGit';
 
-import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN } from './assertSafeGitArgs';
+import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN, assertNotOptionLike } from './assertSafeGitArgs';
 export { SAFE_PATH_PATTERN as SAFE_PATH, SAFE_BRANCH_PATTERN as SAFE_BRANCH };
 export const SAFE_HASH = /^[0-9a-f]{7,40}$/;
 
@@ -34,8 +36,16 @@ export interface GetDiffOptions {
   includeUncommitted?: boolean;
 }
 
-function hasGitError(combined: string, code: number): boolean {
-  return code !== 0 || /^fatal:|^error:/m.test(combined);
+/** Throws with git's own message (or the exit code when it said nothing) when a git command exited non-zero. */
+function assertGitSucceeded(result: CommandResult, what: string): void {
+  if (result.exitCode !== 0) {
+    throw new Error(`${what} failed: ${combinedOutput(result) || `exit ${result.exitCode}`}`);
+  }
+}
+
+/** The checked-out branch name from `rev-parse --abbrev-ref HEAD`; 'HEAD' when git cannot say (detached, no commits). */
+function headBranchOf(result: CommandResult): string {
+  return result.exitCode === 0 ? stripTerminalArtifacts(result.stdout).trim() || 'HEAD' : 'HEAD';
 }
 
 export class GitDiffService {
@@ -43,20 +53,15 @@ export class GitDiffService {
 
   async getCommits(srv: ServerConfig, dirPath: string, base?: string): Promise<GitCommit[]> {
     if (base && !SAFE_BRANCH_PATTERN.test(base)) throw new Error(`Invalid base branch: ${base}`);
+    if (base) assertNotOptionLike(base, 'base branch');
     const transport = this.transportFactory.getTransport(srv);
-    const safeDir = dirPath.replace(/'/g, "'\\''");
 
-    const range = base ? `${base}..HEAD` : '-50 HEAD';
+    const range = base ? [`${base}..HEAD`] : ['-50', 'HEAD'];
     const FIELD_SEP = '<<>>';
     const RECORD_SEP = '<<||>>';
     const fmt = `%H${FIELD_SEP}%h${FIELD_SEP}%an${FIELD_SEP}%aI${FIELD_SEP}%s${RECORD_SEP}`;
-    const cmd = `git -c core.quotepath=false -C '${safeDir}' log --pretty=format:'${fmt}' ${range}`;
-    const result = await transport.exec(cmd);
-
-    const combined = `${result.stdout}\n${result.stderr}`.trim();
-    if (hasGitError(combined, result.code)) {
-      throw new Error(`git log failed: ${combined || `exit ${result.code}`}`);
-    }
+    const result = await runGit(transport, undefined, ['-c', 'core.quotepath=false', '-C', dirPath, 'log', `--pretty=format:${fmt}`, ...range]);
+    assertGitSucceeded(result, 'git log');
 
     const raw = stripTerminalArtifacts(result.stdout);
     return raw
@@ -99,14 +104,9 @@ export class GitDiffService {
   private async getCommitDiff(srv: ServerConfig, dirPath: string, commit: string): Promise<GitDiffResult> {
     if (!SAFE_HASH.test(commit)) throw new Error(`Invalid commit hash: ${commit}`);
     const transport = this.transportFactory.getTransport(srv);
-    const safeDir = dirPath.replace(/'/g, "'\\''");
 
-    const diffCmd = `git -c core.quotepath=false -C '${safeDir}' show --format= --unified=3 ${commit}`;
-    const diffResult = await transport.exec(diffCmd);
-    const combined = `${diffResult.stdout}\n${diffResult.stderr}`.trim();
-    if (hasGitError(combined, diffResult.code)) {
-      throw new Error(`git diff failed: ${combined || `exit ${diffResult.code}`}`);
-    }
+    const diffResult = await runGit(transport, undefined, ['-c', 'core.quotepath=false', '-C', dirPath, 'show', '--format=', '--unified=3', commit]);
+    assertGitSucceeded(diffResult, 'git diff');
 
     const rawDiff = stripTerminalArtifacts(diffResult.stdout);
     const { files, truncated } = this.parseDiffWithTruncation(rawDiff);
@@ -115,19 +115,15 @@ export class GitDiffService {
 
   private async getLegacyDiff(srv: ServerConfig, dirPath: string, base: string): Promise<GitDiffResult> {
     if (base && !SAFE_BRANCH_PATTERN.test(base)) throw new Error(`Invalid base branch: ${base}`);
+    if (base) assertNotOptionLike(base, 'base branch');
     const transport = this.transportFactory.getTransport(srv);
-    const safeDir = dirPath.replace(/'/g, "'\\''");
 
-    const headResult = await transport.exec(`git -C '${safeDir}' rev-parse --abbrev-ref HEAD 2>/dev/null`);
-    const headBranch = stripTerminalArtifacts(headResult.stdout).trim() || 'HEAD';
+    const headResult = await runGit(transport, undefined, ['-C', dirPath, 'rev-parse', '--abbrev-ref', 'HEAD']);
+    const headBranch = headBranchOf(headResult);
 
     const diffRef = base ? `${base}...HEAD` : 'HEAD';
-    const diffCmd = `git -c core.quotepath=false -C '${safeDir}' diff --unified=3 ${diffRef}`;
-    const diffResult = await transport.exec(diffCmd);
-    const combined = `${diffResult.stdout}\n${diffResult.stderr}`.trim();
-    if (hasGitError(combined, diffResult.code)) {
-      throw new Error(`git diff failed: ${combined || `exit ${diffResult.code}`}`);
-    }
+    const diffResult = await runGit(transport, undefined, ['-c', 'core.quotepath=false', '-C', dirPath, 'diff', '--unified=3', diffRef]);
+    assertGitSucceeded(diffResult, 'git diff');
 
     const rawDiff = stripTerminalArtifacts(diffResult.stdout);
     const { files, truncated } = this.parseDiffWithTruncation(rawDiff);
@@ -136,18 +132,19 @@ export class GitDiffService {
 
   private async getUncommittedDiff(srv: ServerConfig, dirPath: string): Promise<GitDiffResult> {
     const transport = this.transportFactory.getTransport(srv);
-    const safeDir = shellQuote(dirPath);
+    const gitInDir = (...args: string[]): ReturnType<typeof runGit> =>
+      runGit(transport, undefined, ['-c', 'core.quotepath=false', '-C', dirPath, ...args]);
 
     // Run all commands in parallel
     const [stagedNamesResult, unstagedNamesResult, diffResult, statusResult, headResult] = await Promise.all([
-      transport.exec(`git -c core.quotepath=false -C ${safeDir} diff --cached --name-only`),
-      transport.exec(`git -c core.quotepath=false -C ${safeDir} diff --name-only`),
-      transport.exec(`git -c core.quotepath=false -C ${safeDir} diff --unified=3 HEAD`),
-      transport.exec(`git -c core.quotepath=false -C ${safeDir} status --porcelain -uall`),
-      transport.exec(`git -C ${safeDir} rev-parse --abbrev-ref HEAD 2>/dev/null`),
+      gitInDir('diff', '--cached', '--name-only'),
+      gitInDir('diff', '--name-only'),
+      gitInDir('diff', '--unified=3', 'HEAD'),
+      gitInDir('status', '--porcelain', '-uall'),
+      runGit(transport, undefined, ['-C', dirPath, 'rev-parse', '--abbrev-ref', 'HEAD']),
     ]);
 
-    const headBranch = stripTerminalArtifacts(headResult.stdout).trim() || 'HEAD';
+    const headBranch = headBranchOf(headResult);
 
     // Parse staged/unstaged name sets
     const stagedNames = new Set(
@@ -158,10 +155,7 @@ export class GitDiffService {
     );
 
     // Parse the combined diff
-    const combined = `${diffResult.stdout}\n${diffResult.stderr}`.trim();
-    if (hasGitError(combined, diffResult.code)) {
-      throw new Error(`git diff failed: ${combined || `exit ${diffResult.code}`}`);
-    }
+    assertGitSucceeded(diffResult, 'git diff');
 
     const rawDiff = stripTerminalArtifacts(diffResult.stdout);
     let { files, truncated } = this.parseDiffWithTruncation(rawDiff);
@@ -277,31 +271,24 @@ export class GitDiffService {
   private async getBaseDiff(srv: ServerConfig, dirPath: string, base: string, includeUncommitted: boolean): Promise<GitDiffResult> {
     if (!base) throw new Error('base branch is required for base scope');
     if (!SAFE_BRANCH_PATTERN.test(base)) throw new Error(`Invalid base branch: ${base}`);
+    assertNotOptionLike(base, 'base branch');
     const transport = this.transportFactory.getTransport(srv);
-    const safeDir = dirPath.replace(/'/g, "'\\''");
 
-    const headResult = await transport.exec(`git -C '${safeDir}' rev-parse --abbrev-ref HEAD 2>/dev/null`);
-    const headBranch = stripTerminalArtifacts(headResult.stdout).trim() || 'HEAD';
+    const headResult = await runGit(transport, undefined, ['-C', dirPath, 'rev-parse', '--abbrev-ref', 'HEAD']);
+    const headBranch = headBranchOf(headResult);
 
-    let diffCmd: string;
+    let diffRef: string;
     if (includeUncommitted) {
       // Resolve merge-base and diff against working tree
-      const mergeBaseResult = await transport.exec(`git -C '${safeDir}' merge-base ${shellQuote(base)} HEAD`);
-      const mbCombined = `${mergeBaseResult.stdout}\n${mergeBaseResult.stderr}`.trim();
-      if (hasGitError(mbCombined, mergeBaseResult.code)) {
-        throw new Error(`git merge-base failed: ${mbCombined || `exit ${mergeBaseResult.code}`}`);
-      }
-      const mergeBase = stripTerminalArtifacts(mergeBaseResult.stdout).trim();
-      diffCmd = `git -c core.quotepath=false -C '${safeDir}' diff --unified=3 ${mergeBase}`;
+      const mergeBaseResult = await runGit(transport, undefined, ['-C', dirPath, 'merge-base', base, 'HEAD']);
+      assertGitSucceeded(mergeBaseResult, 'git merge-base');
+      diffRef = stripTerminalArtifacts(mergeBaseResult.stdout).trim();
     } else {
-      diffCmd = `git -c core.quotepath=false -C '${safeDir}' diff --unified=3 ${base}...HEAD`;
+      diffRef = `${base}...HEAD`;
     }
 
-    const diffResult = await transport.exec(diffCmd);
-    const combined = `${diffResult.stdout}\n${diffResult.stderr}`.trim();
-    if (hasGitError(combined, diffResult.code)) {
-      throw new Error(`git diff failed: ${combined || `exit ${diffResult.code}`}`);
-    }
+    const diffResult = await runGit(transport, undefined, ['-c', 'core.quotepath=false', '-C', dirPath, 'diff', '--unified=3', diffRef]);
+    assertGitSucceeded(diffResult, 'git diff');
 
     const rawDiff = stripTerminalArtifacts(diffResult.stdout);
     const { files, truncated } = this.parseDiffWithTruncation(rawDiff);
