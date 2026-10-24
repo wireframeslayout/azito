@@ -7,8 +7,8 @@ import { pathApiFor } from '../../shared/os/hostPath';
 import type { CommandResult } from '../../shared/exec/commandSpec';
 import { runGit, combinedOutput } from './runGit';
 
-import { SAFE_PATH_PATTERN, SAFE_BRANCH_PATTERN, assertNotOptionLike } from './assertSafeGitArgs';
-export { SAFE_PATH_PATTERN as SAFE_PATH, SAFE_BRANCH_PATTERN as SAFE_BRANCH };
+import { SAFE_BRANCH_PATTERN, assertNotOptionLike } from './assertSafeGitArgs';
+export { SAFE_BRANCH_PATTERN as SAFE_BRANCH };
 export const SAFE_HASH = /^[0-9a-f]{7,40}$/;
 
 const MAX_DIFF_SIZE = 1_000_000;

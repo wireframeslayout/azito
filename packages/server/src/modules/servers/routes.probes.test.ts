@@ -122,6 +122,23 @@ describe('GET /api/servers/:name/branches', () => {
     expect(specs[0]).toMatchObject({ file: 'git', cwd: '/work', args: ['branch', '-a', '--format=%(refname:short)'] });
   });
 
+  it('runs git in a working directory with spaces and Japanese characters', async () => {
+    const { app, specs } = await build(server(), { platform: 'linux', arch: 'x64' }, () => ok('main\n'));
+    const dir = '/home/u/my repo/日本語';
+    const res = await app.inject({ method: 'GET', url: `/api/servers/srv/branches?working_directory=${encodeURIComponent(dir)}` });
+    expect(res.json()).toEqual({ branches: ['main'] });
+    expect(specs[0]).toMatchObject({ file: 'git', cwd: dir });
+  });
+
+  it('refuses a working_directory that is not a path of the host with 400, without running git', async () => {
+    const { app, specs } = await build(server(), { platform: 'linux', arch: 'x64' });
+    for (const dir of ['relative/dir', 'C:\\Users\\x y']) {
+      const res = await app.inject({ method: 'GET', url: `/api/servers/srv/branches?working_directory=${encodeURIComponent(dir)}` });
+      expect(res.statusCode, dir).toBe(400);
+    }
+    expect(specs).toHaveLength(0);
+  });
+
   it('answers an empty list when git exits non-zero', async () => {
     const { app } = await build(server(), { platform: 'linux', arch: 'x64' }, () => failed(128, 'fatal: not a git repository', 'main\n'));
     expect((await app.inject({ method: 'GET', url })).json()).toEqual({ branches: [] });

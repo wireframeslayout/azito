@@ -79,14 +79,22 @@ export function assertPosixHost(profile: HostProfile | null, serverLabel: string
 }
 
 /**
- * The git API (diff, commits, worktree list, branch search) is closed on a Windows host until #370: `SAFE_PATH` in
- * `GitDiffService` accepts POSIX paths only, and `git` cannot be assumed to be installed there. The same row is closed in
+ * The git API (diff, commits, worktree list, branch search) is closed on a Windows host until #370: the read paths take
+ * Windows paths, but worktree create / remove (R4) do not yet, and `git` cannot be assumed to be installed there. The same row is closed in
  * `hostCapabilities.ts` (`git`), which is what the UI reads; this is the answer for a call that still arrives (a saved tab, a
  * direct request). Remove both with #370. A null profile is an agent registered before the OS was recorded: a Unix one.
  */
 export function assertGitSupported(profile: HostProfile | null, serverLabel: string): void {
   if (profile?.platform !== 'win32') return;
   throw new HostProfileError('unsupported_os', `git operations (diff, commits, worktrees, branches) are not available on ${serverLabel} (win32) yet: Windows git support is tracked in #370.`);
+}
+
+/**
+ * The OS whose path rules apply to a server's host. A null profile is an agent registered before the OS was recorded: a Unix
+ * one (the same reading as `assertPosixHost` / `assertGitSupported`).
+ */
+export function platformOfProfile(profile: HostProfile | null): HostPlatform {
+  return profile?.platform ?? 'linux';
 }
 
 /** The separator of a host's PATH. A null profile (a Unix agent registered before the OS was recorded) uses `:`. */

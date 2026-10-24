@@ -1,7 +1,7 @@
 import type { IWorktreeService, WorktreeInfo, WorktreeEntry } from './IWorktreeService';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 
-import { assertSafePath, assertSafeBranch, assertNotOptionLike } from './assertSafeGitArgs';
+import { assertSafePath, assertSafeBranch, assertNotOptionLike, assertGitPathArg } from './assertSafeGitArgs';
 import { parseWorktreePorcelain } from './parseWorktreePorcelain';
 import { combinedOutput, runGit } from './runGit';
 
@@ -9,7 +9,8 @@ export class RemoteWorktreeService implements IWorktreeService {
   constructor(private transport: IServerTransport) {}
 
   async list(workingDir: string): Promise<WorktreeEntry[]> {
-    assertSafePath(workingDir, 'workingDir');
+    const platform = this.transport.files().platform;
+    assertGitPathArg(platform, workingDir, 'workingDir');
     const result = await runGit(this.transport, await this.absolute(workingDir), ['worktree', 'list', '--porcelain']);
     if (result.exitCode !== 0) {
       if (combinedOutput(result).includes('not a git repository')) {
@@ -17,7 +18,7 @@ export class RemoteWorktreeService implements IWorktreeService {
       }
       throw new Error(`Failed to list worktrees: ${result.stderr || result.stdout}`);
     }
-    return parseWorktreePorcelain(result.stdout);
+    return parseWorktreePorcelain(result.stdout, platform);
   }
 
   async create(workingDir: string, taskId: number, taskSlug: string, baseBranch: string, branchName?: string): Promise<WorktreeInfo> {

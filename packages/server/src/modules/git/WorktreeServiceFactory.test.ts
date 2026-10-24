@@ -5,7 +5,7 @@ import { RemoteWorktreeService } from './RemoteWorktreeService';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 
 describe('WorktreeServiceFactory', () => {
-  const factory = new WorktreeServiceFactory();
+  const factory = new WorktreeServiceFactory({ platform: "linux", arch: "x64" });
 
   it('returns LocalWorktreeService for local server type', () => {
     const service = factory.create('local');

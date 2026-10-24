@@ -276,7 +276,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   const paneClassifier = new PaneClassifier(llmClient);
   const contentExtractor = new LlmContentExtractor(llmClient);
   const gitProvider = new GitProviderService();
-  const worktreeServiceFactory = new WorktreeServiceFactory();
+  const worktreeServiceFactory = new WorktreeServiceFactory(hubHost);
   const storageClient = new MinioStorageClient();
   const notificationBus = new NotificationBus();
   const misao = registerMisaoDriver(muxDriverRegistry, misaoRuntime, (serverName) => {
