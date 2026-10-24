@@ -18,6 +18,17 @@ export function isUnsupportedOsAnswer(body: unknown): body is { error: string; c
   return code === 'unsupported_os' && typeof error === 'string';
 }
 
+/**
+ * The body of an API answer that could not run git because the host has no Git for Windows
+ * (`{ error: <the reason, with how to install it>, code: 'git_not_found' }`, HTTP 501). Not known in advance, so it is not a
+ * closed feature: it is recognised in the answer of a git call and shown as that call's error, in the hub's wording.
+ */
+export function isGitNotFoundAnswer(body: unknown): body is { error: string; code: 'git_not_found' } {
+  if (!body || typeof body !== 'object') return false;
+  const { error, code } = body as { error?: unknown; code?: unknown };
+  return code === 'git_not_found' && typeof error === 'string';
+}
+
 /** Words an `unsupported_os` answer: the hub's reason, under a line that says it is the host's OS and not a failure. */
 export function describeUnsupportedOs(body: { error: string }, t: TFunction): string {
   return t('common:hostFeature.apiRefused', { reason: body.error });

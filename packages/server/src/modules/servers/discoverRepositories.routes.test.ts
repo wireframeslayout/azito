@@ -5,6 +5,9 @@ import type { ServersRouteOptions } from './routes';
 import type { IServerRepository, ServerConfig } from './Server';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { mapAppError } from '../../app/mapAppError';
+import { GitNotFoundError } from '../../shared/exec/commandSpec';
+
+const NOT_FOUND_REASON = 'Git for Windows (git.exe) was not found on this host. Install it with "winget install --id Git.Git -e".';
 
 // GET /api/servers/:name/discover-repositories — the project-independent
 // repository scan the create-project wizard calls before any project or
@@ -205,10 +208,10 @@ describe('GET /api/servers/:name/discover-repositories', () => {
   });
 });
 
-describe('GET discover-repositories on a Windows server (the repository scan is closed until #370)', () => {
-  it('answers 501 unsupported_os before the path is checked and runs nothing', async () => {
-    const checkPathStatus = vi.fn();
-    const discover = vi.fn();
+describe('GET discover-repositories on a Windows server without Git for Windows', () => {
+  it('answers 501 git_not_found with the reason, not a failed scan', async () => {
+    const checkPathStatus = vi.fn(async () => ({ exists: true, isGitRepository: false }));
+    const discover = vi.fn(async () => { throw new GitNotFoundError(NOT_FOUND_REASON); });
     const opts = makeOpts({ repoDiscovery: { checkPathStatus, discover } as unknown as ServersRouteOptions['repoDiscovery'] });
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(makeServer({ type: 'agent', hostProfile: { platform: 'win32', arch: 'x64' } }));
     const app = Fastify();
@@ -223,8 +226,7 @@ describe('GET discover-repositories on a Windows server (the repository scan is 
     const res = await app.inject({ method: 'GET', url: '/api/servers/win/discover-repositories?path=C:%5Cwork' });
 
     expect(res.statusCode).toBe(501);
-    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
-    expect(checkPathStatus).not.toHaveBeenCalled();
-    expect(discover).not.toHaveBeenCalled();
+    expect(res.json()).toEqual({ code: 'git_not_found', error: NOT_FOUND_REASON });
+    expect(discover).toHaveBeenCalled();
   });
 });

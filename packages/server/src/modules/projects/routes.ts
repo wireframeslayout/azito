@@ -16,8 +16,8 @@ import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
-import { assertGitSupported } from '../../shared/os/hostProfile';
 import { hostPlatformOfServerName } from '../servers/hostPlatformOfServerName';
+import { GitNotFoundError } from '../../shared/exec/commandSpec';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
 // Issue #29 review (independent QC), M-3: imported from the base-layer
 // `modules/servers` (not `modules/tasks/execution/WindowRotation`, which
@@ -56,7 +56,7 @@ export interface ProjectsRouteOptions {
   tmux: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
-  /** Resolves a server's host OS (`hostProfileFor`): the repository scan is closed on a Windows host until #370. */
+  /** Resolves a server's host OS (`hostProfileFor`). */
   transportFactory: TransportFactory;
   projectSecretRepo: SqliteProjectSecretRepository;
   /** Issue #28 Phase A後半: import-issue is a task-origination path too — see TaskOriginationService's own doc comment. */
@@ -920,7 +920,6 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
 
       const srv = serverRepo.findByName(request.params.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       let discovered;
       try {
@@ -932,6 +931,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
         // The thrown message may embed the raw working directory path but
         // never a remote URL (discover() fails before any `git remote -v`
         // output is read), so it is safe to log/return as-is.
+        if (err instanceof GitNotFoundError) throw err;
         fastify.log.warn({ err, serverName: request.params.serverName }, 'repository discovery scan failed');
         return reply.status(502).send({ error: 'Failed to scan the working directory for git repositories' });
       }

@@ -29,8 +29,8 @@ function node(script: string, args: string[] = [], options: Parameters<typeof bu
 
 describe('runHostOf', () => {
   it('is a Windows host with the SystemRoot the entry resolved, and a Unix host otherwise', () => {
-    expect(runHostOf({ platform: 'win32', systemRoot: 'C:\\Windows' })).toEqual({ windows: true, systemRoot: 'C:\\Windows' });
-    expect(runHostOf({ platform: 'win32', systemRoot: undefined })).toEqual({ windows: true, systemRoot: undefined });
+    expect(runHostOf({ platform: 'win32', systemRoot: 'C:\\Windows' })).toEqual({ windows: true, systemRoot: 'C:\\Windows', git: null });
+    expect(runHostOf({ platform: 'win32', systemRoot: undefined })).toEqual({ windows: true, systemRoot: undefined, git: null });
     expect(runHostOf({ platform: 'linux', systemRoot: 'C:\\ignored' })).toEqual({ windows: false });
     expect(runHostOf({ platform: 'darwin', systemRoot: undefined })).toEqual({ windows: false });
   });

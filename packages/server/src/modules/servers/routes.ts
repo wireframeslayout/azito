@@ -34,12 +34,13 @@ import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort'
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
-import { assertPosixHost, assertGitSupported, platformOfProfile } from '../../shared/os/hostProfile';
+import { assertPosixHost, platformOfProfile } from '../../shared/os/hostProfile';
 import { invalidWorkingDirectoryReason, isHomeRelativePath } from '../../shared/os/hostPath';
 import { assertHostFeature } from '../../shared/os/hostFeature';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
 import { runGit } from '../git/runGit';
+import { GitNotFoundError } from '../../shared/exec/commandSpec';
 import { toDiscoveryResponse, type RepoDiscoveryService } from '../git/RepoDiscoveryService';
 
 // ─── Hub identity helpers ───
@@ -1338,7 +1339,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       const q = (request.query.q || '').trim().toLowerCase();
       const projectId = request.query.project_id ? parseInt(request.query.project_id, 10) : NaN;
@@ -1373,7 +1373,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         }
 
         return { branches };
-      } catch {
+      } catch (err) {
+        // Git for Windows missing is a reason to show (mapAppError -> 501 git_not_found), not an empty list.
+        if (err instanceof GitNotFoundError) throw err;
         return { branches: [] };
       }
     },
@@ -1405,7 +1407,6 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
 
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       const path = request.query.path;
       const platform = platformOfProfile(transportFactory.hostProfileFor(srv));
@@ -1436,6 +1437,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
         // Same distinction as the project-scoped endpoint: a scan that
         // could not run must never be reported the same way as a scan
         // that genuinely found nothing.
+        if (err instanceof GitNotFoundError) throw err;
         fastify.log.warn({ err, serverName: request.params.name }, 'repository discovery scan failed');
         return reply.status(502).send({ error: 'Failed to scan the working directory for git repositories' });
       }

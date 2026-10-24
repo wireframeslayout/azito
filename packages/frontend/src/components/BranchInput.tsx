@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { baseInputStyle } from './ui';
-import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
+import { isGitNotFoundAnswer } from '../lib/hostFeature';
 
 interface BranchInputProps {
   value: string;
@@ -22,11 +22,11 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
   const hasFocusRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
 
-  // Suggestions come from the repository API, which is closed on some hosts (a Windows agent until #370): the branch can
-  // still be typed, so only the suggestions go, and the reason is shown under the field.
-  const gitBlockedReason = useHostFeatureBlock()(serverName, 'git');
+  // Suggestions come from the repository API. The branch can always be typed; when the host has no Git for Windows the API says
+  // so (`git_not_found`), and that reason is shown under the field instead of a silently empty list.
+  const [gitNotFoundReason, setGitNotFoundReason] = useState<string | null>(null);
   const reasonId = useId();
-  const disabled = !serverName || isNaN(projectId) || !!gitBlockedReason;
+  const disabled = !serverName || isNaN(projectId);
 
   const fetchSuggestions = useCallback(async (q: string) => {
     if (disabled) {
@@ -37,8 +37,15 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
     try {
       let url = `/servers/${encodeURIComponent(serverName)}/branches?q=${encodeURIComponent(q)}&project_id=${projectId}`;
       if (workingDirectory) url += `&working_directory=${encodeURIComponent(workingDirectory)}`;
-      const result = await api<{ branches: string[] }>(url);
-      const items = Array.isArray(result.branches) ? result.branches.slice(0, 20) : [];
+      const result = await api<{ branches: string[] } | { error: string; code: 'git_not_found' }>(url);
+      if (isGitNotFoundAnswer(result)) {
+        setGitNotFoundReason(result.error);
+        setSuggestions([]);
+        setOpen(false);
+        return;
+      }
+      setGitNotFoundReason(null);
+      const items = 'branches' in result && Array.isArray(result.branches) ? result.branches.slice(0, 20) : [];
       setSuggestions(items);
       setHighlightIdx(0);
       if (hasFocusRef.current) setOpen(items.length > 0);
@@ -153,10 +160,10 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
         placeholder={placeholder}
         style={{ ...baseInputStyle, ...style }}
         autoComplete="off"
-        aria-describedby={gitBlockedReason ? reasonId : undefined}
+        aria-describedby={gitNotFoundReason ? reasonId : undefined}
       />
-      {gitBlockedReason && (
-        <div id={reasonId} style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{gitBlockedReason}</div>
+      {gitNotFoundReason && (
+        <div id={reasonId} role="status" style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{gitNotFoundReason}</div>
       )}
       {open && suggestions.length > 0 && (
         <div

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { HostPathApi } from '@azito/shared';
 import { api } from '../../api/client';
+import { isGitNotFoundAnswer } from '../../lib/hostFeature';
 import { Badge } from '../ui/Badge';
 import { Icon } from '../ui/Icon';
 import { WorktreePickerItem, getWorktreeName } from './WorktreePickerItem';
@@ -57,10 +58,12 @@ function RootSwitcherReady({ serverName, projectId, selectedPath, onSelect, onWo
     setLoading(true);
     setError(null);
     try {
-      const data = await api<{ worktrees: WorktreeItem[] }>(
+      const data = await api<{ worktrees: WorktreeItem[] } | { error: string; code: 'git_not_found' }>(
         `/servers/${encodeURIComponent(serverName)}/git/worktrees?project_id=${projectId}`,
       );
-      const items = data.worktrees ?? [];
+      // Git for Windows missing on the host: the hub's reason (with how to install it) is the error shown, not an empty list.
+      if (isGitNotFoundAnswer(data)) throw new Error(data.error);
+      const items = 'worktrees' in data ? data.worktrees : [];
       setWorktrees(items);
       const current = selectedPath === null ? (items.find((w) => w.isMain) ?? null) : findByPath(pathApi, items, selectedPath);
       setCurrentWorktree(current);
@@ -285,6 +288,7 @@ function RootSwitcherReady({ serverName, projectId, selectedPath, onSelect, onWo
             {!loading && error && (
               <div style={{ padding: '8px 12px', fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }} role="alert">
                 <span>{t('worktrees.loadError')}</span>
+                <div style={{ marginTop: 4, fontSize: 'var(--font-xs)' }}>{error}</div>
                 <button
                   type="button"
                   onClick={fetchWorktrees}

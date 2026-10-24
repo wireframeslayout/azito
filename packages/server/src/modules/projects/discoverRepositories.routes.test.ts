@@ -6,6 +6,9 @@ import { TaskOriginationService } from '../tasks/origination/TaskOriginationServ
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { mapAppError } from '../../app/mapAppError';
+import { GitNotFoundError } from '../../shared/exec/commandSpec';
+
+const NOT_FOUND_REASON = 'Git for Windows (git.exe) was not found on this host. Install it with "winget install --id Git.Git -e".';
 import { LocalCloneTargetNotEmptyError } from '../git/LocalRepoCloneService';
 
 // Issue #19 third-party review:
@@ -1068,9 +1071,9 @@ describe('POST clone-local', () => {
   });
 });
 
-describe('GET discover-repositories on a Windows server (the repository scan is closed until #370)', () => {
-  it('answers 501 unsupported_os and runs nothing', async () => {
-    const discover = vi.fn();
+describe('GET discover-repositories on a Windows server without Git for Windows', () => {
+  it('answers 501 git_not_found with the reason, not a failed scan', async () => {
+    const discover = vi.fn(async () => { throw new GitNotFoundError(NOT_FOUND_REASON); });
     const opts = makeOpts({
       repoDiscovery: { discover } as unknown as ProjectsRouteOptions['repoDiscovery'],
       transportFactory: { hostProfileFor: () => ({ platform: 'win32', arch: 'x64' }) } as unknown as ProjectsRouteOptions['transportFactory'],
@@ -1088,7 +1091,7 @@ describe('GET discover-repositories on a Windows server (the repository scan is 
     const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
 
     expect(res.statusCode).toBe(501);
-    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
-    expect(discover).not.toHaveBeenCalled();
+    expect(res.json()).toEqual({ code: 'git_not_found', error: NOT_FOUND_REASON });
+    expect(discover).toHaveBeenCalled();
   });
 });

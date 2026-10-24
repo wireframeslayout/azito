@@ -11,8 +11,11 @@
  *  - file name search: `searchFileNames` over `IFileOps.walk`.
  *  - file content search: `GET /files/search` runs `rg` when the host has it, else the host's own search
  *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
+ *  - git (diff / commits / branches / worktree list / repository discovery): `runGit`, which asks the host for the `git.exe` of Git for
+ *    Windows (`GitLocator`: PATH, then the standard install locations). Not installed there: the API answers `501 git_not_found` with
+ *    the reason, which is not known in advance, so it is shown as the error of the call, not as a closed feature.
  *
- * Closed on Windows until #370: git (see `WIN32_UNAVAILABLE`).
+ * Closed on Windows: see `WIN32_UNAVAILABLE`.
  */
 
 export type HostPlatform = 'linux' | 'darwin' | 'win32';
@@ -22,14 +25,13 @@ export interface HostPlatformInfo {
 }
 
 export type HostFeature =
-  | 'git'
   | 'taskExecution'
   | 'workerLaunch'
   | 'tmux'
   | 'browserRuntime'
   | 'harness';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['git', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
+export const HOST_FEATURES: readonly HostFeature[] = ['taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -38,9 +40,6 @@ export type HostFeatureSupport =
 /**
  * The Windows rows: feature -> the issue that supports it (null: never, the host has no such program). Each row says
  * which path closes it.
- *  - git (#370): diff / commits / worktree list / branch search (`modules/git/routes.ts`, `GET /branches`). The read paths take
- *    Windows paths now (`assertGitPathArg`); the row stays closed until worktree create / remove (R4) work on Windows and a host
- *    cannot be assumed to have `git`. Those routes answer `unsupported_os` (`assertGitSupported` in `shared/os/hostProfile.ts`). #370 makes git work on Windows, then removes this row and that guard.
  *  - taskExecution (#371): `ExecuteTaskUseCase` starts the worker in a pane with a command (`paneShell.commandArgs` is null on Windows -> `unsupported_os`).
  *  - workerLaunch (#371): a new window with claude / codex / a command: the same pane command (`MisaoServers`, `paneShell.ts`).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.
@@ -48,7 +47,6 @@ export type HostFeatureSupport =
  *  - harness (#371): `harness/install` is `setup.sh` (`assertPosixHost`).
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
-  git: 370,
   taskExecution: 371,
   workerLaunch: 371,
   tmux: null,

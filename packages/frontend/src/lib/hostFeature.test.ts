@@ -1,25 +1,37 @@
 import { describe, it, expect } from 'vitest';
 import type { TFunction } from 'i18next';
 import { pickTaskExecutionServer } from '@azito/shared';
-import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs } from './hostFeature';
+import { hostFeatureBlockReason, isUnsupportedOsAnswer, describeUnsupportedOs, isGitNotFoundAnswer } from './hostFeature';
 
 const t = ((key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON.stringify(opts) : ''}`) as unknown as TFunction;
 
 describe('hostFeatureBlockReason', () => {
   it('is null on Linux, macOS and an unrecorded host', () => {
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'taskExecution', t)).toBeNull();
-    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'git', t)).toBeNull();
+    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'workerLaunch', t)).toBeNull();
     expect(hostFeatureBlockReason(null, 'harness', t)).toBeNull();
   });
 
   it('says the feature is pending, with its issue, on Windows', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
-    expect(hostFeatureBlockReason({ platform: 'win32' }, 'git', t)).toBe('common:hostFeature.windowsPending{"issue":370}');
-    expect(hostFeatureBlockReason({ platform: 'linux' }, 'git', t)).toBeNull();
+
   });
 
   it('says tmux is not there at all, not that it is coming', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'tmux', t)).toBe('common:hostFeature.windowsNoTmux');
+  });
+});
+
+describe('git_not_found answers', () => {
+  it('recognises the hub answer for a Windows host without Git for Windows', () => {
+    expect(isGitNotFoundAnswer({ error: 'Git for Windows (git.exe) was not found', code: 'git_not_found' })).toBe(true);
+  });
+
+  it('does not take other answers for it', () => {
+    expect(isGitNotFoundAnswer({ branches: [] })).toBe(false);
+    expect(isGitNotFoundAnswer({ error: 'x', code: 'unsupported_os' })).toBe(false);
+    expect(isGitNotFoundAnswer({ code: 'git_not_found' })).toBe(false);
+    expect(isGitNotFoundAnswer(null)).toBe(false);
   });
 });
 

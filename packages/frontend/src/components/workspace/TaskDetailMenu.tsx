@@ -6,8 +6,6 @@ import { AgentIcon } from '../ui/AgentIcons';
 import { BrailleSpinner } from '../ui/WindowActivityIndicator';
 import { useAgentActivity } from '../../hooks/useAgentActivity';
 import { useLongPress, longPressStyle } from '../../hooks/useLongPress';
-import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
-import { Notice } from '../ui';
 import { isSameWindowTarget } from '@azito/shared';
 import { resolveWindowDisplay, formatWindowDisplayLabel } from '../../lib/windowDisplay';
 import StatusDropdown from '../task/StatusDropdown';
@@ -273,25 +271,19 @@ function AddChip({ label, onClick }: { label: string; onClick: () => void }) {
   );
 }
 
-const GIT_BLOCKED_ID = 'task-detail-menu-git-blocked';
-
 const gridCardStyle: CSSProperties = {
   display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 4,
   padding: '12px 14px', background: 'var(--bg-card)', borderRadius: 'var(--radius-md)',
   border: 'none', cursor: 'pointer', textAlign: 'left', width: '100%', boxSizing: 'border-box',
 };
 
-function GridCard({ label, value, onClick, blockedReasonId }: { label: string; value: ReactNode; onClick: () => void; blockedReasonId?: string }) {
-  // Closed with a reason: stays focusable (aria-disabled), does nothing, and points at the notice that says why.
-  const blocked = blockedReasonId !== undefined;
+function GridCard({ label, value, onClick }: { label: string; value: ReactNode; onClick: () => void }) {
   return (
     <button
       type="button"
-      onClick={blocked ? undefined : onClick}
-      aria-disabled={blocked ? true : undefined}
-      aria-describedby={blockedReasonId}
-      className={blocked ? undefined : 'row-hover'}
-      style={blocked ? { ...gridCardStyle, opacity: 0.5, cursor: 'not-allowed' } : gridCardStyle}
+      onClick={onClick}
+      className="row-hover"
+      style={gridCardStyle}
     >
       <span style={{ fontSize: 'var(--font-2xs)', color: 'var(--text-dim)' }}>{label}</span>
       <span style={{ fontSize: 'var(--font-base)', color: 'var(--text)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', width: '100%' }}>
@@ -346,17 +338,14 @@ export default function TaskDetailMenu({
   const [diffStat, setDiffStat] = useState<{ add: number; del: number } | null>(null);
   const [view, setView] = useState<'main' | 'more'>('main');
 
-  const hostFeatureBlock = useHostFeatureBlock();
-  const gitBlockedReason = hostFeatureBlock(diffServerName, 'git');
   const canShowGit = hasUnit && !!diffPath && !!diffServerName;
-  const canLoadGit = canShowGit && !gitBlockedReason;
 
   useEffect(() => {
     if (!open) setView('main');
   }, [open]);
 
   useEffect(() => {
-    if (!open || !canLoadGit || !diffServerName || !diffPath) return;
+    if (!open || !canShowGit || !diffServerName || !diffPath) return;
     let cancelled = false;
     const commitParams = new URLSearchParams({ path: diffPath });
     if (task.baseBranch) commitParams.set('base', task.baseBranch);
@@ -382,7 +371,7 @@ export default function TaskDetailMenu({
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [open, canLoadGit, diffServerName, diffPath, task.baseBranch]);
+  }, [open, canShowGit, diffServerName, diffPath, task.baseBranch]);
 
   if (!open) return null;
 
@@ -548,7 +537,6 @@ export default function TaskDetailMenu({
                     label={t('workspace:viewLabels.commits')}
                     value={commitCount !== null ? t('workspace:taskDetailMenu.commitCount', { count: commitCount }) : '—'}
                     onClick={() => { onOpenCommits(); onClose(); }}
-                    blockedReasonId={gitBlockedReason ? GIT_BLOCKED_ID : undefined}
                   />
                   <GridCard
                     label={t('workspace:viewLabels.diff')}
@@ -560,13 +548,7 @@ export default function TaskDetailMenu({
                       </>
                     ) : '—'}
                     onClick={() => { onOpenDiff(); onClose(); }}
-                    blockedReasonId={gitBlockedReason ? GIT_BLOCKED_ID : undefined}
                   />
-                  {gitBlockedReason && (
-                    <div id={GIT_BLOCKED_ID} style={{ gridColumn: '1 / -1' }}>
-                      <Notice tone="info">{gitBlockedReason}</Notice>
-                    </div>
-                  )}
                 </>
               )}
             </div>

@@ -11,6 +11,7 @@ import { TmuxInstaller } from './agent-deploy/TmuxInstaller';
 import { HarnessInstaller } from './agent-deploy/HarnessInstaller';
 import type { SshClient } from './ssh/SshClient';
 import { mapAppError } from '../../app/mapAppError';
+import { GitNotFoundError } from '../../shared/exec/commandSpec';
 
 const TMUX_CAPS = { changeEvents: true, agentState: false, independentClients: true, copyMode: true };
 
@@ -22,7 +23,7 @@ function makeServer(hostProfile: HostProfile | null): ServerConfig {
   };
 }
 
-async function buildApp(hostProfile: HostProfile | null) {
+async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) => Promise<unknown> = vi.fn()) {
   const server = makeServer(hostProfile);
   const exec = vi.fn(async () => ({ stdout: '', stderr: '', code: 0 }));
   const serverRepo = { findAll: () => [server], findByName: (name: string) => (name === server.name ? server : null) } as unknown as IServerRepository;
@@ -36,7 +37,7 @@ async function buildApp(hostProfile: HostProfile | null) {
     transportFactory: {
       invalidate: vi.fn(),
       hostProfileFor: (s: Pick<ServerConfig, 'hostProfile'>) => s.hostProfile,
-      getTransport: () => ({ hostProfile, exec, run: vi.fn() }),
+      getTransport: () => ({ hostProfile, exec, run }),
     },
     tmuxInstaller: new TmuxInstaller(),
     harnessInstaller: new HarnessInstaller({} as SshClient),
@@ -86,19 +87,32 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
   });
 });
 
-describe('branch search on a Windows server answers unsupported_os (the repository API is closed until #370)', () => {
-  it('GET /api/servers/:name/branches is 501 with the reason', async () => {
-    const { app, exec } = await buildApp({ platform: 'win32', arch: 'x64' });
-    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/branches?working_directory=C:%5Cwork' });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
-    expect(exec).not.toHaveBeenCalled();
+describe('branch search on a Windows server (git runs there; Git for Windows missing is its own answer)', () => {
+  const win32: HostProfile = { platform: 'win32', arch: 'x64' };
+  const url = '/api/servers/srv/branches?working_directory=C:%5Cwork';
+
+  it('GET /api/servers/:name/branches runs git on the host instead of refusing the OS', async () => {
+    const run = vi.fn(async () => ({ exitCode: 0, signal: null, stdout: 'main\nfeature/x\n', stderr: '' }));
+    const { app } = await buildApp(win32, run);
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ branches: ['main', 'feature/x'] });
+    expect(run).toHaveBeenCalled();
   });
 
-  it('a Linux server is not refused', async () => {
+  it('answers 501 git_not_found with the reason, not an empty list', async () => {
+    const reason = 'Git for Windows (git.exe) was not found on this host. Install it with "winget install --id Git.Git -e".';
+    const { app } = await buildApp(win32, async () => { throw new GitNotFoundError(reason); });
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ code: 'git_not_found', error: reason });
+  });
+
+  it('a Linux server without a working directory still answers an empty list', async () => {
     const { app } = await buildApp({ platform: 'linux', arch: 'x64' });
     const res = await app.inject({ method: 'GET', url: '/api/servers/srv/branches' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ branches: [] });
   });
 });
+

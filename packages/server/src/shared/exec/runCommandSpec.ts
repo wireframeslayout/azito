@@ -10,6 +10,7 @@ import {
 } from './commandSpec';
 import { trimIncompleteUtf8 } from './utf8';
 import type { HostEnv } from '../os/hostEnv';
+import { sharedGitLocator, type GitLocator, type WindowsProgramEnv } from './windowsGit';
 
 /**
  * `.cmd` / `.bat` are run by cmd.exe, and Node's `execFile` cannot start one without a shell (and starting one through a shell
@@ -28,11 +29,22 @@ const ABANDON_PIPES_MS = 1000;
  * On Windows a command is stopped with `taskkill /T /F` (its whole tree, by the absolute path under `systemRoot`; without
  * one only the direct child is killed), where Unix signals its process group.
  */
-export type RunHost = { windows: false } | { windows: true; systemRoot: string | undefined };
+export type RunHost =
+  | { windows: false }
+  | {
+    windows: true;
+    systemRoot: string | undefined;
+    /** Finds `git.exe`. Null for a runner that never runs git (the service commands pass no `windowsPrograms`): asking it for git is an error. */
+    git: GitLocator | null;
+  };
 
-export function runHostOf(hostEnv: Pick<HostEnv, 'platform' | 'systemRoot'>): RunHost {
-  return hostEnv.platform === 'win32' ? { windows: true, systemRoot: hostEnv.systemRoot } : { windows: false };
+export function runHostOf(hostEnv: Pick<HostEnv, 'platform' | 'systemRoot'> & { windowsPrograms?: WindowsProgramEnv | undefined }): RunHost {
+  if (hostEnv.platform !== 'win32') return { windows: false };
+  return { windows: true, systemRoot: hostEnv.systemRoot, git: hostEnv.windowsPrograms ? sharedGitLocator(hostEnv.windowsPrograms) : null };
 }
+
+/** The name `git` as a spec spells it for every OS (`runGit`), with or without the extension. On Windows it is resolved by the host, see `runCommandSpec`. */
+const BARE_GIT = /^git(\.exe)?$/i;
 
 export type RunCommandOptions = RunHost & {
   /** Overrides {@link DEFAULT_KILL_GRACE_MS}. */
@@ -145,7 +157,17 @@ function killWindowsTree(child: ChildProcess, systemRoot: string | undefined): v
  * then SIGKILL after a grace period; the whole tree with `taskkill` on Windows) and the call fails with that reason
  * whatever the command exits with — a command that exits 0 on SIGTERM did not succeed.
  */
-export function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): Promise<CommandResult> {
+export async function runCommandSpec(spec: CommandSpec, options: RunCommandOptions): Promise<CommandResult> {
+  // A bare `git` on a Windows host is the `git.exe` of Git for Windows, found by this host (not by the caller: the caller may be a hub
+  // asking an agent). Not found: `GitNotFoundError`, never a bare ENOENT.
+  if (options.windows && BARE_GIT.test(spec.file)) {
+    if (!options.git) throw new Error('This runner has no search for git.exe (its host was resolved without windowsPrograms)');
+    return spawnSpec({ ...spec, file: await options.git.resolve() }, options);
+  }
+  return spawnSpec(spec, options);
+}
+
+function spawnSpec(spec: CommandSpec, options: RunCommandOptions): Promise<CommandResult> {
   if (BATCH_FILE.test(spec.file)) {
     return Promise.reject(new CommandSpawnError(
       'UNSUPPORTED_FILE',

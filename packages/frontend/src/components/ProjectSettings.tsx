@@ -6,7 +6,6 @@ import { Icon } from './ui/Icon';
 import { useApi } from '../hooks/useApi';
 import { useAddWindowModal } from '../hooks/useAddWindowModal';
 import { useIsMobile } from '../hooks/useIsMobile';
-import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 import type { PersistedTab } from '../hooks/useTabPersistence';
 import FormField from './FormField';
 import ProjectGeneralFields from './ProjectGeneralFields';
@@ -69,7 +68,6 @@ export function useProjectSettings(
   const navigate = useNavigate();
   const { data: project, refresh } = useApi<Project>(`/projects/${projectId}`);
   const { data: servers } = useApi<Server[]>('/servers');
-  const hostFeatureBlock = useHostFeatureBlock();
   const { data: unitsData } = useApi<Unit[]>('/units');
   const units = unitsData || [];
 
@@ -345,8 +343,7 @@ export function useProjectSettings(
     const savedWorkDir = psWorkDir.trim();
     setAddPsOpen(false); setPsWorkDir(''); setPsBranch(''); setPsTmuxSession(''); setPsInputPolicy('manual-approval'); setPsDistributeCode(false); setPsDistributionRepositoryId('');
     refreshProjectServers();
-    // The repository scan is closed on some hosts (a Windows agent until #370): no request, no suggestion.
-    if (savedWorkDir && !hostFeatureBlock(savedServer, 'git')) {
+    if (savedWorkDir) {
       api<{ repositories: Array<{ remotes: Array<{ alreadyRegistered: boolean }> }> }>(
         `/projects/${projectId}/servers/${savedServer}/discover-repositories`,
       ).then((res) => {
@@ -358,7 +355,7 @@ export function useProjectSettings(
         }
       }).catch((e: unknown) => console.warn('discover-repositories:', e));
     }
-  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, psDistributionRepositoryId, servers, hostFeatureBlock]);
+  }, [projectId, psServer, psWorkDir, psBranch, psTmuxSession, psInputPolicy, psDistributeCode, psDistributionRepositoryId, servers]);
 
   // Opens the add/edit form for `serverName`, pre-filled from its existing
   // project_servers row when one exists (Issue #51 review note: this form's
