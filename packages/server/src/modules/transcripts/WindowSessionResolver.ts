@@ -11,8 +11,8 @@ import type { TailState, TranscriptSource } from './sources/TranscriptSource';
 import { AgentUnreachableError } from '../servers/transport/AgentUnreachableError';
 import { TranscriptAgentBadResponseError, TranscriptAgentOutdatedError } from './sources/AgentTranscriptSource';
 import type { TranscriptSourceProvider } from './sources/TranscriptSourceProvider';
-import { parsePsOutput, isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
-import type { PsEntry } from './agentProcessDetection';
+import { isAgentProcessRunning, findAgentProcessStartMs, findAgentProcessTypes, argsContainSessionId } from './agentProcessDetection';
+import type { ProcessEntry } from '../../shared/os/processList';
 
 // ─── Types ───
 
@@ -79,8 +79,6 @@ const AGENT_COMMAND_EXACT = new Set(['claude', 'codex']);
  * 以内に更新されていれば、エージェントが実際に書き込み中＝生きているとみなす。
  */
 export const SESSION_ACTIVITY_WINDOW_MS = 120 * 1000;
-/** レイヤー2（プロセス実体検査）／プロセス起動時刻ゲートの `ps` 実行に使うコマンド。pid/ppid/etimes/args を取得する。 */
-const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
 
 /**
  * サーバー単位で一度だけ取得し、そのサーバーの全ウィンドウの `getActivityStatus()` で共有する
@@ -90,7 +88,7 @@ const PS_COMMAND = 'ps -e -o pid=,ppid=,etimes=,args=';
  */
 export interface ActivityProbeSnapshot {
   allPanes: MuxPaneInfo[];
-  psEntries: PsEntry[];
+  psEntries: ProcessEntry[];
 }
 
 /**
@@ -142,7 +140,7 @@ type ProcessGateState =
   | { kind: 'detected'; processStartMs: number; agentTypes: Set<'claude' | 'codex'> };
 
 function toGateState(
-  detection: { entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'> } | null,
+  detection: { entries: ProcessEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'> } | null,
 ): ProcessGateState {
   if (detection === null) return { kind: 'unavailable' };
   if (detection.processStartMs === null) return { kind: 'not_detected' };
@@ -277,7 +275,7 @@ export class WindowSessionResolver {
     const sources = this.sourceProvider.forServer(server);
 
     let gate: ProcessGateState = { kind: 'unavailable' };
-    let psEntries: PsEntry[] | null = null;
+    let psEntries: ProcessEntry[] | null = null;
     let rootPids: number[] = [];
     let unresolvedReason: UnresolvedReason = sources !== null ? 'no_recent_session' : 'unsupported_server';
 
@@ -321,7 +319,7 @@ export class WindowSessionResolver {
     window: Window,
     windowPanes: MuxPaneInfo[],
     gate: ProcessGateState,
-    psEntries: PsEntry[] | null,
+    psEntries: ProcessEntry[] | null,
     rootPids: number[],
   ): Promise<WindowSessionResolution | null> {
     const windowLinked = await this.resolveViaWindow(sources, window);
@@ -475,7 +473,7 @@ export class WindowSessionResolver {
     agentType: string,
     sessionId: string,
     skewMs: number,
-    psEntries: PsEntry[] | null,
+    psEntries: ProcessEntry[] | null,
     rootPids: number[],
   ): Promise<boolean> {
     if (gate.kind !== 'detected') return true;
@@ -487,8 +485,8 @@ export class WindowSessionResolver {
   }
 
   /**
-   * プロセス起動時刻ゲート用の検出。ウィンドウの pane 群の pid を辿り、`ps -e -o
-   * pid=,ppid=,etimes=,args=` を1回実行してその子孫に claude/codex 実行体が無いか調べる
+   * プロセス起動時刻ゲート用の検出。ウィンドウの pane 群の pid を辿り、プロセス一覧（transport.listProcesses()）を
+   * 1回取得してその子孫に claude/codex 実行体が無いか調べる
    * （detectAgent() のレイヤー2と同じ探索ロジック／同じ ps 結果を再利用し、ps を二重実行しない
    * — 呼び出し元がここで得た entries を resolvePaneWithDetection 経由で detectAgent() にも渡す）。
    * 検出できれば起動時刻（複数一致時は最古。findAgentProcessStartMs 参照）を processStartMs として
@@ -503,19 +501,16 @@ export class WindowSessionResolver {
   private async detectWindowAgentProcess(
     server: ServerConfig,
     windowPanes: MuxPaneInfo[],
-    sharedPsEntries?: PsEntry[],
-  ): Promise<{ entries: PsEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'>; rootPids: number[] } | null> {
+    sharedPsEntries?: ProcessEntry[],
+  ): Promise<{ entries: ProcessEntry[]; processStartMs: number | null; agentTypes: Set<'claude' | 'codex'>; rootPids: number[] } | null> {
     if (windowPanes.length === 0) return null;
     try {
-      let entries: PsEntry[];
+      let entries: ProcessEntry[];
       if (sharedPsEntries) {
         entries = sharedPsEntries;
       } else {
-        const { stdout, code } = await this.transportFactory.getTransport(server).exec(PS_COMMAND);
-        if (code !== 0) return null;
-        entries = parsePsOutput(stdout);
+        entries = await this.transportFactory.getTransport(server).listProcesses();
       }
-      const now = Date.now();
 
       const driver = this.muxDriverRegistry.resolve(server);
       let processStartMs: number | null = null;
@@ -525,7 +520,7 @@ export class WindowSessionResolver {
         const pid = await driver.panePidByHandle(server, asPaneHandle(pane.paneId));
         if (pid === null) continue;
         rootPids.push(pid);
-        const startMs = findAgentProcessStartMs(entries, pid, now);
+        const startMs = findAgentProcessStartMs(entries, pid);
         if (startMs !== null && (processStartMs === null || startMs < processStartMs)) {
           processStartMs = startMs;
         }
@@ -644,12 +639,11 @@ export class WindowSessionResolver {
   async captureActivityProbeSnapshot(server: ServerConfig): Promise<ActivityProbeSnapshot | null> {
     try {
       const driver = this.muxDriverRegistry.resolve(server);
-      const [allPanes, ps] = await Promise.all([
+      const [allPanes, psEntries] = await Promise.all([
         driver.listAllPanes(server),
-        this.transportFactory.getTransport(server).exec(PS_COMMAND),
+        this.transportFactory.getTransport(server).listProcesses(),
       ]);
-      if (ps.code !== 0) return null;
-      return { allPanes, psEntries: parsePsOutput(ps.stdout) };
+      return { allPanes, psEntries };
     } catch {
       return null;
     }
@@ -669,7 +663,7 @@ export class WindowSessionResolver {
     windowPanes: MuxPaneInfo[],
     sessionId: string,
     agentType: string,
-    psEntries: PsEntry[] | null,
+    psEntries: ProcessEntry[] | null,
   ): Promise<{ paneId: string; agentDetected: boolean } | null> {
     if (windowPanes.length === 0) return null;
 
@@ -720,7 +714,7 @@ export class WindowSessionResolver {
     pane: MuxPaneInfo | undefined,
     sessionId: string,
     agentType: string,
-    psEntries: PsEntry[] | null,
+    psEntries: ProcessEntry[] | null,
   ): Promise<boolean> {
     if (pane === undefined) return false;
 
@@ -743,7 +737,7 @@ export class WindowSessionResolver {
    * ならこのレイヤーの「検出できず」として false を返す（detectAgent 側のコメントの通り、これは
    * 誤って警告を消す方向には働かない）。
    */
-  private async detectAgentProcess(server: ServerConfig, paneId: string, psEntries: PsEntry[] | null): Promise<boolean> {
+  private async detectAgentProcess(server: ServerConfig, paneId: string, psEntries: ProcessEntry[] | null): Promise<boolean> {
     if (psEntries === null) return false;
     try {
       const driver = this.muxDriverRegistry.resolve(server);

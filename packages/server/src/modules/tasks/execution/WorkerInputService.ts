@@ -4,6 +4,7 @@ import type { ServerConfig } from '../../servers/Server';
 import type { SupervisorRegistry } from '../../supervisors/SupervisorRegistry';
 import { SupervisorCommandError } from '../../supervisors/SupervisorRegistry';
 import type { LogType } from '../ExecutionLog';
+import { isBareShellCommand } from '../../../shared/os/shellCommands';
 
 export interface WorkerInputContext {
   taskId: number;
@@ -15,13 +16,6 @@ export interface WorkerInputContext {
 // WorkerWaiter depends on WorkerInputService (for autoConfirm), and this class
 // must stay a leaf with respect to it.
 export type AppendLogFn = (taskId: number, unitId: number, type: LogType, content: unknown) => void;
-
-// Bare shells that mean the worker process is gone: when a supervisor dies it
-// takes its child worker with it, dropping the pane back to the login shell.
-// Kept in sync with AgentActivityMonitor's SHELL_COMMANDS — duplicated rather
-// than imported because modules/operations already depends on modules/tasks
-// (AgentActivityMonitor imports ExecuteTaskUseCase); importing back would cycle.
-const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
 
 export class WorkerNotRunningError extends Error {
   constructor(public readonly foreground: string) {
@@ -76,7 +70,7 @@ export class WorkerInputService {
     // Guard against sending to a bare shell — covers both the supervisor
     // fallback path (sendCommand failed) and the no-supervisor path.
     const foreground = await driver.paneCommandByHandle(server, handle);
-    if (foreground !== null && SHELL_COMMANDS.has(foreground)) {
+    if (foreground !== null && isBareShellCommand(foreground)) {
       if (ctx) {
         this.appendLog(ctx.taskId, ctx.unitId, 'command', {
           type: 'send_aborted_dead_worker',

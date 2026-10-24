@@ -4,6 +4,7 @@ import type { IPaneStream } from '../../tmux/PaneStream';
 import type { HostProfile } from '../../../shared/os/hostProfile';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import type { IFileOps } from '../../../shared/fs/fileOps';
+import type { ProcessEntry } from '../../../shared/os/processList';
 
 export interface ExecResult {
   stdout: string;
@@ -39,6 +40,12 @@ export interface IServerTransport {
    * what is known of the host: never retried through another when it fails.
    */
   files(): IFileOps;
+
+  /**
+   * The processes of the server's host (pid / ppid / start time / executable / command line), the same shape for every OS. A host
+   * that cannot list them rejects; it is never an empty list.
+   */
+  listProcesses(): Promise<ProcessEntry[]>;
 
   /**
    * シェルコマンド実行（現行 TmuxClient.execCommand 相当）

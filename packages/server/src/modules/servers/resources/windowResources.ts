@@ -13,12 +13,10 @@ export interface WindowResource {
 }
 
 export async function measureWindowResources(transport: IServerTransport, muxClient: Pick<IMuxClient, 'measurePanePids'>, server: ServerConfig): Promise<WindowResource[]> {
-  const [panePidEntries, psResult] = await Promise.all([
+  const [panePidEntries, processList] = await Promise.all([
     muxClient.measurePanePids(server),
-    transport.exec('ps -e -o pid=,ppid=,rss= 2>/dev/null', 5000),
+    transport.listProcesses(),
   ]);
-
-  if (psResult.code !== 0) return [];
 
   const panePids = new Map<string, { ref: MuxRef; pids: number[] }>();
   for (const entry of panePidEntries) {
@@ -31,16 +29,9 @@ export async function measureWindowResources(transport: IServerTransport, muxCli
   if (panePids.size === 0) return [];
 
   const processes = new Map<number, { ppid: number; rss: number }>();
-  for (const line of psResult.stdout.trim().split('\n')) {
-    if (!line) continue;
-    const parts = line.trim().split(/\s+/);
-    if (parts.length < 3) continue;
-    const pid = parseInt(parts[0], 10);
-    const ppid = parseInt(parts[1], 10);
-    const rssKb = parseInt(parts[2], 10);
-    if (Number.isFinite(pid) && Number.isFinite(ppid) && Number.isFinite(rssKb)) {
-      processes.set(pid, { ppid, rss: rssKb * 1024 });
-    }
+  for (const proc of processList) {
+    // A host that does not report a process's memory contributes nothing for it.
+    processes.set(proc.pid, { ppid: proc.ppid, rss: proc.rssBytes ?? 0 });
   }
 
   const children = new Map<number, number[]>();
@@ -55,9 +46,12 @@ export async function measureWindowResources(transport: IServerTransport, muxCli
     const stack = children.get(rootPid);
     if (!stack) return total;
     const queue = [...stack];
+    const visited = new Set<number>([rootPid]); // Windows reuses pids, so parent links can form a loop
     while (queue.length > 0) {
       const childPid = queue.pop()!;
-      total += processes.get(childPid)?.rss ?? 0;
+      if (visited.has(childPid)) continue;
+      visited.add(childPid);
+      total +=processes.get(childPid)?.rss ?? 0;
       const grandchildren = children.get(childPid);
       if (grandchildren) queue.push(...grandchildren);
     }

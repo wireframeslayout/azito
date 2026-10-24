@@ -29,6 +29,10 @@ describe('paneCommand', () => {
     expect(paneCommand(makePane({ cmd: ['bash'], fgCommand: undefined }))).toBe('bash');
   });
 
+  it('takes the file name of a Windows launch command on any hub OS, so a bare cmd.exe pane is recognised as a shell', () => {
+    expect(paneCommand(makePane({ cmd: ['C:\\Windows\\System32\\cmd.exe'], fgCommand: undefined }))).toBe('cmd.exe');
+  });
+
   it('returns fgCommand when it is set', () => {
     expect(paneCommand(makePane({ cmd: ['/usr/bin/bash'], fgCommand: 'vim' }))).toBe('vim');
   });

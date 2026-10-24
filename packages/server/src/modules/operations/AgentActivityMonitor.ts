@@ -13,6 +13,7 @@ import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { MuxDriverUnavailableError } from '../tmux/MuxCapabilityError';
 import { resolveInterval } from '../../shared/testIntervals';
 import type { PaneHandleResolver } from './PaneHandleResolver';
+import { isBareShellCommand } from '../../shared/os/shellCommands';
 import { serverSupportsMux } from '../servers/muxKinds';
 
 /** The `sessionErrors` entry of one mux of a server that could not be listed while the server's other muxes were. */
@@ -106,15 +107,6 @@ export function findLiveWindow(sessions: LiveSession[], target: string, muxRef?:
 }
 
 /**
- * Shells whose foreground presence must NOT count as "agent running": merely
- * focusing a pane and typing (e.g. a stray keystroke, or the shell prompt
- * itself) still bumps tmux's `window_activity`, so activity freshness alone
- * over-detects. Requiring the foreground command to be a real (non-shell)
- * program filters out that false-positive case.
- */
-const SHELL_COMMANDS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash']);
-
-/**
  * Narrow a window's panes to the ones relevant to a target: the pane named by
  * the target's `.<index>` suffix when it still exists, otherwise every pane
  * (conservative: err toward considering the window rather than losing a
@@ -127,13 +119,15 @@ function selectRelevantPanes(panes: TmuxWindow['panes'], paneIndex: number | nul
 
 /**
  * True when at least one relevant pane's foreground command is not a bare
- * shell. `paneIndex` narrows to the specific pane named by the target's
+ * shell (any OS's: see `isBareShellCommand`). A shell's presence must NOT count
+ * as "agent running": merely focusing a pane and typing still bumps tmux's
+ * `window_activity`, so activity freshness alone over-detects.`paneIndex` narrows to the specific pane named by the target's
  * `.<index>` suffix; when it names a pane that no longer exists, or the
  * target has no pane suffix, all panes are considered (conservative: err
  * toward "still running" rather than losing a legitimate agent window).
  */
 function hasNonShellForegroundPane(panes: TmuxWindow['panes'], paneIndex: number | null): boolean {
-  return selectRelevantPanes(panes, paneIndex).some((p) => !SHELL_COMMANDS.has(p.command));
+  return selectRelevantPanes(panes, paneIndex).some((p) => !isBareShellCommand(p.command));
 }
 
 /**

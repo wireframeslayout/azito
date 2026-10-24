@@ -192,6 +192,18 @@ describe('AgentActivityMonitor', () => {
     expect(monitor.snapshot()).toEqual([]);
   });
 
+  it.each(['cmd.exe', 'CMD.EXE', 'powershell.exe', 'pwsh.exe', 'pwsh'])('treats a fresh manual agent window with only the Windows shell %s in the foreground as idle', async (command) => {
+    findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
+    listSessions.mockResolvedValue(makeSessions(
+      'azito', 'agent-1', 3, Math.floor(Date.now() / 1000) - 5,
+      [makePane({ command })],
+    ));
+
+    await monitor.tick();
+    expect(emit).not.toHaveBeenCalled();
+    expect(monitor.snapshot()).toEqual([]);
+  });
+
   it('detects a running agent in the specific pane named by the target even when other panes are shells', async () => {
     findAll.mockReturnValue([makeWindow({ taskId: 7, tmuxTarget: 'azito:agent-1' })]);
     const base = Math.floor(Date.now() / 1000) - 5;

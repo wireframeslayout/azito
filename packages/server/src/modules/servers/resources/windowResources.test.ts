@@ -13,9 +13,16 @@ function makeMux(entries: Array<{ ref: MuxRef; pid: number }>) {
   return { measurePanePids: vi.fn(async () => entries) };
 }
 
+/** `ps.stdout` is rows of `<pid> <ppid> <rssKb>`; a non-zero `code` is a host that cannot list its processes. */
 function makeTransport(ps: { stdout: string; code: number }) {
   return {
-    exec: vi.fn(async () => ({ stdout: ps.stdout, stderr: '', code: ps.code })),
+    listProcesses: vi.fn(async () => {
+      if (ps.code !== 0) throw new Error(`Listing processes failed (exit ${ps.code})`);
+      return ps.stdout.split('\n').filter(Boolean).map((line) => {
+        const [pid, ppid, rssKb] = line.split(' ').map(Number);
+        return { pid, ppid, startMs: null, executable: null, commandLine: '', rssBytes: rssKb * 1024 };
+      });
+    }),
   } as never;
 }
 
@@ -26,10 +33,10 @@ describe('measureWindowResources', () => {
     expect(await measureWindowResources(t, m, server)).toEqual([]);
   });
 
-  it('returns empty when ps command fails', async () => {
+  it('rejects when the host cannot list its processes (the route reports no windows)', async () => {
     const t = makeTransport({ stdout: '', code: 1 });
     const m = makeMux([{ ref: ref('sess', 'win1'), pid: 100 }]);
-    expect(await measureWindowResources(t, m, server)).toEqual([]);
+    await expect(measureWindowResources(t, m, server)).rejects.toThrow('Listing processes failed');
   });
 
   it('aggregates process tree RSS for a single window', async () => {

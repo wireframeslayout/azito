@@ -1,4 +1,4 @@
-import { basename } from 'node:path';
+import { programFileName } from '../../../shared/os/shellCommands';
 import type { MethodResult } from '@misao/protocol' with { 'resolution-mode': 'import' };
 import type { MuxPane, MuxPaneInfo, MuxRef, MuxWindowInfo, MuxWorkspace } from '@azito/shared';
 
@@ -20,7 +20,7 @@ export function panesOfWindow(panes: readonly MisaoPane[], windowId: string): Mi
 
 /** Foreground command when the daemon reports one (running panes), otherwise the launch command. */
 export function paneCommand(pane: MisaoPane): string {
-  return pane.fgCommand ?? basename(pane.cmd[0]);
+  return pane.fgCommand ?? programFileName(pane.cmd[0]);
 }
 
 /** Latest output time among the panes in epoch seconds (tmux's window_activity unit), or null when none has produced output. */
