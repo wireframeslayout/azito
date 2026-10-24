@@ -138,13 +138,6 @@ describe('GET /api/servers/:name/branches', () => {
     expect(specs[0]).toMatchObject({ file: 'git', cwd: '/home/u/repo' });
   });
 
-  it('resolves a ~ working directory against the host home before running git', async () => {
-    const { app, specs } = await build(server(), { platform: 'linux', arch: 'x64' }, () => ok('main\ndev\n'));
-    const res = await app.inject({ method: 'GET', url: `/api/servers/srv/branches?working_directory=${encodeURIComponent('~/repo')}` });
-    expect(res.json()).toEqual({ branches: ['main', 'dev'] });
-    expect(specs[0]).toMatchObject({ file: 'git', cwd: '/home/u/repo' });
-  });
-
   it('refuses a working_directory that is not a path of the host with 400, without running git', async () => {
     const { app, specs } = await build(server(), { platform: 'linux', arch: 'x64' });
     for (const dir of ['relative/dir', 'C:\\Users\\x y']) {

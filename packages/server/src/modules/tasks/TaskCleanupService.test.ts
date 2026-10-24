@@ -2,16 +2,17 @@ import { describe, it, expect, vi } from 'vitest';
 import { TaskCleanupService, type TaskCleanupDeps } from './TaskCleanupService';
 import type { Task } from './Task';
 import type { HostProfile } from '../../shared/os/hostProfile';
+import { FileOpsError } from '../../shared/fs/fileOps';
 
 const HOME = { linux: '/home/u', win32: 'C:\\Users\\me' } as const;
 
-function setup(hostProfile: HostProfile | null, repoDir: string) {
+function setup(hostProfile: HostProfile | null, repoDir: string, gone: (p: string) => boolean = () => false) {
   const remove = vi.fn(async () => {});
   const warn = vi.fn();
   const platform = hostProfile?.platform === 'win32' ? 'win32' : 'linux';
   const files = {
     platform,
-    realpath: async (p: string) => (p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? `${HOME[platform]}${platform === 'win32' ? p.slice(1).replace(/\//g, '\\') : p.slice(1)}` : p),
+    realpath: async (p: string) => (gone(p) ? Promise.reject(new FileOpsError('NOT_FOUND', p)) : p === '~' || p.startsWith('~/') || p.startsWith('~\\') ? `${HOME[platform]}${platform === 'win32' ? p.slice(1).replace(/\//g, '\\') : p.slice(1)}` : p),
   };
   const deps = {
     serverRepo: { findByName: () => ({ name: 's', type: 'agent', hostProfile }) },
@@ -73,6 +74,25 @@ describe('TaskCleanupService worktree removal', () => {
     await service.cleanup(task('/home/user/other/.worktrees/task-3'), { warn });
     expect(remove).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not under /home/user/project/.worktrees'));
+  });
+
+  it('only prunes (through remove) a worktree directory that is already gone, never judging it by its spelling', async () => {
+    const { service, remove, warn, task } = setup(linux, '/home/user/project', (p) => p.includes('.worktrees'));
+    await service.cleanup(task('/home/user/project/.worktrees/task-3'), { warn });
+    expect(remove).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a worktree that resolves elsewhere than <repo>/.worktrees/task-<id> (a link in the path)', async () => {
+    const { service, remove, warn, task } = setup(linux, '/home/user/project');
+    // the repository's own spelling is not what the host resolves: the stored worktree path resolves into another directory
+    const original = (service as unknown as { deps: TaskCleanupDeps }).deps.transportFactory.getTransport;
+    (service as unknown as { deps: TaskCleanupDeps }).deps.transportFactory.getTransport = ((srv: never) => {
+      const t = original(srv) as { files: () => { realpath: (p: string) => Promise<string> } };
+      return { files: () => ({ ...t.files(), realpath: async (p: string) => (p.includes('.worktrees') ? '/elsewhere/.worktrees/task-3' : p) }) };
+    }) as never;
+    await service.cleanup(task('/home/user/project/.worktrees/task-3'), { warn });
+    expect(remove).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('is not under'));
   });
 
   it('judges a Windows-spelled path by the host OS: it is not a worktree path on a POSIX host', async () => {

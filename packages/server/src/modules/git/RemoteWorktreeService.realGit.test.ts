@@ -13,6 +13,8 @@ import { toHostProfile } from '../../shared/os/hostProfile';
 import { RemoteWorktreeService } from './RemoteWorktreeService';
 import { WorktreeServiceFactory } from './WorktreeServiceFactory';
 import { runGit } from './runGit';
+import { TaskCleanupService, type TaskCleanupDeps } from '../tasks/TaskCleanupService';
+import type { Task } from '../tasks/Task';
 
 /**
  * Worktree create / remove against the real git of the machine the test runs on (Git for Windows on the Windows CI runner),
@@ -156,5 +158,57 @@ describe('RemoteWorktreeService over LocalTransport with a real git', () => {
     await svc.remove(viaLink, `${viaLink}/.worktrees/task-1`);
     expect(existsSync(created.path)).toBe(false);
     expect(existsSync(join(base, 'a', 'repo', '.worktrees', 'task-1', 'keep.txt'))).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('removes with the value create() returned, in a structure with a symbolic link before `..`', async () => {
+    const base = join(root, 'symlink-remove');
+    const real = join(base, 'b', 'repo');
+    initRepo(real);
+    mkdirSync(join(base, 'b', 'sub'), { recursive: true });
+    mkdirSync(join(base, 'a'), { recursive: true });
+    symlinkSync(join(base, 'b', 'sub'), join(base, 'a', 'link'));
+    const viaLink = `${join(base, 'a', 'link')}/../repo`;
+
+    const created = await svc.create(viaLink, 2, 'rm', 'main');
+    expect(existsSync(created.path)).toBe(true);
+    await svc.remove(viaLink, created.path);
+    expect(existsSync(created.path)).toBe(false);
+    expect((await svc.list(real)).map((e) => e.path)).not.toContain(created.path);
+
+    // the stored path in the other spelling (through the link) is the same directory and is removed too
+    const again = await svc.create(viaLink, 3, 'rm', 'main');
+    await svc.remove(viaLink, `${viaLink}/.worktrees/task-3`);
+    expect(existsSync(again.path)).toBe(false);
+  });
+
+  it('leaves an unrelated directory alone when the worktree path no longer exists (prune only)', async () => {
+    const created = await svc.create(repo, 20, 'gone', 'main');
+    rmSync(created.path, { recursive: true, force: true });
+    await svc.remove(repo, created.path);
+    expect((await svc.list(repo)).map((e) => e.path)).not.toContain(created.path);
+    expect(existsSync(repo)).toBe(true);
+  });
+
+  it.skipIf(process.platform === 'win32')('cleanup of a task removes the worktree create() returned, with a symbolic link before `..`', async () => {
+    const base = join(root, 'symlink-cleanup');
+    const real = join(base, 'b', 'repo');
+    initRepo(real);
+    mkdirSync(join(base, 'b', 'sub'), { recursive: true });
+    mkdirSync(join(base, 'a'), { recursive: true });
+    symlinkSync(join(base, 'b', 'sub'), join(base, 'a', 'link'));
+    const viaLink = `${join(base, 'a', 'link')}/../repo`;
+    const created = await svc.create(viaLink, 4, 'cl', 'main');
+
+    const warn = vi.fn();
+    const cleanup = new TaskCleanupService({
+      serverRepo: { findByName: () => ({ name: 's', type: 'agent', hostProfile: profile }) },
+      worktreeServiceFactory: new WorktreeServiceFactory(),
+      transportFactory: { getTransport: () => transport, hostProfileFor: () => profile },
+      projectServerRepo: { find: () => ({ workingDirectory: viaLink }), findByProject: () => [] },
+      projectRepo: { findById: () => ({ id: 1 }) },
+    } as unknown as TaskCleanupDeps);
+    await cleanup.cleanup({ id: 4, projectId: 1, serverName: 's', worktreePath: created.path, workingDirectory: viaLink } as unknown as Task, { warn });
+    expect(warn).not.toHaveBeenCalled();
+    expect(existsSync(created.path)).toBe(false);
   });
 });

@@ -2,6 +2,7 @@ import type { IWorktreeService, WorktreeInfo, WorktreeEntry } from './IWorktreeS
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 
 import { hostPathFor } from '@azito/shared';
+import { FileOpsError } from '../../shared/fs/fileOps';
 import { assertSafeBranch, assertNotOptionLike, assertGitPathArg } from './assertSafeGitArgs';
 import { resolveGitPath } from './gitPath';
 import { parseWorktreePorcelain } from './parseWorktreePorcelain';
@@ -108,14 +109,20 @@ export class RemoteWorktreeService implements IWorktreeService {
     assertGitPathArg(platform, workingDir, 'workingDir');
     assertGitPathArg(platform, worktreePath, 'worktreePath');
     const dir = await this.realDirectory(workingDir);
-    // A worktree under the working directory keeps that prefix as resolved: a stored `~/...` path whose directory is already
-    // gone cannot be resolved by the host, and `prune` below is what settles such a registration.
-    const api = hostPathFor(platform);
-    const relative = api.relative(workingDir, worktreePath);
-    const isBelowWorkingDir = relative !== '' && relative !== '..' && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
-    const target = isBelowWorkingDir ? api.join(dir, relative) : await this.absolute(worktreePath);
-    // Both are best-effort cleanup: `remove` fails for a worktree that is already gone, and `prune` then settles the registry.
-    await runGit(this.transport, dir, ['worktree', 'remove', target, '--force']);
+    // The target itself is resolved by the host and that path is what git is given (never a prefix joined onto the resolved
+    // directory: `link/..` makes the two differ). One that is already gone cannot be resolved; `prune` settles its registration,
+    // and nothing is removed on the strength of how the path is spelled.
+    let target: string | null = null;
+    try {
+      target = await this.transport.files().realpath(worktreePath);
+    } catch (err) {
+      if (!(err instanceof FileOpsError && err.code === 'NOT_FOUND')) throw err;
+    }
+    if (target !== null) {
+      assertGitPathArg(platform, target, 'resolved path');
+      // Best-effort: `remove` fails for a worktree git no longer knows, and `prune` then settles the registry.
+      await runGit(this.transport, dir, ['worktree', 'remove', target, '--force']);
+    }
     await runGit(this.transport, dir, ['worktree', 'prune']);
   }
 

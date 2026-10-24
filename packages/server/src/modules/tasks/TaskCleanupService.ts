@@ -20,22 +20,26 @@ import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
 import { taskIdOfWorktreePath } from '../git/gitPath';
 import { platformOfProfile } from '../../shared/os/hostProfile';
 import { hostPathFor } from '@azito/shared';
-import { resolveGitPath } from '../git/gitPath';
+import { FileOpsError } from '../../shared/fs/fileOps';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 import type { HostPlatform } from '../../shared/os/hostEnv';
 
 /**
- * Whether `worktreePath` is the task's own worktree directly under the repository's `.worktrees`, judged on the host's resolved
- * paths (a `~` or a symbolic link in either spelling must not make another directory pass). A worktree below the repository as
- * written keeps that prefix as resolved, so a directory that is already gone can still be recognised.
+ * Whether `worktreePath` may be removed as the task's own worktree: it resolves, on the host, to `<repo>/.worktrees/task-<id>` of
+ * the repository's resolved directory. A path that is already gone (`NOT_FOUND`) cannot be compared and is let through: removing
+ * it only prunes git's registry, and nothing is deleted on the strength of how the path is spelled.
  */
-async function isWorktreeOfRepo(transport: IServerTransport, platform: HostPlatform, repoDir: string, worktreePath: string, taskId: number): Promise<boolean> {
+async function mayRemoveWorktree(transport: IServerTransport, platform: HostPlatform, repoDir: string, worktreePath: string, taskId: number): Promise<boolean> {
   const api = hostPathFor(platform);
-  const realRepo = await transport.files().realpath(repoDir);
-  const relative = api.relative(repoDir, worktreePath);
-  const isBelow = relative !== '' && relative !== '..' && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
-  const actual = isBelow ? api.join(realRepo, relative) : await resolveGitPath(transport, worktreePath);
-  return api.samePath(actual, api.join(realRepo, '.worktrees', `task-${taskId}`));
+  const files = transport.files();
+  try {
+    const actual = await files.realpath(worktreePath);
+    const expected = api.join(await files.realpath(repoDir), '.worktrees', `task-${taskId}`);
+    return api.samePath(actual, expected);
+  } catch (err) {
+    if (err instanceof FileOpsError && err.code === 'NOT_FOUND') return true;
+    throw err;
+  }
 }
 
 /**
@@ -146,7 +150,7 @@ export class TaskCleanupService {
         if (repoDir) {
           try {
             const transport = transportFactory.getTransport(server);
-            if (!(await isWorktreeOfRepo(transport, platform, repoDir, task.worktreePath, task.id))) {
+            if (!(await mayRemoveWorktree(transport, platform, repoDir, task.worktreePath, task.id))) {
               log.warn(`[task-cleanup] Skipping worktree removal: ${task.worktreePath} is not under ${repoDir}/.worktrees`);
             } else {
               await worktreeServiceFactory.create(transport).remove(repoDir, task.worktreePath);
