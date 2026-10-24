@@ -115,9 +115,9 @@ export interface MisaoSocketStatus {
   host: AgentMisaoHost;
 }
 
-/** The one place an agent server's misao is installed: `<home>/.azito/misao`, whatever `MISAO_SOCKET` says (a Windows host: see {@link misaoRootOf}). */
+/** The one place a Unix agent server's misao is installed (a POSIX path, whatever OS the hub runs on): `<home>/.azito/misao`, whatever `MISAO_SOCKET` says (a Windows host: see {@link misaoRootOf}). */
 export function agentMisaoRoot(homeDir: string): string {
-  return path.join(homeDir, '.azito', 'misao');
+  return path.posix.join(homeDir, '.azito', 'misao');
 }
 
 /** Where misao is installed on the host an agent reports: its own folder on Windows, `<home>/.azito/misao` elsewhere. */
@@ -132,7 +132,7 @@ export const MISAO_WINDOWS_CURRENT_FILE = 'current';
 
 /** The managed layout's socket: what the installer sets up, and what the agent relays to unless `MISAO_SOCKET` says otherwise. */
 export function agentMisaoManagedSocket(homeDir: string): string {
-  return path.join(agentMisaoRoot(homeDir), 'misao.sock');
+  return path.posix.join(agentMisaoRoot(homeDir), 'misao.sock');
 }
 
 /** The managed endpoint of the host an agent reports: its named pipe on Windows, the socket under the home elsewhere. */

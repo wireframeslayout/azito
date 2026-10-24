@@ -1,4 +1,3 @@
-import * as path from 'path';
 import { describe, expect, it } from 'vitest';
 import { isWindowsMisaoPipe, managedEndpointOf, misaoFileNameOn, misaoRootOf, resolveAgentMisaoSocket, windowsMisaoPipe, type AgentMisaoHost, type AgentMisaoWindowsHost } from './agentMisaoSocket';
 
@@ -35,7 +34,7 @@ describe('the managed pipe of a Windows host', () => {
 describe('where misao lives on an agent', () => {
   it('is the folder the Windows agent reports, and <home>/.azito/misao elsewhere', () => {
     expect(misaoRootOf(HOST)).toBe(WINDOWS.misaoRoot);
-    expect(misaoRootOf({ homeDir: '/home/u', nodePath: 'node', servicePath: '', platform: 'linux', arch: 'x64' })).toBe(path.join('/home/u', '.azito', 'misao'));
+    expect(misaoRootOf({ homeDir: '/home/u', nodePath: 'node', servicePath: '', platform: 'linux', arch: 'x64' })).toBe('/home/u/.azito/misao');
   });
 
   it('fails for a Windows agent that did not report its folder (an agent older than this hub)', () => {
