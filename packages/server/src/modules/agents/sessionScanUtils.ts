@@ -96,7 +96,8 @@ export function normalizeCwd(platform: HostPlatform, p: string): string {
     const root = p.startsWith('/') ? '/' : '';
     return root + p.slice(root.length).replace(/\/+$/, '');
   }
-  const unified = p.replace(/\//g, '\\');
+  // The extended-length prefix (`\\?\C:\x`, `\\?\UNC\srv\share`) is how Rust programs (Codex) print a canonical path.
+  const unified = p.replace(/\//g, '\\').replace(/^\\\\\?\\UNC\\/i, '\\\\').replace(/^\\\\\?\\(?=[A-Za-z]:)/, '');
   const root = pathApiFor(platform).parse(unified).root;
   return (root + unified.slice(root.length).replace(/\\+$/, '')).toLowerCase();
 }

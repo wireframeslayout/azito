@@ -27,6 +27,14 @@ describe('resolveShellDirectory', () => {
     await expect(resolveShellDirectory(files, '~/work/app')).resolves.toBe('C:\\Users\\me\\work\\app');
   });
 
+  it('drops only the host\'s own separators after ~ (a backslash is a name on POSIX)', async () => {
+    const posix = filesOf('linux', '/home/me');
+    await expect(resolveShellDirectory(posix.files, '~//app')).resolves.toBe('/home/me/app');
+    await expect(resolveShellDirectory(posix.files, '~/\\app')).resolves.toBe('/home/me/\\app');
+    const win = filesOf('win32', 'C:\\Users\\me');
+    await expect(resolveShellDirectory(win.files, '~/\\app')).resolves.toBe('C:\\Users\\me\\app');
+  });
+
   it('does not ask the host for anything when the path is not home-relative', async () => {
     const filesFn = vi.fn();
     await expect(resolveShellDirectory(filesFn, '/work/app')).resolves.toBe('/work/app');

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { claudeProjectDirName } from './projectDirName';
+import { claudeProjectDirNames } from './projectDirName';
 
 describe('claudeProjectDirName (Claude Code: every non-alphanumeric character becomes "-", 200 characters at most + hash)', () => {
   it.each([
@@ -22,22 +22,20 @@ describe('claudeProjectDirName (Claude Code: every non-alphanumeric character be
     ['win32', 'C:\\', 'C--'],
     ['win32', '\\\\server\\share\\dir', '--server-share-dir'],
   ] as const)('%s: %s -> %s', (platform, workingDirectory, expected) => {
-    expect(claudeProjectDirName(platform, workingDirectory)).toBe(expected);
+    expect(claudeProjectDirNames(platform, workingDirectory)).toEqual([expected]);
   });
 
   it('keeps a name of exactly 200 characters as it is', () => {
-    const path = `/${'a'.repeat(199)}`;
-    expect(claudeProjectDirName('linux', path)).toBe(`-${'a'.repeat(199)}`);
+    expect(claudeProjectDirNames('linux', `/${'a'.repeat(199)}`)).toEqual([`-${'a'.repeat(199)}`]);
   });
 
-  it('cuts a longer name to 200 characters and appends the base-36 hash of the whole path', () => {
-    const path = `/${'a'.repeat(249)}`;
-    expect(claudeProjectDirName('linux', path)).toBe(`-${'a'.repeat(199)}-wkpu26`);
+  it('for a longer name lists the cut name with the base-36 hash of the whole path, then the uncut name (older Claude Code)', () => {
+    expect(claudeProjectDirNames('linux', `/${'a'.repeat(249)}`)).toEqual([`-${'a'.repeat(199)}-wkpu26`, `-${'a'.repeat(249)}`]);
   });
 
   it('hashes the original (not the dashed) path, so two long paths that differ only in punctuation stay apart', () => {
-    const a = `/${'a'.repeat(250)}.x`;
-    const b = `/${'a'.repeat(250)}_x`;
-    expect(claudeProjectDirName('linux', a)).not.toBe(claudeProjectDirName('linux', b));
+    const [a] = claudeProjectDirNames('linux', `/${'a'.repeat(250)}.x`);
+    const [b] = claudeProjectDirNames('linux', `/${'a'.repeat(250)}_x`);
+    expect(a).not.toBe(b);
   });
 });

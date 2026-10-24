@@ -1166,7 +1166,7 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
     const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: homeRelative });
     const { service, sentCommands } = buildService({
       window: win,
-      projectServerRepo: makeProjectServerRepo(rootDir),
+      projectServerRepo: makeProjectServerRepo(null),
       transportFactory: makeTransportFactory(),
     });
 

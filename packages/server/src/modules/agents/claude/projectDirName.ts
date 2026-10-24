@@ -12,6 +12,9 @@ import { pathApiFor } from '../../../shared/os/hostPath';
  * So `_`, spaces, and each non-ASCII character are `-` too (`日本語` -> `---`, an astral character -> `--`), a Windows
  * `C:\Users\me` is `C--Users-me`, and a path over 200 characters is cut and given a hash suffix of the whole path. The
  * older `[/.]` -> `-` rule only agreed with this for plain paths.
+ *
+ * Versions differ on the cut: 2.0.50 never cuts (the dashed name of any length), 2.1.310 cuts as above. Sessions made by an
+ * older Claude Code stay under the uncut name, so {@link claudeProjectDirNames} lists both when they differ.
  */
 const MAX_NAME_LENGTH = 200;
 
@@ -22,14 +25,16 @@ function javaStringHash(value: string): number {
 }
 
 /**
- * The directory name Claude Code gives sessions started in `workingDirectory` (a path of a host of `platform`). Trailing
- * separators are dropped first (Claude's own cwd never has one), but a root keeps its separator (`/`, `C:\`).
+ * The directory names Claude Code may have given sessions started in `workingDirectory` (a path of a host of `platform`),
+ * newest rule first: the cut name with its hash (current versions) and, for a path over 200 characters, the uncut dashed name
+ * (older versions). Trailing separators are dropped first (Claude's own cwd never has one), but a root keeps its separator
+ * (`/`, `C:\`).
  */
-export function claudeProjectDirName(platform: HostPlatform, workingDirectory: string): string {
+export function claudeProjectDirNames(platform: HostPlatform, workingDirectory: string): string[] {
   const root = pathApiFor(platform).parse(workingDirectory).root;
   const trimmed = workingDirectory.slice(root.length).replace(platform === 'win32' ? /[\\/]+$/ : /\/+$/, '');
   const cwd = root + trimmed;
   const name = cwd.replace(/[^a-zA-Z0-9]/g, '-');
-  if (name.length <= MAX_NAME_LENGTH) return name;
-  return `${name.slice(0, MAX_NAME_LENGTH)}-${Math.abs(javaStringHash(cwd)).toString(36)}`;
+  if (name.length <= MAX_NAME_LENGTH) return [name];
+  return [`${name.slice(0, MAX_NAME_LENGTH)}-${Math.abs(javaStringHash(cwd)).toString(36)}`, name];
 }

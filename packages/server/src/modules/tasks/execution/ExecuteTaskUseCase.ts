@@ -1967,7 +1967,9 @@ export class ExecuteTaskUseCase {
         try {
           await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
           await sleep(500);
-        } catch {}
+        } catch (err) {
+          this.appendLog(taskId, unitId, 'command', { type: 'cd_failed', directory: followUpDir, reason: err instanceof Error ? err.message : String(err) });
+        }
       }
 
       const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));

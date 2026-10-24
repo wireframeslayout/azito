@@ -142,6 +142,8 @@ describe('normalizeCwd', () => {
     ['win32', 'c:/work/project', 'c:\\work\\project'],
     ['win32', 'C:\\Work\\Project', 'c:\\work\\project'],
     ['win32', 'C:\\', 'c:\\'],
+    ['win32', '\\\\?\\C:\\Work\\Project', 'c:\\work\\project'],
+    ['win32', '\\\\?\\UNC\\Server\\Share\\Dir', '\\\\server\\share\\dir'],
     ['win32', '\\\\Server\\Share\\Dir\\', '\\\\server\\share\\dir'],
   ] as const)('%s: %s -> %s', (platform, input, expected) => {
     expect(normalizeCwd(platform, input)).toBe(expected);

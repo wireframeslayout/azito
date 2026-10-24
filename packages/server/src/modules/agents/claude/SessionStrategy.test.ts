@@ -64,6 +64,21 @@ describe('ClaudeSessionStrategy.scanSessionId', () => {
     await expect(createStrategy().scanSessionId(server, '/work/app')).resolves.toBe(SESSION_A);
   });
 
+  it('finds a session under the uncut name (Claude Code 2.0.x) for a working directory over 200 characters', async () => {
+    const long = `/${'a'.repeat(249)}`;
+    session(`-${'a'.repeat(249)}`, `${SESSION_A}.jsonl`, 1000);
+
+    await expect(createStrategy().scanSessionId(server, long)).resolves.toBe(SESSION_A);
+  });
+
+  it('takes the newest of the cut-name and uncut-name directories', async () => {
+    const long = `/${'a'.repeat(249)}`;
+    session(`-${'a'.repeat(249)}`, `${SESSION_A}.jsonl`, 1000);
+    session(`-${'a'.repeat(199)}-wkpu26`, `${SESSION_B}.jsonl`, 2000);
+
+    await expect(createStrategy().scanSessionId(server, long)).resolves.toBe(SESSION_B);
+  });
+
   it('ignores a trailing slash of the working directory', async () => {
     session('-work-app', `${SESSION_A}.jsonl`, 1000);
 

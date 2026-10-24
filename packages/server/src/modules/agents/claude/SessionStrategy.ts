@@ -5,7 +5,7 @@ import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildClaudeLaunchCommand } from './launchCommand';
-import { claudeProjectDirName } from './projectDirName';
+import { claudeProjectDirNames } from './projectDirName';
 import { claudeConfigDirOf, type LocalAgentHomes } from '../agentHomes';
 
 export class ClaudeSessionStrategy implements ISessionStrategy {
@@ -40,8 +40,13 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     if (!workingDirectory) return null;
     const files = this.transportFactory.getFileOps(server);
     const configDir = await claudeConfigDirOf(files, server.type === 'local', this.localHomes);
-    const projectDir = pathApiFor(files.platform).join(configDir, 'projects', claudeProjectDirName(files.platform, workingDirectory));
-    const candidates = await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, Date.now() + SESSION_SCAN_BUDGET_MS);
+    const deadline = Date.now() + SESSION_SCAN_BUDGET_MS;
+    const found = [];
+    for (const dirName of claudeProjectDirNames(files.platform, workingDirectory)) {
+      const projectDir = pathApiFor(files.platform).join(configDir, 'projects', dirName);
+      found.push(...await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, deadline));
+    }
+    const candidates = found.sort((a, b) => a.mtimeMs - b.mtimeMs);
     const latest = candidates[candidates.length - 1];
     if (!latest) return null;
 

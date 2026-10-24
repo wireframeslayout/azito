@@ -15,7 +15,8 @@ export async function resolveShellDirectory(files: () => IFileOps, dir: string):
   const ops = files();
   if (!isHomeRelativePath(ops.platform, dir)) return dir;
   const home = await ops.realpath('~');
-  const rest = dir.slice(1).replace(/^[\\/]+/, '');
+  // After the `~`, only the host's own separators go: a backslash is a name character on POSIX.
+  const rest = dir.slice(1).replace(ops.platform === 'win32' ? /^[\\/]+/ : /^\/+/, '');
   return rest === '' ? home : pathApiFor(ops.platform).join(home, rest);
 }
 
