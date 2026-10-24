@@ -1,6 +1,8 @@
 {
   "explorer": {
     "refresh": "更新",
+    "serverMissing": "このファイルのサーバー「{{server}}」はもう存在しないため、開けません。",
+    "closeTab": "タブを閉じる",
     "emptyDirectory": "空のディレクトリ",
     "download": "ダウンロード",
     "downloadFailed": "ダウンロードに失敗しました",

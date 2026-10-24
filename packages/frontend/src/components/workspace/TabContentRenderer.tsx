@@ -18,9 +18,10 @@ import TaskListView from '../TaskListView';
 import { SettingsContent, useProjectSettings } from '../ProjectSettings';
 import { DiffViewer } from '../diff';
 import BrowserView from '../BrowserView';
-import { Button, LoadingState } from '../ui';
+import { Button, LoadingState, Notice } from '../ui';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useServerPathApi } from '../../hooks/useServerPath';
+import { useServerStatuses } from '../../hooks/useServerStatuses';
 import { joinRelative } from '../../lib/serverPath';
 import { isFileTabSettled } from '../../lib/fileTabMigration';
 import type { Task, Unit, Project, Session, SidebarMode } from '../../pages/workspace/types';
@@ -114,7 +115,11 @@ export default function TabContentRenderer({
   togglePin,
 }: TabContentRendererProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
+  const { t: tf } = useTranslation('files');
   const serverPathApi = useServerPathApi();
+  const { servers, serversLoaded } = useServerStatuses();
+  // A saved file tab whose server is gone: not listed, and not a merged server's old name either (that one is renamed).
+  const isServerGone = (name: string): boolean => serversLoaded && !servers.some((s) => s.name === name || (s.aliases ?? []).includes(name));
   const navigate = useNavigate();
 
   // "Back to list" idiom shared with TaskPanel's onBack: activate/open the
@@ -172,9 +177,16 @@ export default function TabContentRenderer({
               reconnectKey={tab.reconnectKey}
             />
       )}
-      {tab.type === 'file' && tab.serverName && tab.filePath && !isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
-        // A restored tab can still be re-keyed (server renamed, path normalized) once the server list is in; an editor
-        // mounted now would be rebuilt then and lose its unsaved content.
+      {tab.type === 'file' && tab.serverName && tab.filePath && isServerGone(tab.serverName) && (
+        <div style={{ padding: 16 }}>
+          <Notice tone="warning" action={<Button variant="default" size="sm" onClick={() => closeTab(tab.id)}>{tf('explorer.closeTab')}</Button>}>
+            {tf('explorer.serverMissing', { server: tab.serverName })}
+          </Notice>
+        </div>
+      )}
+      {tab.type === 'file' && tab.serverName && tab.filePath && !isServerGone(tab.serverName) && !isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
+        // A restored tab can still be re-keyed (server renamed, path normalized) once this page load has the server list;
+        // an editor mounted now would be rebuilt then and lose its unsaved content.
         <LoadingState />
       )}
       {tab.type === 'file' && tab.serverName && tab.filePath && isFileTabSettled(tab, serverPathApi(tab.serverName)) && (

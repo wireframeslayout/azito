@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HostPathApi } from '@azito/shared';
-import { composeIdMaps, composeTabMigrations, type TabMigrationStep } from './savedTabMigration';
+import { composeTabMigrations, type TabMigrationStep } from './savedTabMigration';
 import { isFileTabSettled, normalizeFileTabs, type MigratableFileTab } from './fileTabMigration';
 import { renameServerInTabs } from './serverAliasTabs';
 import { serverPathApi } from './serverPath';
@@ -18,13 +18,6 @@ const stepsFor = (aliases: Map<string, string>): TabMigrationStep<Tab>[] => [
   (tabs) => renameServerInTabs(tabs, aliases),
   (tabs) => normalizeFileTabs(tabs, pathApiFor),
 ];
-
-describe('composeIdMaps', () => {
-  it('follows an id through both steps, and keeps the renames only one step made', () => {
-    const composed = composeIdMaps(new Map([['a', 'b'], ['x', 'y']]), new Map([['b', 'c'], ['p', 'q']]));
-    expect(composed).toEqual(new Map([['a', 'c'], ['x', 'y'], ['p', 'q']]));
-  });
-});
 
 describe('composeTabMigrations: server aliases and Windows file paths', () => {
   const aliases = new Map([['old-win', 'win']]);
@@ -50,6 +43,21 @@ describe('composeTabMigrations: server aliases and Windows file paths', () => {
     const { tabs, idMap } = composeTabMigrations([fileTab('win', 'C:\\work\\a.ts'), fileTab('old-win', 'C:/work/a.ts')], stepsFor(aliases));
     expect(tabs.map((t) => t.id)).toEqual(['file:win:C:\\work\\a.ts']);
     expect(idMap.get('file:old-win:C:/work/a.ts')).toBe('file:win:C:\\work\\a.ts');
+  });
+
+  it('maps both original ids of two tabs folded into one, whichever of them was the survivor', () => {
+    const oldTab = 'file:old-win:C:/x/a.ts';
+    const currentTab = 'file:win:C:/x/a.ts';
+    const { tabs, idMap } = composeTabMigrations([fileTab('old-win', 'C:/x/a.ts'), fileTab('win', 'C:/x/a.ts')], stepsFor(aliases));
+    expect(tabs.map((t) => t.id)).toEqual(['file:win:C:\\x\\a.ts']);
+    // the active tab (either one) and the pane layout (either one's pane) find the survivor
+    expect(idMap.get(oldTab)).toBe('file:win:C:\\x\\a.ts');
+    expect(idMap.get(currentTab)).toBe('file:win:C:\\x\\a.ts');
+  });
+
+  it('leaves ids that did not change out of the map', () => {
+    const { idMap } = composeTabMigrations([fileTab('win', 'C:\\x\\a.ts'), fileTab('old-win', 'C:\\x\\b.ts')], stepsFor(aliases));
+    expect([...idMap.keys()]).toEqual(['file:old-win:C:\\x\\b.ts']);
   });
 
   it('is idempotent: a second pass over the result changes nothing', () => {

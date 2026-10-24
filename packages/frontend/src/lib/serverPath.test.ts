@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  fileDisplayName, fileTabPath, findByPath, joinRelative, parentOrRoot, platformOfServer, resolveServerPathApi, serverPathApi,
+  fileDisplayName, fileTabPath, findByPath, joinRelative, parentOrRoot, platformOfServer, resolveServerPathApi, serverPathApi, serverPlatformsOf,
   typedDirectoryPrefix, withTrailingSeparator,
 } from './serverPath';
 
@@ -42,6 +42,22 @@ describe('knowing the OS of a server', () => {
     // a name the list does not have stays unknown
     expect(resolveServerPathApi(listed, 'gone')).toBeNull();
     expect(resolveServerPathApi(listed, null)).toBeNull();
+  });
+});
+
+describe('the server list kept in sessionStorage', () => {
+  // The cached copy was taken before the agent reported its OS; the fresh list knows it is Windows.
+  const cached = [{ name: 'win', hostProfile: null }];
+  const fetched = [{ name: 'win', hostProfile: { platform: 'win32' as const } }];
+
+  it('decides nothing about a host until this page load has fetched the list', () => {
+    expect(serverPlatformsOf(cached, false).size).toBe(0);
+    expect(serverPlatformsOf(fetched, false).size).toBe(0);
+  });
+
+  it('gives the fetched answer even where the cached one differed', () => {
+    expect(serverPlatformsOf(cached, true).get('win')).toBe('linux');
+    expect(serverPlatformsOf(fetched, true).get('win')).toBe('win32');
   });
 });
 

@@ -6,40 +6,35 @@ export interface TabMigrationStep<T> {
   (tabs: T[]): { tabs: T[]; changed: boolean; idMap: Map<string, string>; dropped?: Set<string> };
 }
 
-/** `first` followed by `second`: an id the first step renamed ends where the second step sent it. */
-export function composeIdMaps(first: ReadonlyMap<string, string>, second: ReadonlyMap<string, string>): Map<string, string> {
-  const composed = new Map<string, string>();
-  const renamedByFirst = new Set<string>();
-  for (const [from, to] of first) {
-    renamedByFirst.add(to);
-    composed.set(from, second.get(to) ?? to);
-  }
-  for (const [from, to] of second) {
-    if (!renamedByFirst.has(from)) composed.set(from, to);
-  }
-  return composed;
-}
-
 /**
- * Runs the steps in order, each on the previous step's tabs, and returns the final tabs with one id map from the ids
- * the tabs started with. The caller applies that once to the active tab and the pane layout, so no step's result can be
- * overwritten by another's.
+ * Runs the steps in order, each on the previous step's tabs, and returns the final tabs with one id map from every id
+ * the tabs started with to the id it ended as (a tab folded into another one maps to the survivor, whichever of the two
+ * it was, so the active tab and the pane layout find it). The caller applies that once to the active tab and the pane
+ * layout, so no step's result can be overwritten by another's. Ids that did not change are not in the map.
  */
-export function composeTabMigrations<T>(
+export function composeTabMigrations<T extends { id: string }>(
   tabs: T[],
   steps: ReadonlyArray<TabMigrationStep<T>>,
 ): { tabs: T[]; changed: boolean; idMap: Map<string, string>; dropped: Set<string> } {
   let current = tabs;
   let changed = false;
-  let idMap = new Map<string, string>();
-  const dropped = new Set<string>();
+  // Every starting id -> the id it has now (null: dropped).
+  const now = new Map<string, string | null>(tabs.map((tab) => [tab.id, tab.id]));
   for (const step of steps) {
     const result = step(current);
     if (!result.changed) continue;
     changed = true;
     current = result.tabs;
-    idMap = composeIdMaps(idMap, result.idMap);
-    result.dropped?.forEach((id) => dropped.add(id));
+    for (const [original, id] of now) {
+      if (id === null) continue;
+      now.set(original, result.dropped?.has(id) ? null : (result.idMap.get(id) ?? id));
+    }
+  }
+  const idMap = new Map<string, string>();
+  const dropped = new Set<string>();
+  for (const [original, id] of now) {
+    if (id === null) dropped.add(original);
+    else if (id !== original) idMap.set(original, id);
   }
   return { tabs: current, changed, idMap, dropped };
 }

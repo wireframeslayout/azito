@@ -18,6 +18,17 @@ export function platformOfServer(server: { hostProfile?: HostPlatformInfo | null
   return server.hostProfile?.platform ?? 'linux';
 }
 
+/**
+ * The OS of every server in the list, by name. Empty until the list has been fetched from the hub in this page load: the
+ * copy kept in sessionStorage can be older than the servers' OS (an agent's OS gets recorded later), so it decides nothing.
+ */
+export function serverPlatformsOf(servers: ReadonlyArray<{ name: string; hostProfile?: HostPlatformInfo | null }>, fetched: boolean): Map<string, HostPlatform> {
+  const platforms = new Map<string, HostPlatform>();
+  if (!fetched) return platforms;
+  for (const server of servers) platforms.set(server.name, platformOfServer(server) ?? 'linux');
+  return platforms;
+}
+
 /** The path functions for the named server, or null while its OS is not known (see `platformOfServer`): path-dependent work waits. */
 export function resolveServerPathApi(servers: ReadonlyArray<{ name: string; hostProfile?: HostPlatformInfo | null }>, serverName: string | null | undefined): HostPathApi | null {
   const platform = platformOfServer(servers.find((s) => s.name === serverName));

@@ -29,6 +29,8 @@ function persistStatusCache(servers: Server[], statuses: Record<string, ServerSt
 
 interface ServerStatusContextValue {
   servers: Server[];
+  /** Whether this page load has fetched /servers successfully: `servers` may be the sessionStorage copy until then, which must not decide anything about a host. */
+  serversLoaded: boolean;
   statuses: Record<string, ServerStatus>;
   refresh: () => Promise<Server[]>;
 }
@@ -39,6 +41,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   const initialCache = useRef(loadStatusCache());
   const [servers, setServers] = useState<Server[]>(initialCache.current.servers);
   const [statuses, setStatuses] = useState<Record<string, ServerStatus>>(initialCache.current.statuses);
+  const [serversLoaded, setServersLoaded] = useState(false);
 
   // リクエスト識別用: refresh() 呼び出しごとに増分する（成否に関わらず）。
   const requestSeqRef = useRef(0);
@@ -105,6 +108,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
 
     serversRef.current = srvs;
     setServers(srvs);
+    setServersLoaded(true);
 
     // 既知のステータスがあるサーバーはそのまま維持し、未取得のサーバーのみ checking にする
     // （再チェックのたびに全体をグレー化してフリッカーさせないため）
@@ -152,7 +156,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   }, [refresh]);
 
   return (
-    <ServerStatusContext.Provider value={{ servers, statuses, refresh }}>
+    <ServerStatusContext.Provider value={{ servers, serversLoaded, statuses, refresh }}>
       {children}
     </ServerStatusContext.Provider>
   );
