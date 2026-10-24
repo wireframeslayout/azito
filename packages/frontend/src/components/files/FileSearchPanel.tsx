@@ -3,13 +3,9 @@ import { useTranslation } from 'react-i18next';
 import { getUiToken } from '../../api/token';
 import { Icon } from '../ui/Icon';
 import { InlineToggle } from '../ui/InlineToggle';
-<<<<<<< HEAD
 import { SearchResultList, type SearchResultGroup, type SearchHitItem, type SearchEngine } from './SearchResultList';
-=======
-import { SearchResultList, type SearchResultGroup, type SearchHitItem } from './SearchResultList';
 import { useServerPath } from '../../hooks/useServerPath';
 import { joinRelative } from '../../lib/serverPath';
->>>>>>> origin/master
 
 interface FileSearchPanelProps { serverName: string; projectId: number; root: string; onOpenHit: (path: string, line: number) => void; onClose: () => void; }
 interface SearchApiResult { nameMatches: string[]; contentHits: SearchHitItem[]; engine: SearchEngine; truncated: boolean; elapsedMs: number; }
