@@ -9,6 +9,7 @@ import type { MisaoPaths } from './misaoPaths';
 import { MisaoServiceError } from './MisaoServiceError';
 import { MisaoServiceService } from './MisaoServiceService';
 import { readEnvValue } from '../../../shared/envFile';
+import { ProcessLock } from '../../../shared/processLock';
 import { createSecretFileGuard } from '../../../shared/os/secretFileGuard';
 import type { ServiceManager } from '../serviceManager';
 
@@ -36,6 +37,9 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
   let update: ReturnType<typeof vi.fn>;
   let controller: ServiceManager;
   let controllerInstall: ReturnType<typeof vi.fn>;
+  /** The processes of the fake host: id -> start time. This one is 100; the CLI is 200. */
+  let processes: Map<number, string>;
+  const lockFor = (pid: number): ProcessLock => new ProcessLock(path.join(paths.root, '.operation.lock'), { pid, exists: (p) => processes.has(p), readStart: async (p) => processes.get(p) ?? null });
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azw-'));
@@ -43,6 +47,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     paths = { prefix: dir, root, current: path.join(root, 'current'), socket: PIPE, log: path.join(root, 'misao.log'), hubEnvFile: path.join(dir, 'hub', '.env') };
     fs.mkdirSync(path.join(dir, 'hub'), { recursive: true });
     fs.mkdirSync(root, { recursive: true });
+    processes = new Map([[100, 'hub'], [200, 'cli']]);
     taskExists = false;
     exportedXml = taskXml(root);
     install = vi.fn(async () => RESULT);
@@ -55,6 +60,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
         exportXml: async () => exportedXml,
       } as unknown as LocalMisaoWindows['tasks'],
       taskName: 'AzitoMisao',
+      operationLock: lockFor(100),
     };
     controllerInstall = vi.fn();
     controller = {
@@ -204,6 +210,23 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
       release();
       await updating;
       expect(await svc.reviveWindowsDaemon(false)).toBe('started');
+    });
+
+    it('does nothing while the CLI (another process) is installing / updating: busy, and the CLI\'s update is refused the other way round', async () => {
+      const cli = lockFor(200);
+      let during: string | undefined;
+      await cli.run(async () => {
+        during = await service().reviveWindowsDaemon(true);
+        await expect(service().update()).rejects.toMatchObject({ code: 'busy', message: expect.stringContaining('(200)') });
+      });
+      expect(during).toBe('busy');
+      expect(revive).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      // The slot is free again once the other process is done (and a dead holder does not keep it).
+      expect(await service().reviveWindowsDaemon(false)).toBe('started');
+      await cli.run(async () => undefined);
+      fs.writeFileSync(path.join(paths.root, '.operation.lock'), JSON.stringify({ pid: 300, started: 'gone' }));
+      expect(await service().reviveWindowsDaemon(false)).toBe('started');
     });
 
     it('is only for a Windows hub with a managed misao', () => {

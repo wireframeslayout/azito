@@ -202,14 +202,27 @@ async function main(): Promise<void> {
     log = readLog(hubLog);
     assert(/launcher: start 3 in 10s/.test(log), 'the second restart must wait 10s', log);
 
-    step('azito service restart: exactly one hub, no port conflict, and the new launcher has no restarts');
-    const logBefore = readLog(hubLog).length;
-    const restart = azito(azitoCmd, 'service restart');
-    assert(restart.status === 0 && !/forcibly/.test(restart.output), 'azito service restart failed', restart.output);
+    // The restart lands while the launcher waits to start the crashed hub again (right after the crash, and a few seconds into the wait):
+    // a hub the launcher starts between the restart's first look and the End must be waited for too, and never meets the new one on the port.
+    for (const delayMs of [0, 3000]) {
+      step(`azito service restart ${delayMs === 0 ? 'right after a crash' : '3s into the launcher\\'s wait'}: exactly one hub, no port conflict`);
+      await waitFor('the hub to be running before the crash', async () => (await healthStatus()) === 200, 90_000, () => readLog(hubLog));
+      killForcibly(hubNodePids(entryFragment));
+      await sleep(delayMs);
+      const logBefore = readLog(hubLog).length;
+      const overlapped = azito(azitoCmd, 'service restart');
+      assert(overlapped.status === 0, 'azito service restart failed', overlapped.output);
+      await waitFor('/api/health after the restart', async () => (await healthStatus()) === 200, 90_000, () => readLog(hubLog));
+      await sleep(25_000); // longer than any wait of the old launcher: a hub it started on its own would have shown itself by now
+      assert(hubNodePids(entryFragment).length === 1, 'exactly one hub node.exe after the restart', overlapped.output);
+      assert(!/EADDRINUSE/.test(readLog(hubLog).slice(logBefore)), 'the restart must not meet the old hub on the port', readLog(hubLog).slice(logBefore));
+    }
+    step('azito service restart of a healthy hub: exactly one hub, and the new launcher has no restarts');
+    const plain = azito(azitoCmd, 'service restart');
+    assert(plain.status === 0 && !/forcibly/.test(plain.output), 'azito service restart failed', plain.output);
     await waitFor('/api/health after restart', async () => (await healthStatus()) === 200, 90_000, () => readLog(hubLog));
-    await sleep(8000); // a second hub from a launcher that did not end would have shown itself by now
+    await sleep(8000);
     assert(hubNodePids(entryFragment).length === 1, 'exactly one hub node.exe after the restart');
-    assert(!/EADDRINUSE/.test(readLog(hubLog).slice(logBefore)), 'the restart must not meet the old hub on the port', readLog(hubLog).slice(logBefore));
     assert(/launcher:\s+no restart since the launcher began/.test(azito(azitoCmd, 'status').output), 'the new launcher starts with no restarts');
 
     step('misao.exe crashes (ended forcibly): the hub starts its task again');
@@ -294,8 +307,13 @@ async function main(): Promise<void> {
       const deleted = schtasks(['/Delete', '/TN', task, '/F']);
       if (schtasks(['/Query', '/TN', task]).status === 0) cleanupFailure = `could not delete the task ${task}: ${deleted.output.trim()}`;
     }
-    if (pipe !== '' && misaoPids(pipe).length > 0) cleanupFailure = `a misao.exe is still running for ${pipe}`;
-    if (entryFragment !== '' && hubNodePids(entryFragment).length > 0) cleanupFailure = 'a hub node.exe is still running';
+    // A check that cannot run must not hide the failure that brought us here, nor skip the removal below.
+    try {
+      if (pipe !== '' && misaoPids(pipe).length > 0) cleanupFailure = `a misao.exe is still running for ${pipe}`;
+      if (entryFragment !== '' && hubNodePids(entryFragment).length > 0) cleanupFailure = 'a hub node.exe is still running';
+    } catch (err) {
+      cleanupFailure = `could not check what is left running: ${err instanceof Error ? err.message : String(err)}`;
+    }
     fs.rmSync(definitionCopy, { force: true });
     try {
       fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });

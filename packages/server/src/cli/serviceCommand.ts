@@ -24,10 +24,10 @@ function isServiceCommand(value: string | undefined): value is ServiceCommand {
 export type { ServiceCommandContext };
 
 /** The launcher restarts a hub that died; the task's own Last Result never shows it, so `status` does. A record that cannot be read is said, not skipped. */
-function printLauncherState(windowsHub: WindowsHub): void {
+function printLauncherState(windowsHub: WindowsHub, running: boolean): void {
   try {
     const state = readHubLauncherState(windowsHub.layout.launcherState);
-    if (state) console.log(`launcher:  ${describeHubLauncherState(state)}`);
+    if (state) console.log(`launcher:  ${describeHubLauncherState(state)}${running ? '' : ' [the last run; the service is stopped]'}`);
   } catch (err) {
     console.log(`launcher:  cannot read ${windowsHub.layout.launcherState}: ${err instanceof Error ? err.message : String(err)}`);
   }
@@ -42,7 +42,7 @@ async function printStatus(manager: ServiceManager, windowsHub: WindowsHub | und
   console.log(`service:   ${manager.kind} (${state})`);
   if (windowsHub) {
     console.log(`log:       ${windowsHub.layout.logFile}`);
-    printLauncherState(windowsHub);
+    printLauncherState(windowsHub, state === 'active');
     // The definition copy outlives a task that was deleted by hand.
     if (!(await taskExists(windowsHub))) console.log('warning:   the task is not registered any more (deleted?). Run `azito service install` to register it again.');
   }

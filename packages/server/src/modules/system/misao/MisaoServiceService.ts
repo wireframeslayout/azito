@@ -13,6 +13,7 @@ import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
+import { ProcessLockBusyError } from '../../../shared/processLock';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -395,29 +396,41 @@ export class MisaoServiceService {
   /**
    * Windows only: starts the task of the daemon AZITO installed for this hub when it died (its task reports 0 whatever happened, so the
    * Task Scheduler does not start it again): `MisaoWindowsInstaller.reviveDaemon`, the very steps an agent's gets. It takes the
-   * same one-at-a-time slot as install / start / update and gives way to them (`busy`, nothing done). Only the misao this hub installed
+   * same one-at-a-time slot as install / start / update (across processes too, so also `azito misao ...` of the CLI) and gives way to them (`busy`, nothing done). Only the misao this hub installed
    * is touched: a `MISAO_SOCKET` set by hand to another daemon is `custom_socket`, and a task that starts another folder's misao
    * (`taskStartsMisaoOf`) is `other_task`.
    */
   async reviveWindowsDaemon(force: boolean): Promise<string> {
     const { windows } = this.deps;
     if (!windows) throw new MisaoServiceError('unsupported_host', 'The hub\'s own misao is a Windows task only on Windows.');
-    if (this.busy) return 'busy';
-    return this.exclusive(async () => {
-      if (this.socketSetting() !== 'managed') return 'custom_socket';
-      if ((await windows.tasks.query(windows.taskName)).exists && !taskStartsMisaoOf(await windows.tasks.exportXml(windows.taskName), this.paths.root)) return 'other_task';
-      return windows.installer.reviveDaemon(windows.target, force);
-    });
+    try {
+      return await this.exclusive(async () => {
+        if (this.socketSetting() !== 'managed') return 'custom_socket';
+        if ((await windows.tasks.query(windows.taskName)).exists && !taskStartsMisaoOf(await windows.tasks.exportXml(windows.taskName), this.paths.root)) return 'other_task';
+        return await windows.installer.reviveDaemon(windows.target, force);
+      });
+    } catch (err) {
+      if (err instanceof MisaoServiceError && err.code === 'busy') return 'busy';
+      throw err;
+    }
   }
 
-  /** One install / start / update at a time: two of them interleaving could stop a daemon the other just started. */
+  /**
+   * One install / start / update at a time: two of them interleaving could stop a daemon the other just started. In this process by
+   * a flag; on Windows also across processes by the lock file of `LocalMisaoWindows.operationLock`, because `azito misao ...` runs in
+   * its own process beside the hub (whose Setup row, API and watchdog share this instance). Nothing waits: a taken slot is `busy`.
+   * Unix is not locked across processes (systemd / launchd are driven by the CLI and the hub as before, and nothing there starts the
+   * service on its own, so no watchdog contends for it).
+   */
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     if (this.busy) throw new MisaoServiceError('busy', 'Another misao service operation is still running.');
     this.busy = true;
     try {
-      return await operation();
+      const lock = this.deps.windows?.operationLock;
+      return await (lock ? lock.run(operation) : operation());
     } catch (err) {
       if (err instanceof DuplicateLoadError) throw new MisaoServiceError('duplicate_load', err.message);
+      if (err instanceof ProcessLockBusyError) throw new MisaoServiceError('busy', `Another process${err.owner ? ` (${err.owner.pid})` : ''} is running a misao operation (${err.file}). Try again when it has finished; if no such process exists, delete that file.`);
       throw err;
     } finally {
       this.busy = false;

@@ -4,7 +4,7 @@ import { z } from 'zod';
 /**
  * What the Windows hub's launcher records in `<prefix>\logs\hub-launcher.json` (see `buildHubLauncherScript`): the Task Scheduler's
  * Last Result stays 0 whatever happens to the hub below the launcher, so this file (and hub.log) is where restarts are visible.
- * It is rewritten at every start of the launcher, so it never describes an earlier run of the task.
+ * It is rewritten at every start of the launcher, so it describes the last launcher that ran (it stays after `azito stop`).
  */
 const launcherStateSchema = z.object({
   startedAt: z.string(),

@@ -110,8 +110,12 @@ export async function runOnWindows(command: 'start' | 'stop' | 'restart' | 'relo
   }
   // Found BEFORE the task is ended, and of any version folder: a restart after `current.txt` was switched must wait for the old version.
   const run: SpecRunner = (spec) => runCommandSpec(spec, hub.runHost);
-  const targets = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
+  const before = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
   await manager.stop();
+  // And again AFTER: the launcher restarts a hub that crashed, and one that it started between the first look and the End has no one to
+  // follow once the conhost is gone but is not in `before`. Both sets are waited for (the same process, by id and creation time, once).
+  const after = await findHubProcesses(run, hub.systemRoot, hub.hubRoots, context.pid);
+  const targets = [...before, ...after.filter((a) => !before.some((b) => b.pid === a.pid && b.created === a.created))];
   const forced = await endHubProcesses(run, hub.systemRoot, targets, HUB_GRACE_MS);
   if (forced.length > 0) console.warn(`azito service: the hub did not end within ${HUB_GRACE_MS / 1000}s of the task being ended, so it was ended forcibly (process ${forced.join(', ')})`);
   // restart and reload are the same here: the registered task is the installed definition, so making it current is a restart.

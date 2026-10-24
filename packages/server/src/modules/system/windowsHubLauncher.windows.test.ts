@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'child_process';
+import { spawn, spawnSync, type ChildProcess } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -18,6 +18,9 @@ const FAST: HubRestartTiming = { baseSeconds: 1, maxSeconds: 2, stableSeconds: 3
 let work: string;
 let layout: HubWindowsLayout;
 let counter: string;
+/** Every launcher this file started and has not seen end: ended in afterEach whatever the test did, before the folder it uses is removed. */
+let children: ChildProcess[];
+let strayPids: number[];
 
 function installFakeRun(exitCodes: number[]): void {
   const dir = path.join(layout.hubRoot, 'v0.0.1');
@@ -44,9 +47,23 @@ describe.skipIf(process.platform !== 'win32')('the hub launcher (Windows PowerSh
     work = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-launcher-'));
     layout = hubWindowsLayout(path.join(work, 'Foo Bar (Work)', "O'Neil", '.azito'));
     counter = path.join(work, 'runs.count');
+    children = [];
+    strayPids = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const child of children) {
+      if (child.exitCode === null && child.signalCode === null) {
+        const ended = new Promise<void>((resolve) => child.once('exit', () => resolve()));
+        child.kill();
+        await Promise.race([ended, sleep(15_000)]);
+      }
+    }
+    if (strayPids.length > 0) {
+      spawnSync(POWERSHELL, ['-NoProfile', '-Command', `Stop-Process -Id ${strayPids.join(',')} -Force -ErrorAction SilentlyContinue`], { encoding: 'utf-8' });
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline && strayPids.some(alive)) await sleep(250);
+    }
     fs.rmSync(work, { recursive: true, force: true, maxRetries: 5, retryDelay: 500 });
   });
 
@@ -61,7 +78,7 @@ describe.skipIf(process.platform !== 'win32')('the hub launcher (Windows PowerSh
     expect(log).toMatch(/run\.ps1 \(v0\.0\.1\) exited with code 4/);
     expect(log).toMatch(/start 2 in 1s/);
     expect(log).toMatch(/start 3 in 2s/);
-    expect(log).toMatch(/exited with code 0: not starting it again/);
+    expect(log).toMatch(/exited with code 0: done/);
     // 1 s + 2 s of waiting at least.
     expect(Date.now() - started).toBeGreaterThanOrEqual(3000);
     const state = readHubLauncherState(layout.launcherState);
@@ -80,10 +97,11 @@ describe.skipIf(process.platform !== 'win32')('the hub launcher (Windows PowerSh
     installFakeRun([0]);
     fs.writeFileSync(layout.pointer, 'not-a-version\r\n');
     const child = spawn(POWERSHELL, launcher(), { stdio: 'ignore' });
+    children.push(child);
     const exited = new Promise<number | null>((resolve) => child.once('exit', resolve));
     const deadline = Date.now() + 30_000;
-    while (Date.now() < deadline && (hubLog().match(/does not hold a version/g) ?? []).length < 2) await sleep(250);
-    expect((hubLog().match(/does not hold a version/g) ?? []).length).toBeGreaterThanOrEqual(2);
+    while (Date.now() < deadline && (hubLog().match(/is not a version/g) ?? []).length < 2) await sleep(250);
+    expect((hubLog().match(/is not a version/g) ?? []).length).toBeGreaterThanOrEqual(2);
     expect(runs()).toBe(0);
     expect(hubLog()).toMatch(/start \d+ in 2s/);
     // The pointer is read again at every start: fixing it is enough.
@@ -107,13 +125,14 @@ describe.skipIf(process.platform !== 'win32')('the hub launcher (Windows PowerSh
       env: { ...process.env, LAUNCHER_POWERSHELL: POWERSHELL, LAUNCHER_ARGS: JSON.stringify(args) },
     });
     const pid = Number(parent.stdout.trim().split(/\r?\n/)[0]);
+    if (pid > 0) strayPids.push(pid);
     expect(pid, `${parent.stdout}${parent.stderr}`).toBeGreaterThan(0);
     const runsAtEnd = runs();
     expect(runsAtEnd).toBeGreaterThanOrEqual(2); // it did keep starting the hub while its parent lived
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline && alive(pid)) await sleep(500);
     expect(alive(pid), hubLog()).toBe(false);
-    expect(hubLog()).toMatch(/the task was ended: not starting the hub again/);
+    expect(hubLog()).toMatch(/task ended: not restarting/);
     expect(runs()).toBeLessThanOrEqual(runsAtEnd + 1);
   }, 120_000);
 });

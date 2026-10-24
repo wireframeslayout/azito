@@ -95,11 +95,11 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     'try {',
     '  $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId',
     '  $parentStart = (Get-Process -Id $parentId).StartTime',
-    '} catch { Log "cannot tell the parent process, so it is not followed: $($_.Exception.Message)"; $parentId = $null }',
+    '} catch { Log "no parent to follow: $($_.Exception.Message)"; $parentId = $null }',
     'function Stop-IfEnded {',
     '  if (-not $parentId) { return }',
     '  $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue',
-    '  if (-not $p -or $p.StartTime -ne $parentStart) { Log \'the task was ended: not starting the hub again\'; exit 0 }',
+    '  if (-not $p -or $p.StartTime -ne $parentStart) { Log \'task ended: not restarting\'; exit 0 }',
     '}',
     // What `azito status` shows: when this launcher began, and how many times it started the hub again (and after which exit).
     '$restarts = 0; $started = [DateTime]::UtcNow.ToString(\'o\')',
@@ -107,22 +107,26 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     '  try {',
     '    $json = [pscustomobject]@{ startedAt = $started; restarts = $restarts; lastExitCode = $code; lastExitAt = $at; nextWaitSeconds = $wait } | ConvertTo-Json -Compress',
     '    New-Item -ItemType Directory -Force -Path $logDir | Out-Null',
-    '    [IO.File]::WriteAllText($stateFile, $json, (New-Object Text.UTF8Encoding($false)))',
+    // Written beside and moved over, so `azito status` never reads half a file.
+    '    [IO.File]::WriteAllText("$stateFile.tmp", $json, (New-Object Text.UTF8Encoding($false)))',
+    '    Move-Item -LiteralPath "$stateFile.tmp" -Destination $stateFile -Force',
     '  } catch { Log "cannot write ${stateFile}: $($_.Exception.Message)" }',
     '}',
     'Save-State $null $null 0',
     '$delay = $base',
     'while ($true) {',
+    // Checked before every start too, not only while waiting: an End that came in between would leave a hub with no conhost.exe to follow.
+    '  Stop-IfEnded',
     '  $began = [DateTime]::UtcNow; $version = \'?\'; $code = $null',
     '  try {',
     '    $version = ([IO.File]::ReadAllText($pointer)).TrimStart([char]0xFEFF).Trim()',
-    `    if ($version -notmatch ${q(VERSION_PATTERN)}) { throw "$pointer does not hold a version such as v0.12.0 (it holds '$version')" }`,
+    `    if ($version -notmatch ${q(VERSION_PATTERN)}) { throw "$pointer is not a version (it holds '$version')" }`,
     "    $run = Join-Path (Join-Path $hubRoot $version) 'run.ps1'",
-    '    if (-not (Test-Path -LiteralPath $run -PathType Leaf)) { throw "$run does not exist (current.txt names a version that is not installed)" }',
+    '    if (-not (Test-Path -LiteralPath $run -PathType Leaf)) { throw "$run does not exist (not installed)" }',
     '    & $run -Service -LogFile $logFile',
     '    $code = $LASTEXITCODE',
     '  } catch { Log $_.Exception.Message }',
-    '  if ($code -eq 0) { Log "run.ps1 ($version) exited with code 0: not starting it again"; exit 0 }',
+    '  if ($code -eq 0) { Log "run.ps1 ($version) exited with code 0: done"; exit 0 }',
     '  Stop-IfEnded',
     '  $wait = $max',
     '  if ($null -ne $code) {',
@@ -268,7 +272,7 @@ export interface HubTaskInput {
  * The task definition (XML is only ever generated here, by `buildTaskXml`): at the user's logon, as that user with least
  * privilege, restarted when it fails. It runs `conhost.exe --headless powershell.exe <launcher>`: without `--headless` a console
  * program started in the user's session gets a visible console window, and closing it would end the hub. The launcher is what
- * starts the hub again when it dies ({@link buildHubLauncherScript}); RestartOnFailure only covers the launcher itself failing.
+ * starts the hub again when it dies ({@link buildHubLauncherScript}); RestartOnFailure never fires for it (conhost reports 0) and is only the Task Scheduler's own retry of a start that failed.
  */
 export function buildHubTaskXml(input: HubTaskInput): string {
   const exec = hubTaskExec(input.systemRoot, buildHubLauncherScript(input.layout, HUB_RESTART_TIMING));

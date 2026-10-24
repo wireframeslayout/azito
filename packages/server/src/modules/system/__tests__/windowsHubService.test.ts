@@ -64,13 +64,14 @@ describe('buildHubLauncherScript', () => {
 
   it('is a loop that reads the pointer again at every start', () => {
     const loop = script.slice(script.indexOf('while ($true) {'));
+    expect(loop.startsWith('while ($true) {\n  Stop-IfEnded')).toBe(true);
     expect(loop).toContain('ReadAllText($pointer)');
     expect(loop).toContain('& $run -Service -LogFile $logFile');
   });
 
   it('does not start the hub again after exit code 0 or after the task was ended', () => {
-    expect(script).toContain('exited with code 0: not starting it again"; exit 0');
-    expect(script).toContain("Log 'the task was ended: not starting the hub again'; exit 0");
+    expect(script).toContain('exited with code 0: done"; exit 0');
+    expect(script).toContain("Log 'task ended: not restarting'; exit 0");
     // The wait is checked second by second, so an /End during it is noticed.
     expect(script).toContain('Start-Sleep -Seconds 1; Stop-IfEnded');
   });

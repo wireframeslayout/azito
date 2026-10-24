@@ -10,6 +10,8 @@ import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstall
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
 import { taskMisaoRoot } from './misaoWindowsTask';
 import { resolveRealPath } from '../../../shared/os/realPath';
+import { ProcessLock } from '../../../shared/processLock';
+import { processExists, readWindowsProcessCreation } from '../../../agent/parentWatch';
 
 /**
  * The hub's own misao on Windows: the very installer an agent server gets (`MisaoWindowsInstaller`), pointed at this machine.
@@ -23,6 +25,11 @@ export interface LocalMisaoWindows {
   /** The Task Scheduler as the hub's service managers use it, for reading the task (exists / running). */
   tasks: SchtasksClient;
   taskName: string;
+  /**
+   * One misao operation at a time across processes: the hub (Setup, the API, `LocalMisaoWatchdog`) and `azito misao install|start|update` run in
+   * different processes, so the in-process flag of `MisaoServiceService` cannot keep them apart. A file under the misao folder, see `ProcessLock`.
+   */
+  operationLock: ProcessLock;
 }
 
 export type LocalWindowsHostEnv = Pick<HostEnv, 'platform' | 'arch' | 'homeDir' | 'tmpDir' | 'execPath' | 'systemRoot'>;
@@ -60,6 +67,11 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
+    operationLock: new ProcessLock(path.win32.join(paths.root, '.operation.lock'), {
+      pid: process.pid,
+      exists: processExists,
+      readStart: (pid) => readWindowsProcessCreation(hostEnv.systemRoot!, pid),
+    }),
   };
 }
 
