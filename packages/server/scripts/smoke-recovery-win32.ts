@@ -193,7 +193,7 @@ async function main(): Promise<void> {
     let log = readLog(hubLog);
     assert(/launcher: run\.ps1 \(.+\) exited with code -?[1-9]\d*/.test(log) && /launcher: start 2 in 5s/.test(log), 'hub.log must record the exit code and the restart (5s)', log);
     const afterFirst = azito(azitoCmd, 'status');
-    assert(/launcher:\s+1 restart since .* last exit code -?[1-9]\d*/.test(afterFirst.output), 'azito status must show the restart and the last exit code', afterFirst.output);
+    assert(/launcher:\s+1 restart since .*\(last exit code -?[1-9]\d*/.test(afterFirst.output), 'azito status must show the restart and the last exit code', afterFirst.output);
     assert(/service:\s+taskscheduler \(active\)/.test(afterFirst.output), 'the task is still the one running (Last Result stays 0 whatever happened)', afterFirst.output);
 
     step('a second crash right after: the wait doubles');
