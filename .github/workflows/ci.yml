@@ -61,6 +61,7 @@ jobs:
   windows-unit:
     name: Unit tests (Windows)
     runs-on: windows-latest
+    needs: agent-native
     steps:
       - uses: actions/checkout@v4
 
@@ -71,7 +72,15 @@ jobs:
 
       - run: npm ci
 
+      # WindowsAgentDeployer.windows.test.ts installs the agent bundle this very runner builds (AgentBundler.ensureBuild), which needs node-pty's Linux binary.
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux
+          path: ${{ runner.temp }}/node-pty-linux
+
       - name: Server unit tests
+        env:
+          AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
         run: npx -w packages/server vitest run --project unit
 
   # The agent runs on Linux x86-64 whichever OS the hub runs on, and node-pty's Linux binary can only be built on Linux. This job builds

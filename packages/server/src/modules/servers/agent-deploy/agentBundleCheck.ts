@@ -12,6 +12,20 @@ export const AGENT_LAUNCHER_PATH = 'run.sh';
 /** Files of the agent bundle besides what is under node_modules. */
 const REQUIRED_FILES = ['azito-agent.cjs', 'azito-supervisor.cjs', 'version.txt', AGENT_LAUNCHER_PATH];
 
+/**
+ * The prebuilds of the npm node-pty that a macOS and a Windows agent load (the same bundle serves every agent OS: node-pty uses
+ * `build/Release` on Linux and `prebuilds/<platform>-<arch>` elsewhere). Debug symbols are not carried.
+ */
+const NODE_PTY_PREBUILD_FILES = [
+  ...['darwin-arm64', 'darwin-x64'].flatMap((dir) => [`${dir}/pty.node`, `${dir}/spawn-helper`]),
+  ...['conpty.node', 'conpty_console_list.node', 'conpty/conpty.dll', 'conpty/OpenConsole.exe'].map((file) => `win32-x64/${file}`),
+].map((file) => `node_modules/node-pty/prebuilds/${file}`);
+
+/** node-pty execs this on macOS to start a pty; the npm package ships it without the execute bit. */
+export function isNodePtySpawnHelper(entryPath: string): boolean {
+  return /^node_modules\/node-pty\/(prebuilds\/[^/]+|build\/Release)\/spawn-helper$/.test(entryPath);
+}
+
 const ELF_MAGIC = [0x7f, 0x45, 0x4c, 0x46];
 const ELF_CLASS_64 = 2;
 const ELF_MACHINE_X86_64 = 62;
@@ -49,8 +63,11 @@ export function findAgentBundleProblems(tarGz: Buffer): string[] {
     const notElf = describeNotLinuxX64Elf(pty.data ?? Buffer.alloc(0));
     if (notElf) problems.push(`${AGENT_PTY_NODE_PATH} is not a Linux x86-64 binary: ${notElf}`);
   }
-  const foreign = entries.filter((entry) => /^node_modules\/node-pty\/prebuilds\//.test(entry.path));
-  if (foreign.length > 0) problems.push(`node-pty prebuilds for other platforms are in the bundle (${foreign[0].path} ...)`);
+  for (const file of NODE_PTY_PREBUILD_FILES) {
+    const entry = findFile(entries, file);
+    if (!entry) problems.push(`${file} is missing (a macOS / Windows agent cannot start a pty)`);
+    else if (isNodePtySpawnHelper(file) && (entry.mode & 0o111) !== 0o111) problems.push(`${file} is not executable (mode ${entry.mode.toString(8)})`);
+  }
   return problems;
 }
 

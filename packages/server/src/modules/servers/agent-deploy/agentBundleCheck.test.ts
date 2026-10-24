@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { packTarGz, type TarEntry } from '../../../shared/fs/tarGz';
-import { assertAgentBundleComplete, describeNotLinuxX64Elf, findAgentBundleProblems, AGENT_PTY_NODE_PATH } from './agentBundleCheck';
+import { assertAgentBundleComplete, describeNotLinuxX64Elf, findAgentBundleProblems, isNodePtySpawnHelper, AGENT_PTY_NODE_PATH } from './agentBundleCheck';
 
 function elf(machine: number, elfClass = 2): Buffer {
   const header = Buffer.alloc(64);
@@ -21,6 +21,11 @@ function completeBundle(): TarEntry[] {
     file('run.sh', '#!/bin/bash\n', 0o755),
     file(AGENT_PTY_NODE_PATH, elf(62)),
     file('node_modules/node-pty/lib/index.js', 'js'),
+    ...['darwin-arm64', 'darwin-x64'].flatMap((dir) => [
+      file(`node_modules/node-pty/prebuilds/${dir}/pty.node`, 'macho'),
+      file(`node_modules/node-pty/prebuilds/${dir}/spawn-helper`, 'macho', 0o755),
+    ]),
+    ...['conpty.node', 'conpty_console_list.node', 'conpty/conpty.dll', 'conpty/OpenConsole.exe'].map((f) => file(`node_modules/node-pty/prebuilds/win32-x64/${f}`, 'pe')),
   ];
 }
 
@@ -44,12 +49,16 @@ describe('findAgentBundleProblems', () => {
     expect(findAgentBundleProblems(pack(completeBundle()))).toEqual([]);
   });
 
-  it('reports a bundle built on a Windows or macOS host: no Linux pty.node, other platforms prebuilds instead', () => {
+  it('reports a bundle built on a Windows or macOS host: no Linux pty.node', () => {
     const entries = completeBundle().filter((e) => e.path !== AGENT_PTY_NODE_PATH);
-    entries.push(file('node_modules/node-pty/prebuilds/win32-x64/pty.node', Buffer.from('MZ')));
-    const problems = findAgentBundleProblems(pack(entries));
-    expect(problems.some((p) => p.includes(`${AGENT_PTY_NODE_PATH} is missing`))).toBe(true);
-    expect(problems.some((p) => p.includes('prebuilds for other platforms'))).toBe(true);
+    expect(findAgentBundleProblems(pack(entries))).toEqual([`${AGENT_PTY_NODE_PATH} is missing (node-pty has no Linux binary in the bundle)`]);
+  });
+
+  it('reports the prebuilds a macOS / Windows agent needs when they are missing, and a spawn-helper that cannot run', () => {
+    const noWindows = completeBundle().filter((e) => !e.path.includes('win32-x64'));
+    expect(findAgentBundleProblems(pack(noWindows)).every((p) => p.includes('win32-x64') && p.includes('is missing'))).toBe(true);
+    const slowHelper = completeBundle().map((e) => (e.path.endsWith('darwin-x64/spawn-helper') ? { ...e, mode: 0o644 } : e));
+    expect(findAgentBundleProblems(pack(slowHelper))).toEqual(['node_modules/node-pty/prebuilds/darwin-x64/spawn-helper is not executable (mode 644)']);
   });
 
   it('reports a launcher without its execute bit', () => {
@@ -69,5 +78,14 @@ describe('findAgentBundleProblems', () => {
 
   it('throws with the label and every problem', () => {
     expect(() => assertAgentBundleComplete(pack([]), 'the tarball')).toThrow(/the tarball is not a complete Linux x86_64 agent bundle: azito-agent\.cjs is missing/);
+  });
+});
+
+describe('isNodePtySpawnHelper', () => {
+  it('matches node-pty spawn-helpers only', () => {
+    expect(isNodePtySpawnHelper('node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper')).toBe(true);
+    expect(isNodePtySpawnHelper('node_modules/node-pty/build/Release/spawn-helper')).toBe(true);
+    expect(isNodePtySpawnHelper('node_modules/other/spawn-helper')).toBe(false);
+    expect(isNodePtySpawnHelper('node_modules/node-pty/lib/spawn-helper.js')).toBe(false);
   });
 });

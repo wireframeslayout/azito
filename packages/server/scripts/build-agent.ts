@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
-import { assertAgentBundleComplete, AGENT_LAUNCHER_PATH, AGENT_PTY_NODE_PATH, describeNotLinuxX64Elf } from '../src/modules/servers/agent-deploy/agentBundleCheck';
+import { assertAgentBundleComplete, AGENT_LAUNCHER_PATH, AGENT_PTY_NODE_PATH, describeNotLinuxX64Elf, isNodePtySpawnHelper } from '../src/modules/servers/agent-deploy/agentBundleCheck';
 import { collectTreeEntries, packTarGz } from '../src/shared/fs/tarGz';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -28,7 +28,7 @@ function hashDirContents(dir: string): string {
   const files: string[] = [];
   const walk = (sub: string): void => {
     for (const entry of fs.readdirSync(path.join(dir, sub), { withFileTypes: true })) {
-      const rel = path.join(sub, entry.name);
+      const rel = path.posix.join(sub, entry.name);
       if (entry.isDirectory()) walk(rel);
       else files.push(rel);
     }
@@ -38,8 +38,8 @@ function hashDirContents(dir: string): string {
 
   const hash = crypto.createHash('sha256');
   for (const rel of files) {
-    // Forward slashes, so the hash is the same whichever OS built the bundle.
-    hash.update(rel.split(path.sep).join('/'));
+    // Forward slashes, sorted as such (above), so the hash is the same whichever OS built the bundle.
+    hash.update(rel);
     hash.update('\0');
     hash.update(fs.readFileSync(path.join(dir, rel)));
   }
@@ -109,7 +109,7 @@ async function main(): Promise<void> {
   // (or exFAT) file system has no execute bit for the host `tar` to copy into run.sh.
   const tarball = packTarGz(
     collectTreeEntries(STAGE, {
-      fileMode: (rel) => (rel === AGENT_LAUNCHER_PATH ? 0o755 : 0o644),
+      fileMode: (rel) => (rel === AGENT_LAUNCHER_PATH || isNodePtySpawnHelper(rel) ? 0o755 : 0o644),
       directoryMode: 0o755,
     }),
     Math.floor(Date.now() / 1000),
@@ -159,14 +159,18 @@ function resolveLinuxNodePtyDir(): string {
   throw new Error('node-pty not found in node_modules');
 }
 
-/** node-pty's JS and its one Linux binary. (Linux needs no spawn-helper, and the other platforms' prebuilds are not carried.) */
+/**
+ * node-pty's JS, the Linux binary (`build/Release/pty.node`, from `linuxDir`) and the npm package's own prebuilds (macOS and Windows,
+ * debug symbols left out): one bundle serves a Linux, a macOS and a Windows agent, and node-pty picks `build/Release` on Linux and
+ * `prebuilds/<platform>-<arch>` elsewhere. (Linux needs no spawn-helper.)
+ */
 function stageNodePty(linuxDir: string, dest: string): void {
   const native = path.join(linuxDir, 'build', 'Release', 'pty.node');
   if (!fs.existsSync(native)) throw new Error(`${native} does not exist: the directory is not a built node-pty`);
   const notElf = describeNotLinuxX64Elf(fs.readFileSync(native));
   if (notElf) throw new Error(`${native} cannot run on a Linux x86-64 agent: ${notElf}`);
 
-  // lib/ and package.json come from this checkout's own node-pty (the JS is the same on every OS); only pty.node is the Linux one.
+  // lib/, prebuilds/ and package.json come from this checkout's own node-pty (the same on every OS); only pty.node is the Linux one.
   const jsSrc = ['node_modules', path.join('..', '..', 'node_modules')].map((r) => path.join(ROOT, r, 'node-pty')).find((d) => fs.existsSync(path.join(d, 'package.json')));
   if (!jsSrc) throw new Error('node-pty not found in node_modules');
   const linuxVersion = JSON.parse(fs.readFileSync(path.join(linuxDir, 'package.json'), 'utf-8')).version as string;
@@ -176,17 +180,18 @@ function stageNodePty(linuxDir: string, dest: string): void {
   fs.mkdirSync(path.join(dest, 'build', 'Release'), { recursive: true });
   fs.copyFileSync(path.join(jsSrc, 'package.json'), path.join(dest, 'package.json'));
   copyDir(path.join(jsSrc, 'lib'), path.join(dest, 'lib'));
+  copyDir(path.join(jsSrc, 'prebuilds'), path.join(dest, 'prebuilds'), (name) => !name.endsWith('.pdb'));
   fs.copyFileSync(native, path.join(dest, AGENT_PTY_NODE_PATH.replace('node_modules/node-pty/', '')));
 }
 
-function copyDir(src: string, dest: string): void {
+function copyDir(src: string, dest: string, include: (fileName: string) => boolean = () => true): void {
   fs.mkdirSync(dest, { recursive: true });
   for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
     const srcPath = path.join(src, entry.name);
     const destPath = path.join(dest, entry.name);
     if (entry.isDirectory()) {
-      copyDir(srcPath, destPath);
-    } else {
+      copyDir(srcPath, destPath, include);
+    } else if (include(entry.name)) {
       fs.copyFileSync(srcPath, destPath);
     }
   }
