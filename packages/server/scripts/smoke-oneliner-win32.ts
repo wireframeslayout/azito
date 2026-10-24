@@ -125,14 +125,15 @@ function callerScript(work: string, name: string, invocation: string): string {
   fs.writeFileSync(file, [
     "$ErrorActionPreference = 'Continue'",
     "$ProgressPreference = 'Continue'",
-    "$functionsBefore = @(Get-ChildItem Function: | ForEach-Object { $_.Name })",
+    // Functions of modules the session loads on demand (Get-FileHash and others) are not the installer's: only functions without a module count.
+    "$functionsBefore = @(Get-ChildItem Function: | Where-Object { -not $_.ModuleName } | ForEach-Object { $_.Name })",
     '$variablesBefore = @(Get-Variable | ForEach-Object { $_.Name })',
     invocation,
     "Write-Output 'CALLER-CONTINUES'",
     'Write-Output "preferences=$ErrorActionPreference/$ProgressPreference"',
-    // LASTEXITCODE is the one variable every native command sets in the global scope.
-    "Write-Output ('leaked-variables=' + (@(Get-Variable | ForEach-Object { $_.Name } | Where-Object { ($variablesBefore -notcontains $_) -and ($_ -ne 'LASTEXITCODE') }) -join ','))",
-    "Write-Output ('leaked-functions=' + (@(Get-ChildItem Function: | ForEach-Object { $_.Name } | Where-Object { $functionsBefore -notcontains $_ }) -join ','))",
+    // LASTEXITCODE is the one variable every native command sets in the global scope; variablesBefore is this script's own.
+    "Write-Output ('leaked-variables=' + (@(Get-Variable | ForEach-Object { $_.Name } | Where-Object { ($variablesBefore -notcontains $_) -and ($_ -ne 'LASTEXITCODE') -and ($_ -ne 'variablesBefore') }) -join ','))",
+    "Write-Output ('leaked-functions=' + (@(Get-ChildItem Function: | Where-Object { -not $_.ModuleName } | ForEach-Object { $_.Name } | Where-Object { $functionsBefore -notcontains $_ }) -join ','))",
     '',
   ].join('\r\n'));
   return file;
