@@ -179,7 +179,14 @@ jobs:
         run: |
           echo "linux:   $(cat linux/bundle-hash.txt)"
           echo "windows: $(cat windows/bundle-hash.txt)"
-          test "$(cat linux/bundle-hash.txt)" = "$(cat windows/bundle-hash.txt)"
+          if [ "$(cat linux/bundle-hash.txt)" != "$(cat windows/bundle-hash.txt)" ]; then
+            mkdir -p cmp/linux cmp/windows
+            tar xzf linux/azito-agent.tar.gz -C cmp/linux
+            tar xzf windows/azito-agent.tar.gz -C cmp/windows
+            echo "Files that differ:"
+            diff -rq cmp/linux cmp/windows || true
+            exit 1
+          fi
 
       # What buildSafeExtractCommand does on the agent host (extract with --no-same-permissions), then the two things the agent needs.
       - name: Unpack as the installer does and run node-pty from it
