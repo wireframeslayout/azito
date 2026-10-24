@@ -24,6 +24,7 @@ import { FetchDistributionService } from '../modules/git/hub-transfer/FetchDistr
 import { PushNotaryService } from '../modules/git/hub-transfer/PushNotaryService';
 
 import { SshClient, type FingerprintStore } from '../modules/servers/ssh/SshClient';
+import { resolveSshClientEnv } from '../modules/servers/ssh/sshClientEnv';
 import { TransportFactory } from '../modules/servers/transport/TransportFactory';
 import { TmuxClient } from '../modules/tmux/TmuxClient';
 import { MuxDriverRegistry } from '../modules/tmux/MuxDriverRegistry';
@@ -255,7 +256,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 // ─── Per-module factories ───
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
-  const sshClient = new SshClient(hostEnv.homeDir, fingerprintStore);
+  const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
   const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);

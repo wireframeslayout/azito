@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import SSHConfig from 'ssh-config';
 import type { ExecResult } from '../transport/ServerTransport';
+import { resolveSshAgent } from './sshAgentSocket';
 
 // ─── Types ───
 
@@ -11,7 +12,24 @@ interface ResolvedHost {
   port: number;
   username: string;
   identityFile: string | null;
+  /** Unix socket path, Windows pipe name or `pageant` for ssh2's `agent` option; null when there is no agent to ask. */
   agent: string | null;
+  /** Why `agent` is null (null when there is one). */
+  agentUnavailableReason: string | null;
+}
+
+/**
+ * What the hub process knows about its own machine, resolved once at startup (the boundary) and handed in: the home directory
+ * that holds `.ssh`, and the two environment values SSH looks at. The client never reads process.env itself, so a Windows hub
+ * (USERNAME, no HOME / USER, a named-pipe agent) and a Unix one go through the same code.
+ */
+export interface SshClientEnv {
+  homeDir: string;
+  platform: NodeJS.Platform;
+  /** `SSH_AUTH_SOCK`. */
+  authSock: string | undefined;
+  /** The OS user's name: the SSH user for a host whose `user@host` and ssh config both leave it out. */
+  defaultUser: string | undefined;
 }
 
 interface ParsedHost {
@@ -101,8 +119,23 @@ export class SshClient {
   private configMtime: number | null = null;
   private configPath: string;
 
-  constructor(private homeDir: string, private fingerprintStore?: FingerprintStore, configPath?: string) {
-    this.configPath = configPath ?? path.join(homeDir, '.ssh', 'config');
+  private readonly reportedNoAgent = new Set<string>();
+
+  constructor(private env: SshClientEnv, private fingerprintStore?: FingerprintStore, configPath?: string) {
+    this.configPath = configPath ?? path.join(env.homeDir, '.ssh', 'config');
+  }
+
+  private resolveIdentityFile(configured: unknown): string | null {
+    // ssh-config's compute() returns IdentityFile as a list (ssh tries them in order; the first one is used here).
+    const first = Array.isArray(configured) ? configured[0] : configured;
+    if (!first) return findDefaultKey(this.env.homeDir);
+    // ssh_config writes `~/.ssh/key` (or a Windows path); `~` is this user's home, whichever separator follows it.
+    return (first as string).replace(/^~(?=$|[\\/])/, this.env.homeDir);
+  }
+
+  private resolveAgent(): Pick<ResolvedHost, 'agent' | 'agentUnavailableReason'> {
+    const resolution = resolveSshAgent(this.env.platform, this.env.authSock, fs.existsSync);
+    return { agent: resolution.socket, agentUnavailableReason: resolution.unavailableReason };
   }
 
   private getConfig(): ReturnType<typeof SSHConfig.parse> {
@@ -115,32 +148,29 @@ export class SshClient {
 
   resolveHost(hostStr: string): ResolvedHost {
     const direct = parseHostString(hostStr);
+    const config = this.getConfig();
     if (direct) {
-      const config = this.getConfig();
       const computed = config.compute(direct.host);
-      const identityFile = computed.IdentityFile
-        ? (computed.IdentityFile as string).replace(/^~/, this.homeDir)
-        : findDefaultKey(this.homeDir);
       return {
         host: (computed.HostName as string) || direct.host,
         port: direct.portExplicit ? direct.port : parseInt((computed.Port as string) || '22', 10),
         username: direct.username,
-        identityFile,
-        agent: process.env.SSH_AUTH_SOCK || null,
+        identityFile: this.resolveIdentityFile(computed.IdentityFile),
+        ...this.resolveAgent(),
       };
     }
 
-    const config = this.getConfig();
     const computed = config.compute(hostStr);
-    const identityFile = computed.IdentityFile
-      ? (computed.IdentityFile as string).replace(/^~/, this.homeDir)
-      : findDefaultKey(this.homeDir);
+    const username = (computed.User as string) || this.env.defaultUser;
+    if (!username) {
+      throw new Error(`No SSH user for "${hostStr}": write the server as user@host, or set User for it in ${this.configPath}`);
+    }
     return {
       host: (computed.HostName as string) || hostStr,
       port: parseInt((computed.Port as string) || '22', 10),
-      username: (computed.User as string) || process.env.USER || '',
-      identityFile,
-      agent: process.env.SSH_AUTH_SOCK || null,
+      username,
+      identityFile: this.resolveIdentityFile(computed.IdentityFile),
+      ...this.resolveAgent(),
     };
   }
 
@@ -170,6 +200,9 @@ export class SshClient {
     authMethods.push({ type: 'none', username: resolved.username });
     if (resolved.agent) {
       authMethods.push({ type: 'agent', username: resolved.username, agent: resolved.agent });
+    } else if (resolved.agentUnavailableReason && !this.reportedNoAgent.has(resolved.agentUnavailableReason)) {
+      this.reportedNoAgent.add(resolved.agentUnavailableReason);
+      console.log(`[SSH] no ssh-agent for ${resolved.host}: ${resolved.agentUnavailableReason}`);
     }
     if (privateKey) {
       authMethods.push({ type: 'publickey', username: resolved.username, key: privateKey });

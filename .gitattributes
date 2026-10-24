@@ -1,0 +1,7 @@
+# Files that run on a Linux / macOS host after the hub sends them. A Windows checkout (core.autocrlf=true is Git for Windows' default)
+# would turn them into CRLF, and `#!/bin/bash\r` does not start. The agent bundle, the harness and the service templates are packed
+# from the checkout, so they are LF on every OS.
+*.sh text eol=lf
+install.sh text eol=lf
+harness/** text eol=lf
+deploy/** text eol=lf

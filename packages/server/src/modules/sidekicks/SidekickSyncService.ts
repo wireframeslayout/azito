@@ -1,9 +1,6 @@
 import * as crypto from 'crypto';
-import { execFile } from 'child_process';
 import * as fs from 'fs';
-import * as os from 'os';
 import * as path from 'path';
-import { promisify } from 'util';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 import { isShellFileOps } from '../servers/transport/ShellFileOps';
 import type { ServerConfig } from '../servers/Server';
@@ -11,8 +8,7 @@ import type { SidekickPackage } from './SidekickPackage';
 import { syncThroughFileOps } from './fileOpsSidekickSync';
 import { syncThroughShell } from './shellSidekickSync';
 import { REMOTE_SIDEKICKS_BASE, type SidekickSyncContext } from './sidekickSyncShared';
-
-const execFileAsync = promisify(execFile);
+import { collectTreeEntries, packTarGz } from '../../shared/fs/tarGz';
 
 export { REMOTE_SIDEKICKS_BASE } from './sidekickSyncShared';
 export { PAYLOAD_CHUNK_SIZE } from './shellSidekickSync';
@@ -121,7 +117,7 @@ export class SidekickSyncService {
       serverName,
       transport,
       hash: computeSidekicksHash(packages),
-      buildTarball: () => buildTarball(packages),
+      buildTarball: async () => buildTarball(packages),
       lockRetries: this.lockRetries,
       lockRetryDelayMs: this.lockRetryDelayMs,
     };
@@ -130,32 +126,17 @@ export class SidekickSyncService {
 }
 
 /**
- * The gzip-compressed tar of the packages, laid out flat (`<name>/...`). Staged on the hub first so that the scripts'
- * executable bits can be set before packing: tar keeps them, wherever it is unpacked.
+ * The gzip-compressed tar of the packages, laid out flat (`<name>/...`). Packed in Node so that the scripts' executable
+ * bits (everything under a `scripts/` folder) do not depend on the hub's file system: a Windows hub reports none for
+ * `tar` to keep, and the packages are unpacked on a Linux / macOS host.
  */
-async function buildTarball(packages: SidekickPackage[]): Promise<Buffer> {
-  const stageDir = fs.mkdtempSync(path.join(os.tmpdir(), 'azito-sidekicks-stage-'));
-  const tarPath = path.join(os.tmpdir(), `azito-sidekicks-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.tar.gz`);
-  try {
-    for (const pkg of packages) {
-      fs.cpSync(pkg.dir, path.join(stageDir, pkg.name), { recursive: true, dereference: false });
-    }
-    makeScriptsExecutable(stageDir);
-    await execFileAsync('tar', ['czf', tarPath, '-C', stageDir, '.']);
-    return fs.readFileSync(tarPath);
-  } finally {
-    fs.rmSync(stageDir, { recursive: true, force: true });
-    fs.rmSync(tarPath, { force: true });
-  }
-}
-
-/** `chmod -R 755` on every directory named `scripts` (and what is in it); symbolic links are left alone, as `chmod -R` does. */
-function makeScriptsExecutable(dir: string, insideScripts = false): void {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) continue;
-    const full = path.join(dir, entry.name);
-    const scripts = insideScripts || (entry.isDirectory() && entry.name === 'scripts');
-    if (scripts) fs.chmodSync(full, 0o755);
-    if (entry.isDirectory()) makeScriptsExecutable(full, scripts);
-  }
+export function buildTarball(packages: Pick<SidekickPackage, 'name' | 'dir'>[]): Buffer {
+  const entries = packages.flatMap((pkg) =>
+    collectTreeEntries(pkg.dir, {
+      prefix: pkg.name,
+      fileMode: (relPath) => (relPath.split('/').slice(0, -1).includes('scripts') ? 0o755 : 0o644),
+      directoryMode: 0o755,
+    }),
+  );
+  return packTarGz(entries, Math.floor(Date.now() / 1000));
 }

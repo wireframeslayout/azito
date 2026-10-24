@@ -126,7 +126,32 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 | `azito service status\|start\|stop\|restart\|reload\|install` | Unix のサービスと同じ操作。`install` はタスクを登録する（install.ps1 が呼ぶ）。同じ定義の再登録は何もせず、違う定義はハブが動いている間は拒否される |
 | `azito misao status\|install\|update\|start` | ハブ自身の misao をタスクスケジューラのタスク `AzitoMisao` として扱う（下と `misao.md`）。`install.ps1` が `install` を実行する。`update` は先にすべてのペインを終了する |
 
-**未対応（#380）:** misao だけで動く local サーバー（B4a）、Windows のハブからの SSH / エージェントサーバー（B4b）、アプリ内の更新・アンインストール（#381）。
+**未対応（#380）:** アプリ内の更新・アンインストール（#381）。
+
+### Windows のハブから SSH / エージェントのサーバーを使う準備
+
+Windows のハブは、Linux / macOS のハブと同じように SSH 経由でサーバーを追加し、Linux の agent を導入・更新できます（Windows ホストへの agent の導入は「Windows ホストをエージェントとして追加する」）。ハブが探す場所は次のとおりです。
+
+| 何を | どこを見るか |
+|---|---|
+| 秘密鍵 | `%USERPROFILE%\.ssh\id_ed25519`、無ければ `id_rsa`、`id_ecdsa`（`$HOME` ではなくユーザーのホームフォルダー） |
+| ssh の設定 | `%USERPROFILE%\.ssh\config`（`HostName` / `Port` / `User` / `IdentityFile`。`IdentityFile ~/.ssh/key` の `~` はユーザーのホーム） |
+| ホストの鍵 | `known_hosts` は読みません。初回接続で指紋を AZITO に記録し（初回は信頼）、変わると接続を拒否します（Linux / macOS のハブと同じ） |
+| ssh-agent | 環境変数 `SSH_AUTH_SOCK` があればそれ（`\\.\pipe\…` か `pageant`）。無ければ OpenSSH の名前付きパイプ `\\.\pipe\openssh-ssh-agent` |
+| ユーザー名 | `user@host` の形、無ければ ssh の設定の `User`、無ければ Windows のユーザー名（`USERNAME`） |
+
+鍵ファイルだけで使うなら準備は要りません（ファイルにパスフレーズを付けた鍵は使えません。ssh-agent に入れてください）。ssh-agent を使うときは、Windows の **OpenSSH Authentication Agent** サービスを起動します（既定は無効です）。管理者の PowerShell で:
+
+```powershell
+Set-Service -Name ssh-agent -StartupType Automatic
+Start-Service ssh-agent
+ssh-add $env:USERPROFILE\.ssh\id_ed25519   # 鍵を入れる（パスフレーズを聞かれます）
+ssh-add -l                                    # 入っている鍵の確認
+```
+
+サービスが止まっていてパイプが無いときは、ハブのログに「no ssh-agent」とその理由（起動のコマンド付き）を 1 回出し、鍵ファイルでの認証に進みます。ハブがタスクスケジューラのタスクとして動くときも同じパイプを使うので、`SSH_AUTH_SOCK` の設定は要りません。
+
+agent はハブの OS に関係なく Linux x86-64 用が導入されます。リリースの zip は、Linux でビルドした node-pty を含む同じ agent を載せています。ソースからビルドした Windows のハブで agent を導入したいときは、Linux x64 でビルドした node-pty のフォルダー（`package.json` と `build/Release/pty.node`）を用意し、環境変数 `AZITO_AGENT_NODE_PTY_LINUX` にそのパスを設定してください。
 
 ### Windows の misao
 
