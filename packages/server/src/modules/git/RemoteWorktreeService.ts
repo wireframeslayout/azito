@@ -1,7 +1,9 @@
 import type { IWorktreeService, WorktreeInfo, WorktreeEntry } from './IWorktreeService';
 import type { IServerTransport } from '../servers/transport/ServerTransport';
 
-import { assertSafePath, assertSafeBranch, assertNotOptionLike, assertGitPathArg } from './assertSafeGitArgs';
+import { hostPathFor } from '@azito/shared';
+import { assertSafeBranch, assertNotOptionLike, assertGitPathArg } from './assertSafeGitArgs';
+import { resolveGitPath } from './gitPath';
 import { parseWorktreePorcelain } from './parseWorktreePorcelain';
 import { combinedOutput, runGit } from './runGit';
 
@@ -22,7 +24,8 @@ export class RemoteWorktreeService implements IWorktreeService {
   }
 
   async create(workingDir: string, taskId: number, taskSlug: string, baseBranch: string, branchName?: string): Promise<WorktreeInfo> {
-    assertSafePath(workingDir, 'workingDir');
+    const platform = this.transport.files().platform;
+    assertGitPathArg(platform, workingDir, 'workingDir');
     assertSafeBranch(taskSlug, 'taskSlug');
     assertSafeBranch(baseBranch, 'baseBranch');
     assertNotOptionLike(baseBranch, 'baseBranch');
@@ -33,10 +36,12 @@ export class RemoteWorktreeService implements IWorktreeService {
 
     const dir = await this.absolute(workingDir);
     const branch = branchName || `task/${taskId}-${taskSlug}`;
-    const worktreePath = `${dir}/.worktrees/task-${taskId}`;
+    const api = hostPathFor(platform);
+    const worktreesDir = api.join(dir, '.worktrees');
+    const worktreePath = api.join(worktreesDir, `task-${taskId}`);
     assertNotOptionLike(worktreePath, 'worktreePath');
 
-    await this.transport.files().create(`${dir}/.worktrees`, 'directory', { recursive: true });
+    await this.transport.files().create(worktreesDir, 'directory', { recursive: true });
 
     if ((await this.transport.files().stat(worktreePath))?.kind === 'directory') {
       const removed = await runGit(this.transport, dir, ['worktree', 'remove', worktreePath, '--force']);
@@ -90,7 +95,7 @@ export class RemoteWorktreeService implements IWorktreeService {
   }
 
   async exists(worktreePath: string): Promise<boolean> {
-    assertSafePath(worktreePath, 'worktreePath');
+    assertGitPathArg(this.transport.files().platform, worktreePath, 'worktreePath');
     try {
       return (await this.transport.files().stat(await this.absolute(worktreePath)))?.kind === 'directory';
     } catch {
@@ -99,20 +104,23 @@ export class RemoteWorktreeService implements IWorktreeService {
   }
 
   async remove(workingDir: string, worktreePath: string): Promise<void> {
-    assertSafePath(workingDir, 'workingDir');
-    assertSafePath(worktreePath, 'worktreePath');
-    assertNotOptionLike(worktreePath, 'worktreePath');
+    const platform = this.transport.files().platform;
+    assertGitPathArg(platform, workingDir, 'workingDir');
+    assertGitPathArg(platform, worktreePath, 'worktreePath');
     const dir = await this.absolute(workingDir);
     // A worktree under the working directory keeps that prefix as resolved: a stored `~/...` path whose directory is already
     // gone cannot be resolved by the host, and `prune` below is what settles such a registration.
-    const target = worktreePath.startsWith(`${workingDir}/`) ? `${dir}${worktreePath.slice(workingDir.length)}` : await this.absolute(worktreePath);
+    const api = hostPathFor(platform);
+    const relative = api.relative(workingDir, worktreePath);
+    const isBelowWorkingDir = relative !== '' && relative !== '..' && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
+    const target = isBelowWorkingDir ? api.join(dir, relative) : await this.absolute(worktreePath);
     // Both are best-effort cleanup: `remove` fails for a worktree that is already gone, and `prune` then settles the registry.
     await runGit(this.transport, dir, ['worktree', 'remove', target, '--force']);
     await runGit(this.transport, dir, ['worktree', 'prune']);
   }
 
   async getBranch(worktreePath: string): Promise<string | null> {
-    assertSafePath(worktreePath, 'worktreePath');
+    assertGitPathArg(this.transport.files().platform, worktreePath, 'worktreePath');
     try {
       const result = await runGit(this.transport, undefined, ['-C', await this.absolute(worktreePath), 'branch', '--show-current']);
       return result.exitCode === 0 ? result.stdout.trim() || null : null;
@@ -122,7 +130,7 @@ export class RemoteWorktreeService implements IWorktreeService {
   }
 
   async getDiff(worktreePath: string, baseBranch: string): Promise<string | null> {
-    assertSafePath(worktreePath, 'worktreePath');
+    assertGitPathArg(this.transport.files().platform, worktreePath, 'worktreePath');
     assertSafeBranch(baseBranch, 'baseBranch');
     assertNotOptionLike(baseBranch, 'baseBranch');
     const worktree = await this.absolute(worktreePath);
@@ -148,16 +156,9 @@ export class RemoteWorktreeService implements IWorktreeService {
     }
   }
 
-  /**
-   * A path as the target host sees it. A leading `~` is a supported form of a stored working directory (the shell used to
-   * expand it); `cwd` and git's arguments are literal, so it is resolved here — the boundary of this service — against the
-   * host's home. Any other path is already absolute and passes through.
-   */
-  private async absolute(target: string): Promise<string> {
-    if (target !== '~' && !target.startsWith('~/')) return target;
-    const resolved = await this.transport.files().realpath(target);
-    assertSafePath(resolved, 'resolved path');
-    return resolved;
+  /** A path as the target host sees it: a leading `~` resolved against the host's home (see `resolveGitPath`). */
+  private absolute(target: string): Promise<string> {
+    return resolveGitPath(this.transport, target);
   }
 
   private assertWorktreeSuccess(result: { exitCode: number; stdout: string; stderr: string }): void {

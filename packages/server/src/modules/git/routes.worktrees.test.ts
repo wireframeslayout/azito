@@ -60,7 +60,7 @@ describe('GET /api/servers/:name/git/worktrees', () => {
       transportFactory: { getTransport: () => transport, hostProfileFor: () => null } as unknown as TransportFactory,
       taskRepo: { findById: () => null } as unknown as ITaskRepository,
       projectServerRepo: { find: () => ({ workingDirectory: '~/ws/repo' }) } as unknown as IProjectServerRepository,
-      worktreeServiceFactory: new WorktreeServiceFactory({ platform: "linux", arch: "x64" }),
+      worktreeServiceFactory: new WorktreeServiceFactory(),
     });
     await app.ready();
 

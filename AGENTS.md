@@ -396,9 +396,8 @@ packages/
 
 ### Worktree Service
 - `IWorktreeService` interface abstracts git worktree operations (create/exists/remove/getBranch/getDiff/getPrUrl)
-- `LocalWorktreeService`: local `execSync` implementation (async wrapper)
-- `RemoteWorktreeService`: remote execution via `IServerTransport.exec()` with shell injection prevention (`assertSafePath`/`assertSafeBranch`)
-- `WorktreeServiceFactory`: returns appropriate implementation based on server type (local/ssh/agent)
+- `RemoteWorktreeService`: the only implementation, for `local` servers too (`WorktreeServiceFactory.create(transport)`): git runs through `transport.run` (argv, no shell) and file operations through `transport.files()`; paths use the host OS rules (`hostPathFor`), a leading `~` / `~\` is resolved against the host home by `resolveGitPath` (`runGit` does it for `cwd` and `-C`); paths are checked with `assertGitPathArg`, branch names with `assertSafeBranch`
+- `WorktreeServiceFactory`: wraps the server's transport (local/ssh/agent alike) in a `RemoteWorktreeService`
 - Worktree creation fails fast: on failure, task is set to `failed` status (no fallback to original directory)
 - Optional `branchName` parameter: user-specified branch checks for existing branch before creating; auto-generated branch always recreates
 - `skipPr` option: when enabled, pushing phase skips PR creation (commit+push only), `verifyPushCompleted` skips PR existence check

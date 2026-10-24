@@ -313,8 +313,7 @@ Workspace 内タブ／パネルとして表示される主なもの:
 
 | ファイル | 説明 |
 |---|---|
-| `packages/server/src/modules/git/WorktreeService.ts` | Git worktree management (LocalWorktreeService) |
-| `packages/server/src/modules/git/RemoteWorktreeService.ts` | リモートサーバーのworktree操作 |
+| `packages/server/src/modules/git/RemoteWorktreeService.ts` | Git worktree management (local and remote servers) |
 | `packages/server/src/modules/git/WorktreeServiceFactory.ts` | サーバータイプに応じたWorktreeService実装の選択 |
 | `packages/server/src/modules/tasks/recovery/RecoverStuckTasksUseCase.ts` | 起動時の非終端タスク自動復旧 |
 

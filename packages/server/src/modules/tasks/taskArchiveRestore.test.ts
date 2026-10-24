@@ -146,6 +146,7 @@ function makeOpts(taskOverrides?: Partial<Task>): TasksRouteOptions {
     } as unknown as TasksRouteOptions['worktreeServiceFactory'],
     transportFactory: {
       getTransport: vi.fn(() => ({})),
+      hostProfileFor: vi.fn(() => null),
     } as unknown as TasksRouteOptions['transportFactory'],
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),

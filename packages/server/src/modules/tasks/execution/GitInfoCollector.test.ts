@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { GitInfoCollector } from './GitInfoCollector';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
+import type { HostProfile } from '../../../shared/os/hostProfile';
 
 const server = { name: 'remote', type: 'agent' } as ServerConfig;
 
@@ -9,9 +10,10 @@ interface FakeExec {
   (cmd: string): { stdout: string; stderr: string; code: number } | Error;
 }
 
-function makeCollector(handler: FakeExec): { collector: GitInfoCollector; commands: string[] } {
+function makeCollector(handler: FakeExec, hostProfile: HostProfile | null = null): { collector: GitInfoCollector; commands: string[] } {
   const commands: string[] = [];
   const transportFactory = {
+    hostProfileFor: () => hostProfile,
     getTransport: () => ({
       exec: vi.fn(async (cmd: string) => {
         commands.push(cmd);
@@ -92,5 +94,18 @@ describe('GitInfoCollector.collectGitInfoRemote', () => {
     const info = await collector.collectGitInfoRemote(server, '/w');
     expect(info.branch).toBe('evil`whoami`');
     expect('prUrl' in info).toBe(false);
+  });
+
+  it('single-quotes a working directory with a space, Japanese, a quote and shell metacharacters (POSIX shellQuote)', async () => {
+    const { collector, commands } = makeCollector(() => ok('x'));
+    await collector.collectGitInfoRemote(server, "/w/my repo 日本語/it's $(id);`x`");
+    expect(commands.length).toBeGreaterThan(0);
+    for (const c of commands) expect(c.startsWith("cd '/w/my repo 日本語/it'\\''s $(id);`x`' && git")).toBe(true);
+  });
+
+  it('is refused on a Windows host instead of returning an empty result', async () => {
+    const { collector, commands } = makeCollector(() => ok('x'), { platform: 'win32', arch: 'x64' } as HostProfile);
+    await expect(collector.collectGitInfoRemote(server, 'C:\\w')).rejects.toMatchObject({ code: 'unsupported_os' });
+    expect(commands).toEqual([]);
   });
 });

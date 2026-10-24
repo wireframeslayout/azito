@@ -64,9 +64,9 @@ describe('validateGitFields', () => {
       expect(validateGitFields({ working_directory: '~\\x' }, 'linux')).toMatch(/absolute/);
     });
 
-    it('on POSIX still refuses spaces and non-ASCII until R3 / R4 (the git side keeps SAFE_PATH)', () => {
-      expect(validateGitFields({ working_directory: '/home/me/my repo' }, 'linux')).toMatch(/only letters/);
-      expect(validateGitFields({ worktree_path: '/home/me/プロジェクト' }, 'darwin')).toMatch(/worktree_path/);
+    it('on POSIX accepts spaces and non-ASCII (the worktree code takes paths as an argv)', () => {
+      expect(validateGitFields({ working_directory: '/home/me/my repo' }, 'linux')).toBeNull();
+      expect(validateGitFields({ worktree_path: '/home/me/プロジェクト/.worktrees/task-1' }, 'darwin')).toBeNull();
     });
 
     it('refuses control characters on every OS', () => {

@@ -17,8 +17,8 @@ import { resolveKillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
 import { taskWindowRef } from '../tmux/windowIdentity';
 import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
-
-const WORKTREE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-]+\/\.worktrees\/task-\d+$/;
+import { taskIdOfWorktreePath } from '../git/gitPath';
+import { platformOfProfile } from '../../shared/os/hostProfile';
 
 /**
  * Removes the task's temp files of the hub's own server: the paths recorded in its execution_log first, then whatever
@@ -116,8 +116,8 @@ export class TaskCleanupService {
     if (!server || !resolvedServerName) return;
 
     if (task.worktreePath) {
-      if (!WORKTREE_PATH_PATTERN.test(task.worktreePath)) {
-        log.warn(`[task-cleanup] Skipping worktree removal: path does not match expected pattern: ${task.worktreePath}`);
+      if (taskIdOfWorktreePath(platformOfProfile(transportFactory.hostProfileFor(server)), task.worktreePath) === null) {
+        log.warn(`[task-cleanup] Skipping worktree removal: not a task worktree path (<repo>/.worktrees/task-<id>): ${task.worktreePath}`);
       } else {
         const project = projectRepo.findById(task.projectId);
         const projectServer = project
@@ -127,7 +127,7 @@ export class TaskCleanupService {
         if (repoDir) {
           try {
             const transport = transportFactory.getTransport(server);
-            const worktreeService = worktreeServiceFactory.create(server.type, transport);
+            const worktreeService = worktreeServiceFactory.create(transport);
             await worktreeService.remove(repoDir, task.worktreePath);
           } catch (e) {
             log.warn(`[task-cleanup] Failed to remove worktree ${task.worktreePath}: ${(e as Error).message}`);

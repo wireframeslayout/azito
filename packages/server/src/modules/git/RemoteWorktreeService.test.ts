@@ -262,8 +262,19 @@ describe('RemoteWorktreeService', () => {
   });
 
   describe('input validation', () => {
-    it('rejects unsafe workingDir in create', async () => {
-      await expect(setup().svc.create('/tmp; rm -rf /', 1, 'slug', 'main')).rejects.toThrow('Unsafe workingDir');
+    it.each(['relative/dir', '--upload-pack=x', '/tmp/a\nb', ''])('rejects the workingDir %j in create, before git runs', async (dir) => {
+      const { svc, gitCalls } = setup();
+      await expect(svc.create(dir, 1, 'slug', 'main')).rejects.toThrow('Unsafe workingDir');
+      expect(gitCalls).toHaveLength(0);
+    });
+
+    it('takes shell metacharacters, spaces and Japanese in a path as plain characters: git gets an argv, never a shell line', async () => {
+      const dir = "/home/u/my repo 日本語/it's $(id);`x`";
+      const { svc, gitCalls } = setup();
+      const result = await svc.create(dir, 1, 'slug', 'main');
+      expect(result.path).toBe(`${dir}/.worktrees/task-1`);
+      expect(gitCalls.at(-1)!.args).toEqual(['worktree', 'add', '-b', 'task/1-slug', `${dir}/.worktrees/task-1`, 'main']);
+      expect(gitCalls.every((c) => c.cwd === dir)).toBe(true);
     });
 
     it('rejects unsafe taskSlug in create', async () => {
@@ -274,7 +285,7 @@ describe('RemoteWorktreeService', () => {
       await expect(setup().svc.create(WD, 1, 'slug', 'main && echo pwned')).rejects.toThrow('Unsafe baseBranch');
     });
 
-    it('rejects unsafe worktreePath in exists', async () => {
+    it('rejects a relative worktreePath in exists', async () => {
       await expect(setup().svc.exists('$(whoami)')).rejects.toThrow('Unsafe worktreePath');
     });
 
@@ -312,6 +323,61 @@ describe('RemoteWorktreeService', () => {
   });
 
   // `~/...` is a supported form of a stored working directory. The shell used to expand it; `cwd` and git's arguments are literal.
+  describe('a Windows host', () => {
+    const WIN_HOME = 'C:\\Users\\me';
+    const WIN_WD = 'D:\\work\\my repo 日本語';
+    const WIN_WT = `${WIN_WD}\\.worktrees\\task-1`;
+
+    function winSetup(onGit: GitResponder = () => ok()) {
+      const gitCalls: CommandSpec[] = [];
+      const fileCalls: string[] = [];
+      const files = {
+        platform: 'win32',
+        create: async (p: string) => { fileCalls.push(`create ${p}`); return { created: true }; },
+        remove: async (p: string) => { fileCalls.push(`remove ${p}`); },
+        stat: async (p: string) => { fileCalls.push(`stat ${p}`); return fileCalls.filter((c) => c === `stat ${p}`).length > 1 ? { kind: 'directory', size: 0, mtimeMs: 0, mode: 0 } : null; },
+        realpath: async (p: string) => { fileCalls.push(`realpath ${p}`); return p === '~' || p.startsWith('~\\') || p.startsWith('~/') ? `${WIN_HOME}${p.slice(1).replace(/\//g, '\\')}` : p; },
+      } as unknown as IFileOps;
+      const transport = { run: async (spec: CommandSpec) => { gitCalls.push(spec); return onGit(spec); }, files: () => files } as unknown as IServerTransport;
+      return { svc: new RemoteWorktreeService(transport), gitCalls, fileCalls };
+    }
+
+    it('builds the worktree path with backslashes', async () => {
+      const { svc, gitCalls, fileCalls } = winSetup();
+      const result = await svc.create(WIN_WD, 1, 'slug', 'main');
+      expect(result.path).toBe(WIN_WT);
+      expect(fileCalls).toContain(`create ${WIN_WD}\\.worktrees`);
+      expect(gitCalls.at(-1)!.args).toEqual(['worktree', 'add', '-b', 'task/1-slug', WIN_WT, 'main']);
+      expect(gitCalls.every((c) => c.cwd === WIN_WD)).toBe(true);
+    });
+
+    it('resolves ~\\ and ~/ against the host home, and builds the worktree under it', async () => {
+      for (const tilde of ['~\\repo', '~/repo']) {
+        const { svc, gitCalls } = winSetup();
+        const result = await svc.create(tilde, 2, 'slug', 'main');
+        expect(result.path).toBe(`${WIN_HOME}\\repo\\.worktrees\\task-2`);
+        expect(gitCalls.every((c) => c.cwd === `${WIN_HOME}\\repo`)).toBe(true);
+      }
+    });
+
+    it('remove keeps the working directory prefix for a worktree below it, whichever slash the stored path uses', async () => {
+      const { svc, gitCalls } = winSetup();
+      await svc.remove('~\\repo', '~/repo/.worktrees/task-3');
+      expect(gitCalls.map((c) => c.args)).toEqual([
+        ['worktree', 'remove', `${WIN_HOME}\\repo\\.worktrees\\task-3`, '--force'],
+        ['worktree', 'prune'],
+      ]);
+    });
+
+    it('refuses a POSIX path, a drive-relative path and a device path', async () => {
+      const { svc, gitCalls } = winSetup();
+      await expect(svc.create('/home/me/repo', 1, 'slug', 'main')).rejects.toThrow('Unsafe workingDir');
+      await expect(svc.exists('C:foo')).rejects.toThrow('Unsafe worktreePath');
+      await expect(svc.getBranch('\\\\?\\C:\\x')).rejects.toThrow('Unsafe worktreePath');
+      expect(gitCalls).toHaveLength(0);
+    });
+  });
+
   describe('a working directory that starts with ~', () => {
     const HOME = '/home/u';
     const TILDE_DIR = '~/ws/repo';

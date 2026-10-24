@@ -128,7 +128,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
       try {
         const transport = transportFactory.getTransport(srv);
         const platform = hostPlatformOf(srv);
-        const worktreeService = wsf.create(srv.type, transport);
+        const worktreeService = wsf.create(transport);
         const entries = await worktreeService.list(workingDir);
 
         const changedCounts = await Promise.all(

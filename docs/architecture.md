@@ -155,9 +155,8 @@ ExecutionLog
 | `packages/frontend/src/hooks/useTabPersistence.ts` | Unified tab state (localStorage) |
 | `packages/frontend/src/components/TaskLogView.tsx` | Chat-style execution log |
 | `packages/frontend/src/components/FileExplorer.tsx` | File tree + preview with syntax highlighting |
-| `packages/server/src/modules/git/WorktreeService.ts` | Git worktree (LocalWorktreeService) |
+| `packages/server/src/modules/git/RemoteWorktreeService.ts` | Git worktree (local and remote servers) |
 | `packages/server/src/modules/git/IWorktreeService.ts` | Worktree service interface |
-| `packages/server/src/modules/git/RemoteWorktreeService.ts` | Remote worktree operations via ServerTransport |
 | `packages/server/src/modules/tasks/recovery/RecoverStuckTasksUseCase.ts` | Startup task recovery (stuck tasks) |
 | `packages/frontend/src/components/ui/` | Shared UI components directory |
 | `harness/setup.sh` | Installs azt-harness skills/rules/MCP/hook into `~/.claude/` |
