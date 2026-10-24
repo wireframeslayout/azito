@@ -55,7 +55,7 @@ On a Windows agent server, and on the Windows hub's own (local) server, these fi
 | File content search | Works. `rg` when it is installed (it is fast, so installing it is recommended), otherwise the built-in search; see "File Search" above for how the built-in one differs from `rg`. Result paths are relative to the search root with `/` either way, and the UI turns them back into Windows paths to open the file |
 | Directory completion | Works (the working directory field in project settings) |
 | Working directory path | A Windows path can be set: a drive path (`C:\work\app`), a UNC path (`\\server\share\app`), or `~\work` from the home folder |
-| Git (diff, log, worktrees, branch search) | Not available yet on a Windows server (an agent, or the hub's own local server). The UI shows the reason, and the API answers `unsupported_os` (501) |
+| Git (diff, log, worktrees, branch search, repository discovery) | Works. The host needs **Git for Windows** (`git.exe`; `winget install --id Git.Git -e`). The host itself looks for it (the agent for an agent server, the hub for its own local server). When there is no `git.exe`, the API answers `git_not_found` (501) with the reason, and the UI shows that reason (how to install it, and where it looked) as the error of each screen. How it is found: see "Adding a Windows host as an agent" in `install-and-update.md` |
 
 Confinement to the working directory (refusing anything that leaves it) follows Windows path rules: both sides are resolved to the real path on disk before they are compared, so a difference in the case of what was typed does not matter, and `\` and `/` both separate.
 

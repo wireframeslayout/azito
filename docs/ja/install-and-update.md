@@ -447,7 +447,7 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 ## Windows ホストをエージェントとして追加する
 
-Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。Windows での git は #370、タスク実行は #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
+Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。タスク実行は #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
 
 Windows のエージェントで使える機能と、まだ使えない機能は次のとおりです。ハブはエージェントから OS（`hostProfile`）を受け取り、サーバー一覧とサーバーの概要に表示します。操作ごとに、いまのコードの経路で閉じるかどうかを決めます（判定は `@azito/shared` の `hostFeatureSupport` の 1 つの表で、各行を閉じる経路はコメントに書いてあります）。閉じた入口はフォーカスできる（`aria-disabled`）まま何もせず、理由を文字かツールチップで出し、`aria-describedby` で結び付けます。それでもハブに届いた操作は、理由付きの `unsupported_os`（501）で断られ、UI はその理由をそのまま出します。タスクは、実行先のサーバー（タスク自身のサーバー、無ければプロジェクトの唯一のサーバー。ハブと同じ規則）で判定します。
 
@@ -457,7 +457,7 @@ Windows のエージェントで使える機能と、まだ使えない機能は
 | misao（ペインサーバー）と、Setup からの導入・更新 | 使える | — |
 | シェルだけの新しいウィンドウ | 使える（cmd.exe） | — |
 | ファイル（一覧・読み・書き・作成・削除・名前の変更。`IFileOps`）、ファイル名の検索、ファイルの中身の検索（`rg` があれば `rg`、無ければ内蔵の検索。結果のパスは相対の `/` 区切り）、ディレクトリの補完。詳しくは `files.md` | 使える | — |
-| git の diff・履歴・ワークツリーの切り替え・ブランチの検索（API は Windows のパスを受け付けず、Windows に git が入っているとも限らない） | UI で無効（理由を表示。API は `unsupported_os`（501）） | #370 |
+| git の diff・履歴・ワークツリーの切り替え・ブランチの検索・リポジトリの検出（Git for Windows が必要。無ければ API は `git_not_found`（501）で、理由を各画面のエラーに出す） | 使える | — |
 | タスク・Unit の実行 | UI で無効 | #371 |
 | 新しいウィンドウでの claude / codex（や任意のコマンド）の起動 | UI で無効（シェルのみを選ぶ） | #371 |
 | tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
@@ -474,6 +474,7 @@ Windows 側の準備:
 | OpenSSH サーバー | Windows 側で有効化し、ハブから到達できること。既定シェルは **cmd.exe のままでよい**（PowerShell でも可）。ハブは先に OS を判定し、以後の確認は両方で同じに動く PowerShell スクリプトで行います。SSH で入るユーザーが、agent を動かすユーザーになります |
 | Windows | x64 のみ。OS ネイティブのアーキテクチャで判定（ARM 版 Windows は x64 エミュレーション下でも理由付きで拒否）。Windows 10 1809（ビルド 17763）以降、Windows Server 2019 以降（`tar.exe` と `conhost.exe --headless` のため。preflight が確認します）。Windows の版（10 / 11 / Server）は表示だけで検査しない |
 | Node.js v24+ | SSH セッションの PATH にあること |
+| Git for Windows | `git.exe` が入っていること（`winget install --id Git.Git -e`。AZITO には同梱しません）。agent のホスト自身が、PATH（`PATHEXT` の拡張子付き）、次に標準の場所 `%ProgramFiles%\Git\cmd\git.exe`・`%ProgramFiles(x86)%\Git\cmd\git.exe`・`%LOCALAPPDATA%\Programs\Git\cmd\git.exe`（ユーザーごとの導入）の順に探します。タスクスケジューラの agent は最小の環境で起動して PATH が足りないことがあり、winget の直後は PATH がログオンし直すまで反映されないことがあるためです。使うのは `cmd\git.exe` だけで、`bin\git.exe`（ラッパー）や `mingw64\bin` は標準の場所として探しません。見つけた場所は覚え、見つからなかった結果は 30 秒だけ覚えるので、入れた直後も再起動なしで通ります。無いときは git の API が `git_not_found` で理由を返し、導入は止まりません。ハブが Windows のときの local サーバーも同じ規則で、ハブ自身が探します |
 | Tailscale | 導入済みでサインイン済みであること。PATH に無くても `%ProgramFiles%\Tailscale\tailscale.exe` を探します |
 | Windows ファイアウォール | `node.exe` への受信 TCP 3002 を許可し、Block 規則が無いこと（下の手順 1） |
 

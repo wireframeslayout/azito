@@ -215,15 +215,15 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 }
 
 export function CodeStep({
-  t, codeMode, setCodeMode, selectedServer, serverPlatform, variant, existingPath, onExistingPathChange, discovery, discoveryBlockedReason,
+  t, codeMode, setCodeMode, selectedServer, serverPlatform, variant, existingPath, onExistingPathChange, discovery, discoveryFailureReason,
   selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, onSelectRepoCandidate, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
   cloneToken, setCloneToken, reusableRepo,
   showValidation,
 }: {
   t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; serverPlatform: HostPlatform | null; variant: CodeStepVariant;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
-  /** Why the existing-directory scan is closed on the selected server's host (a Windows agent); null: open. */
-  discoveryBlockedReason: string | null;
+  /** Why the existing-directory scan could not run, when the hub gave a reason (Git for Windows missing on the host); null otherwise. */
+  discoveryFailureReason: string | null;
   selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
   cloneUrl: string; setCloneUrl: (v: string) => void; onSelectRepoCandidate: (candidate: RepositoryCandidate) => void;
   cloneDirectory: string; setCloneDirectory: (v: string) => void;
@@ -292,9 +292,7 @@ export function CodeStep({
       {mode === 'existing' && (
         <FormField label={t('wizard.code.pathLabel')} error={showValidation ? t('wizard.code.pathRequired') : undefined}>
           <DirectoryInput value={existingPath} onChange={onExistingPathChange} serverName={selectedServer} placeholder={t('wizard.code.pathPlaceholder')} style={baseInputStyle} />
-          {discoveryBlockedReason
-            ? <Notice tone="info">{discoveryBlockedReason}</Notice>
-            : <DiscoveryResult t={t} discovery={discovery} selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected} />}
+          <DiscoveryResult t={t} discovery={discovery} failureReason={discoveryFailureReason} selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected} />
         </FormField>
       )}
 
@@ -379,15 +377,15 @@ function ProbeStatus({ chip, title, sub }: { chip: ReactNode; title: ReactNode; 
   );
 }
 
-function DiscoveryResult({ t, discovery, selectedRemoteUrls, toggleRemoteSelected }: {
-  t: TFunc; discovery: DiscoveryStatus; selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
+export function DiscoveryResult({ t, discovery, failureReason, selectedRemoteUrls, toggleRemoteSelected }: {
+  t: TFunc; discovery: DiscoveryStatus; failureReason: string | null; selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
 }) {
   if (discovery === 'idle') return null;
   if (discovery === 'checking') {
     return <ProbeStatus chip={<Spinner size={13} trackColor="var(--accent-a35)" />} title={t('wizard.code.checking')} />;
   }
   if (discovery === 'error') {
-    return <ProbeStatus chip={<Chip tone="red">!</Chip>} title={t('wizard.code.pathCheckFailed')} />;
+    return <ProbeStatus chip={<Chip tone="red">!</Chip>} title={t('wizard.code.pathCheckFailed')} sub={failureReason ?? undefined} />;
   }
   if (!discovery.exists) {
     return <ProbeStatus chip={<Chip tone="accent">+</Chip>} title={t('wizard.code.pathWillBeCreated')} />;

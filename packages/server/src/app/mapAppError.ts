@@ -1,6 +1,7 @@
 import { MuxDriverUnavailableError, MuxOperationUnsupportedError } from '../modules/tmux/MuxCapabilityError';
 import { HostProfileError } from '../shared/os/hostProfile';
 import { AgentUnreachableError } from '../modules/servers/transport/AgentUnreachableError';
+import { GitNotFoundError } from '../shared/exec/commandSpec';
 
 export interface AppErrorResponse {
   status: number;
@@ -21,6 +22,10 @@ export function mapAppError(err: unknown): AppErrorResponse | null {
   if (err instanceof HostProfileError) {
     // `error` is the reason in words, like the other install routes answer: the UI shows it as it is. `code` is `unsupported_os` / `unsupported_host`.
     return { status: 501, body: { error: err.message, code: err.code } };
+  }
+  if (err instanceof GitNotFoundError) {
+    // Same shape as the host-OS reasons above: the reason (with how to install Git for Windows) in `error`, `git_not_found` in `code`.
+    return { status: 501, body: { error: err.message, code: 'git_not_found' } };
   }
   return null;
 }

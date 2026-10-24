@@ -2,7 +2,7 @@ import os from 'os';
 import { describe, it, expect, afterEach } from 'vitest';
 import { resolveHostEnv, resolveCurrentHostEnv } from './hostEnv';
 
-const base = { platform: 'linux' as const, arch: 'x64', homeDir: '/home/u', tmpDir: '/tmp', execPath: '/usr/bin/node', uid: 1000, systemRoot: undefined };
+const base = { platform: 'linux' as const, arch: 'x64', homeDir: '/home/u', tmpDir: '/tmp', execPath: '/usr/bin/node', uid: 1000, systemRoot: undefined, windowsPrograms: undefined };
 
 describe('resolveHostEnv', () => {
   it('入力をそのまま返す', () => {
@@ -10,7 +10,7 @@ describe('resolveHostEnv', () => {
   });
 
   it('win32 / darwin の入力も受け付ける', () => {
-    const win = { platform: 'win32' as const, arch: 'x64', homeDir: 'C:\\Users\\u', tmpDir: 'C:\\Temp', execPath: 'C:\\node\\node.exe', uid: 1000, systemRoot: undefined };
+    const win = { platform: 'win32' as const, arch: 'x64', homeDir: 'C:\\Users\\u', tmpDir: 'C:\\Temp', execPath: 'C:\\node\\node.exe', uid: 1000, systemRoot: undefined, windowsPrograms: undefined };
     expect(resolveHostEnv(win)).toEqual(win);
     expect(resolveHostEnv({ ...base, platform: 'darwin', arch: 'arm64' }).platform).toBe('darwin');
   });

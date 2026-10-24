@@ -1,4 +1,5 @@
 import os from 'os';
+import { windowsProgramEnvOf, type WindowsProgramEnv } from '../exec/windowsGit';
 
 /** 対応を明示するプラットフォーム / アーキテクチャ。絞り込み関数は、使う側（P5 の hostProfile など）で足す。 */
 export type HostPlatform = 'linux' | 'darwin' | 'win32';
@@ -20,10 +21,12 @@ export interface HostEnv {
   uid: number;
   /** Windows の `%SystemRoot%`（`taskkill.exe` の絶対パスに使う）。Windows 以外、または未設定なら undefined。プロセスの入口で 1 回読み、使う側は `process.env` を読まない。 */
   systemRoot: string | undefined;
+  /** Windows の PATH / PATHEXT / ProgramFiles など（`git.exe` を探す分。`windowsGit.ts`）。Windows 以外は undefined。プロセスの入口で 1 回読む。 */
+  windowsPrograms: WindowsProgramEnv | undefined;
 }
 
 /** ローカルのホスト（LocalTransport が使う分）。ハブ / agent の入口で解決した HostEnv から渡す。 */
-export type LocalHost = Pick<HostEnv, 'platform' | 'homeDir' | 'systemRoot'>;
+export type LocalHost = Pick<HostEnv, 'platform' | 'homeDir' | 'systemRoot' | 'windowsPrograms'>;
 
 /** 純粋関数。homeDir / tmpDir が空のときだけ投げる（フォールバックしない）。 */
 export function resolveHostEnv(input: HostEnv): HostEnv {
@@ -33,7 +36,7 @@ export function resolveHostEnv(input: HostEnv): HostEnv {
   if (input.tmpDir === '') {
     throw new Error('Cannot resolve the temp directory: os.tmpdir() returned an empty string');
   }
-  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath, uid: input.uid, systemRoot: input.systemRoot };
+  return { platform: input.platform, arch: input.arch, homeDir: input.homeDir, tmpDir: input.tmpDir, execPath: input.execPath, uid: input.uid, systemRoot: input.systemRoot, windowsPrograms: input.windowsPrograms };
 }
 
 /** 実プロセスから読む。`process.platform` を読んでよいのはここだけ。各プロセスの入口で 1 回呼ぶ。 */
@@ -47,5 +50,6 @@ export function resolveCurrentHostEnv(): HostEnv {
     // os.userInfo() throws when the uid has no passwd entry (docker run -u <uid>); only launchd needs the uid anyway.
     uid: typeof process.getuid === 'function' ? process.getuid() : -1,
     systemRoot: process.env.SystemRoot,
+    windowsPrograms: process.platform === 'win32' ? windowsProgramEnvOf(process.env) : undefined,
   });
 }

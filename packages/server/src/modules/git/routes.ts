@@ -10,7 +10,8 @@ import type { GitProviderService } from './providers/GitProviderService';
 import type { ProviderFilter } from './RepositoryCandidateService';
 import { RepositoryCandidateService } from './RepositoryCandidateService';
 import { runGit } from './runGit';
-import { assertGitSupported, platformOfProfile } from '../../shared/os/hostProfile';
+import { platformOfProfile } from '../../shared/os/hostProfile';
+import { GitNotFoundError } from '../../shared/exec/commandSpec';
 import { assertGitPathArg } from './assertSafeGitArgs';
 import { taskIdOfWorktreePath } from './gitPath';
 import type { HostPlatform } from '../../shared/os/hostEnv';
@@ -30,8 +31,6 @@ export interface GitRouteOptions {
 
 const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) => {
   const { serverRepo, transportFactory, projectRepo, gitProvider } = opts;
-  // A Windows host is refused with `unsupported_os` (mapAppError -> 501) until #370, before the path is even looked at.
-  const assertServerGit = (srv: ServerConfig): void => assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
   const hostPlatformOf = (srv: ServerConfig): HostPlatform => platformOfProfile(transportFactory.hostProfileFor(srv));
   const isInvalidPath = (srv: ServerConfig, dirPath: string): boolean => {
     const platform = hostPlatformOf(srv);
@@ -52,7 +51,6 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      assertServerGit(srv);
 
       const dirPath = (request.query.path || '').trim();
       if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
@@ -64,6 +62,8 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
       try {
         return await gitDiffService.getCommits(srv, dirPath, base || undefined);
       } catch (e) {
+        // Git for Windows missing is a reason of its own (mapAppError -> 501 git_not_found), not a failed read.
+        if (e instanceof GitNotFoundError) throw e;
         return reply.status(500).send({ error: e instanceof Error ? e.message : 'Failed to get commits' });
       }
     },
@@ -75,7 +75,6 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      assertServerGit(srv);
 
       const dirPath = (request.query.path || '').trim();
       if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
@@ -100,6 +99,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
           includeUncommitted,
         });
       } catch (e) {
+        if (e instanceof GitNotFoundError) throw e;
         return reply.status(500).send({ error: e instanceof Error ? e.message : 'Failed to get diff' });
       }
     },
@@ -116,7 +116,6 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
 
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      assertServerGit(srv);
 
       const projectId = request.query.project_id ? parseInt(request.query.project_id, 10) : NaN;
       if (isNaN(projectId)) return reply.status(400).send({ error: 'project_id query parameter required' });
@@ -166,6 +165,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
 
         return { worktrees };
       } catch (error) {
+        if (error instanceof GitNotFoundError) throw error;
         return reply.status(500).send({ error: error instanceof Error ? error.message : 'Failed to list worktrees' });
       }
     },

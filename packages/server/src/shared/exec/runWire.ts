@@ -2,6 +2,8 @@ import { z } from 'zod';
 import {
   CommandOutputLimitError,
   CommandSpawnError,
+  GIT_NOT_FOUND_CODE,
+  GitNotFoundError,
   CommandTimeoutError,
   type CommandResult,
   type CommandSpec,
@@ -42,6 +44,7 @@ export function responseToResult(body: unknown): CommandResult {
     case 'result':
       return { exitCode: response.exitCode, signal: response.signal, stdout: response.stdout, stderr: response.stderr };
     case 'spawn_failed':
+      if (response.code === GIT_NOT_FOUND_CODE) throw new GitNotFoundError(response.message, response.stdout, response.stderr);
       throw new CommandSpawnError(response.code, response.message, response.stdout, response.stderr);
     case 'timeout':
       throw new CommandTimeoutError(response.timeoutMs, response.stdout, response.stderr);

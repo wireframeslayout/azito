@@ -17,7 +17,6 @@ import StoragePanel from '../StoragePanel';
 import { SettingsSidebar, type SettingsSection } from '../ProjectSettings';
 import ObjectsSidebar from './ObjectsSidebar';
 import TasksSidebar from './TasksSidebar';
-import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
 
 interface WorkspaceSidebarContentProps {
   sidebarMode: SidebarMode;
@@ -76,7 +75,6 @@ interface WorkspaceSidebarContentProps {
   onWindowFocus?: (windowId: number) => void;
 }
 
-const GIT_BLOCKED_NOTICE_ID = 'file-git-blocked-reason';
 
 export default function WorkspaceSidebarContent({
   sidebarMode,
@@ -128,7 +126,6 @@ export default function WorkspaceSidebarContent({
 }: WorkspaceSidebarContentProps) {
   const { t } = useTranslation('workspace');
   const { t: tf } = useTranslation('files');
-  const hostFeatureBlock = useHostFeatureBlock();
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
   const [filesView, setFilesView] = useState<'tree' | 'search'>('tree');
   const [currentWorktree, setCurrentWorktree] = useState<WorktreeItem | null>(null);
@@ -225,12 +222,9 @@ export default function WorkspaceSidebarContent({
               );
             }
             const effectiveRoot = selectedWorktreePath ?? rootPath;
-            const gitBlockedReason = hostFeatureBlock(selectedFileServer, 'git');
             return (
               <>
                 <FileSidebarHeader
-                  diffBlockedReason={gitBlockedReason}
-                  diffBlockedReasonId={GIT_BLOCKED_NOTICE_ID}
                   onSearch={() => setFilesView(filesView === 'search' ? 'tree' : 'search')}
                   onDiff={() => { onOpenDiff(selectedFileServer, effectiveRoot); if (mobile) onCloseMobileSidebar(); }}
                   onRefresh={handleRefresh}
@@ -240,12 +234,7 @@ export default function WorkspaceSidebarContent({
                   allServerNames={projectServers.map((s) => s.serverName)}
                   onSelectServer={onSelectFileServer}
                 />
-                {gitBlockedReason && (
-                  <div id={GIT_BLOCKED_NOTICE_ID} style={{ padding: '0 12px 8px', flexShrink: 0 }}>
-                    <Notice tone="info">{gitBlockedReason}</Notice>
-                  </div>
-                )}
-                {project && !gitBlockedReason && (
+                {project && (
                   <RootSwitcher
                     serverName={selectedFileServer}
                     projectId={project.id}

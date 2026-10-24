@@ -68,6 +68,17 @@ export class CommandSpawnError extends CommandError {
   }
 }
 
+/** The `code` of a {@link GitNotFoundError}, also what crosses the agent wire (`spawn_failed`). */
+export const GIT_NOT_FOUND_CODE = 'GIT_NOT_FOUND';
+
+/** A Windows host has no Git for Windows where it is looked for (`GitLocator`). The message is the reason, with how to fix it, and is shown to the user as it is. */
+export class GitNotFoundError extends CommandSpawnError {
+  constructor(message: string, stdout = '', stderr = '') {
+    super(GIT_NOT_FOUND_CODE, message, stdout, stderr);
+    this.name = 'GitNotFoundError';
+  }
+}
+
 /** The command ran past its deadline and was killed. */
 export class CommandTimeoutError extends CommandError {
   readonly kind = 'timeout';

@@ -4,17 +4,23 @@ import gitRoutes from './routes';
 import type { GitRouteOptions } from './routes';
 import type { HostProfile } from '../../shared/os/hostProfile';
 import type { ServerConfig } from '../servers/Server';
+import type { CommandResult } from '../../shared/exec/commandSpec';
+import { CommandSpawnError, GitNotFoundError } from '../../shared/exec/commandSpec';
 import { mapAppError } from '../../app/mapAppError';
 
-async function buildApp(hostProfile: HostProfile | null) {
+type Run = (spec: unknown) => Promise<CommandResult>;
+
+async function buildApp(hostProfile: HostProfile | null, run: Run, workingDirectoryExists = true) {
   const server = { name: 'srv', type: 'agent', hostProfile } as unknown as ServerConfig;
-  const run = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
   const opts = {
     serverRepo: { findByName: (name: string) => (name === 'srv' ? server : null) },
-    transportFactory: { hostProfileFor: (s: ServerConfig) => s.hostProfile, getTransport: () => ({ run, hostProfile }) },
+    transportFactory: {
+      hostProfileFor: (s: ServerConfig) => s.hostProfile,
+      getTransport: () => ({ run, hostProfile, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => (workingDirectoryExists ? { kind: 'directory' } : null) }) }),
+    },
     taskRepo: {},
     projectServerRepo: { find: () => ({ workingDirectory: 'C:\\work' }) },
-    worktreeServiceFactory: { create: () => ({ list: async () => [] }) },
+    worktreeServiceFactory: { create: () => ({ list: async () => { await run({}); return []; } }) },
   } as unknown as GitRouteOptions;
   const app = Fastify();
   const defaultHandler = app.errorHandler;
@@ -24,27 +30,54 @@ async function buildApp(hostProfile: HostProfile | null) {
     return defaultHandler.call(app, err, request, reply);
   });
   await app.register(gitRoutes, opts);
-  return { app, run };
+  return app;
 }
 
-describe('git API on a Windows server', () => {
-  const win32: HostProfile = { platform: 'win32', arch: 'x64' };
+const win32: HostProfile = { platform: 'win32', arch: 'x64' };
+const ok = async (): Promise<CommandResult> => ({ exitCode: 0, signal: null, stdout: '', stderr: '' });
 
-  it.each([
+describe('git API on a Windows server', () => {
+  const urls = [
     '/api/servers/srv/git/diff?path=C:%5CUsers%5Ca',
     '/api/servers/srv/git/commits?path=C:%5CUsers%5Ca',
     '/api/servers/srv/git/worktrees?project_id=1',
-  ])('GET %s is 501 unsupported_os (not "Invalid path")', async (url) => {
-    const { app, run } = await buildApp(win32);
+  ];
+
+  it.each(urls)('GET %s is not refused for the OS: it runs git', async (url) => {
+    const run = vi.fn(ok);
+    const app = await buildApp(win32, run);
     const res = await app.inject({ method: 'GET', url });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
-    expect(run).not.toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+    expect(run).toHaveBeenCalled();
   });
 
-  it('a Linux server is not refused', async () => {
-    const { app } = await buildApp({ platform: 'linux', arch: 'x64' });
-    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/git/worktrees?project_id=1' });
-    expect(res.statusCode).toBe(200);
+  it.each(urls)('GET %s answers 501 git_not_found with the reason when the host has no Git for Windows', async (url) => {
+    const reason = 'Git for Windows (git.exe) was not found on this host. Install it with "winget install --id Git.Git -e".';
+    const app = await buildApp(win32, async () => { throw new GitNotFoundError(reason); });
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ code: 'git_not_found', error: reason });
+  });
+
+  // An agent from before R5b spawns a bare `git` and answers ENOENT: the hub turns it into the same reason.
+  const oldAgent = async (): Promise<CommandResult> => { throw new CommandSpawnError('ENOENT', 'spawn git ENOENT'); };
+
+  it.each(urls.slice(0, 2))('GET %s: an old Windows agent\'s ENOENT for git answers 501 git_not_found (install Git for Windows or update the agent)', async (url) => {
+    const res = await (await buildApp(win32, oldAgent)).inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'git_not_found', error: expect.stringContaining('update the agent') });
+    expect(res.json().error).toContain('winget install --id Git.Git -e');
+  });
+
+  it('an ENOENT because the working directory is missing is not turned into git_not_found', async () => {
+    const res = await (await buildApp(win32, oldAgent, false)).inject({ method: 'GET', url: urls[1] });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'spawn git ENOENT' });
+  });
+
+  it('an ENOENT on a Linux server stays what it was (500 with the message)', async () => {
+    const res = await (await buildApp({ platform: 'linux', arch: 'x64' }, oldAgent)).inject({ method: 'GET', url: '/api/servers/srv/git/commits?path=%2Fhome%2Fa' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'spawn git ENOENT' });
   });
 });

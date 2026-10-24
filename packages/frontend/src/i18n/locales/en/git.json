@@ -1,7 +1,4 @@
 {
-  "blocked": {
-    "title": "Git views are not available on this server yet"
-  },
   "issues": {
     "title": "Issues",
     "pullRequests": "Pull Requests",

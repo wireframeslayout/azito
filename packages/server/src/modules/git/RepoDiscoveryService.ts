@@ -6,7 +6,7 @@ import { hostPathFor } from '@azito/shared';
 import { pathApiFor } from '../../shared/os/hostPath';
 import type { HostPlatform } from '../../shared/os/hostEnv';
 import { isGitDirectoryName, normalizeGitPath } from './gitPath';
-import { CommandSpawnError, type CommandResult } from '../../shared/exec/commandSpec';
+import { CommandSpawnError, GitNotFoundError, type CommandResult } from '../../shared/exec/commandSpec';
 import { runGit } from './runGit';
 import { sanitizeDiscoveredRemoteUrl } from './sanitizeDiscoveredRemoteUrl';
 
@@ -138,6 +138,8 @@ export class RepoDiscoveryService {
     try {
       gitCheckResult = await runGit(transport, undefined, ['--version']);
     } catch (err) {
+      // Git for Windows missing keeps its own error: it carries the reason and how to fix it (mapAppError -> git_not_found).
+      if (err instanceof GitNotFoundError) throw err;
       if (err instanceof CommandSpawnError) throw gitUnusable(err.message);
       throw err;
     }

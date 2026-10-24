@@ -8,8 +8,6 @@ import DiffContent from './DiffContent';
 import CommitList from './CommitList';
 import type { DiffResponse, DiffScope } from './types';
 import { Icon } from '../ui/Icon';
-import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
-import GitBlockedState from './GitBlockedState';
 
 interface DiffViewerProps {
   serverName: string;
@@ -20,14 +18,7 @@ interface DiffViewerProps {
   onOpenFile?: (relPath: string) => void;
 }
 
-/** Git is closed on some hosts (a Windows agent until #370): the view then says why, and nothing is requested. */
-export default function DiffViewer(props: DiffViewerProps) {
-  const blockedReason = useHostFeatureBlock()(props.serverName, 'git');
-  if (blockedReason) return <GitBlockedState reason={blockedReason} />;
-  return <DiffViewerContent {...props} />;
-}
-
-function DiffViewerContent({ serverName, path, baseBranch, commit: commitProp, initialFile, onOpenFile }: DiffViewerProps) {
+export default function DiffViewer({ serverName, path, baseBranch, commit: commitProp, initialFile, onOpenFile }: DiffViewerProps) {
   const { t } = useTranslation('git');
 
   // Derive initial scope from props

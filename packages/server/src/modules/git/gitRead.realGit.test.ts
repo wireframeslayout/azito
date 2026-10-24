@@ -22,7 +22,6 @@ import { taskIdOfWorktreePath } from './gitPath';
 /**
  * The git read paths against a real git on the machine the test runs on (Git for Windows on the Windows CI runner), through
  * LocalTransport: a repository in a directory with a space and Japanese characters, reached by the host's own spelling.
- * These are service-level tests: the route guard that keeps a Windows host closed (`assertGitSupported`) is not involved.
  */
 const hostEnv = resolveCurrentHostEnv();
 const profile = toHostProfile(hostEnv.platform, hostEnv.arch);
