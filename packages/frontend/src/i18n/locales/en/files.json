@@ -1,6 +1,8 @@
 {
   "explorer": {
     "refresh": "Refresh",
+    "serverMissing": "The server \"{{server}}\" of this file no longer exists, so it cannot be opened.",
+    "closeTab": "Close tab",
     "emptyDirectory": "Empty directory",
     "download": "Download",
     "downloadFailed": "Failed to download file",

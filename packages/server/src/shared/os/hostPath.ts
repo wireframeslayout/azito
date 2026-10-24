@@ -62,6 +62,11 @@ export function invalidWorkingDirectoryReason(platform: HostPlatform, input: str
   return hostPathFor(platform).isAbsolute(input) ? null : 'the path must be absolute (or start with ~)';
 }
 
+/** Whether two real, absolute paths name the same place (the rule `isHostPathContained` uses: `relative()` of the host's path API). */
+export function isSameHostPath(platform: HostPlatform, a: string, b: string): boolean {
+  return pathApiFor(platform).relative(a, b) === '';
+}
+
 /**
  * Whether `target` is `allowedRoot` or beneath it. Both must already be real, absolute paths of the host (see
  * `IFileOps.realpath`); no resolution happens here. The verdict is `relative()` of the host's path API (another drive or

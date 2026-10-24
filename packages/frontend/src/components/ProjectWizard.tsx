@@ -15,7 +15,7 @@ import {
   repoStepSignature, envStepSignature, cloneStepSignature, repoIdsToCleanup, cleanupStaleRepositoryIds,
   findReusableRepositoryWithToken, needsDirectoryCreation, trackCreatedRepositoryId,
   resolveCodeStepVariant, effectiveCodeMode, shouldPersistDistribution,
-  resolveEnvironmentAdvancedSettings, resolveDistributionSummary,
+  resolveEnvironmentAdvancedSettings, resolveDistributionSummary, serverHostPlatform,
   type WizardStepId, type CodeMode, type WizardValidationState, type DiscoveryKey, type ReusableRepoCandidate,
   type EnvironmentInputPolicy,
 } from '../lib/projectWizardLogic';
@@ -284,8 +284,9 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     [effectiveMode, cloneUrl, existingRepositories],
   );
 
+  const serverPlatform = serverHostPlatform(selectedServer, serverList);
   const validationState: WizardValidationState = {
-    projectName: name, projectSlug: slug, selectedServer, codeMode: effectiveMode, existingPath, cloneUrl, cloneDirectory,
+    projectName: name, projectSlug: slug, selectedServer, codeMode: effectiveMode, existingPath, cloneUrl, cloneDirectory, serverPlatform,
     existingServerNames: existingServerList, discoveryReady,
   };
   const canAdvance = canAdvanceFromStep(currentStep, validationState);
@@ -765,6 +766,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
             <CodeStep
               t={t} codeMode={codeMode} setCodeMode={setCodeMode}
               selectedServer={selectedServer}
+              serverPlatform={serverPlatform}
               variant={codeStepVariant}
               existingPath={existingPath} onExistingPathChange={setExistingPath}
               discovery={discovery}

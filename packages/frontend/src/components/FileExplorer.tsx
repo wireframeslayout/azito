@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import type { HostPathApi } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
 import { fetchBlob } from '../api/client';
 import { useToast } from '../hooks/useToast';
@@ -11,6 +12,8 @@ import { useLongPress, longPressStyle } from '../hooks/useLongPress';
 import { useFileTree } from './files/useFileTree';
 import type { TreeNode } from './files/useFileTree';
 import { useFileCrud } from './files/useFileCrud';
+import { useServerPath } from '../hooks/useServerPath';
+import { parentOrRoot } from '../lib/serverPath';
 import FileTree from './files/FileTree';
 import DeleteConfirmModal from './files/DeleteConfirmModal';
 
@@ -24,7 +27,14 @@ export interface FileExplorerProps {
   onRefreshRef?: (fn: () => void) => void;
 }
 
-export default function FileExplorer({ serverName, rootPath, projectId, onFileSelect, onRefreshRef }: FileExplorerProps) {
+/** Waits for the server's OS (every path it builds depends on it), then shows the tree. */
+export default function FileExplorer(props: FileExplorerProps) {
+  const pathApi = useServerPath(props.serverName);
+  if (!pathApi) return <LoadingState />;
+  return <FileExplorerTree {...props} pathApi={pathApi} />;
+}
+
+function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRefreshRef, pathApi }: FileExplorerProps & { pathApi: HostPathApi }) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -37,6 +47,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
     serverName,
     projectId,
     rootPath,
+    pathApi,
     loadRoot,
     expandDir,
     refreshDir,
@@ -57,7 +68,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
 
   const buildMenuItems = useCallback((node: TreeNode) => {
     const isDir = node.type === 'directory';
-    const parentPath = isDir ? node.path : (node.path.substring(0, node.path.lastIndexOf('/')) || rootPath);
+    const parentPath = isDir ? node.path : parentOrRoot(pathApi, node.path, rootPath);
     return [
       { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(parentPath, 'file') },
       { label: t('explorer.newFolder'), icon: <Icon name="folder-plus" size={14} />, onClick: () => crud.startCreate(parentPath, 'directory') },
@@ -88,7 +99,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
       { separator: true, label: '', onClick: () => {} },
       { label: t('explorer.delete'), icon: <Icon name="trash" size={14} />, danger: true, onClick: () => crud.startDelete(node.path, node.type) },
     ];
-  }, [t, crud, rootPath, serverName, showToast]);
+  }, [t, crud, rootPath, pathApi, serverName, showToast]);
 
   const buildAreaMenuItems = useCallback((): ContextMenuItem[] => [
     { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(rootPath, 'file') },
@@ -132,6 +143,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
           nodes={tree}
           selectedPath={selectedPath}
           rootPath={rootPath}
+          pathApi={pathApi}
           pendingCreate={crud.pendingCreate}
           pendingRename={crud.pendingRename}
           onSelect={handleClick}

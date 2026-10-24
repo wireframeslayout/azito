@@ -1,7 +1,9 @@
 import { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
+import type { HostPathApi } from '@azito/shared';
 import { useToast } from '../../hooks/useToast';
+import { joinRelative, parentOrRoot } from '../../lib/serverPath';
 
 export interface PendingCreate {
   parentPath: string;
@@ -17,13 +19,15 @@ interface UseFileCrudOptions {
   serverName: string;
   projectId: number | undefined;
   rootPath: string;
+  /** The path functions of the server's host OS. */
+  pathApi: HostPathApi;
   loadRoot: () => Promise<void>;
   expandDir: (path: string) => Promise<void>;
   refreshDir: (path: string) => Promise<void>;
   onFileCreated?: (filePath: string) => void;
 }
 
-export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandDir, refreshDir, onFileCreated }: UseFileCrudOptions) {
+export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot, expandDir, refreshDir, onFileCreated }: UseFileCrudOptions) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [pendingCreate, setPendingCreate] = useState<PendingCreate | null>(null);
@@ -39,9 +43,7 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
 
   const commitCreate = useCallback(async (name: string) => {
     if (!pendingCreate || !projectId) return;
-    const fullPath = pendingCreate.parentPath.endsWith('/')
-      ? pendingCreate.parentPath + name
-      : pendingCreate.parentPath + '/' + name;
+    const fullPath = joinRelative(pathApi, pendingCreate.parentPath, name);
     try {
       const res = await api<{ ok?: boolean; error?: string }>(`/servers/${serverName}/files`, {
         method: 'POST',
@@ -60,7 +62,7 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
     } catch {
       showToast(t('explorer.createFailed'));
     }
-  }, [pendingCreate, projectId, serverName, rootPath, loadRoot, refreshDir, onFileCreated, showToast, t]);
+  }, [pendingCreate, projectId, serverName, rootPath, pathApi, loadRoot, refreshDir, onFileCreated, showToast, t]);
 
   const cancelCreate = useCallback(() => setPendingCreate(null), []);
 
@@ -77,7 +79,7 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
         body: JSON.stringify({ projectId, path: pendingRename.path, newName }),
       });
       if (res.error) throw new Error(res.error);
-      const parentDir = pendingRename.path.substring(0, pendingRename.path.lastIndexOf('/')) || rootPath;
+      const parentDir = parentOrRoot(pathApi, pendingRename.path, rootPath);
       setPendingRename(null);
       if (parentDir === rootPath) {
         await loadRoot();
@@ -87,7 +89,7 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
     } catch {
       showToast(t('explorer.renameFailed'));
     }
-  }, [pendingRename, projectId, serverName, rootPath, loadRoot, refreshDir, showToast, t]);
+  }, [pendingRename, projectId, serverName, rootPath, pathApi, loadRoot, refreshDir, showToast, t]);
 
   const cancelRename = useCallback(() => setPendingRename(null), []);
 
@@ -104,7 +106,7 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
         body: JSON.stringify({ projectId, path: deleteTarget.path }),
       });
       if (res.error) throw new Error(res.error);
-      const parentDir = deleteTarget.path.substring(0, deleteTarget.path.lastIndexOf('/')) || rootPath;
+      const parentDir = parentOrRoot(pathApi, deleteTarget.path, rootPath);
       setDeleteTarget(null);
       if (parentDir === rootPath) {
         await loadRoot();
@@ -115,7 +117,7 @@ export function useFileCrud({ serverName, projectId, rootPath, loadRoot, expandD
       showToast(t('explorer.deleteFailed'));
     }
     setDeleteLoading(false);
-  }, [deleteTarget, projectId, serverName, rootPath, loadRoot, refreshDir, showToast, t]);
+  }, [deleteTarget, projectId, serverName, rootPath, pathApi, loadRoot, refreshDir, showToast, t]);
 
   const cancelDelete = useCallback(() => setDeleteTarget(null), []);
 

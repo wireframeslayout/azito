@@ -1,8 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { stripPaneSuffix } from '@azito/shared';
+import { stripPaneSuffix, type HostPathApi } from '@azito/shared';
 import { api } from '../api/client';
 import { applyRetargetTabs } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
+import { fileDisplayName, fileTabPath } from '../lib/serverPath';
+import { normalizeFileTabs } from '../lib/fileTabMigration';
+import { composeTabMigrations, type TabMigrationStep } from '../lib/savedTabMigration';
 import { renameServerInTabs } from '../lib/serverAliasTabs';
 import {
   type TerminalRef,
@@ -18,6 +21,16 @@ import type { Session } from '../pages/workspace/types';
 export type TabType = 'terminal' | 'file' | 'unit' | 'task' | 'task-form' | 'unit-form' | 'sidekick-form' | 'issue' | 'issue-list' | 'server' | 'settings' | 'project-tasks' | 'storage-file' | 'diff' | 'browser';
 
 const FORM_TAB_TYPES: readonly TabType[] = ['task-form', 'unit-form', 'sidekick-form'];
+
+/** What the saved tabs are waiting for, as far as it is known now (see `migrateSavedTabs`). */
+export interface SavedTabMigrationPlan {
+  /** Present once there are sessions to resolve legacy terminal ids against. */
+  terminal?: { sessionsByServer: Map<string, Session[]>; isTmuxServer: (serverName: string) => boolean | undefined };
+  /** Merged server name -> current name (empty: none). */
+  aliases: ReadonlyMap<string, string>;
+  /** The path functions of a server's host OS, null while the server list has not reported it. */
+  pathApiFor: (serverName: string) => HostPathApi | null;
+}
 
 export interface PersistedTab {
   id: string;
@@ -389,13 +402,23 @@ export function useTabPersistence(storageKey?: string) {
   }, []);
 
   /**
-   * Rewrite legacy `terminal:<server>/<target>` tab ids to the TerminalRef form once the
-   * sessions for their servers are known (Workspace calls this whenever sessionData changes;
-   * it is a no-op when nothing is left to migrate). The active tab id follows the rename.
+   * Rewrites the saved tabs that were waiting for something to be known, in one pass: legacy terminal ids once their
+   * servers' sessions are known (`terminal`), tabs of a server merged into another (`aliases`, #313: compatibility for
+   * one release) and Windows file tabs once the server's OS is known (`pathApiFor`). The steps run one after another on
+   * the same tabs (an old-name tab is renamed first and then moved to its normalized path), and the active tab follows
+   * the combined renames. A no-op when nothing is left to migrate. Returns the combined id renames so the caller can move
+   * the pane layout along.
    */
-  const migrateLegacyTerminalTabIds = useCallback((sessionsByServer: Map<string, Session[]>, isTmuxServer: (serverName: string) => boolean | undefined): Map<string, string> => {
+  const migrateSavedTabs = useCallback((plan: SavedTabMigrationPlan): Map<string, string> => {
     const before = tabsRef.current;
-    const { tabs: migrated, changed, idMap, dropped } = migrateTerminalTabs(before, sessionsByServer, isTmuxServer);
+    const steps: TabMigrationStep<PersistedTab>[] = [];
+    if (plan.terminal) {
+      const { sessionsByServer, isTmuxServer } = plan.terminal;
+      steps.push((tabs) => migrateTerminalTabs(tabs, sessionsByServer, isTmuxServer));
+    }
+    if (plan.aliases.size > 0) steps.push((tabs) => renameServerInTabs(tabs, plan.aliases));
+    steps.push((tabs) => normalizeFileTabs(tabs, plan.pathApiFor));
+    const { tabs: migrated, changed, idMap, dropped } = composeTabMigrations(before, steps);
     if (!changed) return idMap;
     setTabs(migrated);
     const active = activeTabIdRef.current;
@@ -403,20 +426,6 @@ export function useTabPersistence(storageKey?: string) {
     else if (active && dropped.has(active)) {
       setActiveTabId(nextActiveTabIdAfterDrop(before, migrated, idMap, active));
     }
-    return idMap;
-  }, []);
-
-  /**
-   * Re-points saved tabs of a server that migration 079 merged into another (`aliases`: old name -> current
-   * name, from GET /api/servers). A no-op when no tab names an old server. Returns the id renames so the
-   * caller can move the pane layout along. TODO(#313): compatibility for one release.
-   */
-  const migrateServerAliases = useCallback((aliases: ReadonlyMap<string, string>): Map<string, string> => {
-    const { tabs: renamed, changed, idMap } = renameServerInTabs(tabsRef.current, aliases);
-    if (!changed) return idMap;
-    setTabs(renamed);
-    const active = activeTabIdRef.current;
-    if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
     return idMap;
   }, []);
 
@@ -459,10 +468,11 @@ export function useTabPersistence(storageKey?: string) {
     openTab(serverResolvedTerminalTab(serverName, target, projectId));
   }, [openTab]);
 
-  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
+  /** `pathApi` is the path functions of `serverName`'s host OS: they decide the tab's identity (one file, one tab) and its name. */
+  const openFile = useCallback((serverName: string, rawFilePath: string, projectId: number | undefined, line: number | undefined, pathApi: HostPathApi) => {
+    const filePath = fileTabPath(pathApi, rawFilePath);
     const tabId = `file:${serverName}:${filePath}`;
-    const fileName = filePath.split('/').pop() || filePath;
-    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId, line });
+    openTab({ id: tabId, type: 'file', label: fileDisplayName(pathApi, filePath), serverName, filePath, projectId, line });
   }, [openTab]);
 
   const openUnit = useCallback((unitId: number, name: string, projectId?: number, openerTabId?: string) => {
@@ -699,5 +709,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, migrateServerAliases, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateSavedTabs, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

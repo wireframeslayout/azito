@@ -6,6 +6,9 @@
 // the pure-logic side of a component (see distributeCodePolicy.ts,
 // repoDiscoveryDialogLogic.ts) rather than adding component tests.
 
+import type { HostPlatform, HostPlatformInfo } from '@azito/shared';
+import { platformOfServer, serverPathApi } from './serverPath';
+
 /**
  * The four wizard steps, in a fixed order. `environment` is the only step
  * that can be skipped (see `getVisibleSteps`) — `project` always starts the
@@ -24,6 +27,8 @@ export interface WizardValidationState {
   existingPath: string;
   cloneUrl: string;
   cloneDirectory: string;
+  /** The OS of the selected server's host (the clone target is a path on it); null while the server list has not reported it. */
+  serverPlatform: HostPlatform | null;
   /**
    * Server names already configured for this project ('addEnvironment' mode
    * only). A selection matching one of these must never be allowed to
@@ -82,7 +87,7 @@ export function canAdvanceFromStep(stepId: WizardStepId, state: WizardValidation
         // project's directory, or may be unwritable, under a daemon/
         // release deployment) — see `isAbsoluteWizardPath` (Issue #87
         // review, Important finding 2).
-        if (!isAbsoluteWizardPath(state.cloneDirectory)) return false;
+        if (state.serverPlatform === null || !isAbsoluteWizardPath(state.cloneDirectory, state.serverPlatform)) return false;
         // No token check here: the hub resolves a repository's credential in
         // two steps (docs/ja/github-integration.md) — the repository's own
         // PAT first, then the hub's `gh` / `glab` CLI login. An operator who
@@ -190,8 +195,8 @@ export function isDiscoveryCurrent(key: DiscoveryKey | null, currentServer: stri
  * picks it explicitly via `DirectoryInput`, which lists real paths on the
  * selected server.
  */
-export function isAbsoluteWizardPath(p: string): boolean {
-  return p.trim().startsWith('/');
+export function isAbsoluteWizardPath(p: string, platform: HostPlatform): boolean {
+  return serverPathApi(platform).isAbsolute(p.trim());
 }
 
 /**
@@ -489,6 +494,8 @@ export async function cleanupStaleRepositoryIds(
 export interface WizardServerRecord {
   name: string;
   type: string;
+  /** The OS of the server's host (null / absent: a Unix agent whose OS was never recorded). */
+  hostProfile?: HostPlatformInfo | null;
   isolationIntent?: boolean;
 }
 
@@ -610,4 +617,9 @@ export function resolveDistributionSummary(
   const distributed = variant !== 'local' && variant !== 'unresolved' && effectiveCodeMode(variant, codeMode) === 'clone';
   if (!distributed) return { distributed: false, repositoryName: null };
   return { distributed: true, repositoryName: cloneUrl.trim() || null };
+}
+
+/** The OS of the selected server's host, which decides what an absolute path looks like in the wizard; null until the server list reports it. */
+export function serverHostPlatform(selectedServer: string, serverList: WizardServerRecord[]): HostPlatform | null {
+  return platformOfServer(serverList.find((sv) => sv.name === selectedServer));
 }
