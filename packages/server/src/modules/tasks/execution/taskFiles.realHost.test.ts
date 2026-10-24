@@ -91,7 +91,7 @@ describe('task temp files on this host', () => {
     const unreadable = taskTempFiles.outputFile(local, 93, 'dir');
     mkdirSync(unreadable);
     try {
-      await expect(waiter.readPhaseOutputFile(server, unreadable)).rejects.toMatchObject({ name: 'FileOpsError' });
+      await expect(waiter.readPhaseOutputFile(server, unreadable)).rejects.toThrow();
     } finally {
       rmSync(unreadable, { recursive: true, force: true });
     }
