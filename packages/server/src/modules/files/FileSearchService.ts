@@ -20,6 +20,8 @@ const COMMAND_CHECK_TIMEOUT_MS = 3000;
  */
 const SEARCH_MAX_OUTPUT_BYTES = 1024 * 1024;
 const EXCLUDED_DIRS = ['node_modules', '.git', 'dist', '.worktrees'];
+/** How many of the exclude globs of a search are the ones every search carries. */
+export const SEARCH_DEFAULT_EXCLUDES = EXCLUDED_DIRS.length;
 
 function isTimeoutError(err: unknown): boolean {
   if (err instanceof CommandTimeoutError) return true;
@@ -34,6 +36,14 @@ function relativeHitPath(api: HostPathApi, root: string, hit: string): string {
   const relative = api.relative(root, hit);
   if (relative === '' || relative === '..' || relative.startsWith('..' + api.sep) || api.isAbsolute(relative)) return hit;
   return api.sep === '/' ? relative : relative.split(api.sep).join('/');
+}
+
+/** rg / grep ended with an error (exit code 2) and found nothing: what they said is the reason. */
+function searchFailure(engine: 'rg' | 'grep', opts: SearchOptions, stderr: string): FileBrowseError {
+  const reason = stderr.trim().split('\n')[0] || 'no message';
+  // A regular expression that does not compile is the user's, anything else (a root that cannot be read) is the host's.
+  const badExpression = opts.regex && /regex|unmatched|invalid|unexpected|unterminated|parenthes|bracket/i.test(stderr);
+  return new FileBrowseError(`${engine} failed: ${reason}`, badExpression ? 400 : 500);
 }
 
 export interface SearchOptions {
@@ -167,8 +177,11 @@ export class FileSearchService {
     const transport = this.transportFactory.getTransport(server);
     try {
       // rg and grep exit 1 for "no match" and 2 for an error that may still have produced hits: the output decides.
-      const { stdout, cut, timedOut } = await this.readSearchOutput(transport.run(spec));
+      const { stdout, stderr, exitCode, cut, timedOut } = await this.readSearchOutput(transport.run(spec));
       const hits = stdout.trim() ? this.parseHits(stdout, opts, engine, pathApiFor(this.platformOf(server))) : [];
+      // 2 is an error (a bad expression, a root that cannot be read). With hits the search still found something, and those are
+      // returned; with none the reason is the answer, not an empty result.
+      if (exitCode !== null && exitCode >= 2 && hits.length === 0 && !cut && !timedOut) throw searchFailure(engine, opts, stderr);
       // A deadline is a partial success only when the whole lines read hold a usable hit (rg's `begin` records alone are not one).
       if (timedOut && hits.length === 0) throw new FileBrowseError('Search timed out', 504);
       return { hits, truncated: cut };
@@ -184,6 +197,14 @@ export class FileSearchService {
 
   /** The host searches its own files (`IFileOps.searchContent`); a root it has nothing to search in has no hits. */
   private async searchContentOnHost(server: ServerConfig, opts: SearchOptions): Promise<{ hits: SearchHit[]; truncated: boolean }> {
+    // The built-in search reads JavaScript expressions; one that does not compile is the user's mistake to be told, not an empty result.
+    if (opts.regex) {
+      try {
+        new RegExp(opts.query);
+      } catch (err) {
+        throw new FileBrowseError(`Invalid regular expression: ${(err as Error).message}`, 400);
+      }
+    }
     try {
       const result = await this.transportFactory.getTransport(server).files().searchContent(opts.root, {
         query: opts.query,
@@ -191,10 +212,12 @@ export class FileSearchService {
         wholeWord: opts.wholeWord,
         regex: opts.regex,
         include: this.splitGlobPatterns(opts.include),
-        excludeNames: [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)],
+        exclude: [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)],
         maxHits: MAX_RESULTS,
         timeBudgetMs: SEARCH_TIMEOUT_MS,
       });
+      // Like rg and grep: a deadline that left nothing usable is a timeout, not an empty answer.
+      if (result.timedOut && result.hits.length === 0) throw new FileBrowseError('Search timed out', 504);
       return { hits: result.hits, truncated: result.truncated };
     } catch (err: unknown) {
       if (err instanceof FileOpsError && NOTHING_TO_SEARCH.has(err.code)) return { hits: [], truncated: false };
@@ -221,13 +244,14 @@ export class FileSearchService {
    * The stdout of a search. One the output cap cut, or the deadline ended, is returned as the whole lines read so far with
    * `cut` set (the caller reports `truncated`) and `timedOut` for a deadline; with not even one whole line the error stands.
    */
-  private async readSearchOutput(running: Promise<CommandResult>): Promise<{ stdout: string; cut: boolean; timedOut: boolean }> {
+  private async readSearchOutput(running: Promise<CommandResult>): Promise<{ stdout: string; stderr: string; exitCode: number | null; cut: boolean; timedOut: boolean }> {
     try {
-      return { stdout: (await running).stdout, cut: false, timedOut: false };
+      const result = await running;
+      return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode, cut: false, timedOut: false };
     } catch (err) {
       const partial = err instanceof CommandOutputLimitError || err instanceof CommandTimeoutError ? err : null;
       if (partial && partial.stdout.includes('\n')) {
-        return { stdout: partial.stdout.slice(0, partial.stdout.lastIndexOf('\n') + 1), cut: true, timedOut: err instanceof CommandTimeoutError };
+        return { stdout: partial.stdout.slice(0, partial.stdout.lastIndexOf('\n') + 1), stderr: partial.stderr, exitCode: null, cut: true, timedOut: err instanceof CommandTimeoutError };
       }
       throw err;
     }

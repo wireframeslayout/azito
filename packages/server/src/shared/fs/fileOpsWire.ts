@@ -28,7 +28,9 @@ export const MAX_WALK_TIME_BUDGET_MS = 45_000;
 const MAX_WALK_EXCLUDES = 100;
 /** What one content search request may ask for. */
 const MAX_SEARCH_QUERY_LENGTH = 1000;
-const MAX_SEARCH_GLOB_LENGTH = 1000;
+export const MAX_SEARCH_GLOB_LENGTH = 1000;
+/** Globs one request may carry, in `include` and in `exclude` each. */
+export const MAX_SEARCH_GLOBS = 100;
 const MAX_SEARCH_HITS = 10_000;
 
 const filePath = z.string().min(1);
@@ -65,8 +67,8 @@ export const fileOpRequestSchema = z.discriminatedUnion('op', [
     caseSensitive: z.boolean(),
     wholeWord: z.boolean(),
     regex: z.boolean(),
-    include: z.array(z.string().max(MAX_SEARCH_GLOB_LENGTH)).max(MAX_WALK_EXCLUDES),
-    excludeNames: z.array(z.string().max(MAX_SEARCH_GLOB_LENGTH)).max(MAX_WALK_EXCLUDES),
+    include: z.array(z.string().max(MAX_SEARCH_GLOB_LENGTH)).max(MAX_SEARCH_GLOBS),
+    exclude: z.array(z.string().max(MAX_SEARCH_GLOB_LENGTH)).max(MAX_SEARCH_GLOBS),
     maxHits: z.number().int().positive().max(MAX_SEARCH_HITS),
     timeBudgetMs: z.number().int().positive().max(MAX_WALK_TIME_BUDGET_MS),
   }),
@@ -105,6 +107,7 @@ const resultSchemas = {
       path: z.string(), line: z.number(), column: z.number(), text: z.string(), matchStart: z.number(), matchEnd: z.number(),
     })),
     truncated: z.boolean(),
+    timedOut: z.boolean(),
   }),
   realpath: z.string(),
 };
@@ -130,8 +133,8 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
     case 'replaceDirectory': await ops.replaceDirectory(request.staging, request.target); return null;
     case 'walk': return ops.walk(request.path, { excludeNames: request.excludeNames, maxEntries: request.maxEntries, timeBudgetMs: request.timeBudgetMs });
     case 'searchContent': {
-      const { path, query, caseSensitive, wholeWord, regex, include, excludeNames, maxHits, timeBudgetMs } = request;
-      return ops.searchContent(path, { query, caseSensitive, wholeWord, regex, include, excludeNames, maxHits, timeBudgetMs });
+      const { path, query, caseSensitive, wholeWord, regex, include, exclude, maxHits, timeBudgetMs } = request;
+      return ops.searchContent(path, { query, caseSensitive, wholeWord, regex, include, exclude, maxHits, timeBudgetMs });
     }
     case 'realpath': return ops.realpath(request.path);
   }

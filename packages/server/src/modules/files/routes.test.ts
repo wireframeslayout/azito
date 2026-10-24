@@ -452,6 +452,16 @@ describe('GET /api/servers/:name/files/search — host feature guard', () => {
     await app.close();
   });
 
+  it('answers 400 for more globs than a search request to the host can carry', async () => {
+    const search = vi.fn(async () => ({}));
+    const app = await appOn('linux', search);
+    const many = Array.from({ length: 97 }, (_, i) => `g${i}`).join(',');
+    const res = await app.inject({ method: 'GET', url: `/api/servers/srv/files/search?q=x&project_id=1&exclude=${many}` });
+    expect(res.statusCode).toBe(400);
+    expect(search).not.toHaveBeenCalled();
+    await app.close();
+  });
+
   it('searches on a Unix host, and on one whose OS was never recorded', async () => {
     for (const platform of ['linux', null] as const) {
       const search = vi.fn(async () => ({ nameMatches: [], contentHits: [], engine: 'rg', truncated: false, elapsedMs: 1 }));

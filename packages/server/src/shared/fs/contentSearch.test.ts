@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
+import { execFileSync } from 'child_process';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
-import { CONTENT_SEARCH_MAX_FILE_BYTES, FileOpsError, type ContentSearchOptions } from './fileOps';
+import { scanFilesForContent } from './contentSearch';
+import { CONTENT_SEARCH_MAX_FILE_BYTES, CONTENT_SEARCH_MAX_LINE_CHARS, CONTENT_SEARCH_MAX_RESULT_BYTES, FileOpsError, type ContentSearchOptions } from './fileOps';
 import { executeFileOp, fileOpRequestSchema, RemoteFileOps } from './fileOpsWire';
 import { LocalFileOps, localFileOpsHost } from './LocalFileOps';
 
@@ -10,7 +12,7 @@ let dir: string;
 let ops: LocalFileOps;
 
 const BASE: ContentSearchOptions = {
-  query: 'needle', caseSensitive: false, wholeWord: false, regex: false, include: [], excludeNames: [], maxHits: 200, timeBudgetMs: 10_000,
+  query: 'needle', caseSensitive: false, wholeWord: false, regex: false, include: [], exclude: [], maxHits: 200, timeBudgetMs: 10_000,
 };
 
 function put(relative: string, content: string | Buffer): void {
@@ -36,6 +38,7 @@ describe('LocalFileOps.searchContent', () => {
     expect(result).toEqual({
       hits: [{ path: 'src/deep/a.ts', line: 2, column: 5, text: 'the Needle is here', matchStart: 4, matchEnd: 10 }],
       truncated: false,
+      timedOut: false,
     });
   });
 
@@ -72,7 +75,7 @@ describe('LocalFileOps.searchContent', () => {
 
   it('has no hits for an expression that cannot be compiled', async () => {
     put('a.txt', 'needle\n');
-    expect(await search({ query: '(', regex: true })).toEqual({ hits: [], truncated: false });
+    expect(await search({ query: '(', regex: true })).toEqual({ hits: [], truncated: false, timedOut: false });
   });
 
   it('ends a regular expression that runs for ever at the time budget, keeping the hits found before it', async () => {
@@ -97,7 +100,7 @@ describe('LocalFileOps.searchContent', () => {
     put('src/.git/config', 'needle');
     put('src/keep.ts', 'needle');
     put('src/skip.log', 'needle');
-    const { hits } = await search({ excludeNames: ['node_modules', '.git', '*.log'] });
+    const { hits } = await search({ exclude: ['node_modules', '.git', '*.log'] });
     expect(hits.map((h) => h.path)).toEqual(['src/keep.ts']);
   });
 
@@ -148,5 +151,162 @@ describe('searchContent over the agent wire', () => {
   it('keeps the refusal of the host as a FileOpsError', async () => {
     const remote = new RemoteFileOps(ops.platform, async (request) => JSON.parse(JSON.stringify(await executeFileOp(ops, fileOpRequestSchema.parse(request)))));
     await expect(remote.searchContent(path.join(dir, 'missing'), BASE)).rejects.toBeInstanceOf(FileOpsError);
+  });
+});
+
+describe('what the hits are made of', () => {
+  it('cuts a very long line to a window around the match, keeping the match inside it', async () => {
+    put('long.txt', `${'x'.repeat(5000)}needle${'y'.repeat(5000)}\n`);
+    const { hits } = await search();
+    expect(hits).toHaveLength(1);
+    expect(hits[0].text.length).toBe(CONTENT_SEARCH_MAX_LINE_CHARS);
+    expect(hits[0].text.slice(hits[0].matchStart, hits[0].matchEnd)).toBe('needle');
+    expect(hits[0].column).toBe(5001);
+  });
+
+  it('stops when the text of the hits reaches the size limit, saying the search was cut', async () => {
+    // 3 bytes a character: 200 hits of 2000 characters would be more than the limit.
+    const line = `needle${'あ'.repeat(1900)}\n`;
+    for (let file = 0; file < 40; file++) put(`f${String(file).padStart(2, '0')}.txt`, line.repeat(5));
+    const result = await search();
+    expect(result.truncated).toBe(true);
+    expect(result.hits.length).toBeGreaterThan(0);
+    expect(result.hits.length).toBeLessThan(200);
+    expect(result.hits.reduce((sum, hit) => sum + Buffer.byteLength(hit.text), 0)).toBeLessThanOrEqual(CONTENT_SEARCH_MAX_RESULT_BYTES);
+  });
+
+  it('says it ran out of time', async () => {
+    put('z.txt', `${'a'.repeat(40)}!\n`);
+    const result = await search({ query: '(a+)+$', regex: true, timeBudgetMs: 1_000 });
+    expect(result).toMatchObject({ hits: [], truncated: true, timedOut: true });
+  });
+});
+
+describe('files with a byte order mark', () => {
+  const body = 'first line\nneedle second\r\nlast';
+
+  it('removes the mark of UTF-8 from the first line, so the position of a match in it is right', async () => {
+    put('bom8.txt', Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('needle first\nx\n')]));
+    const { hits } = await search({ query: '^needle', regex: true });
+    expect(hits).toMatchObject([{ path: 'bom8.txt', line: 1, column: 1, text: 'needle first' }]);
+  });
+
+  it('reads UTF-16 with a mark, little-endian and big-endian, as text', async () => {
+    put('le.txt', Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(body, 'utf16le')]));
+    put('be.txt', Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(body, 'utf16le').swap16()]));
+    const { hits } = await search();
+    expect(hits.map((h) => [h.path, h.line, h.column, h.text])).toEqual([['be.txt', 2, 1, 'needle second'], ['le.txt', 2, 1, 'needle second']]);
+  });
+
+  it('still takes UTF-16 without a mark for a binary file', async () => {
+    put('nomark.txt', Buffer.from('needle', 'utf16le'));
+    expect((await search()).hits).toEqual([]);
+  });
+});
+
+describe('globs as ripgrep reads them', () => {
+  function tree(): void {
+    put('a.ts', 'needle');
+    put('notes.md', 'needle');
+    put('src/b.ts', 'needle');
+    put('src/deep/c.ts', 'needle');
+    put('src/deep/er/d.ts', 'needle');
+    put('src/private/key.ts', 'needle');
+    put('src/private/nested/key2.ts', 'needle');
+    put('lib/src/e.ts', 'needle');
+    put('lib/private/f.ts', 'needle');
+    put('src/gen/g.ts', 'needle');
+  }
+
+  const found = async (overrides: Partial<ContentSearchOptions>): Promise<string[]> => (await search(overrides)).hits.map((h) => h.path).sort();
+
+  it('leaves out everything below a directory with a path glob, and a name glob at any depth', async () => {
+    tree();
+    expect(await found({ exclude: ['src/private/**'] })).not.toContain('src/private/key.ts');
+    expect(await found({ exclude: ['src/private/**'] })).not.toContain('src/private/nested/key2.ts');
+    expect(await found({ exclude: ['src/private/**'] })).toContain('lib/private/f.ts');
+    expect(await found({ exclude: ['private'] })).toEqual(expect.not.arrayContaining(['src/private/key.ts', 'lib/private/f.ts']));
+    expect(await found({ exclude: ['/lib'] })).toEqual(expect.not.arrayContaining(['lib/src/e.ts']));
+    expect(await found({ exclude: ['src/gen/'] })).not.toContain('src/gen/g.ts');
+  });
+
+  it('keeps `src/*.ts` to the files directly in the src directory of the root', async () => {
+    tree();
+    expect(await found({ include: ['src/*.ts'] })).toEqual(['src/b.ts']);
+    expect(await found({ include: ['src/**/*.ts'] })).toEqual(['src/b.ts', 'src/deep/c.ts', 'src/deep/er/d.ts', 'src/gen/g.ts', 'src/private/key.ts', 'src/private/nested/key2.ts']);
+    expect(await found({ include: ['*.md', 'src/deep/*.ts'] })).toEqual(['notes.md', 'src/deep/c.ts']);
+  });
+
+  /** ripgrep itself as the reference: the same tree, the same globs. Where it is not installed there is nothing to compare with. */
+  const rgInstalled = ((): boolean => {
+    try {
+      execFileSync('rg', ['--version'], { stdio: 'ignore' });
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+
+  it.skipIf(!rgInstalled || process.platform === 'win32')('finds the same files as rg -g does', async () => {
+    tree();
+    const cases: Array<{ include?: string[]; exclude?: string[] }> = [
+      { include: ['src/*.ts'] },
+      { include: ['*.md'] },
+      { include: ['src/**/*.ts'] },
+      { include: ['src/deep/*.ts'] },
+      { exclude: ['src/private/**'] },
+      { exclude: ['private'] },
+      { exclude: ['/lib'] },
+      { exclude: ['src/gen/'] },
+      { exclude: ['*.md', 'src/deep/**'] },
+      { include: ['*.ts'], exclude: ['src/private/**'] },
+    ];
+    for (const { include = [], exclude = [] } of cases) {
+      const globs = [...include.flatMap((g) => ['-g', g]), ...exclude.flatMap((g) => ['-g', `!${g}`])];
+      let listed = '';
+      try {
+        listed = execFileSync('rg', ['-l', '-F', '--no-ignore', '--hidden', ...globs, '--', 'needle', '.'], { cwd: dir, encoding: 'utf8' });
+      } catch (err) {
+        // exit code 1: no file matches
+        if ((err as { status?: number }).status !== 1) throw err;
+      }
+      const expected = listed.split('\n').filter(Boolean).map((p) => p.replace(/^\.\//, '')).sort();
+      expect(await found({ include, exclude }), JSON.stringify({ include, exclude })).toEqual(expected);
+    }
+  });
+});
+
+describe('a file that is replaced after the walk', () => {
+  const OUTSIDE = 'secret needle outside the root\n';
+  const scan = async (files: Array<{ absolute: string; relative: string }>) => scanFilesForContent(dir, files, BASE, 5_000);
+
+  it.skipIf(process.platform === 'win32')('does not read a file that has become a symbolic link out of the root', async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'azito-outside-'));
+    try {
+      writeFileSync(path.join(outside, 'secret.txt'), OUTSIDE);
+      put('ok.txt', 'needle\n');
+      symlinkSync(path.join(outside, 'secret.txt'), path.join(dir, 'swapped.txt'));
+      const result = await scan([{ absolute: path.join(dir, 'swapped.txt'), relative: 'swapped.txt' }, { absolute: path.join(dir, 'ok.txt'), relative: 'ok.txt' }]);
+      expect(result.hits.map((h) => h.path)).toEqual(['ok.txt']);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(process.platform === 'win32')('does not read through a directory that has become a link out of the root', async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'azito-outside-'));
+    try {
+      writeFileSync(path.join(outside, 'secret.txt'), OUTSIDE);
+      symlinkSync(outside, path.join(dir, 'swappedDir'), 'dir');
+      const result = await scan([{ absolute: path.join(dir, 'swappedDir', 'secret.txt'), relative: 'swappedDir/secret.txt' }]);
+      expect(result.hits).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('does not read a directory as a file', async () => {
+    mkdirSync(path.join(dir, 'now-a-directory'));
+    expect((await scan([{ absolute: path.join(dir, 'now-a-directory'), relative: 'now-a-directory' }])).hits).toEqual([]);
   });
 });

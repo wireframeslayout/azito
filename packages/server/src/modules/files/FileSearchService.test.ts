@@ -392,18 +392,18 @@ describe('FileSearchService: which program searches, and how its hits are read',
   });
 
   it('does not run grep on a Windows host without rg: the host searches with the built-in search', async () => {
-    const searchContent = vi.fn(async () => ({ hits: [{ path: 'src/a.ts', line: 1, column: 1, text: 'test', matchStart: 0, matchEnd: 4 }], truncated: true }));
+    const searchContent = vi.fn(async () => ({ hits: [{ path: 'src/a.ts', line: 1, column: 1, text: 'test', matchStart: 0, matchEnd: 4 }], truncated: true, timedOut: false }));
     const { factory, runSpecs } = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent }) });
     const result = await new FileSearchService(factory).search(winServer, { ...baseOpts, root: 'C:\\proj', include: '*.ts', excludeExtra: 'vendor' });
     expect(result).toMatchObject({ engine: 'builtin', truncated: true, contentHits: [{ path: 'src/a.ts' }] });
     expect(runSpecs.some((s) => s.file === 'grep')).toBe(false);
     expect(searchContent).toHaveBeenCalledWith('C:\\proj', expect.objectContaining({
-      query: 'test', caseSensitive: false, wholeWord: false, regex: false, include: ['*.ts'], excludeNames: ['node_modules', '.git', 'dist', '.worktrees', 'vendor'],
+      query: 'test', caseSensitive: false, wholeWord: false, regex: false, include: ['*.ts'], exclude: ['node_modules', '.git', 'dist', '.worktrees', 'vendor'],
     }));
   });
 
   it('uses the built-in search on a Unix host that has neither rg nor grep', async () => {
-    const searchContent = vi.fn(async () => ({ hits: [], truncated: false }));
+    const searchContent = vi.fn(async () => ({ hits: [], truncated: false, timedOut: false }));
     const { factory } = createMockTransportFactory({ platform: 'linux', rgVersion: NO_RG, grepVersion: new CommandSpawnError('ENOENT', 'spawn grep ENOENT'), files: searchedOn({ platform: 'linux', searchContent }) });
     expect((await new FileSearchService(factory).search(baseServer, baseOpts)).engine).toBe('builtin');
     expect(searchContent).toHaveBeenCalledOnce();
@@ -426,6 +426,32 @@ describe('FileSearchService: which program searches, and how its hits are read',
     expect((await new FileSearchService(missing.factory).search(winServer, baseOpts)).contentHits).toEqual([]);
     const broken = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent: async () => { throw new Error('agent unreachable'); } }) });
     await expect(new FileSearchService(broken.factory).search(winServer, baseOpts)).rejects.toThrow('agent unreachable');
+  });
+
+  it('answers 504 when the built-in search ran out of time without a hit, and keeps hits found before it', async () => {
+    const timedOut = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent: async () => ({ hits: [], truncated: true, timedOut: true }) }) });
+    await expect(new FileSearchService(timedOut.factory).search(winServer, baseOpts)).rejects.toMatchObject({ status: 504 });
+    const partly = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent: async () => ({ hits: [{ path: 'a', line: 1, column: 1, text: 't', matchStart: 0, matchEnd: 1 }], truncated: true, timedOut: true }) }) });
+    expect((await new FileSearchService(partly.factory).search(winServer, baseOpts)).truncated).toBe(true);
+  });
+
+  it('answers 400 for a regular expression the built-in search cannot read, without asking the host', async () => {
+    const searchContent = vi.fn();
+    const { factory } = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent }) });
+    await expect(new FileSearchService(factory).search(winServer, { ...baseOpts, query: '(', regex: true })).rejects.toMatchObject({ status: 400 });
+    expect(searchContent).not.toHaveBeenCalled();
+  });
+
+  it('returns what rg said as the reason when it ended with an error and found nothing', async () => {
+    const bad = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: failed(2, 'regex parse error:\n    (\nerror: unclosed group') });
+    await expect(new FileSearchService(bad.factory).search(baseServer, { ...baseOpts, query: '(', regex: true })).rejects.toMatchObject({ status: 400, message: expect.stringContaining('regex parse error') });
+    const unreadable = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: failed(2, 'rg: /project: Permission denied (os error 13)') });
+    await expect(new FileSearchService(unreadable.factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 500, message: expect.stringContaining('Permission denied') });
+  });
+
+  it('still answers "no match" (exit code 1) with no hits and no error', async () => {
+    const { factory } = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: failed(1) });
+    expect((await new FileSearchService(factory).search(baseServer, baseOpts)).contentHits).toEqual([]);
   });
 
   it('lets a failure of rg itself propagate instead of answering with no hits', async () => {

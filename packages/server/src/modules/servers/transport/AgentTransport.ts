@@ -22,7 +22,7 @@ import { AGENT_RUN_PATH, responseToResult } from '../../../shared/exec/runWire';
 import { AGENT_FILE_OPS_PATH, RemoteFileOps, type FileOpRequest } from '../../../shared/fs/fileOpsWire';
 import type { IFileOps } from '../../../shared/fs/fileOps';
 import { ShellFileOps } from './ShellFileOps';
-import { AgentFileOpOutdatedError } from './agentFileOpsProtocol';
+import { AgentFileOpOutdatedError, rejectsOperationName } from './agentFileOpsProtocol';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, formatMuxRef, tmuxTargetFromMuxRef } from '@azito/shared';
 
@@ -179,8 +179,8 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
       headers: { 'content-type': 'application/json', authorization: this.authHeader },
       body: JSON.stringify(request),
     }, FILE_OPS_TIMEOUT_MS);
-    // An agent that has /api/fileops but not this operation rejects the request as malformed (its schema has no such `op`).
-    if (status === 400 && request.op === 'searchContent') throw new AgentFileOpOutdatedError(this.serverName, request.op);
+    // An agent that has /api/fileops but not this operation rejects the request because its schema has no such `op`; any other 400 is a request it understood and refused.
+    if (status === 400 && request.op === 'searchContent' && rejectsOperationName(text)) throw new AgentFileOpOutdatedError(this.serverName, request.op);
     if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_FILE_OPS_PATH} failed (${status}): ${text}`);
     return JSON.parse(text);
   }

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Chip } from '../ui/Chip';
 import { Icon } from '../ui/Icon';
+import { Tooltip } from '../ui/Tooltip';
 
 export interface SearchHitItem {
   path: string;
@@ -85,8 +86,12 @@ export function SearchResultList({
         flexShrink: 0,
       }}>
         <span>{t('search.summary', { files: totalFiles, hits: totalHits, engine: engineLabel, time: elapsedMs })}</span>
-        <span title={t(`search.engineHint.${engine}`)} style={{ marginLeft: 'auto', display: 'inline-flex' }}>
-          <Chip tone={engine === 'builtin' ? 'orange' : 'default'}>{engineLabel}</Chip>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex' }}>
+          <Tooltip content={t(`search.engineHint.${engine}`)}>
+            <span tabIndex={0} style={{ display: 'inline-flex' }}>
+              <Chip tone={engine === 'builtin' ? 'orange' : 'default'}>{engineLabel}</Chip>
+            </span>
+          </Tooltip>
         </span>
       </div>
 

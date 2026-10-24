@@ -19,7 +19,7 @@ import {
   type WriteOptions,
   type WriteResult,
 } from './fileOps';
-import { compileGlob, compileIncludeFilter } from './glob';
+import { compileGlob, compileSearchPathFilter, walkExcludeNames } from './glob';
 import { CONTENT_SEARCH_MAX_FILES, scanFilesForContent } from './contentSearch';
 
 /** What a {@link LocalFileOps} needs to know of the host it runs on, resolved once at the process's entry point. */
@@ -189,16 +189,20 @@ export class LocalFileOps implements IFileOps {
   async searchContent(root: string, options: ContentSearchOptions): Promise<ContentSearchResult> {
     const deadline = Date.now() + options.timeBudgetMs;
     const walked = await this.walk(root, {
-      excludeNames: options.excludeNames,
+      excludeNames: walkExcludeNames(options.exclude),
       maxEntries: CONTENT_SEARCH_MAX_FILES,
       timeBudgetMs: Math.max(1, Math.floor(options.timeBudgetMs / 2)),
     });
-    const isIncluded = compileIncludeFilter(root, options.include);
+    const isSearched = compileSearchPathFilter({ include: options.include, exclude: options.exclude });
     const files = walked.entries
-      .filter((entry) => isIncluded(entry.path))
+      .filter((entry) => isSearched(entry.path))
       .map((entry) => ({ absolute: this.api.join(root, entry.path), relative: entry.path }));
-    const scanned = await scanFilesForContent(files, options, deadline - Date.now());
-    return { hits: scanned.hits, truncated: walked.truncated || scanned.timedOut || scanned.hits.length >= options.maxHits };
+    const scanned = await scanFilesForContent(root, files, options, deadline - Date.now());
+    return {
+      hits: scanned.hits,
+      truncated: walked.truncated || scanned.timedOut || scanned.cut || scanned.hits.length >= options.maxHits,
+      timedOut: scanned.timedOut,
+    };
   }
 
   /**

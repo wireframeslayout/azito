@@ -7,10 +7,11 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
-import type { FileSearchService } from './FileSearchService';
+import { SEARCH_DEFAULT_EXCLUDES, type FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
 import { isHostPathContained, pathApiFor } from '../../shared/os/hostPath';
 import type { HostPlatform } from '../../shared/os/hostEnv';
+import { MAX_SEARCH_GLOBS, MAX_SEARCH_GLOB_LENGTH } from '../../shared/fs/fileOpsWire';
 import { assertHostFeature } from '../../shared/os/hostFeature';
 
 /** `.git` as the host's filesystem sees it: case-insensitive on win32 / darwin, and win32 ignores trailing dots and spaces. */
@@ -552,6 +553,14 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
 
       if (/[\x00-\x1f]/.test(request.query.include || '') || /[\x00-\x1f]/.test(request.query.exclude || '')) {
         return reply.status(400).send({ error: 'Invalid search patterns' });
+      }
+      // The most a search request to the host may carry (the agent refuses more); the defaults take some of the exclude list.
+      const globsTooMany = (value: string | undefined, limit: number): boolean => {
+        const globs = (value || '').split(',').map((glob) => glob.trim()).filter(Boolean);
+        return globs.length > limit || globs.some((glob) => glob.length > MAX_SEARCH_GLOB_LENGTH);
+      };
+      if (globsTooMany(request.query.include, MAX_SEARCH_GLOBS) || globsTooMany(request.query.exclude, MAX_SEARCH_GLOBS - SEARCH_DEFAULT_EXCLUDES)) {
+        return reply.status(400).send({ error: 'Too many or too long search patterns' });
       }
 
       const ps = projectServerRepo.find(projectId, srv.name);

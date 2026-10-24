@@ -3,6 +3,7 @@ import { AgentTransport } from './AgentTransport';
 import { ShellFileOps } from './ShellFileOps';
 import { RemoteFileOps } from '../../../shared/fs/fileOpsWire';
 import { FileOpsError } from '../../../shared/fs/fileOps';
+import { AgentFileOpOutdatedError } from './agentFileOpsProtocol';
 import { AgentUnreachableError } from './AgentUnreachableError';
 
 function json(body: unknown, status = 200): Response {
@@ -46,6 +47,23 @@ describe('AgentTransport.files: the route is chosen by whether the agent host is
       const err = await make().files().write('/work/a.txt', Buffer.from('x'), { expect: { mtimeMs: 1 } }).catch((e: unknown) => e);
       expect(err).toBeInstanceOf(FileOpsError);
       expect(err).toMatchObject({ code: 'CONFLICT', details: { currentMtimeMs: 7 } });
+    });
+
+    describe('searchContent against an agent that may not know the operation', () => {
+      const options = { query: 'x', caseSensitive: false, wholeWord: false, regex: false, include: [], exclude: [], maxHits: 10, timeBudgetMs: 1000 };
+      const issues = (path: string[], message: string) => JSON.stringify([{ code: 'x', path, message }]);
+
+      it('says agent_outdated when the agent\'s schema does not know the operation', async () => {
+        fetchSpy.mockResolvedValue(json({ error: 'invalid_file_op', message: issues(['op'], 'Invalid discriminator value') }, 400));
+        await expect(make().files().searchContent('/work', options)).rejects.toBeInstanceOf(AgentFileOpOutdatedError);
+      });
+
+      it('does not blame the agent\'s age when it refused a field of the operation it knows', async () => {
+        fetchSpy.mockResolvedValue(json({ error: 'invalid_file_op', message: issues(['exclude'], 'Too big') }, 400));
+        const err = await make().files().searchContent('/work', options).catch((e: unknown) => e);
+        expect(err).not.toBeInstanceOf(AgentFileOpOutdatedError);
+        expect((err as Error).message).toMatch(/failed \(400\)/);
+      });
     });
 
     it('does not retry through the shell when /api/fileops fails', async () => {

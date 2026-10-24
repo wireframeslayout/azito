@@ -438,7 +438,7 @@ describe('FileBrowseService on a host with Windows path rules', () => {
       rename: async (from, to) => { seen.push(from, to); },
       replaceDirectory: async () => undefined,
       walk: async () => ({ entries: [], truncated: false }),
-      searchContent: async () => ({ hits: [], truncated: false }),
+      searchContent: async () => ({ hits: [], truncated: false, timedOut: false }),
       realpath: async (p) => p,
     };
     return { ops, seen };
