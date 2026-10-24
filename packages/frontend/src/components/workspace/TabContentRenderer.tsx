@@ -18,10 +18,11 @@ import TaskListView from '../TaskListView';
 import { SettingsContent, useProjectSettings } from '../ProjectSettings';
 import { DiffViewer } from '../diff';
 import BrowserView from '../BrowserView';
-import { Button } from '../ui';
+import { Button, LoadingState } from '../ui';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
 import { useServerPathApi } from '../../hooks/useServerPath';
 import { joinRelative } from '../../lib/serverPath';
+import { isFileTabSettled } from '../../lib/fileTabMigration';
 import type { Task, Unit, Project, Session, SidebarMode } from '../../pages/workspace/types';
 import { isSupportedProvider } from '../../lib/gitProvider';
 
@@ -171,7 +172,12 @@ export default function TabContentRenderer({
               reconnectKey={tab.reconnectKey}
             />
       )}
-      {tab.type === 'file' && tab.serverName && tab.filePath && (
+      {tab.type === 'file' && tab.serverName && tab.filePath && !isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
+        // A restored tab can still be re-keyed (server renamed, path normalized) once the server list is in; an editor
+        // mounted now would be rebuilt then and lose its unsaved content.
+        <LoadingState />
+      )}
+      {tab.type === 'file' && tab.serverName && tab.filePath && isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
         <FilePreviewPanel
           serverName={tab.serverName}
           filePath={tab.filePath}

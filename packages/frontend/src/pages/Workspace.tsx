@@ -104,7 +104,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, migrateServerAliases, migrateFileTabPaths, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -269,31 +269,24 @@ function WorkspaceInner() {
     const server = servers.find((sv) => sv.name === serverName);
     return server ? server.defaultMux === 'tmux' : undefined;
   }, [servers]);
-  useEffect(() => {
-    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
-    if (byServer.size === 0) return;
-    const idMap = migrateLegacyTerminalTabIds(byServer, isTmuxServer);
-    // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
-    idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData, migrateLegacyTerminalTabIds, isTmuxServer]);
-
-  // Tabs saved under the name of a server that was merged into another (#313) follow the merge.
-  // TODO(#313): compatibility for one release; remove with the server-side alias table.
+  const serverPathApi = useServerPathApi();
+  // Saved tabs that were waiting for something are rewritten in one pass, so no migration overwrites another's result:
+  // legacy terminal ids (5-B) once their servers' sessions are available, tabs of a merged server (#313; TODO: compatibility
+  // for one release, remove with the server-side alias table) and Windows file tabs once the server's OS is known.
+  // Idempotent: it changes nothing when every tab is settled, so the dependency on `tabs` does not loop.
   useEffect(() => {
     const aliases = new Map<string, string>();
     for (const sv of servers) for (const old of sv.aliases ?? []) aliases.set(old, sv.name);
-    if (aliases.size === 0) return;
-    migrateServerAliases(aliases).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    const sessionsByServer = new Map<string, Session[]>(Object.entries(sessionData));
+    const idMap = migrateSavedTabs({
+      terminal: sessionsByServer.size > 0 ? { sessionsByServer, isTmuxServer } : undefined,
+      aliases,
+      pathApiFor: serverPathApi,
+    });
+    // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
+    idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [servers, migrateServerAliases]);
-
-  const serverPathApi = useServerPathApi();
-  // Saved file tabs of a Windows server are keyed by the normalized path; they move there once its OS is known.
-  useEffect(() => {
-    migrateFileTabPaths(serverPathApi).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [serverPathApi, migrateFileTabPaths]);
+  }, [tabs, servers, sessionData, isTmuxServer, serverPathApi, migrateSavedTabs]);
 
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 

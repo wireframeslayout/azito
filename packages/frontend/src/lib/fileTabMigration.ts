@@ -11,6 +11,12 @@ export interface MigratableFileTab {
   openerTabId?: string;
 }
 
+/** Whether a file tab is already in the form its server's OS keeps (its id, path and label as `normalizeFileTabs` leaves them). */
+export function isFileTabSettled(tab: MigratableFileTab, pathApi: HostPathApi | null): boolean {
+  if (!pathApi || tab.serverName === undefined || tab.filePath === undefined) return false;
+  return tab.id === `file:${tab.serverName}:${fileTabPath(pathApi, tab.filePath)}`;
+}
+
 /**
  * File tabs saved before a Windows server's paths were normalized are keyed by the string they were opened with
  * (`C:/x/a.ts`), so the same file opened again (`C:\x\a.ts`) would be a second tab. Once a server's OS is known this
