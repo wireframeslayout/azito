@@ -11,6 +11,9 @@ export interface ContentScanFile {
   relative: string;
 }
 
+/** Bytes of the agent's response around the hits (`{"ok":true,"result":{"hits":[],"truncated":false,"timedOut":false}}` is 68), with room to spare. */
+const RESPONSE_ENVELOPE_BYTES = 256;
+
 /** Steps the worker takes between opening a file and checking it: for the test that replaces files at that moment, nothing else. */
 export interface ContentScanHooks {
   afterOpen: Array<{ op: 'unlink' | 'rename'; args: string[] }>;
@@ -36,16 +39,25 @@ export interface ContentScanResult {
  * Each file was found by a walk some time ago, so it is checked again as it is read: it is opened without following a link where the
  * OS can (`O_NOFOLLOW`), must be a regular file by the handle's own `fstat`, and its real path (every directory above it included)
  * must still be inside the real root, and the opened handle must be that very file: the `dev` / `ino` of the handle's `fstat` equal
- those of the real path's `stat`. (A directory put back between the open and the check would otherwise leave a handle on a file
- outside the root next to a path inside it.) A file that fails any of these, or whose `ino` the OS does not report (0), is passed over,
- as if the walk had not listed it. `hooks` run between the open and the checks and exist only for the test that swaps files there.
+ * those of the real path's `stat`. (A directory put back between the open and the check would otherwise leave a handle on a file
+ * outside the root next to a path inside it.) A file that fails any of these, or whose `ino` the OS does not report (0), is passed over,
+ * as if the walk had not listed it.
+ *
+ * Threat model and what stays open: the check guards against ordinary symbolic links in the tree and against a file swapped once between
+ * the walk and the read. It cannot be made airtight from Node: there is no `openat` to resolve a path below a directory handle, and
+ * no way to ask a handle for its final path, so every check is by path and a path can be swapped again between two of them. Whoever
+ * can win that race has to be able to write inside the searched root, which means the same rights as the process running this code
+ * (the hub, or the agent's user), and what it could make the search read is only what that user can already read. The `rg` and `grep`
+ * route has the same residue (they follow whatever the path is when they open it). That is accepted here, not solved.
+ *
+ * `hooks` run between the open and the checks and exist only for the test that swaps files there.
  */
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
 const path = require('node:path');
 (() => {
-  const { root, files, pattern, flags, wholeWord, maxHits, perFile, maxBytes, maxResultBytes, maxLineChars, afterOpen } = workerData;
+  const { root, files, pattern, flags, wholeWord, maxHits, perFile, maxBytes, maxResultBytes, maxLineChars, afterOpen, envelopeBytes } = workerData;
   let expression;
   try {
     new RegExp(pattern, flags);
@@ -105,7 +117,8 @@ const path = require('node:path');
     }
   };
   let total = 0;
-  let bytes = 0;
+  // The response wraps the hits in a small JSON envelope (ok, result, truncated, timedOut): room is kept for everything but the hits.
+  let bytes = envelopeBytes;
   let cut = false;
   for (const file of files) {
     if (total >= maxHits || cut) break;
@@ -171,6 +184,7 @@ export function scanFilesForContent(root: string, files: ContentScanFile[], opti
         maxResultBytes: CONTENT_SEARCH_MAX_RESULT_BYTES,
         maxLineChars: CONTENT_SEARCH_MAX_LINE_CHARS,
         afterOpen: hooks?.afterOpen ?? [],
+        envelopeBytes: RESPONSE_ENVELOPE_BYTES,
       },
     });
     const finish = (result: ContentScanResult | Error): void => {

@@ -343,4 +343,15 @@ describe('the size limit counts what is sent', () => {
     expect(result.truncated).toBe(true);
     expect(Buffer.byteLength(JSON.stringify(result.hits))).toBeLessThanOrEqual(CONTENT_SEARCH_MAX_RESULT_BYTES);
   });
+
+  it('keeps the whole response, the envelope of the agent included, within the limit even at the boundary', async () => {
+    // Many different line lengths, so that some search ends within a few bytes of the limit.
+    for (let size = 0; size < 12; size++) {
+      for (let file = 0; file < 40; file++) put(`b${size}/f${String(file).padStart(2, '0')}.txt`, `needle${'\u0001'.repeat(900 + size * 7)}\n`.repeat(5));
+      const result = await search();
+      const response = JSON.stringify({ ok: true, result: { hits: result.hits, truncated: result.truncated, timedOut: result.timedOut } });
+      expect(Buffer.byteLength(response)).toBeLessThanOrEqual(CONTENT_SEARCH_MAX_RESULT_BYTES);
+      rmSync(path.join(dir, `b${size}`), { recursive: true, force: true });
+    }
+  });
 });
