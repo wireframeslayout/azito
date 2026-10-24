@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as path from 'path';
-import { invalidHostPathReason, invalidWorkingDirectoryReason,isHostPathContained, isHomeRelativePath, pathApiFor } from './hostPath';
+import { invalidHostPathReason, invalidWorkingDirectoryReason,isHostPathContained, isHomeRelativePath, isSameHostPath, pathApiFor } from './hostPath';
 
 describe('invalidWorkingDirectoryReason', () => {
   it('accepts an absolute path or ~ of the host, with spaces and Japanese', () => {
@@ -87,6 +87,18 @@ describe('invalidHostPathReason', () => {
     for (const p of ['C:\\work\\file.txt:hidden', 'C:\\work\\file.txt::$DATA', 'C:\\work\\dir:stream\\x', 'file:stream', '\\\\server\\share\\f:s']) {
       expect(invalidHostPathReason('win32', p), p).toMatch(/alternate data stream/);
     }
+  });
+});
+
+describe('isSameHostPath', () => {
+  it('ignores a trailing separator and, on win32 only, case and the kind of separator', () => {
+    expect(isSameHostPath('linux', '/a/b', '/a/b/')).toBe(true);
+    expect(isSameHostPath('linux', '/a/b', '/a/B')).toBe(false);
+    expect(isSameHostPath('linux', '/a/b', '/a/b/c')).toBe(false);
+    expect(isSameHostPath('win32', 'C:\\Work', 'c:\\work\\')).toBe(true);
+    expect(isSameHostPath('win32', 'C:\\Work', 'C:/Work')).toBe(true);
+    expect(isSameHostPath('win32', 'C:\\Work', 'C:\\Work\\sub')).toBe(false);
+    expect(isSameHostPath('win32', 'C:\\Work', 'D:\\Work')).toBe(false);
   });
 });
 

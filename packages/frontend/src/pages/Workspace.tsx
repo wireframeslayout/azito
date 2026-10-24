@@ -12,6 +12,7 @@ import type { TabItem } from '../components/ui';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { useTabPersistence, type PersistedTab } from '../hooks/useTabPersistence';
 import { useTerminalTargetOpener } from '../hooks/useTerminalTargetOpener';
+import { useServerPathApi } from '../hooks/useServerPath';
 import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 import { useBrowserKeepalive } from '../hooks/useBrowserKeepalive';
 import { useBrowserGroups } from '../hooks/useBrowserGroups';
@@ -103,7 +104,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, migrateServerAliases, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateSavedTabs, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -268,24 +269,24 @@ function WorkspaceInner() {
     const server = servers.find((sv) => sv.name === serverName);
     return server ? server.defaultMux === 'tmux' : undefined;
   }, [servers]);
-  useEffect(() => {
-    const byServer = new Map<string, Session[]>(Object.entries(sessionData));
-    if (byServer.size === 0) return;
-    const idMap = migrateLegacyTerminalTabIds(byServer, isTmuxServer);
-    // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
-    idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionData, migrateLegacyTerminalTabIds, isTmuxServer]);
-
-  // Tabs saved under the name of a server that was merged into another (#313) follow the merge.
-  // TODO(#313): compatibility for one release; remove with the server-side alias table.
+  const serverPathApi = useServerPathApi();
+  // Saved tabs that were waiting for something are rewritten in one pass, so no migration overwrites another's result:
+  // legacy terminal ids (5-B) once their servers' sessions are available, tabs of a merged server (#313; TODO: compatibility
+  // for one release, remove with the server-side alias table) and Windows file tabs once the server's OS is known.
+  // Idempotent: it changes nothing when every tab is settled, so the dependency on `tabs` does not loop.
   useEffect(() => {
     const aliases = new Map<string, string>();
     for (const sv of servers) for (const old of sv.aliases ?? []) aliases.set(old, sv.name);
-    if (aliases.size === 0) return;
-    migrateServerAliases(aliases).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    const sessionsByServer = new Map<string, Session[]>(Object.entries(sessionData));
+    const idMap = migrateSavedTabs({
+      terminal: sessionsByServer.size > 0 ? { sessionsByServer, isTmuxServer } : undefined,
+      aliases,
+      pathApiFor: serverPathApi,
+    });
+    // The layout follows the renames in the same batch, or its reconcile would re-place the tabs.
+    idMap.forEach((newId, oldId) => layout.replaceTab(oldId, newId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [servers, migrateServerAliases]);
+  }, [tabs, servers, sessionData, isTmuxServer, serverPathApi, migrateSavedTabs]);
 
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
@@ -540,8 +541,10 @@ function WorkspaceInner() {
   // save-path containment check runs against the wrong project's workingDirectory (Issue #27 review
   // Important 2).
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
-    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line);
-  }, [openFileRaw, currentProjectId]);
+    const pathApi = serverPathApi(serverName);
+    if (!pathApi) return; // the server's OS is not known yet: the tab's identity depends on it
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
+  }, [openFileRaw, currentProjectId, serverPathApi]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
     openDiffRaw(serverName, path, baseBranch, currentProjectId);

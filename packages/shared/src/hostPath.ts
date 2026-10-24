@@ -174,6 +174,8 @@ function dirname(platform: HostPlatform, p: string): string {
 
 /** `path.basename`: only a drive letter (`C:`) is a prefix; a UNC share root's last part is its name, like Node. */
 function basename(platform: HostPlatform, p: string, ext?: string): string {
+  // Like Node: a whole path that is the extension has no name left (`basename('foo', 'foo')`), but `basename('/x/foo', 'foo')` is still `foo`.
+  if (ext !== undefined && ext !== '' && p === ext) return '';
   const prefix = platform === 'win32' && /^[A-Za-z]:/.test(p) ? 2 : 0;
   const rest = stripTrailingSeps(platform, p.slice(prefix));
   const segments = rest.split(platform === 'win32' ? /[\\/]/ : /\//);

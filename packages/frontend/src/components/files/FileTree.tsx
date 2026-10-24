@@ -1,4 +1,6 @@
 import React from 'react';
+import type { HostPathApi } from '@azito/shared';
+import { parentOrRoot } from '../../lib/serverPath';
 import { Icon } from '../ui/Icon';
 import type { TreeNode } from './useFileTree';
 import type { PendingCreate, PendingRename } from './useFileCrud';
@@ -8,6 +10,7 @@ interface FileTreeProps {
   nodes: TreeNode[];
   selectedPath: string | null;
   rootPath: string;
+  pathApi: HostPathApi;
   pendingCreate: PendingCreate | null;
   pendingRename: PendingRename | null;
   onSelect: (node: TreeNode) => void;
@@ -26,7 +29,7 @@ interface FileTreeProps {
 }
 
 export default function FileTree({
-  nodes, selectedPath, rootPath, pendingCreate, pendingRename,
+  nodes, selectedPath, rootPath, pathApi, pendingCreate, pendingRename,
   onSelect, onContextMenu, onLongPress,
   onCommitCreate, onCancelCreate, onCommitRename, onCancelRename,
   getSiblingNames, longPressHandlers,
@@ -37,7 +40,7 @@ export default function FileTree({
     const isRenaming = pendingRename?.path === node.path;
 
     if (isRenaming) {
-      const parentPath = node.path.substring(0, node.path.lastIndexOf('/')) || rootPath;
+      const parentPath = parentOrRoot(pathApi, node.path, rootPath);
       const siblings = getSiblingNames(parentPath).filter((n) => n !== node.name);
       return (
         <div key={node.path}>

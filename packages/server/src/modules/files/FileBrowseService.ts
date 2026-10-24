@@ -155,9 +155,11 @@ export class FileBrowseService {
   }
 
   /** GET /api/servers/:name/directories 用: 部分パスに対する候補ディレクトリ一覧 */
-  async listDirectories(srv: ServerConfig, inputPath: string): Promise<string[]> {
+  async listDirectories(srv: ServerConfig, rawInput: string): Promise<string[]> {
     const ops = this.ops(srv);
     const api = pathApiFor(ops.platform);
+    // `C:` alone names the drive's working directory on Windows; the operator typing it means the drive's root.
+    const inputPath = ops.platform === 'win32' && /^[A-Za-z]:$/.test(rawInput) ? `${rawInput}\\` : rawInput;
     const endsWithSeparator = ops.platform === 'win32' ? /[\\/]$/.test(inputPath) : inputPath.endsWith('/');
     const dir = endsWithSeparator ? inputPath : api.dirname(inputPath);
     const prefix = endsWithSeparator ? '' : api.basename(inputPath).toLowerCase();

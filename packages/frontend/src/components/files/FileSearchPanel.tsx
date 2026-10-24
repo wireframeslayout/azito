@@ -3,13 +3,20 @@ import { useTranslation } from 'react-i18next';
 import { getUiToken } from '../../api/token';
 import { Icon } from '../ui/Icon';
 import { InlineToggle } from '../ui/InlineToggle';
+<<<<<<< HEAD
 import { SearchResultList, type SearchResultGroup, type SearchHitItem, type SearchEngine } from './SearchResultList';
+=======
+import { SearchResultList, type SearchResultGroup, type SearchHitItem } from './SearchResultList';
+import { useServerPath } from '../../hooks/useServerPath';
+import { joinRelative } from '../../lib/serverPath';
+>>>>>>> origin/master
 
 interface FileSearchPanelProps { serverName: string; projectId: number; root: string; onOpenHit: (path: string, line: number) => void; onClose: () => void; }
 interface SearchApiResult { nameMatches: string[]; contentHits: SearchHitItem[]; engine: SearchEngine; truncated: boolean; elapsedMs: number; }
 
 export function FileSearchPanel({ serverName, projectId, root, onOpenHit, onClose }: FileSearchPanelProps) {
   const { t } = useTranslation('files');
+  const pathApi = useServerPath(serverName);
   const [query, setQuery] = useState('');
   const [caseSensitive, setCaseSensitive] = useState(false);
   const [wholeWord, setWholeWord] = useState(false);
@@ -65,7 +72,7 @@ export function FileSearchPanel({ serverName, projectId, root, onOpenHit, onClos
   }, [query, caseSensitive, wholeWord, useRegex, include, exclude, performSearch]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Escape') { if (query) setQuery(''); else onClose(); } };
-  const handleSelect = (path: string, line: number) => { setActiveHit({ path, line }); onOpenHit(root.endsWith('/') ? root + path : root + '/' + path, line); };
+  const handleSelect = (path: string, line: number) => { if (!pathApi) return; setActiveHit({ path, line }); onOpenHit(joinRelative(pathApi, root, path), line); };
   const groups: SearchResultGroup[] = [];
   if (result) {
     const contentByPath = new Map<string, SearchHitItem[]>();

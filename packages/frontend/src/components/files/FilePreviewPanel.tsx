@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { api, fetchBlob } from '../../api/client';
 import { useToast } from '../../hooks/useToast';
+import { useServerPath } from '../../hooks/useServerPath';
+import { fileDisplayName } from '../../lib/serverPath';
 import MarkdownRenderer, { mdStyles } from '../MarkdownRenderer';
 import { Icon } from '../ui/Icon';
 import { LoadingState } from '../ui';
@@ -186,6 +188,7 @@ export function FilePreviewPanel({
 }) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
+  const pathApi = useServerPath(serverName);
   const [file, setFile] = useState<FileContent | null>(null);
   const [image, setImage] = useState<ImageContent | null>(null);
   const [pdf, setPdf] = useState<PdfContent | null>(null);
@@ -363,7 +366,7 @@ export function FilePreviewPanel({
     flexShrink: 0,
   };
 
-  const fileName = filePath.split('/').pop() || filePath;
+  const fileName = pathApi ? fileDisplayName(pathApi, filePath) : filePath;
   const activeSize = file?.size ?? image?.size ?? pdf?.size;
 
   return (

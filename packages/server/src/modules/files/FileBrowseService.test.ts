@@ -464,6 +464,12 @@ describe('FileBrowseService on a host with Windows path rules', () => {
     const { ops } = recording();
     expect(await serviceFor(ops).listDirectories(srv, 'C:\\work\\su')).toEqual(['C:\\work\\Sub']);
   });
+
+  it('lists the root of the drive when only a drive letter is typed', async () => {
+    const { ops, seen } = recording();
+    expect(await serviceFor(ops).listDirectories(srv, 'C:')).toEqual(['C:\\Sub']);
+    expect(seen).toEqual(['C:\\']);
+  });
 });
 
 describe('FileBrowseService.writeFileContent concurrency', () => {

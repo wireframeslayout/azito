@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { HostPathApi } from '@azito/shared';
 import { api } from '../../api/client';
 import { Badge } from '../ui/Badge';
 import { Icon } from '../ui/Icon';
 import { WorktreePickerItem, getWorktreeName } from './WorktreePickerItem';
+import { useServerPath } from '../../hooks/useServerPath';
+import { findByPath } from '../../lib/serverPath';
 
 export interface WorktreeItem {
   path: string;
@@ -28,7 +31,14 @@ interface RootSwitcherProps {
   onWorktreeChange?: (worktree: WorktreeItem | null) => void;
 }
 
-export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, onWorktreeChange }: RootSwitcherProps) {
+/** Waits for the server's OS (the selected worktree is matched by path), then shows the switcher. */
+export function RootSwitcher(props: RootSwitcherProps) {
+  const pathApi = useServerPath(props.serverName);
+  if (!pathApi) return null;
+  return <RootSwitcherReady {...props} pathApi={pathApi} />;
+}
+
+function RootSwitcherReady({ serverName, projectId, selectedPath, onSelect, onWorktreeChange, pathApi }: RootSwitcherProps & { pathApi: HostPathApi }) {
   const { t } = useTranslation('files');
   const [open, setOpen] = useState(false);
   const [worktrees, setWorktrees] = useState<WorktreeItem[]>([]);
@@ -52,7 +62,7 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
       );
       const items = data.worktrees ?? [];
       setWorktrees(items);
-      const current = findCurrent(items, selectedPath);
+      const current = selectedPath === null ? (items.find((w) => w.isMain) ?? null) : findByPath(pathApi, items, selectedPath);
       setCurrentWorktree(current);
       onWorktreeChangeRef.current?.(current);
     } catch (err) {
@@ -60,7 +70,7 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
     } finally {
       setLoading(false);
     }
-  }, [serverName, projectId, selectedPath]);
+  }, [serverName, projectId, selectedPath, pathApi]);
 
   useEffect(() => {
     fetchWorktrees();
@@ -92,7 +102,7 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
   const filtered = worktrees.filter((w) => {
     if (!filter) return true;
     const q = filter.toLowerCase();
-    const name = getWorktreeName(w).toLowerCase();
+    const name = getWorktreeName(w, pathApi).toLowerCase();
     const branch = (w.branch ?? '').toLowerCase();
     const taskMatch = w.taskId != null && `#${w.taskId}`.includes(q);
     return name.includes(q) || branch.includes(q) || taskMatch;
@@ -136,7 +146,7 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
     }
   }, [filtered, highlightIdx, handleSelect]);
 
-  const name = currentWorktree ? getWorktreeName(currentWorktree) : '…';
+  const name = currentWorktree ? getWorktreeName(currentWorktree, pathApi) : '…';
   const isRunning = currentWorktree?.taskStatus != null && RUNNING_STATUSES.has(currentWorktree.taskStatus);
 
   return (
@@ -293,11 +303,12 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
               </div>
             )}
             {!loading && !error && filtered.map((worktree, i) => {
-              const isSelected = selectedPath === worktree.path || (worktree.isMain && selectedPath === null);
+              const isSelected = (selectedPath !== null && pathApi.samePath(selectedPath, worktree.path)) || (worktree.isMain && selectedPath === null);
               return (
                 <WorktreePickerItem
                   key={worktree.path}
                   item={worktree}
+                  pathApi={pathApi}
                   isSelected={isSelected}
                   isHighlighted={i === highlightIdx}
                   onClick={() => handleSelect(worktree)}
@@ -326,9 +337,4 @@ export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, on
       )}
     </div>
   );
-}
-
-function findCurrent(worktrees: WorktreeItem[], selectedPath: string | null): WorktreeItem | null {
-  if (selectedPath === null) return worktrees.find((w) => w.isMain) ?? null;
-  return worktrees.find((w) => w.path === selectedPath) ?? null;
 }

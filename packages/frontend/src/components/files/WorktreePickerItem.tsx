@@ -1,4 +1,5 @@
 import { useTranslation } from 'react-i18next';
+import type { HostPathApi } from '@azito/shared';
 import { Badge } from '../ui/Badge';
 import type { WorktreeItem } from './RootSwitcher';
 
@@ -6,20 +7,25 @@ const RUNNING_STATUSES = new Set(['running', 'in_progress', 'waiting_input', 'ph
 
 interface WorktreePickerItemProps {
   item: WorktreeItem;
+  pathApi: HostPathApi;
   isSelected: boolean;
   isHighlighted: boolean;
   onClick: () => void;
 }
 
-export function getWorktreeName(worktree: WorktreeItem): string {
-  if (worktree.isMain) return worktree.path.split('/').pop() ?? worktree.path;
-  return worktree.path.match(/\/\.worktrees\/(.+)$/)?.[1] ?? worktree.path;
+const POSIX_WORKTREE_DIR = /\/\.worktrees\/(.+)$/;
+const WIN32_WORKTREE_DIR = /[\\/]\.worktrees[\\/](.+)$/;
+
+/** The name a worktree is listed by: the main checkout's directory name, or the folder under `.worktrees` (`pathApi`: the host's OS). */
+export function getWorktreeName(worktree: WorktreeItem, pathApi: HostPathApi): string {
+  if (worktree.isMain) return pathApi.basename(worktree.path) || worktree.path;
+  return worktree.path.match(pathApi.sep === '\\' ? WIN32_WORKTREE_DIR : POSIX_WORKTREE_DIR)?.[1] ?? worktree.path;
 }
 
-export function WorktreePickerItem({ item, isSelected, isHighlighted, onClick }: WorktreePickerItemProps) {
+export function WorktreePickerItem({ item, pathApi, isSelected, isHighlighted, onClick }: WorktreePickerItemProps) {
   const { t } = useTranslation('files');
   const isRunning = item.taskStatus != null && RUNNING_STATUSES.has(item.taskStatus);
-  const name = getWorktreeName(item);
+  const name = getWorktreeName(item, pathApi);
 
   return (
     <div
