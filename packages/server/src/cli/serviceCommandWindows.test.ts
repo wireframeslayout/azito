@@ -80,6 +80,10 @@ describe('installWindowsTask', () => {
     const { hub, manager } = setup(singleRunXmlFor(MINE), singleRunXmlFor(MINE));
     await installWindowsTask(manager, hub, context, false);
     expect(manager.install).toHaveBeenCalledWith(xmlFor(MINE));
+    // The registered task decides, not the copy: a copy that already is the new definition does not make an old task current.
+    const stale = setup(singleRunXmlFor(MINE), xmlFor(MINE));
+    await installWindowsTask(stale.manager, stale.hub, context, false);
+    expect(stale.manager.install).toHaveBeenCalledWith(xmlFor(MINE));
     const running = setup(singleRunXmlFor(MINE), singleRunXmlFor(MINE), true);
     await expect(installWindowsTask(running.manager, running.hub, context, false)).rejects.toThrow(/is running\. Stop it first/);
     expect(running.manager.install).not.toHaveBeenCalled();
