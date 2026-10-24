@@ -12,6 +12,9 @@ export interface SearchHitItem {
   matchEnd: number;
 }
 
+/** Which program searched the file contents (the server's `engine`). `builtin` is the Node search used when the host has no rg. */
+export type SearchEngine = 'rg' | 'grep' | 'builtin';
+
 export interface SearchResultGroup {
   path: string;
   isNameMatch: boolean;
@@ -20,7 +23,7 @@ export interface SearchResultGroup {
 
 interface SearchResultListProps {
   groups: SearchResultGroup[];
-  engine: 'rg' | 'grep';
+  engine: SearchEngine;
   truncated: boolean;
   elapsedMs: number;
   totalFiles: number;
@@ -57,6 +60,8 @@ export function SearchResultList({
   const { t } = useTranslation('files');
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
 
+  const engineLabel = t(`search.engine.${engine}`);
+
   const toggleCollapse = (path: string) => {
     setCollapsed(prev => {
       const next = new Set(prev);
@@ -79,8 +84,10 @@ export function SearchResultList({
         borderBottom: '1px solid var(--border)',
         flexShrink: 0,
       }}>
-        <span>{t('search.summary', { files: totalFiles, hits: totalHits, engine, time: elapsedMs })}</span>
-        <Chip tone="default" style={{ marginLeft: 'auto' }}>{engine}</Chip>
+        <span>{t('search.summary', { files: totalFiles, hits: totalHits, engine: engineLabel, time: elapsedMs })}</span>
+        <span title={t(`search.engineHint.${engine}`)} style={{ marginLeft: 'auto', display: 'inline-flex' }}>
+          <Chip tone={engine === 'builtin' ? 'orange' : 'default'}>{engineLabel}</Chip>
+        </span>
       </div>
 
       {/* Truncation warning */}

@@ -39,7 +39,9 @@ The search mode in the sidebar lets you search file names and file contents acro
 
 - Three inline toggles next to the search box — `Aa` (match case), `ab` (whole word), `.*` (regular expression) — narrow the search
 - Expanding the details reveals "Files to Include" / "Files to Exclude" glob fields (default exclusions such as `node_modules`, `.git`, `dist`, `.worktrees`)
-- `rg` (ripgrep) is used when available on the server, falling back to `grep` otherwise
+- File contents are searched with `rg` (ripgrep) when the server has it (it is fast, so installing it is recommended). On a Unix server without `rg`, `grep` is used; on a Windows server without `rg` (Windows has no `grep` either), AZITO's own search written in Node is used. A small label above the results (ripgrep / grep / built-in) shows which one searched
+- The built-in search keeps to the same limits as `rg`: the same excluded directories and at most 5 lines per file; binary files (those with a NUL byte) and files over 10 MB are skipped. A Unix server that has neither `rg` nor `grep` switches to it too. An older agent without the new search operation is refused with `agent_outdated` (update the agent)
+- Result paths are relative to the search root with `/` separators, whichever program searched
 - The search scope is also confined to the project's `workingDirectory`
 
 ## File Preview

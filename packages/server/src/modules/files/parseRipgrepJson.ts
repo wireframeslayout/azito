@@ -28,7 +28,7 @@ export function parseRipgrepJson(output: string): RipgrepMatch[] {
 
     const lineNumber = data.line_number as number | undefined;
     const linesObj = data.lines as { text?: string } | undefined;
-    const text = linesObj?.text?.replace(/\n$/, '') ?? '';
+    const text = linesObj?.text?.replace(/(?:\r?\n|\r)$/, '') ?? '';
 
     const submatches = data.submatches as Array<{ start?: number; end?: number }> | undefined;
     const firstMatch = submatches?.[0];

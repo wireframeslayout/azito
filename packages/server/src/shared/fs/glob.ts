@@ -99,3 +99,21 @@ export function compileGlob(glob: string, caseSensitive: boolean): (text: string
     return p === tokens.length;
   };
 }
+
+/**
+ * A filter for the files a search is limited to: a path (relative to the searched root, with `/`) passes when it matches any of
+ * `globs`, or when there are none. A glob without a `/` is matched against the file's name; one with a `/` against the whole path
+ * from `root` (preceded by `*` so that it can start at any directory). Matched without regular expressions, like every glob.
+ */
+export function compileIncludeFilter(root: string, globs: string[]): (relativePath: string) => boolean {
+  if (globs.length === 0) return () => true;
+  // `root` may use the host's separator (`C:\work`); only the matching text needs one notation.
+  const rootPrefix = root.replace(/[\\/]+$/, '');
+  const compiled = globs.map((glob) => (glob.includes('/')
+    ? { onPath: true, matches: compileGlob(`*/${glob}`, true) }
+    : { onPath: false, matches: compileGlob(glob, true) }));
+  return (relativePath) => {
+    const name = relativePath.slice(relativePath.lastIndexOf('/') + 1);
+    return compiled.some((include) => include.matches(include.onPath ? `${rootPrefix}/${relativePath}` : name));
+  };
+}

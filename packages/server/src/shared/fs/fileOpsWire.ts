@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { HostPlatform } from '../os/hostEnv';
 import {
   FileOpsError,
+  type ContentSearchOptions,
+  type ContentSearchResult,
   type DirEntry,
   type FileContent,
   type FileStat,
@@ -24,6 +26,10 @@ export const FILE_OPS_BODY_LIMIT = Math.ceil(MAX_FILE_OPS_BYTES / 3) * 4 + 4096;
 export const MAX_WALK_ENTRIES = 1_000_000;
 export const MAX_WALK_TIME_BUDGET_MS = 45_000;
 const MAX_WALK_EXCLUDES = 100;
+/** What one content search request may ask for. */
+const MAX_SEARCH_QUERY_LENGTH = 1000;
+const MAX_SEARCH_GLOB_LENGTH = 1000;
+const MAX_SEARCH_HITS = 10_000;
 
 const filePath = z.string().min(1);
 const sha256 = z.string().regex(/^[0-9a-f]{64}$/);
@@ -50,6 +56,18 @@ export const fileOpRequestSchema = z.discriminatedUnion('op', [
     path: filePath,
     excludeNames: z.array(z.string()).max(MAX_WALK_EXCLUDES),
     maxEntries: z.number().int().positive().max(MAX_WALK_ENTRIES),
+    timeBudgetMs: z.number().int().positive().max(MAX_WALK_TIME_BUDGET_MS),
+  }),
+  z.object({
+    op: z.literal('searchContent'),
+    path: filePath,
+    query: z.string().min(1).max(MAX_SEARCH_QUERY_LENGTH),
+    caseSensitive: z.boolean(),
+    wholeWord: z.boolean(),
+    regex: z.boolean(),
+    include: z.array(z.string().max(MAX_SEARCH_GLOB_LENGTH)).max(MAX_WALK_EXCLUDES),
+    excludeNames: z.array(z.string().max(MAX_SEARCH_GLOB_LENGTH)).max(MAX_WALK_EXCLUDES),
+    maxHits: z.number().int().positive().max(MAX_SEARCH_HITS),
     timeBudgetMs: z.number().int().positive().max(MAX_WALK_TIME_BUDGET_MS),
   }),
   z.object({ op: z.literal('realpath'), path: filePath }),
@@ -82,6 +100,12 @@ const resultSchemas = {
   rename: z.null(),
   replaceDirectory: z.null(),
   walk: z.object({ entries: z.array(z.object({ path: z.string(), mtimeMs: z.number() })), truncated: z.boolean() }),
+  searchContent: z.object({
+    hits: z.array(z.object({
+      path: z.string(), line: z.number(), column: z.number(), text: z.string(), matchStart: z.number(), matchEnd: z.number(),
+    })),
+    truncated: z.boolean(),
+  }),
   realpath: z.string(),
 };
 
@@ -105,6 +129,10 @@ async function perform(ops: IFileOps, request: FileOpRequest): Promise<unknown> 
     case 'rename': await ops.rename(request.from, request.to); return null;
     case 'replaceDirectory': await ops.replaceDirectory(request.staging, request.target); return null;
     case 'walk': return ops.walk(request.path, { excludeNames: request.excludeNames, maxEntries: request.maxEntries, timeBudgetMs: request.timeBudgetMs });
+    case 'searchContent': {
+      const { path, query, caseSensitive, wholeWord, regex, include, excludeNames, maxHits, timeBudgetMs } = request;
+      return ops.searchContent(path, { query, caseSensitive, wholeWord, regex, include, excludeNames, maxHits, timeBudgetMs });
+    }
     case 'realpath': return ops.realpath(request.path);
   }
 }
@@ -167,6 +195,10 @@ export class RemoteFileOps implements IFileOps {
 
   walk(root: string, options: WalkOptions): Promise<WalkResult> {
     return this.call('walk', { op: 'walk', path: root, excludeNames: options.excludeNames, maxEntries: options.maxEntries, timeBudgetMs: options.timeBudgetMs });
+  }
+
+  searchContent(root: string, options: ContentSearchOptions): Promise<ContentSearchResult> {
+    return this.call('searchContent', { op: 'searchContent', path: root, ...options });
   }
 
   realpath(path: string): Promise<string> {

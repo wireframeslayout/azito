@@ -6,6 +6,8 @@ import type { HostEnv, HostPlatform } from '../os/hostEnv';
 import { invalidHostPathReason, pathApiFor, type HostPathApi } from '../os/hostPath';
 import {
   FileOpsError,
+  type ContentSearchOptions,
+  type ContentSearchResult,
   type DirEntry,
   type EntryKind,
   type FileContent,
@@ -17,7 +19,8 @@ import {
   type WriteOptions,
   type WriteResult,
 } from './fileOps';
-import { compileGlob } from './glob';
+import { compileGlob, compileIncludeFilter } from './glob';
+import { CONTENT_SEARCH_MAX_FILES, scanFilesForContent } from './contentSearch';
 
 /** What a {@link LocalFileOps} needs to know of the host it runs on, resolved once at the process's entry point. */
 export interface LocalFileOpsHost {
@@ -180,6 +183,22 @@ export class LocalFileOps implements IFileOps {
       level = next;
     }
     return { entries, truncated: false };
+  }
+
+  /** The walk gets half of the time, the reading of the files the rest; a walk that ends early leaves its time to them. */
+  async searchContent(root: string, options: ContentSearchOptions): Promise<ContentSearchResult> {
+    const deadline = Date.now() + options.timeBudgetMs;
+    const walked = await this.walk(root, {
+      excludeNames: options.excludeNames,
+      maxEntries: CONTENT_SEARCH_MAX_FILES,
+      timeBudgetMs: Math.max(1, Math.floor(options.timeBudgetMs / 2)),
+    });
+    const isIncluded = compileIncludeFilter(root, options.include);
+    const files = walked.entries
+      .filter((entry) => isIncluded(entry.path))
+      .map((entry) => ({ absolute: this.api.join(root, entry.path), relative: entry.path }));
+    const scanned = await scanFilesForContent(files, options, deadline - Date.now());
+    return { hits: scanned.hits, truncated: walked.truncated || scanned.timedOut || scanned.hits.length >= options.maxHits };
   }
 
   /**

@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { FileSearchService, type SearchOptions } from './FileSearchService';
 import { CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandSpec } from '../../shared/exec/commandSpec';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
-import type { IFileOps } from '../../shared/fs/fileOps';
+import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
+import { ShellFileOps } from '../servers/transport/ShellFileOps';
+import { AgentFileOpOutdatedError } from '../servers/transport/agentFileOpsProtocol';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import * as path from 'path';
@@ -12,10 +14,14 @@ type RunAnswer = ReturnType<typeof ok> | Error;
 interface Answers {
   /** `rg --version` */
   rgVersion?: RunAnswer;
+  /** `grep --version`; by default grep is there */
+  grepVersion?: RunAnswer;
   /** the content search (rg or grep) */
   content?: RunAnswer;
   /** the host's file operations; by default a host with no files, where the name search finds nothing */
   files?: IFileOps;
+  /** the host's OS as the hub recorded it; by default none (a Unix host) */
+  platform?: 'linux' | 'darwin' | 'win32';
 }
 
 function createMockTransportFactory(answers: Answers = {}) {
@@ -28,6 +34,7 @@ function createMockTransportFactory(answers: Answers = {}) {
     run: vi.fn(async (spec: CommandSpec) => {
       runSpecs.push(spec);
       if (spec.file === 'rg' && spec.args[0] === '--version') return unwrap(answer(answers.rgVersion, failed(1)));
+      if (spec.file === 'grep' && spec.args[0] === '--version') return unwrap(answer(answers.grepVersion, ok('grep (GNU grep) 3.11\n')));
       return unwrap(answer(answers.content, failed(1)));
     }),
     exec: vi.fn(async (command: string) => {
@@ -36,7 +43,7 @@ function createMockTransportFactory(answers: Answers = {}) {
     }),
   };
   const files = answers.files ?? ({ platform: 'linux', walk: async () => ({ entries: [], truncated: false }) } as unknown as IFileOps);
-  return { factory: { getTransport: () => ({ ...transport, files: () => files }) } as any, runSpecs, execCommands, transport };
+  return { factory: { getTransport: () => ({ ...transport, files: () => files }), hostProfileFor: () => (answers.platform ? { platform: answers.platform } : null) } as any, runSpecs, execCommands, transport };
 }
 
 /** `rg` is not installed: the one case grep stands in for it. */
@@ -187,7 +194,8 @@ describe('FileSearchService', () => {
       const service = new FileSearchService(factory);
       expect((await service.search(baseServer, baseOpts)).engine).toBe('grep');
       await service.search(baseServer, baseOpts);
-      expect(runSpecs.filter((s) => s.args[0] === '--version')).toHaveLength(1);
+      expect(runSpecs.filter((s) => s.file === 'rg' && s.args[0] === '--version')).toHaveLength(1);
+      expect(runSpecs.filter((s) => s.file === 'grep' && s.args[0] === '--version')).toHaveLength(1);
     });
 
     it('answers 504, not a grep result, when the rg check times out, and asks again next time', async () => {
@@ -264,7 +272,7 @@ describe('FileSearchService', () => {
     it('stops rg and grep at an output size that fits the 200 hits, not megabytes', async () => {
       const { factory, runSpecs } = createMockTransportFactory({ rgVersion: NO_RG });
       await new FileSearchService(factory).search(baseServer, baseOpts);
-      const grep = runSpecs.find((s) => s.file === 'grep')!;
+      const grep = runSpecs.find((s) => s.file === 'grep' && s.args[0] !== '--version')!;
       expect(grep.maxOutputBytes).toBeLessThanOrEqual(1024 * 1024);
     });
 
@@ -346,5 +354,82 @@ describe('FileSearchService', () => {
 
       await expect(serviceOver(unreachable).service.search(baseServer, baseOpts)).rejects.toThrow('agent unreachable');
     });
+  });
+});
+
+describe('FileSearchService: which program searches, and how its hits are read', () => {
+  const winServer = { ...baseServer, type: 'agent' as const, name: 'win' };
+  const searchedOn = (hostFiles: Partial<IFileOps>) => ({ platform: 'win32', walk: async () => ({ entries: [], truncated: false }), ...hostFiles }) as unknown as IFileOps;
+
+  it('turns the paths rg prints on Windows into paths relative to the root, with `/`', async () => {
+    const { factory } = createMockTransportFactory({
+      platform: 'win32',
+      rgVersion: ok('ripgrep 14\n'),
+      content: ok(rgMatch('C:\\proj\\src\\deep\\a.ts', 3, 'test one')),
+    });
+    const result = await new FileSearchService(factory).search(winServer, { ...baseOpts, root: 'C:\\proj' });
+    expect(result.engine).toBe('rg');
+    expect(result.contentHits.map((h) => h.path)).toEqual(['src/deep/a.ts']);
+  });
+
+  it('takes the carriage return off the line rg reports for a CRLF file', async () => {
+    const { factory } = createMockTransportFactory({
+      rgVersion: ok('ripgrep 14\n'),
+      content: ok(JSON.stringify({ type: 'match', data: { path: { text: '/project/a.txt' }, lines: { text: 'test one\r\n' }, line_number: 1, submatches: [{ start: 0, end: 4 }] } })),
+    });
+    const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+    expect(result.contentHits[0].text).toBe('test one');
+  });
+
+  it('reads grep output whose path holds a colon, strips the carriage return, and makes the path relative', async () => {
+    const { factory } = createMockTransportFactory({
+      rgVersion: NO_RG,
+      content: ok('/project/we:ird/a.txt:7:test crlf\r\n/project/b.txt:2:another test\n'),
+    });
+    const result = await new FileSearchService(factory).search(baseServer, baseOpts);
+    expect(result.engine).toBe('grep');
+    expect(result.contentHits.map((h) => [h.path, h.line, h.text])).toEqual([['we:ird/a.txt', 7, 'test crlf'], ['b.txt', 2, 'another test']]);
+  });
+
+  it('does not run grep on a Windows host without rg: the host searches with the built-in search', async () => {
+    const searchContent = vi.fn(async () => ({ hits: [{ path: 'src/a.ts', line: 1, column: 1, text: 'test', matchStart: 0, matchEnd: 4 }], truncated: true }));
+    const { factory, runSpecs } = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent }) });
+    const result = await new FileSearchService(factory).search(winServer, { ...baseOpts, root: 'C:\\proj', include: '*.ts', excludeExtra: 'vendor' });
+    expect(result).toMatchObject({ engine: 'builtin', truncated: true, contentHits: [{ path: 'src/a.ts' }] });
+    expect(runSpecs.some((s) => s.file === 'grep')).toBe(false);
+    expect(searchContent).toHaveBeenCalledWith('C:\\proj', expect.objectContaining({
+      query: 'test', caseSensitive: false, wholeWord: false, regex: false, include: ['*.ts'], excludeNames: ['node_modules', '.git', 'dist', '.worktrees', 'vendor'],
+    }));
+  });
+
+  it('uses the built-in search on a Unix host that has neither rg nor grep', async () => {
+    const searchContent = vi.fn(async () => ({ hits: [], truncated: false }));
+    const { factory } = createMockTransportFactory({ platform: 'linux', rgVersion: NO_RG, grepVersion: new CommandSpawnError('ENOENT', 'spawn grep ENOENT'), files: searchedOn({ platform: 'linux', searchContent }) });
+    expect((await new FileSearchService(factory).search(baseServer, baseOpts)).engine).toBe('builtin');
+    expect(searchContent).toHaveBeenCalledOnce();
+  });
+
+  it('refuses, saying what to install, on a host reached with shell commands only and neither program', async () => {
+    const shellOps = new ShellFileOps({ exec: vi.fn() });
+    const { factory } = createMockTransportFactory({ rgVersion: NO_RG, grepVersion: new CommandSpawnError('ENOENT', 'spawn grep ENOENT'), files: shellOps });
+    await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toMatchObject({ status: 501, message: expect.stringContaining('install') });
+  });
+
+  it('answers 501 agent_outdated when the agent has no content search operation', async () => {
+    const searchContent = async (): Promise<never> => { throw new AgentFileOpOutdatedError('win', 'searchContent'); };
+    const { factory } = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent }) });
+    await expect(new FileSearchService(factory).search(winServer, baseOpts)).rejects.toMatchObject({ status: 501, message: expect.stringContaining('agent_outdated') });
+  });
+
+  it('has no content hits for a root the host cannot search, and lets any other failure propagate', async () => {
+    const missing = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent: async () => { throw new FileOpsError('NOT_FOUND', 'gone'); } }) });
+    expect((await new FileSearchService(missing.factory).search(winServer, baseOpts)).contentHits).toEqual([]);
+    const broken = createMockTransportFactory({ platform: 'win32', rgVersion: NO_RG, files: searchedOn({ searchContent: async () => { throw new Error('agent unreachable'); } }) });
+    await expect(new FileSearchService(broken.factory).search(winServer, baseOpts)).rejects.toThrow('agent unreachable');
+  });
+
+  it('lets a failure of rg itself propagate instead of answering with no hits', async () => {
+    const { factory } = createMockTransportFactory({ rgVersion: ok('ripgrep 14\n'), content: new Error('agent unreachable') });
+    await expect(new FileSearchService(factory).search(baseServer, baseOpts)).rejects.toThrow('agent unreachable');
   });
 });

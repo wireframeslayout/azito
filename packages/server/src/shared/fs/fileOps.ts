@@ -48,6 +48,14 @@ export interface IFileOps {
    * `NOT_A_DIRECTORY`; a directory below it that cannot be read is passed over.
    */
   walk(root: string, options: WalkOptions): Promise<WalkResult>;
+  /**
+   * The lines of the regular files below the directory `root` that match a query, searched on the host by AZITO's own code
+   * (no `rg` / `grep` needed). The tree is walked like {@link IFileOps.walk}; a file that looks binary (a NUL byte) or is larger than
+   * {@link CONTENT_SEARCH_MAX_FILE_BYTES} is passed over. See {@link ContentSearchOptions} for the bounds; when one is reached the
+   * hits found so far are returned with `truncated`. A `root` that is missing or not a directory is `NOT_FOUND` / `NOT_A_DIRECTORY`.
+   * An expression that cannot be compiled has no hits.
+   */
+  searchContent(root: string, options: ContentSearchOptions): Promise<ContentSearchResult>;
   /** The real path of an existing entry (symbolic links and junctions followed, notation made the filesystem's own). A leading `~` is the host's home directory. */
   realpath(path: string): Promise<string>;
 }
@@ -83,6 +91,49 @@ export interface WalkResult {
   /** Level by level (shallower first), by name within a directory, where the host walks that way. */
   entries: WalkEntry[];
   /** A bound was reached before the whole tree was seen. */
+  truncated: boolean;
+}
+
+/** Files larger than this are not searched by {@link IFileOps.searchContent} (a minified bundle or a data dump is not what a person searches for). */
+export const CONTENT_SEARCH_MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** A file yields at most this many matching lines (ripgrep is run with `--max-count 5` the same way). */
+export const CONTENT_SEARCH_MAX_HITS_PER_FILE = 5;
+
+export interface ContentSearchOptions {
+  query: string;
+  caseSensitive: boolean;
+  /** The match has to be a whole word: no letter, digit or `_` of the ASCII range next to it. */
+  wholeWord: boolean;
+  /** `query` is a regular expression (JavaScript syntax) that is matched against each line; otherwise it is text. */
+  regex: boolean;
+  /** Globs a file must match (any of them), as in the file name search: its name, or its path from `root` for a glob that has a `/`. Empty: every file. */
+  include: string[];
+  /** Globs (see `compileGlob`) of entry names that are neither searched nor entered, at any depth. Case-sensitive. */
+  excludeNames: string[];
+  /** The search stops after this many hits. */
+  maxHits: number;
+  /** The search stops after this long, by the host's clock. */
+  timeBudgetMs: number;
+}
+
+export interface ContentSearchHit {
+  /** Relative to the searched root, always with `/`. */
+  path: string;
+  /** 1-based. */
+  line: number;
+  /** 1-based, in UTF-16 units. */
+  column: number;
+  /** The line, without its line terminator (`\n` or `\r\n`). */
+  text: string;
+  /** Offsets of the first match in `text`, in UTF-16 units. */
+  matchStart: number;
+  matchEnd: number;
+}
+
+export interface ContentSearchResult {
+  /** By file (shallower first, by name within a level), by line within a file. */
+  hits: ContentSearchHit[];
+  /** A bound was reached before every file was searched. */
   truncated: boolean;
 }
 

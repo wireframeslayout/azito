@@ -3,10 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { getUiToken } from '../../api/token';
 import { Icon } from '../ui/Icon';
 import { InlineToggle } from '../ui/InlineToggle';
-import { SearchResultList, type SearchResultGroup, type SearchHitItem } from './SearchResultList';
+import { SearchResultList, type SearchResultGroup, type SearchHitItem, type SearchEngine } from './SearchResultList';
 
 interface FileSearchPanelProps { serverName: string; projectId: number; root: string; onOpenHit: (path: string, line: number) => void; onClose: () => void; }
-interface SearchApiResult { nameMatches: string[]; contentHits: SearchHitItem[]; engine: 'rg' | 'grep'; truncated: boolean; elapsedMs: number; }
+interface SearchApiResult { nameMatches: string[]; contentHits: SearchHitItem[]; engine: SearchEngine; truncated: boolean; elapsedMs: number; }
 
 export function FileSearchPanel({ serverName, projectId, root, onOpenHit, onClose }: FileSearchPanelProps) {
   const { t } = useTranslation('files');

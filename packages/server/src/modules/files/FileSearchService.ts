@@ -1,14 +1,19 @@
+import type { HostPlatform } from '../../shared/os/hostEnv';
 import type { ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseError } from './FileBrowseService';
 import { parseRipgrepJson } from './parseRipgrepJson';
-import { searchFileNames, type NameSearchResult } from './nameSearch';
+import { NOTHING_TO_SEARCH, searchFileNames, type NameSearchResult } from './nameSearch';
+import { FileOpsError } from '../../shared/fs/fileOps';
+import { pathApiFor, type HostPathApi } from '../../shared/os/hostPath';
+import { isShellFileOps } from '../servers/transport/ShellFileOps';
+import { AgentFileOpOutdatedError } from '../servers/transport/agentFileOpsProtocol';
 import { buildCommandSpec, CommandOutputLimitError, CommandSpawnError, CommandTimeoutError, type CommandResult } from '../../shared/exec/commandSpec';
 
 const MAX_RESULTS = 200;
 const SEARCH_TIMEOUT_MS = 10_000;
-const RG_CHECK_TTL_MS = 5 * 60 * 1000;
-const RG_CHECK_TIMEOUT_MS = 3000;
+const COMMAND_CHECK_TTL_MS = 5 * 60 * 1000;
+const COMMAND_CHECK_TIMEOUT_MS = 3000;
 /**
  * rg / grep are stopped here: room for the 200 hits that are used, with long lines. A search that matches more is cut
  * (the old `| head -200` ended it early the same way), and the hits read so far are used and reported as `truncated`.
@@ -20,6 +25,15 @@ function isTimeoutError(err: unknown): boolean {
   if (err instanceof CommandTimeoutError) return true;
   if (!(err instanceof Error)) return false;
   return (err as Error & { killed?: boolean }).killed === true || err.message.includes('timed out');
+}
+
+const GREP_LINE = /^(.+?):(\d+):(.*)$/s;
+
+/** A path rg / grep printed for a hit, relative to the searched root and with `/` on every OS; a path outside the root stays as it is. */
+function relativeHitPath(api: HostPathApi, root: string, hit: string): string {
+  const relative = api.relative(root, hit);
+  if (relative === '' || relative === '..' || relative.startsWith('..' + api.sep) || api.isAbsolute(relative)) return hit;
+  return api.sep === '/' ? relative : relative.split(api.sep).join('/');
 }
 
 export interface SearchOptions {
@@ -41,23 +55,28 @@ export interface SearchHit {
   matchEnd: number;
 }
 
+/**
+ * What searched the file contents: `rg`, else `grep` on a Unix host, else AZITO's own search on the host (`IFileOps.searchContent`),
+ * which is the only one a Windows host without ripgrep has. Hit paths are relative to the root with `/` whichever it was.
+ */
+export type SearchEngine = 'rg' | 'grep' | 'builtin';
+
 export interface SearchResult {
   nameMatches: string[];
   contentHits: SearchHit[];
-  engine: 'rg' | 'grep';
+  engine: SearchEngine;
   truncated: boolean;
   elapsedMs: number;
 }
 
 export class FileSearchService {
-  private rgCache = new Map<string, { available: boolean; checkedAt: number }>();
+  private commandCache = new Map<string, { available: boolean; checkedAt: number }>();
 
   constructor(private readonly transportFactory: TransportFactory) {}
 
   async search(server: ServerConfig, opts: SearchOptions): Promise<SearchResult> {
     const start = Date.now();
-    const hasRg = await this.checkRgAvailable(server);
-    const engine: 'rg' | 'grep' = hasRg ? 'rg' : 'grep';
+    const engine = await this.pickEngine(server);
 
     const [names, content] = await Promise.all([
       this.searchByName(server, opts),
@@ -78,23 +97,45 @@ export class FileSearchService {
     };
   }
 
-  private async checkRgAvailable(server: ServerConfig): Promise<boolean> {
-    const cached = this.rgCache.get(server.name);
-    if (cached && Date.now() - cached.checkedAt < RG_CHECK_TTL_MS) {
+  /**
+   * rg when the host has it. Without it, grep on a Unix host (Windows has none), and where there is no grep either, or on Windows,
+   * AZITO's own search on the host. A host reached with shell commands only (an agent registered before its OS was recorded) has no
+   * such search, so there the answer is a refusal that says what to install, not an empty result.
+   */
+  private async pickEngine(server: ServerConfig): Promise<SearchEngine> {
+    if (await this.isCommandInstalled(server, 'rg')) return 'rg';
+    if (this.platformOf(server) !== 'win32' && await this.isCommandInstalled(server, 'grep')) return 'grep';
+    if (isShellFileOps(this.transportFactory.getTransport(server).files())) {
+      throw new FileBrowseError('Neither ripgrep (rg) nor grep is installed on this host; install one of them to search file contents', 501);
+    }
+    return 'builtin';
+  }
+
+  private platformOf(server: ServerConfig): HostPlatform {
+    return this.transportFactory.hostProfileFor(server)?.platform ?? 'linux';
+  }
+
+  /**
+   * Whether the program is installed on the server's host (remembered for a while). Only a program that is not there is "not
+   * installed"; one that is there but does not run (rg exits non-zero for `--version`), a timeout or an unreachable host is an error
+   * of this search: failing is better than quietly searching differently.
+   */
+  private async isCommandInstalled(server: ServerConfig, program: 'rg' | 'grep'): Promise<boolean> {
+    const key = `${server.name}:${program}`;
+    const cached = this.commandCache.get(key);
+    if (cached && Date.now() - cached.checkedAt < COMMAND_CHECK_TTL_MS) {
       return cached.available;
     }
     const transport = this.transportFactory.getTransport(server);
     try {
-      const result = await transport.run(buildCommandSpec('rg', ['--version'], { timeoutMs: RG_CHECK_TIMEOUT_MS }));
-      // rg is there but does not run: that is a problem to report, not a reason to search with something else.
-      if (result.exitCode !== 0) throw new Error(`rg --version exited with ${result.exitCode}: ${result.stderr.trim()}`);
-      this.rgCache.set(server.name, { available: true, checkedAt: Date.now() });
+      const result = await transport.run(buildCommandSpec(program, ['--version'], { timeoutMs: COMMAND_CHECK_TIMEOUT_MS }));
+      // grep's `--version` is not the same on every grep (BusyBox's fails), so only rg is held to its exit code.
+      if (program === 'rg' && result.exitCode !== 0) throw new Error(`rg --version exited with ${result.exitCode}: ${result.stderr.trim()}`);
+      this.commandCache.set(key, { available: true, checkedAt: Date.now() });
       return true;
     } catch (err) {
-      // grep stands in only when rg is not installed (remembered). A timeout, an unreachable host or an rg that cannot run
-      // is an error of this search: failing is better than quietly searching differently.
       if (err instanceof CommandSpawnError && err.code === 'ENOENT') {
-        this.rgCache.set(server.name, { available: false, checkedAt: Date.now() });
+        this.commandCache.set(key, { available: false, checkedAt: Date.now() });
         return false;
       }
       if (isTimeoutError(err)) throw new FileBrowseError('Search timed out', 504);
@@ -117,7 +158,8 @@ export class FileSearchService {
     }, { maxResults: MAX_RESULTS, budgetMs: SEARCH_TIMEOUT_MS });
   }
 
-  private async searchContent(server: ServerConfig, opts: SearchOptions, engine: 'rg' | 'grep'): Promise<{ hits: SearchHit[]; truncated: boolean }> {
+  private async searchContent(server: ServerConfig, opts: SearchOptions, engine: SearchEngine): Promise<{ hits: SearchHit[]; truncated: boolean }> {
+    if (engine === 'builtin') return this.searchContentOnHost(server, opts);
     const spec = engine === 'rg'
       ? buildCommandSpec('rg', this.buildRgArgs(opts), { timeoutMs: SEARCH_TIMEOUT_MS, maxOutputBytes: SEARCH_MAX_OUTPUT_BYTES })
       : buildCommandSpec('grep', this.buildGrepArgs(opts), { timeoutMs: SEARCH_TIMEOUT_MS, maxOutputBytes: SEARCH_MAX_OUTPUT_BYTES });
@@ -126,7 +168,7 @@ export class FileSearchService {
     try {
       // rg and grep exit 1 for "no match" and 2 for an error that may still have produced hits: the output decides.
       const { stdout, cut, timedOut } = await this.readSearchOutput(transport.run(spec));
-      const hits = stdout.trim() ? this.parseHits(stdout, opts, engine) : [];
+      const hits = stdout.trim() ? this.parseHits(stdout, opts, engine, pathApiFor(this.platformOf(server))) : [];
       // A deadline is a partial success only when the whole lines read hold a usable hit (rg's `begin` records alone are not one).
       if (timedOut && hits.length === 0) throw new FileBrowseError('Search timed out', 504);
       return { hits, truncated: cut };
@@ -134,16 +176,37 @@ export class FileSearchService {
       if (isTimeoutError(err)) {
         throw new FileBrowseError('Search timed out', 504);
       }
-      // The output cap hit before even one whole line: nothing usable, but the search was cut.
-      return { hits: [], truncated: err instanceof CommandOutputLimitError };
+      // The output cap hit before even one whole line: nothing usable, but the search was cut. Anything else is an error of the search.
+      if (err instanceof CommandOutputLimitError) return { hits: [], truncated: true };
+      throw err;
     }
   }
 
-  private parseHits(stdout: string, opts: SearchOptions, engine: 'rg' | 'grep'): SearchHit[] {
-    const root = opts.root.endsWith('/') ? opts.root : opts.root + '/';
+  /** The host searches its own files (`IFileOps.searchContent`); a root it has nothing to search in has no hits. */
+  private async searchContentOnHost(server: ServerConfig, opts: SearchOptions): Promise<{ hits: SearchHit[]; truncated: boolean }> {
+    try {
+      const result = await this.transportFactory.getTransport(server).files().searchContent(opts.root, {
+        query: opts.query,
+        caseSensitive: opts.caseSensitive,
+        wholeWord: opts.wholeWord,
+        regex: opts.regex,
+        include: this.splitGlobPatterns(opts.include),
+        excludeNames: [...EXCLUDED_DIRS, ...this.splitGlobPatterns(opts.excludeExtra)],
+        maxHits: MAX_RESULTS,
+        timeBudgetMs: SEARCH_TIMEOUT_MS,
+      });
+      return { hits: result.hits, truncated: result.truncated };
+    } catch (err: unknown) {
+      if (err instanceof FileOpsError && NOTHING_TO_SEARCH.has(err.code)) return { hits: [], truncated: false };
+      if (err instanceof AgentFileOpOutdatedError) throw new FileBrowseError(err.message, 501);
+      throw err;
+    }
+  }
+
+  private parseHits(stdout: string, opts: SearchOptions, engine: 'rg' | 'grep', api: HostPathApi): SearchHit[] {
     if (engine === 'rg') {
       return parseRipgrepJson(stdout).slice(0, MAX_RESULTS).map(m => ({
-        path: m.path.startsWith(root) ? m.path.slice(root.length) : m.path,
+        path: relativeHitPath(api, opts.root, m.path),
         line: m.line,
         column: m.column,
         text: m.text,
@@ -151,7 +214,7 @@ export class FileSearchService {
         matchEnd: m.matchEnd,
       }));
     }
-    return this.parseGrepOutput(stdout, root, opts).slice(0, MAX_RESULTS);
+    return this.parseGrepOutput(stdout, opts, api).slice(0, MAX_RESULTS);
   }
 
   /**
@@ -218,23 +281,15 @@ export class FileSearchService {
     return patterns?.split(',').map(pattern => pattern.trim()).filter(Boolean) ?? [];
   }
 
-  private parseGrepOutput(output: string, root: string, opts: SearchOptions): SearchHit[] {
+  private parseGrepOutput(output: string, opts: SearchOptions, api: HostPathApi): SearchHit[] {
     const hits: SearchHit[] = [];
-    for (const line of output.split('\n')) {
-      if (!line.trim()) continue;
-      // grep -H output: path:line:text
-      // Find the first colon after the root path
-      const firstColon = line.indexOf(':');
-      if (firstColon === -1) continue;
-      const secondColon = line.indexOf(':', firstColon + 1);
-      if (secondColon === -1) continue;
-
-      const filePath = line.slice(0, firstColon);
-      const lineNum = parseInt(line.slice(firstColon + 1, secondColon), 10);
-      if (isNaN(lineNum)) continue;
-      const text = line.slice(secondColon + 1);
-
-      const relativePath = filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+    for (const rawLine of output.split('\n')) {
+      // grep -H prints `path:line:text`. The path ends at the first `:<digits>:`, so a `:` inside it (`C:\work`) does not cut it.
+      const parsed = GREP_LINE.exec(rawLine);
+      if (!parsed) continue;
+      const lineNum = parseInt(parsed[2], 10);
+      const text = parsed[3].replace(/\r$/, '');
+      const relativePath = relativeHitPath(api, opts.root, parsed[1]);
 
       let matchStart = 0;
       let matchEnd = 0;

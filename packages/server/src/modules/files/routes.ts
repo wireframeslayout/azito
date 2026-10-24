@@ -11,6 +11,7 @@ import type { FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
 import { isHostPathContained, pathApiFor } from '../../shared/os/hostPath';
 import type { HostPlatform } from '../../shared/os/hostEnv';
+import { assertHostFeature } from '../../shared/os/hostFeature';
 
 /** `.git` as the host's filesystem sees it: case-insensitive on win32 / darwin, and win32 ignores trailing dots and spaces. */
 export function isGitDirectoryName(platform: HostPlatform, name: string): boolean {
@@ -538,6 +539,8 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      // Before anything touches the host: the UI closes the search from the same table (`hostFeatureSupport`).
+      assertHostFeature(transportFactory.hostProfileFor(srv), 'fileSearch', 'Searching file contents');
 
       const q = (request.query.q || '').trim();
       if (!q) return reply.status(400).send({ error: 'q is required' });
