@@ -40,29 +40,26 @@ export function isHomeRelativePath(platform: HostPlatform, input: string): boole
   return platform === 'win32' && input.startsWith('~\\');
 }
 
+const CONTROL_CHARACTER = /[\x00-\x1f\x7f]/;
+// A win32 working directory names its drive (or UNC share): `\work` and `/work` would follow the process's current drive.
+const WIN32_FULLY_QUALIFIED = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/;
+
 /**
  * Why a stored working directory (a project server's, a task's) is refused, or null when it is acceptable: the file-operation
- * rules of {@link invalidHostPathReason}, then an absolute path of the host or a `~` form. A relative path would be resolved
- * against whatever directory the next command happens to run in. Only new input is checked; a value already in the database is
- * never run through this.
+ * rules of {@link invalidHostPathReason}, no control character on any OS (a follow-up types the path into a pane, where Ctrl-U
+ * or a line break would run another command), then an absolute path of the host (on win32 with its drive or UNC share) or a `~`
+ * form. A relative path would be resolved against whatever directory the next command happens to run in. Only new input is
+ * checked; a value already in the database is never run through this.
  */
 export function invalidWorkingDirectoryReason(platform: HostPlatform, input: string): string | null {
   const reason = invalidHostPathReason(platform, input);
   if (reason) return reason;
-  if (isHomeRelativePath(platform, input) || hostPathFor(platform).isAbsolute(input)) return null;
-  return 'the path must be absolute (or start with ~)';
-}
-
-/**
- * {@link invalidWorkingDirectoryReason} for a host that may not be known yet: an agent that has not reported its OS, or a task
- * whose server is only chosen later (from its unit or project). Without a platform the path is accepted when it is valid on
- * at least one OS, and the host-specific check is made later where the host is known. A known host gets its own rules.
- */
-export function invalidWorkingDirectoryReasonFor(platform: HostPlatform | null, input: string): string | null {
-  if (platform) return invalidWorkingDirectoryReason(platform, input);
-  const posix = invalidWorkingDirectoryReason('linux', input);
-  if (posix === null) return null;
-  return invalidWorkingDirectoryReason('win32', input) === null ? null : posix;
+  if (CONTROL_CHARACTER.test(input)) return 'the path contains a control character';
+  if (isHomeRelativePath(platform, input)) return null;
+  if (platform === 'win32') {
+    return WIN32_FULLY_QUALIFIED.test(input) ? null : 'the path must start with a drive (C:\\) or a UNC share (or ~)';
+  }
+  return hostPathFor(platform).isAbsolute(input) ? null : 'the path must be absolute (or start with ~)';
 }
 
 /**

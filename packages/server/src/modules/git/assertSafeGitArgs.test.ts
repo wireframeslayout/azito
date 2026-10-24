@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   assertGitPathArg,
+  invalidStoredWorkingDirectoryReason,
   assertSafePath,
   assertSafeBranch,
   SAFE_PATH_PATTERN,
@@ -126,6 +127,29 @@ describe('rejectQualifiedBranchInput (Issue #87 third-party review, 11th round, 
   });
 });
 
+describe('invalidStoredWorkingDirectoryReason', () => {
+  it('on POSIX keeps SAFE_PATH_PATTERN until R3 / R4 (spaces and non-ASCII are refused at save time)', () => {
+    expect(invalidStoredWorkingDirectoryReason('linux', '/home/me/repo')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason('darwin', '~/work')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason('linux', '/home/me/my repo')).toMatch(/only letters/);
+    expect(invalidStoredWorkingDirectoryReason('darwin', '/Users/me/日本語')).toMatch(/only letters/);
+    expect(invalidStoredWorkingDirectoryReason('linux', '/a\nb')).toMatch(/control character/);
+  });
+
+  it('on win32 applies only the new rules', () => {
+    expect(invalidStoredWorkingDirectoryReason('win32', 'C:\\Users\\me\\My Repo')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason('win32', 'D:/work/日本語')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason('win32', 'relative')).toMatch(/drive/);
+  });
+
+  it('without a platform accepts what is valid on either OS', () => {
+    expect(invalidStoredWorkingDirectoryReason(null, '/srv/x')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason(null, 'C:\\Users\\My Repo')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason(null, '/srv/my repo')).toMatch(/only letters/);
+    expect(invalidStoredWorkingDirectoryReason(null, 'x')).not.toBeNull();
+  });
+});
+
 describe('assertGitPathArg', () => {
   it('accepts absolute paths of the host, including spaces and Japanese (git takes an argv, never a shell line)', () => {
     expect(() => assertGitPathArg('linux', '/home/me/my repo', 'path')).not.toThrow();
@@ -146,10 +170,15 @@ describe('assertGitPathArg', () => {
     expect(() => assertGitPathArg('win32', '-c', 'path')).toThrow(/Unsafe path/);
   });
 
+  it('refuses a control character on every OS', () => {
+    expect(() => assertGitPathArg('linux', '/a\nb', 'path')).toThrow(/control character/);
+    expect(() => assertGitPathArg('win32', 'C:\\a\rb', 'path')).toThrow(/control character/);
+  });
+
   it('refuses a relative path, an empty one and NUL', () => {
     expect(() => assertGitPathArg('linux', 'repo', 'path')).toThrow(/absolute/);
     expect(() => assertGitPathArg('linux', '../repo', 'path')).toThrow(/absolute/);
-    expect(() => assertGitPathArg('win32', 'repo', 'path')).toThrow(/absolute/);
+    expect(() => assertGitPathArg('win32', 'repo', 'path')).toThrow(/drive/);
     expect(() => assertGitPathArg('linux', '', 'path')).toThrow(/empty/);
     expect(() => assertGitPathArg('linux', '/a\0b', 'path')).toThrow(/NUL/);
   });

@@ -46,9 +46,9 @@ describe('validateGitFields', () => {
   });
 
   describe('working_directory / worktree_path', () => {
-    it('accepts absolute paths of the server OS, including spaces and Japanese', () => {
-      expect(validateGitFields({ working_directory: '/home/me/my repo' }, 'linux')).toBeNull();
-      expect(validateGitFields({ working_directory: '/home/me/プロジェクト' }, 'darwin')).toBeNull();
+    it('accepts absolute paths of the server OS (win32 also with spaces and Japanese)', () => {
+      expect(validateGitFields({ working_directory: '/home/me/repo' }, 'linux')).toBeNull();
+      expect(validateGitFields({ worktree_path: '/home/me/repo/.worktrees/task-1' }, 'darwin')).toBeNull();
       expect(validateGitFields({ working_directory: 'C:\\Users\\me\\My Repo' }, 'win32')).toBeNull();
       expect(validateGitFields({ worktree_path: 'D:/work/日本語' }, 'win32')).toBeNull();
       expect(validateGitFields({ working_directory: '~/work' }, 'linux')).toBeNull();
@@ -57,11 +57,25 @@ describe('validateGitFields', () => {
 
     it('rejects a path that is not valid on the server OS', () => {
       expect(validateGitFields({ working_directory: 'C:\\x' }, 'linux')).toMatch(/working_directory/);
-      expect(validateGitFields({ working_directory: '/home/me' }, 'win32')).toBeNull(); // rooted without a drive is absolute on win32
+      expect(validateGitFields({ working_directory: '/home/me' }, 'win32')).toMatch(/drive/);
       expect(validateGitFields({ working_directory: 'relative/dir' }, 'linux')).toMatch(/absolute/);
       expect(validateGitFields({ working_directory: 'C:foo' }, 'win32')).toMatch(/drive-relative/);
       expect(validateGitFields({ worktree_path: '\\\\.\\pipe\\x' }, 'win32')).toMatch(/worktree_path/);
       expect(validateGitFields({ working_directory: '~\\x' }, 'linux')).toMatch(/absolute/);
+    });
+
+    it('on POSIX still refuses spaces and non-ASCII until R3 / R4 (the git side keeps SAFE_PATH)', () => {
+      expect(validateGitFields({ working_directory: '/home/me/my repo' }, 'linux')).toMatch(/only letters/);
+      expect(validateGitFields({ worktree_path: '/home/me/プロジェクト' }, 'darwin')).toMatch(/worktree_path/);
+    });
+
+    it('refuses control characters on every OS', () => {
+      for (const platform of ['linux', 'win32', null] as const) {
+        const base = platform === 'win32' ? 'C:\\repo' : '/repo';
+        for (const ch of ['\n', '\r', '\x15']) {
+          expect(validateGitFields({ working_directory: base + ch + 'x' }, platform)).toMatch(/control character/);
+        }
+      }
     });
 
     it('rejects a non-string value', () => {
@@ -75,7 +89,7 @@ describe('validateGitFields', () => {
     it('with an unknown server, accepts a path valid on any OS and rejects one valid on none', () => {
       expect(validateGitFields({ working_directory: '/srv/repo' }, null)).toBeNull();
       expect(validateGitFields({ working_directory: 'C:\\Users\\me' }, null)).toBeNull();
-      expect(validateGitFields({ working_directory: 'relative' }, null)).toMatch(/absolute/);
+      expect(validateGitFields({ working_directory: 'relative' }, null)).not.toBeNull();
       expect(validateGitFields({ working_directory: 'a\0b' }, null)).toMatch(/NUL/);
     });
   });

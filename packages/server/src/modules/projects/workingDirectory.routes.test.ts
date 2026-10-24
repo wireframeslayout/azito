@@ -30,8 +30,7 @@ const LINUX: HostProfile = { platform: 'linux', arch: 'x64' };
 
 describe('PUT /api/projects/:id/servers/:serverName — working_directory validation', () => {
   it.each([
-    [LINUX, '/home/me/my repo'],
-    [LINUX, '/home/me/日本語'],
+    [LINUX, '/home/me/repo'],
     [LINUX, '~/work'],
     [WIN, 'C:\\Users\\me\\My Repo'],
     [WIN, 'D:/work/日本語'],
@@ -45,10 +44,17 @@ describe('PUT /api/projects/:id/servers/:serverName — working_directory valida
   });
 
   it.each([
+    [LINUX, '/home/me/my repo', /only letters/],
+    [LINUX, '/home/me/日本語', /only letters/],
+    [LINUX, '/repo\n/x', /control character/],
+    [LINUX, '/repo\r', /control character/],
+    [LINUX, '/repo\x15touch /tmp/x\r', /control character/],
+    [WIN, 'C:\\repo\n', /control character/],
+    [WIN, '\\work', /drive/],
     [LINUX, 'relative/dir', /absolute/],
     [LINUX, 'C:\\Users\\me', /absolute/],
     [LINUX, '~\\work', /absolute/],
-    [WIN, 'relative\\dir', /absolute/],
+    [WIN, 'relative\\dir', /drive/],
     [WIN, 'C:foo', /drive-relative/],
     [WIN, '\\\\.\\C:\\x', /device/],
     [WIN, 'C:\\dir:stream', /alternate data stream/],

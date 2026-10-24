@@ -91,7 +91,7 @@ function normalize(platform: HostPlatform, p: string): string {
   if (tail === '') {
     if (root.canonical === '') return hasTrailingSep(platform, p) ? `.${sep}` : '.';
     // `C:` alone is the drive's working directory: Node spells it `C:.`
-    return root.absolute ? root.canonical : `${root.canonical}.`;
+    return root.absolute ? root.canonical : `${root.canonical}.${hasTrailingSep(platform, p) ? sep : ''}`;
   }
   return root.canonical + tail + (hasTrailingSep(platform, p) ? sep : '');
 }
@@ -113,24 +113,69 @@ function stripTrailingSeps(platform: HostPlatform, p: string): string {
   return p.slice(0, end);
 }
 
+/** `path.posix.dirname` / `path.win32.dirname`, including what they do with doubled separators and a UNC share root. */
 function dirname(platform: HostPlatform, p: string): string {
-  if (p.length === 0) return '.';
-  const root = parseRoot(platform, p);
-  const rest = stripTrailingSeps(platform, p.slice(root.raw.length));
-  let last = -1;
-  for (let i = rest.length - 1; i >= 0; i--) {
-    if (isSepChar(platform, rest[i])) {
-      last = i;
-      break;
+  const len = p.length;
+  if (len === 0) return '.';
+  const isSep = (i: number): boolean => isSepChar(platform, p[i]);
+  const win = platform === 'win32';
+  let rootEnd = -1;
+  let offset = 0;
+  if (win) {
+    if (len === 1) return isSep(0) ? p : '.';
+    if (isSep(0)) {
+      rootEnd = offset = 1;
+      if (isSep(1)) {
+        // UNC: \\server\share\
+        let j = 2;
+        let last = j;
+        while (j < len && !isSep(j)) j++;
+        if (j < len && j !== last) {
+          last = j;
+          while (j < len && isSep(j)) j++;
+          if (j < len && j !== last) {
+            last = j;
+            while (j < len && !isSep(j)) j++;
+            if (j === len) return p;
+            if (j !== last) rootEnd = offset = j + 1;
+          }
+        }
+      }
+    } else if (/^[A-Za-z]:/.test(p)) {
+      rootEnd = len > 2 && isSep(2) ? 3 : 2;
+      offset = rootEnd;
+    }
+  } else if (isSep(0)) {
+    rootEnd = 1;
+  }
+  let end = -1;
+  let matchedSlash = true;
+  for (let i = len - 1; i >= (win ? offset : 1); i--) {
+    if (isSep(i)) {
+      if (!matchedSlash) {
+        end = i;
+        break;
+      }
+    } else {
+      matchedSlash = false;
     }
   }
-  if (last === -1) return root.raw === '' ? '.' : root.raw;
-  return root.raw + stripTrailingSeps(platform, rest.slice(0, last));
+  if (end === -1) {
+    if (win) {
+      if (rootEnd === -1) return '.';
+      end = rootEnd;
+    } else {
+      return rootEnd === 1 ? '/' : '.';
+    }
+  }
+  if (!win && rootEnd === 1 && end === 1) return '//';
+  return p.slice(0, end);
 }
 
+/** `path.basename`: only a drive letter (`C:`) is a prefix; a UNC share root's last part is its name, like Node. */
 function basename(platform: HostPlatform, p: string, ext?: string): string {
-  const root = parseRoot(platform, p);
-  const rest = stripTrailingSeps(platform, p.slice(root.raw.length));
+  const prefix = platform === 'win32' && /^[A-Za-z]:/.test(p) ? 2 : 0;
+  const rest = stripTrailingSeps(platform, p.slice(prefix));
   const segments = rest.split(platform === 'win32' ? /[\\/]/ : /\//);
   const name = segments[segments.length - 1];
   if (ext !== undefined && ext !== '' && name !== ext && name.endsWith(ext)) return name.slice(0, name.length - ext.length);
@@ -154,10 +199,17 @@ function relative(platform: HostPlatform, from: string, to: string): string {
   const b = trimmed(platform, to);
   const rootA = parseRoot(platform, a);
   const rootB = parseRoot(platform, b);
-  // Another drive or share has no relative form: like Node, the target itself comes back.
-  if (rootA.absolute !== rootB.absolute || fold(platform, rootA.canonical) !== fold(platform, rootB.canonical)) return b;
-  const segA = splitSegments(platform, a.slice(rootA.raw.length));
-  const segB = splitSegments(platform, b.slice(rootB.raw.length));
+  // Like Node, a UNC path is compared as `\\` + server + share + ..., so two shares of one server relate by `..`.
+  const isUnc = (root: ParsedRoot): boolean => root.canonical.startsWith('\\\\');
+  const rootKey = (root: ParsedRoot): string => (isUnc(root) ? root.canonical.slice(0, root.canonical.indexOf('\\', 2) + 1) : root.canonical);
+  const segmentsOf = (p: string, root: ParsedRoot): string[] => [
+    ...(isUnc(root) ? root.canonical.slice(2).split('\\').filter((x) => x !== '') : []),
+    ...splitSegments(platform, p.slice(root.raw.length)),
+  ];
+  // Another drive or server has no relative form: like Node, the target itself comes back.
+  if (rootA.absolute !== rootB.absolute || fold(platform, rootKey(rootA)) !== fold(platform, rootKey(rootB))) return b;
+  const segA = segmentsOf(a, rootA);
+  const segB = segmentsOf(b, rootB);
   let common = 0;
   while (common < segA.length && common < segB.length && fold(platform, segA[common]) === fold(platform, segB[common])) common++;
   const up = segA.slice(common).map(() => '..');

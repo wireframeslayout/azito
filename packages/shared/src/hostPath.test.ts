@@ -5,11 +5,13 @@ import { hostPathFor } from './hostPath';
 const WIN_PATHS = [
   'C:\\Users\\me', 'C:/Users/me', 'C:\\', 'C:/', 'C:', 'C:foo', 'C:\\a\\b\\', 'C:\\a\\..\\b', 'C:\\..\\..\\x', 'c:\\A/b\\c',
   '\\\\server\\share\\dir\\file', '//server/share/x', '\\\\server\\share\\a\\..\\..\\b',
+  '\\\\server\\share', '\\\\server\\share\\', '//server/share/', '\\\\server', '\\\\server\\', 'c:\\A/b\\\\c', 'C:\\a\\\\b', 'C:foo/../', 'C:foo\\', 'C:.\\',
+  '\\\\?\\C:\\x', '//', '\\\\\\a', 'C:\\\\\\a',
   '\\rooted\\x', '/rooted/x', '\\', 'rel\\a', 'rel/a/./b', '..\\a', 'a\\..\\..\\b', '.', '',
   'C:\\Users\\日本語\\プロジェクト', 'C:\\Program Files\\My App\\x.txt', 'D:\\a b\\c d\\', 'C:\\dir\\file.tar.gz',
 ];
 const POSIX_PATHS = [
-  '/home/me', '/', '/a/b/', '/a/../b', '/../../x', 'a/b', './a/./b', '../a', 'a/../../b', '.', '', './',
+  '/home/me', '/', '//', '//a', '//a//b', '/a//b', 'a//b', '///a', '/a/b/', '/a//', 'a/', '/a/../b', '/../../x', 'a/b', './a/./b', '../a', 'a/../../b', '.', '', './',
   '/home/日本語/プロジェクト', '/tmp/my dir/x y.txt', '/a/b/file.tar.gz', '~/work', 'a\\b',
 ];
 
@@ -52,7 +54,7 @@ describe('hostPathFor: same results as Node path', () => {
     const win: [string, string][] = [
       ['C:\\a\\b', 'C:\\a\\b\\c\\d'], ['C:\\a\\b', 'C:\\a'], ['C:\\a\\b', 'C:\\a\\x'], ['C:\\a\\b', 'C:\\a\\b'], ['C:\\a\\b\\', 'C:\\a\\b'],
       ['C:\\a\\b', 'C:\\A\\B\\c'], ['C:/a/b', 'C:\\a\\c'], ['C:\\a', 'D:\\a'], ['C:\\', 'C:\\a'], ['C:\\a', 'C:\\'],
-      ['\\\\srv\\share\\a', '\\\\srv\\share\\a\\b'], ['C:\\日本語', 'C:\\日本語\\子'],
+      ['\\\\srv\\share\\a', '\\\\srv\\share\\a\\b'], ['\\\\srv\\share\\a', '\\\\srv\\other\\a'], ['\\\\srv\\a', '\\\\srv\\b'], ['\\\\srv1\\a\\b', '\\\\srv2\\a'], ['\\\\SRV\\Share', '\\\\srv\\share\\x'], ['C:\\日本語', 'C:\\日本語\\子'],
       ['C:\\My Dir\\a', 'C:\\My Dir\\a\\b c'], ['C:\\a\\b\\..\\c', 'C:\\a\\c\\d'],
     ];
     it.each(win)('win32 %j -> %j', (a, b) => expect(hostPathFor('win32').relative(a, b)).toBe(nodePath.win32.relative(a, b)));

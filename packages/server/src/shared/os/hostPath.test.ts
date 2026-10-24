@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as path from 'path';
-import { invalidHostPathReason, invalidWorkingDirectoryReason, invalidWorkingDirectoryReasonFor, isHostPathContained, isHomeRelativePath, pathApiFor } from './hostPath';
+import { invalidHostPathReason, invalidWorkingDirectoryReason,isHostPathContained, isHomeRelativePath, pathApiFor } from './hostPath';
 
 describe('invalidWorkingDirectoryReason', () => {
   it('accepts an absolute path or ~ of the host, with spaces and Japanese', () => {
@@ -14,7 +14,7 @@ describe('invalidWorkingDirectoryReason', () => {
   it('refuses a relative path and what invalidHostPathReason refuses', () => {
     expect(invalidWorkingDirectoryReason('linux', 'repo')).toMatch(/absolute/);
     expect(invalidWorkingDirectoryReason('linux', '~user/x')).toMatch(/absolute/);
-    expect(invalidWorkingDirectoryReason('win32', 'repo')).toMatch(/absolute/);
+    expect(invalidWorkingDirectoryReason('win32', 'repo')).toMatch(/drive/);
     expect(invalidWorkingDirectoryReason('win32', 'C:foo')).toMatch(/drive-relative/);
     expect(invalidWorkingDirectoryReason('linux', '')).toMatch(/empty/);
   });
@@ -25,16 +25,22 @@ describe('invalidWorkingDirectoryReason', () => {
   });
 });
 
-describe('invalidWorkingDirectoryReasonFor', () => {
-  it('uses the rules of a known platform', () => {
-    expect(invalidWorkingDirectoryReasonFor('linux', 'C:\\x')).toMatch(/absolute/);
-    expect(invalidWorkingDirectoryReasonFor('win32', 'C:\\x')).toBeNull();
+describe('invalidWorkingDirectoryReason: control characters and win32 roots', () => {
+  it.each(['linux', 'darwin', 'win32'] as const)('refuses C0 controls and DEL on %s', (platform) => {
+    const base = platform === 'win32' ? 'C:\\repo' : '/repo';
+    for (const ch of ['\n', '\r', '\x15', '\x03', '\x1b', '\t', '\x7f']) {
+      expect(invalidWorkingDirectoryReason(platform, base + ch + 'x')).toMatch(/control character/);
+    }
   });
 
-  it('without a platform accepts what is valid on either OS', () => {
-    expect(invalidWorkingDirectoryReasonFor(null, '/srv/x')).toBeNull();
-    expect(invalidWorkingDirectoryReasonFor(null, 'C:\\x')).toBeNull();
-    expect(invalidWorkingDirectoryReasonFor(null, 'x')).toMatch(/absolute/);
+  it('on win32 needs a drive or UNC share, not a bare rooted path', () => {
+    expect(invalidWorkingDirectoryReason('win32', '\\work')).toMatch(/drive/);
+    expect(invalidWorkingDirectoryReason('win32', '/home/me')).toMatch(/drive/);
+    expect(invalidWorkingDirectoryReason('win32', '\\\\srv')).toMatch(/drive/);
+    expect(invalidWorkingDirectoryReason('win32', 'C:\\work')).toBeNull();
+    expect(invalidWorkingDirectoryReason('win32', 'c:/work')).toBeNull();
+    expect(invalidWorkingDirectoryReason('win32', '\\\\srv\\share')).toBeNull();
+    expect(invalidWorkingDirectoryReason('win32', '~')).toBeNull();
   });
 });
 

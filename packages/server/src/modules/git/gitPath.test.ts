@@ -14,6 +14,16 @@ describe('normalizeGitPath', () => {
     expect(normalizeGitPath('win32', 'C:\\Users\\me\\repo')).toBe('C:\\Users\\me\\repo');
   });
 
+  it('keeps an empty output empty', () => {
+    expect(normalizeGitPath('win32', '')).toBe('');
+    expect(normalizeGitPath('win32', '\r\n')).toBe('');
+    expect(normalizeGitPath('linux', '\n')).toBe('');
+  });
+
+  it('on POSIX removes only the LF: a trailing CR belongs to the name', () => {
+    expect(normalizeGitPath('linux', '/tmp/repo\r\n')).toBe('/tmp/repo\r');
+  });
+
   it('keeps a POSIX path as git printed it, minus the line break', () => {
     expect(normalizeGitPath('linux', '/home/me/my repo\n')).toBe('/home/me/my repo');
     expect(normalizeGitPath('darwin', '/Users/me/リポジトリ')).toBe('/Users/me/リポジトリ');

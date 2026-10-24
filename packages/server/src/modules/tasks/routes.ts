@@ -18,8 +18,8 @@ import type { TaskRestoreService } from './TaskRestoreService';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
 import type { TaskTempFiles } from '../../shared/os/taskTempFiles';
-import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
-import { invalidWorkingDirectoryReasonFor } from '../../shared/os/hostPath';
+import { invalidStoredWorkingDirectoryReason, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
+import { hostPlatformOfServerName } from '../servers/hostPlatformOfServerName';
 import type { HostPlatform } from '../../shared/os/hostEnv';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
@@ -89,7 +89,7 @@ export function validateGitFields(body: Record<string, unknown>, platform: HostP
     const v = body[key];
     if (v == null || v === '') continue;
     if (typeof v !== 'string') return `Invalid ${key}`;
-    const reason = invalidWorkingDirectoryReasonFor(platform, v);
+    const reason = invalidStoredWorkingDirectoryReason(platform, v);
     if (reason) return `Invalid ${key}: ${reason}`;
   }
   return null;
@@ -230,11 +230,7 @@ function toListItem(task: Task, windows: unknown[], executionServerName: string 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, muxDriverRegistry, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled, taskTempFiles } = opts;
   /** The OS of a task input's server, or null when no known server is named (see validateGitFields). */
-  const hostPlatformOfServer = (serverName: unknown): HostPlatform | null => {
-    if (typeof serverName !== 'string' || serverName === '') return null;
-    const srv = serverRepo.findByName(serverName);
-    return srv ? (transportFactory.hostProfileFor(srv)?.platform ?? null) : null;
-  };
+  const hostPlatformOfServer = (serverName: unknown): HostPlatform | null => hostPlatformOfServerName(serverRepo, transportFactory, serverName);
   const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry, windowRepo, logRepo, taskTempFiles });
 
   // ── GET /api/tasks ──
