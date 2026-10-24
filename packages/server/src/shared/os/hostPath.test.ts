@@ -1,6 +1,42 @@
 import { describe, expect, it } from 'vitest';
 import * as path from 'path';
-import { invalidHostPathReason, isHostPathContained, pathApiFor } from './hostPath';
+import { invalidHostPathReason, invalidWorkingDirectoryReason, invalidWorkingDirectoryReasonFor, isHostPathContained, isHomeRelativePath, pathApiFor } from './hostPath';
+
+describe('invalidWorkingDirectoryReason', () => {
+  it('accepts an absolute path or ~ of the host, with spaces and Japanese', () => {
+    expect(invalidWorkingDirectoryReason('linux', '/srv/my repo/日本語')).toBeNull();
+    expect(invalidWorkingDirectoryReason('linux', '~')).toBeNull();
+    expect(invalidWorkingDirectoryReason('win32', 'C:\\My Repo\\日本語')).toBeNull();
+    expect(invalidWorkingDirectoryReason('win32', '~\\x')).toBeNull();
+    expect(invalidWorkingDirectoryReason('win32', '~/x')).toBeNull();
+  });
+
+  it('refuses a relative path and what invalidHostPathReason refuses', () => {
+    expect(invalidWorkingDirectoryReason('linux', 'repo')).toMatch(/absolute/);
+    expect(invalidWorkingDirectoryReason('linux', '~user/x')).toMatch(/absolute/);
+    expect(invalidWorkingDirectoryReason('win32', 'repo')).toMatch(/absolute/);
+    expect(invalidWorkingDirectoryReason('win32', 'C:foo')).toMatch(/drive-relative/);
+    expect(invalidWorkingDirectoryReason('linux', '')).toMatch(/empty/);
+  });
+
+  it('knows ~\\ only on win32', () => {
+    expect(isHomeRelativePath('win32', '~\\x')).toBe(true);
+    expect(isHomeRelativePath('linux', '~\\x')).toBe(false);
+  });
+});
+
+describe('invalidWorkingDirectoryReasonFor', () => {
+  it('uses the rules of a known platform', () => {
+    expect(invalidWorkingDirectoryReasonFor('linux', 'C:\\x')).toMatch(/absolute/);
+    expect(invalidWorkingDirectoryReasonFor('win32', 'C:\\x')).toBeNull();
+  });
+
+  it('without a platform accepts what is valid on either OS', () => {
+    expect(invalidWorkingDirectoryReasonFor(null, '/srv/x')).toBeNull();
+    expect(invalidWorkingDirectoryReasonFor(null, 'C:\\x')).toBeNull();
+    expect(invalidWorkingDirectoryReasonFor(null, 'x')).toMatch(/absolute/);
+  });
+});
 
 describe('pathApiFor', () => {
   it('gives each OS its own rules, whichever OS runs the code', () => {

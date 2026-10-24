@@ -1,4 +1,7 @@
-export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-][a-zA-Z0-9_./@:~-]*$/;
+import type { HostPlatform } from '../../shared/os/hostEnv';
+import { invalidWorkingDirectoryReason } from '../../shared/os/hostPath';
+
+export const SAFE_PATH_PATTERN =/^[a-zA-Z0-9_./@:~-][a-zA-Z0-9_./@:~-]*$/;
 export const SAFE_BRANCH_PATTERN = /^[a-zA-Z0-9_./-]+$/;
 
 // Fully-qualified refs (e.g. `refs/heads/main`) are allowed by SAFE_BRANCH_PATTERN
@@ -19,6 +22,19 @@ export function isFullyQualifiedRef(value: string): boolean {
  */
 export function assertNotOptionLike(value: string, label: string): void {
   if (value.startsWith('-')) throw new Error(`Unsafe ${label}: ${value}`);
+}
+
+/**
+ * A host path handed to git as an argument. git runs as a CommandSpec (an argv, never a shell line), so the characters of the
+ * path cannot split the command or be interpreted: spaces, Japanese and a Windows `\` are all fine, unlike the shell-line
+ * `SAFE_PATH_PATTERN` above. What is left to refuse is a path git would not take as a path: one the host cannot use at all
+ * (empty, NUL, a Windows device path / drive-relative / stream), a relative one (resolved against an unknown directory), and
+ * one that git would read as an option (`assertNotOptionLike`).
+ */
+export function assertGitPathArg(platform: HostPlatform, value: string, label: string): void {
+  assertNotOptionLike(value, label);
+  const reason = invalidWorkingDirectoryReason(platform, value);
+  if (reason) throw new Error(`Unsafe ${label}: ${reason}`);
 }
 
 export function assertSafePath(value: string, label: string): void {

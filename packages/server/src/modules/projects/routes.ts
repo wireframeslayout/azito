@@ -17,6 +17,7 @@ import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { assertGitSupported } from '../../shared/os/hostProfile';
+import { invalidWorkingDirectoryReasonFor } from '../../shared/os/hostPath';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
 // Issue #29 review (independent QC), M-3: imported from the base-layer
 // `modules/servers` (not `modules/tasks/execution/WindowRotation`, which
@@ -499,6 +500,16 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
       if ('branch' in body && body.branch) {
         const reason = rejectQualifiedBranchInput(body.branch);
         if (reason) return reply.status(400).send({ error: `Invalid branch: ${reason}` });
+      }
+      // New input only: a value already stored is never re-checked. null / '' (unset) are left as they were.
+      if ('working_directory' in body && body.working_directory != null && body.working_directory !== '') {
+        if (typeof body.working_directory !== 'string') {
+          return reply.status(400).send({ error: 'Invalid working_directory: must be a string' });
+        }
+        const targetServer = serverRepo.findByName(serverName);
+        const platform = targetServer ? (transportFactory.hostProfileFor(targetServer)?.platform ?? null) : null;
+        const reason = invalidWorkingDirectoryReasonFor(platform, body.working_directory);
+        if (reason) return reply.status(400).send({ error: `Invalid working_directory: ${reason}` });
       }
       // Issue #29 Step 3a: 'allow' is now selectable, but ONLY declaratively
       // for a server that has declared isolation intent — the real safety

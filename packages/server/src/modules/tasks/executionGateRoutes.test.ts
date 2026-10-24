@@ -149,7 +149,7 @@ function makeOpts(existingTask: Task): { opts: TasksRouteOptions; createCalls: R
       delete: vi.fn(),
     },
     worktreeServiceFactory: { create: vi.fn() } as unknown as TasksRouteOptions['worktreeServiceFactory'],
-    transportFactory: { getTransport: vi.fn(() => ({})) } as unknown as TasksRouteOptions['transportFactory'],
+    transportFactory: { getTransport: vi.fn(() => ({})), hostProfileFor: vi.fn(() => null) } as unknown as TasksRouteOptions['transportFactory'],
     windowRepo: {
       findByTaskIds: vi.fn(() => new Map()),
       add: vi.fn(() => 100),

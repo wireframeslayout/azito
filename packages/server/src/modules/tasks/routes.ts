@@ -18,7 +18,9 @@ import type { TaskRestoreService } from './TaskRestoreService';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import { TaskCleanupService } from './TaskCleanupService';
 import type { TaskTempFiles } from '../../shared/os/taskTempFiles';
-import { SAFE_PATH_PATTERN, rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
+import { rejectQualifiedBranchInput } from '../git/assertSafeGitArgs';
+import { invalidWorkingDirectoryReasonFor } from '../../shared/os/hostPath';
+import type { HostPlatform } from '../../shared/os/hostEnv';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId } from './execution/TaskExecutionEnv';
 import type { KillOutcome } from '../tmux/killOutcome';
 import { muxWindowTarget } from '../tmux/muxWindowTarget';
@@ -58,7 +60,11 @@ function parseSubagentConfigInput(raw: unknown, fieldName: string): SubagentConf
   return { enabled: obj['enabled'], provider: obj['provider'], model: obj['model'] };
 }
 
-export function validateGitFields(body: Record<string, unknown>): string | null {
+/**
+ * `platform` is the OS of the host the task's paths belong to, or null when that server is not known yet (the task's server is
+ * chosen later from its unit or project): the paths are then accepted when valid on any OS.
+ */
+export function validateGitFields(body: Record<string, unknown>, platform: HostPlatform | null): string | null {
   for (const key of ['base_branch', 'branch', 'target_branch'] as const) {
     const v = body[key];
     if (v == null || v === '') continue;
@@ -81,7 +87,10 @@ export function validateGitFields(body: Record<string, unknown>): string | null 
   }
   for (const key of ['working_directory', 'worktree_path'] as const) {
     const v = body[key];
-    if (v != null && v !== '' && (typeof v !== 'string' || !SAFE_PATH_PATTERN.test(v))) return `Invalid ${key}`;
+    if (v == null || v === '') continue;
+    if (typeof v !== 'string') return `Invalid ${key}`;
+    const reason = invalidWorkingDirectoryReasonFor(platform, v);
+    if (reason) return `Invalid ${key}: ${reason}`;
   }
   return null;
 }
@@ -220,6 +229,12 @@ function toListItem(task: Task, windows: unknown[], executionServerName: string 
 
 const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, done) => {
   const { taskRepo, muxDriverRegistry, projectRepo, projectServerRepo, logRepo, executeTaskUseCase, unitRepo, serverRepo, worktreeServiceFactory, transportFactory, windowRepo, respawnService, taskRestoreService, unitTypeLoader, sidekickLoader, projectSecretRepo, auditLogService, originationService, taskTokenRepo, destroyPrimaryTaskWindow, scopedAuthEnabled, taskTempFiles } = opts;
+  /** The OS of a task input's server, or null when no known server is named (see validateGitFields). */
+  const hostPlatformOfServer = (serverName: unknown): HostPlatform | null => {
+    if (typeof serverName !== 'string' || serverName === '') return null;
+    const srv = serverRepo.findByName(serverName);
+    return srv ? (transportFactory.hostProfileFor(srv)?.platform ?? null) : null;
+  };
   const taskCleanupService = new TaskCleanupService({ serverRepo, worktreeServiceFactory, transportFactory, projectServerRepo, projectRepo, muxDriverRegistry, windowRepo, logRepo, taskTempFiles });
 
   // ── GET /api/tasks ──
@@ -271,7 +286,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       implement_subagent,
       sleep_after_push,
     } = request.body as Record<string, unknown>;
-    const gitError = validateGitFields(request.body as Record<string, unknown>);
+    const gitError = validateGitFields(request.body as Record<string, unknown>, hostPlatformOfServer(server_name));
     if (gitError) return reply.status(400).send({ error: gitError });
     if (!project_id || !title)
       return reply.status(400).send({ error: 'project_id, title required' });
@@ -639,7 +654,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (!existing) return reply.status(404).send({ error: 'Task not found' });
       const { title, description, status, unit_id, server_name, priority, tmux_window, self_review_max_attempts, require_plan_approval, base_branch, target_branch, skip_pr, working_directory, branch, changed_files, pr_url, source, source_ref, review_subagent, implement_subagent, sleep_after_push, worktree_path, worktree_branch } =
         request.body as Record<string, unknown>;
-      const gitError = validateGitFields(request.body as Record<string, unknown>);
+      const gitError = validateGitFields(request.body as Record<string, unknown>, hostPlatformOfServer(server_name === undefined ? existing.serverName : server_name));
       if (gitError) return reply.status(400).send({ error: gitError });
       // require_plan_approval must be validated as an actual boolean before
       // it is used for anything — otherwise `!!` coercion downstream would
@@ -799,7 +814,7 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       if (description !== undefined && description !== null && typeof description !== 'string') {
         return reply.status(400).send({ error: 'description must be a string or null' });
       }
-      const gitError = validateGitFields(request.body as Record<string, unknown>);
+      const gitError = validateGitFields(request.body as Record<string, unknown>, null);
       if (gitError) return reply.status(400).send({ error: gitError });
 
       let unitId: number | null = null;

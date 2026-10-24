@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  assertGitPathArg,
   assertSafePath,
   assertSafeBranch,
   SAFE_PATH_PATTERN,
@@ -122,5 +123,45 @@ describe('rejectQualifiedBranchInput (Issue #87 third-party review, 11th round, 
 
   it('rejects unsafe characters', () => {
     expect(rejectQualifiedBranchInput('main; touch x')).toMatch(/invalid branch name/);
+  });
+});
+
+describe('assertGitPathArg', () => {
+  it('accepts absolute paths of the host, including spaces and Japanese (git takes an argv, never a shell line)', () => {
+    expect(() => assertGitPathArg('linux', '/home/me/my repo', 'path')).not.toThrow();
+    expect(() => assertGitPathArg('darwin', '/Users/me/プロジェクト', 'path')).not.toThrow();
+    expect(() => assertGitPathArg('linux', '~/work', 'path')).not.toThrow();
+    expect(() => assertGitPathArg('win32', 'C:\\Users\\me\\My Repo', 'path')).not.toThrow();
+    expect(() => assertGitPathArg('win32', 'C:/Users/me', 'path')).not.toThrow();
+    expect(() => assertGitPathArg('win32', '~\\work', 'path')).not.toThrow();
+  });
+
+  it('is looser than SAFE_PATH_PATTERN on POSIX in the characters it allows', () => {
+    expect(SAFE_PATH_PATTERN.test('/home/me/my repo')).toBe(false);
+    expect(() => assertGitPathArg('linux', '/home/me/my repo', 'path')).not.toThrow();
+  });
+
+  it('refuses a value git would read as an option', () => {
+    expect(() => assertGitPathArg('linux', '--upload-pack=x', 'path')).toThrow(/Unsafe path/);
+    expect(() => assertGitPathArg('win32', '-c', 'path')).toThrow(/Unsafe path/);
+  });
+
+  it('refuses a relative path, an empty one and NUL', () => {
+    expect(() => assertGitPathArg('linux', 'repo', 'path')).toThrow(/absolute/);
+    expect(() => assertGitPathArg('linux', '../repo', 'path')).toThrow(/absolute/);
+    expect(() => assertGitPathArg('win32', 'repo', 'path')).toThrow(/absolute/);
+    expect(() => assertGitPathArg('linux', '', 'path')).toThrow(/empty/);
+    expect(() => assertGitPathArg('linux', '/a\0b', 'path')).toThrow(/NUL/);
+  });
+
+  it('refuses the Windows paths a file operation refuses', () => {
+    expect(() => assertGitPathArg('win32', '\\\\?\\C:\\x', 'path')).toThrow(/device/);
+    expect(() => assertGitPathArg('win32', 'C:foo', 'path')).toThrow(/drive-relative/);
+    expect(() => assertGitPathArg('win32', 'C:\\x:stream', 'path')).toThrow(/alternate data stream/);
+  });
+
+  it('does not take a Windows path on a POSIX host, or ~\\ there', () => {
+    expect(() => assertGitPathArg('linux', 'C:\\x', 'path')).toThrow(/absolute/);
+    expect(() => assertGitPathArg('linux', '~\\x', 'path')).toThrow(/absolute/);
   });
 });
