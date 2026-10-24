@@ -106,6 +106,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
     gitProvider: { getIssue: vi.fn() } as unknown as ProjectsRouteOptions['gitProvider'],
     tmux: { listSessions: vi.fn(async () => []), createSession: vi.fn(async () => {}) } as unknown as ProjectsRouteOptions['tmux'],
     muxDriverRegistry: { resolve: vi.fn(() => ({ listWorkspaces: vi.fn(async () => []), openWorkspace: vi.fn(async () => {}) })) } as unknown as ProjectsRouteOptions['muxDriverRegistry'],
+    transportFactory: { hostProfileFor: () => null } as unknown as ProjectsRouteOptions['transportFactory'],
     serverRepo: {
       // Throws on purpose: this listing must never take the credential-decrypting
       // path (`findAll()` -> `toEntity()` -> `SecretBox.open()`), which one broken

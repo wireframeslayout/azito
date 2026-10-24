@@ -3,7 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../api/client';
 import Modal from './Modal';
 import { Badge } from './ui/Badge';
-import { Button, Spinner } from './ui';
+import { Button, Notice, Spinner } from './ui';
+import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 import { createRequestGuard, dedupeSelectableUrls } from './repoDiscoveryDialogLogic';
 
 interface DiscoveredRemote {
@@ -45,6 +46,8 @@ const PROVIDER_TONE: Record<string, 'accent' | 'orange' | 'neutral'> = {
 
 export default function RepoDiscoveryDialog({ open, onClose, projectId, serverName, onRegistered }: RepoDiscoveryDialogProps) {
   const { t } = useTranslation(['projects', 'common']);
+  // The scan is closed on some hosts (a Windows agent until #370): nothing is requested, the reason is shown.
+  const gitBlockedReason = useHostFeatureBlock()(serverName, 'git');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [repos, setRepos] = useState<DiscoveredRepo[]>([]);
@@ -90,8 +93,8 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
   }, [projectId, serverName, t]);
 
   useEffect(() => {
-    if (open) discover();
-  }, [open, discover]);
+    if (open && !gitBlockedReason) discover();
+  }, [open, discover, gitBlockedReason]);
 
   const toggleSelect = useCallback((url: string) => {
     setSelected((prev) => {
@@ -162,7 +165,7 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
       onClose={onClose}
       maxWidth={640}
       actions={
-        !loading && !error && totalRemotes > 0 ? (
+        !gitBlockedReason && !loading && !error && totalRemotes > 0 ? (
           <Button
             variant="primary"
             onClick={handleRegister}
@@ -175,27 +178,29 @@ export default function RepoDiscoveryDialog({ open, onClose, projectId, serverNa
         ) : undefined
       }
     >
-      {loading && (
+      {gitBlockedReason && <Notice tone="info">{gitBlockedReason}</Notice>}
+
+      {!gitBlockedReason && loading && (
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '32px 0' }}>
           <Spinner size={16} />
           <span style={{ fontSize: 'var(--font-md)', color: 'var(--text-dim)' }}>{t('settings.repositories.discover.scanning')}</span>
         </div>
       )}
 
-      {error && !loading && (
+      {!gitBlockedReason && error && !loading && (
         <div style={{ textAlign: 'center', padding: '24px 0' }}>
           <div style={{ color: 'var(--red)', fontSize: 'var(--font-md)', marginBottom: 12 }}>{error}</div>
           <Button size="sm" onClick={discover}>{t('settings.repositories.discover.retry')}</Button>
         </div>
       )}
 
-      {!loading && !error && totalRemotes === 0 && (
+      {!gitBlockedReason && !loading && !error && totalRemotes === 0 && (
         <div style={{ textAlign: 'center', padding: '24px 0', color: 'var(--text-dim)', fontSize: 'var(--font-md)' }}>
           {t('settings.repositories.discover.empty')}
         </div>
       )}
 
-      {!loading && !error && totalRemotes > 0 && (
+      {!gitBlockedReason && !loading && !error && totalRemotes > 0 && (
         <div>
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
             <span style={{ fontSize: 'var(--font-sm)', color: 'var(--text-dim)' }}>

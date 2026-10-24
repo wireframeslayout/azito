@@ -5,6 +5,7 @@ import type { ProjectsRouteOptions } from './routes';
 import { TaskOriginationService } from '../tasks/origination/TaskOriginationService';
 import type { AuditLogService } from '../../shared/audit/AuditLogService';
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { mapAppError } from '../../app/mapAppError';
 import { LocalCloneTargetNotEmptyError } from '../git/LocalRepoCloneService';
 
 // Issue #19 third-party review:
@@ -91,6 +92,7 @@ function makeOpts(overrides: Partial<ProjectsRouteOptions> = {}): ProjectsRouteO
       findMetaByNames: vi.fn(() => []),
       delete: vi.fn(),
     },
+    transportFactory: { hostProfileFor: (s: { hostProfile: unknown }) => s.hostProfile } as unknown as ProjectsRouteOptions['transportFactory'],
     projectSecretRepo: {
       findByProject: vi.fn(() => []),
     } as unknown as ProjectsRouteOptions['projectSecretRepo'],
@@ -1063,5 +1065,30 @@ describe('POST clone-local', () => {
 
     expect(res.statusCode).toBe(502);
     expect(res.json().error).toContain('could not resolve host');
+  });
+});
+
+describe('GET discover-repositories on a Windows server (the repository scan is closed until #370)', () => {
+  it('answers 501 unsupported_os and runs nothing', async () => {
+    const discover = vi.fn();
+    const opts = makeOpts({
+      repoDiscovery: { discover } as unknown as ProjectsRouteOptions['repoDiscovery'],
+      transportFactory: { hostProfileFor: () => ({ platform: 'win32', arch: 'x64' }) } as unknown as ProjectsRouteOptions['transportFactory'],
+    });
+    const app = Fastify();
+    const defaultHandler = app.errorHandler;
+    app.setErrorHandler((err, request, reply) => {
+      const mapped = mapAppError(err);
+      if (mapped) return reply.status(mapped.status).send(mapped.body);
+      return defaultHandler.call(app, err, request, reply);
+    });
+    await app.register(projectsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'GET', url: '/api/projects/10/servers/local/discover-repositories' });
+
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
+    expect(discover).not.toHaveBeenCalled();
   });
 });

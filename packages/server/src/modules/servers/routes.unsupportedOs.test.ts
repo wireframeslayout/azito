@@ -85,3 +85,20 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     expect(exec).toHaveBeenCalled();
   });
 });
+
+describe('branch search on a Windows server answers unsupported_os (the repository API is closed until #370)', () => {
+  it('GET /api/servers/:name/branches is 501 with the reason', async () => {
+    const { app, exec } = await buildApp({ platform: 'win32', arch: 'x64' });
+    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/branches?working_directory=C:%5Cwork' });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining('win32') });
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it('a Linux server is not refused', async () => {
+    const { app } = await buildApp({ platform: 'linux', arch: 'x64' });
+    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/branches' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({ branches: [] });
+  });
+});

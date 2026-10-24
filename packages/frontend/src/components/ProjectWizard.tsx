@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { apiWithStatus } from '../api/client';
+import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 import { useApi } from '../hooks/useApi';
 import { useIsMobile } from '../hooks/useIsMobile';
 import { Button, type InstallStep } from './ui';
@@ -66,6 +67,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
   const isMobile = useIsMobile();
   const { data: servers } = useApi<ServerListItem[]>('/servers');
   const serverList = useMemo(() => servers ?? [], [servers]);
+  const hostFeatureBlock = useHostFeatureBlock();
 
   // ── Step 1: project fields (mode === 'create' only) ──
   const [name, setName] = useState('');
@@ -207,6 +209,8 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     if (!visibleSteps.includes(currentStep)) setCurrentStep(visibleSteps[0]);
   }, [visibleSteps, currentStep]);
 
+  const discoveryBlockedReason = hostFeatureBlock(selectedServer, 'git');
+
   const runDiscovery = useCallback(async (path: string, server: string) => {
     const requestId = discoveryGuardRef.current.start();
     setDiscovery('checking');
@@ -241,9 +245,11 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
     setSelectedRemoteUrls(new Set());
 
     if (effectiveMode !== 'existing' || !existingPath.trim() || !selectedServer) return;
+    // The scan is closed on some hosts (a Windows agent until #370): nothing is requested; the step shows the reason.
+    if (discoveryBlockedReason) return;
     const handle = setTimeout(() => { runDiscovery(existingPath, selectedServer); }, 400);
     return () => clearTimeout(handle);
-  }, [existingPath, selectedServer, effectiveMode, runDiscovery]);
+  }, [existingPath, selectedServer, effectiveMode, runDiscovery, discoveryBlockedReason]);
 
   const toggleRemoteSelected = useCallback((url: string) => {
     setSelectedRemoteUrls((prev) => {
@@ -762,6 +768,7 @@ export default function ProjectWizard({ mode, projectId, existingServerNames, on
               variant={codeStepVariant}
               existingPath={existingPath} onExistingPathChange={setExistingPath}
               discovery={discovery}
+              discoveryBlockedReason={discoveryBlockedReason}
               selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected}
               cloneUrl={cloneUrl} setCloneUrl={setCloneUrl} onSelectRepoCandidate={handleSelectRepoCandidate}
               cloneDirectory={cloneDirectory}

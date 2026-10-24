@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import { formatRelativeTime } from '../../utils/time';
 import { LoadingState, EmptyState } from '../ui';
+import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
+import GitBlockedState from './GitBlockedState';
 
 interface GitCommit {
   hash: string;
@@ -20,7 +22,14 @@ interface CommitListProps {
   onSelectCommit: (hash: string) => void;
 }
 
-export default function CommitList({ serverName, path, baseBranch, selectedHash, onSelectCommit }: CommitListProps) {
+/** Git is closed on some hosts (a Windows agent until #370): the list then says why, and nothing is requested. */
+export default function CommitList(props: CommitListProps) {
+  const blockedReason = useHostFeatureBlock()(props.serverName, 'git');
+  if (blockedReason) return <GitBlockedState reason={blockedReason} />;
+  return <CommitListContent {...props} />;
+}
+
+function CommitListContent({ serverName, path, baseBranch, selectedHash, onSelectCommit }: CommitListProps) {
   const { t } = useTranslation('git');
   const [commits, setCommits] = useState<GitCommit[]>([]);
   const [loading, setLoading] = useState(true);

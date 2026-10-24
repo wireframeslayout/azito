@@ -214,13 +214,15 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 }
 
 export function CodeStep({
-  t, codeMode, setCodeMode, selectedServer, variant, existingPath, onExistingPathChange, discovery,
+  t, codeMode, setCodeMode, selectedServer, variant, existingPath, onExistingPathChange, discovery, discoveryBlockedReason,
   selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, onSelectRepoCandidate, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
   cloneToken, setCloneToken, reusableRepo,
   showValidation,
 }: {
   t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; variant: CodeStepVariant;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
+  /** Why the existing-directory scan is closed on the selected server's host (a Windows agent); null: open. */
+  discoveryBlockedReason: string | null;
   selectedRemoteUrls: Set<string>; toggleRemoteSelected: (url: string) => void;
   cloneUrl: string; setCloneUrl: (v: string) => void; onSelectRepoCandidate: (candidate: RepositoryCandidate) => void;
   cloneDirectory: string; setCloneDirectory: (v: string) => void;
@@ -289,7 +291,9 @@ export function CodeStep({
       {mode === 'existing' && (
         <FormField label={t('wizard.code.pathLabel')} error={showValidation ? t('wizard.code.pathRequired') : undefined}>
           <DirectoryInput value={existingPath} onChange={onExistingPathChange} serverName={selectedServer} placeholder={t('wizard.code.pathPlaceholder')} style={baseInputStyle} />
-          <DiscoveryResult t={t} discovery={discovery} selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected} />
+          {discoveryBlockedReason
+            ? <Notice tone="info">{discoveryBlockedReason}</Notice>
+            : <DiscoveryResult t={t} discovery={discovery} selectedRemoteUrls={selectedRemoteUrls} toggleRemoteSelected={toggleRemoteSelected} />}
         </FormField>
       )}
 

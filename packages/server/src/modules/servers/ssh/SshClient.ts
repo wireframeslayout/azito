@@ -169,10 +169,10 @@ export class SshClient {
     const authMethods: Array<Record<string, unknown>> = [];
     authMethods.push({ type: 'none', username: resolved.username });
     if (resolved.agent) {
-      authMethods.push({ type: 'agent', agent: resolved.agent });
+      authMethods.push({ type: 'agent', username: resolved.username, agent: resolved.agent });
     }
     if (privateKey) {
-      authMethods.push({ type: 'publickey', key: privateKey });
+      authMethods.push({ type: 'publickey', username: resolved.username, key: privateKey });
     }
 
     let authIdx = 0;
