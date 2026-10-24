@@ -1,5 +1,6 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ISessionStrategy } from './SessionStrategy';
+import type { LocalAgentHomes } from './agentHomes';
 import type { ShellDialect } from '../../shared/os/shellDialect';
 
 // ─── Catalog types (旧 AgentCatalog.AgentDefinition 相当) ───
@@ -36,6 +37,8 @@ export interface LaunchOptions {
 
 export interface SessionStrategyDeps {
   transportFactory: TransportFactory;
+  /** Overrides of the agent CLIs' directories on the hub's own machine (resolved at the composition root). */
+  localHomes: LocalAgentHomes;
 }
 
 // ─── Token usage (エージェントごとに形が異なるため緩く型付けする) ───

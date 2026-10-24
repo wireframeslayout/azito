@@ -1161,6 +1161,22 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   });
 
   // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('types an absolute path for a working directory written as ~/… (the shell does not expand a quoted ~)', async () => {
+    const homeRelative = `~/${path.relative(realpathSync.native(tmpdir()), rootDir)}`;
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: homeRelative });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(null),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${rootDir}'`);
+    expect(sentCommands.some((c) => c.includes('~'))).toBe(false);
+  });
+
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
   it.skipIf(process.platform === 'win32')('guards a resolved path starting with "-" from being read as a cd option', async () => {
     const dashDir = path.join(rootDir, '-rf');
     mkdirSync(dashDir);
@@ -2057,7 +2073,7 @@ describe('WindowRespawnService.respawn — baseBranch auto-detection (Issue #63)
 
 /**
  * Builds a service variant with process-detection mocks: the tmux driver
- * gains `panePidByHandle` and the transport gains `exec` (for `ps` output).
+ * gains `panePidByHandle` and the transport gains `listProcesses` (answered from rows of `<pid> <ppid> <elapsed seconds> <command line>`).
  * `extraWindows` feeds `windowRepo.findByTask`.
  */
 function buildServiceWithProcessDetection(opts: {
@@ -2069,12 +2085,15 @@ function buildServiceWithProcessDetection(opts: {
   psOutput?: string;
   psExecThrows?: boolean;
 }) {
-  const exec = opts.psExecThrows
+  const listProcesses = opts.psExecThrows
     ? vi.fn(async () => { throw new Error('ps failed'); })
-    : vi.fn(async () => ({ stdout: opts.psOutput ?? '', stderr: '', code: 0 }));
+    : vi.fn(async () => (opts.psOutput ?? '').split('\n').flatMap((line) => {
+      const m = /^\s*(\d+)\s+(\d+)\s+(\d+)\s+(.+)$/.exec(line);
+      return m ? [{ pid: Number(m[1]), ppid: Number(m[2]), startMs: Date.now() - Number(m[3]) * 1000, executable: null, commandLine: m[4], rssBytes: null }] : [];
+    }));
 
   const transportFactory: Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'> = {
-    getTransport: vi.fn(() => ({ exec })) as any,
+    getTransport: vi.fn(() => ({ listProcesses })) as any,
     getFileOps: vi.fn(() => hostFiles),
     hostProfileFor: vi.fn(() => null),
   };
@@ -2095,7 +2114,7 @@ function buildServiceWithProcessDetection(opts: {
     (result.windowRepo.findByTask as ReturnType<typeof vi.fn>).mockReturnValue(opts.extraWindows);
   }
 
-  return { ...result, exec };
+  return { ...result, listProcesses };
 }
 
 describe('WindowRespawnService.findRunningSessionForTask', () => {

@@ -4,8 +4,9 @@ import type { TransportFactory } from '../../servers/transport/TransportFactory'
 import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import { raceDeadline } from '../../../shared/fs/deadline';
 import { pathApiFor } from '../../../shared/os/hostPath';
-import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta, ROLLOUT_HEAD_BYTES, SESSION_SCAN_BUDGET_MS, type RolloutCandidate } from '../sessionScanUtils';
+import { findFilesByMtime, firstLineOf, normalizeCwd, parseRolloutMeta, ROLLOUT_HEAD_BYTES, SESSION_SCAN_BUDGET_MS, type RolloutCandidate } from '../sessionScanUtils';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
+import { codexHomeOf, type LocalAgentHomes } from '../agentHomes';
 import { buildCodexLaunchCommand, buildCodexRespawnCommand } from './launchCommand';
 
 export class CodexSessionStrategy implements ISessionStrategy {
@@ -13,7 +14,7 @@ export class CodexSessionStrategy implements ISessionStrategy {
   readonly needsPostLaunchScan = true;
   private excludedIds = new Set<string>();
 
-  constructor(private transportFactory: TransportFactory) {}
+  constructor(private transportFactory: TransportFactory, private localHomes: LocalAgentHomes) {}
 
   excludeSessionId(id: string): void {
     this.excludedIds.add(id);
@@ -36,7 +37,7 @@ export class CodexSessionStrategy implements ISessionStrategy {
 
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {
     const files = this.transportFactory.getFileOps(server);
-    const sessionsDir = pathApiFor(files.platform).join(await files.realpath('~'), '.codex', 'sessions');
+    const sessionsDir = pathApiFor(files.platform).join(await codexHomeOf(files, server.type === 'local', this.localHomes), 'sessions');
 
     // Oldest first; the first one that passes the filters is the answer, so the rest are not read. The reads share the scan's time.
     const deadline = Date.now() + SESSION_SCAN_BUDGET_MS;
@@ -46,7 +47,7 @@ export class CodexSessionStrategy implements ISessionStrategy {
       if (!candidate) continue;
       if (this.excludedIds.has(candidate.sessionId)) continue;
       if (candidate.originator === 'codex_exec') continue;
-      if (workingDirectory !== null && candidate.cwd !== null && normalizePath(candidate.cwd) !== normalizePath(workingDirectory)) continue;
+      if (workingDirectory !== null && candidate.cwd !== null && normalizeCwd(files.platform, candidate.cwd) !== normalizeCwd(files.platform, workingDirectory)) continue;
       return candidate.sessionId;
     }
     return null;
