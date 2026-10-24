@@ -57,6 +57,8 @@
     "includePlaceholder": "例: *.ts, src/**",
     "excludePlaceholder": "node_modules, .git, dist, .worktrees",
     "summary": "{{files}} ファイル · {{hits}} 件 ({{engine}}, {{time}}ms)",
+    "engine": { "rg": "ripgrep", "grep": "grep", "builtin": "内蔵" },
+    "engineHint": { "rg": "ripgrep で検索しました", "grep": "grep で検索しました", "builtin": "内蔵の検索で検索しました。ホストに ripgrep (rg) を入れると速くなります。" },
     "truncated": "上位 200 件を表示しています — 絞り込んでください",
     "noMatch": "一致するものがありません",
     "noMatchHint": "除外パターンを確認してください",

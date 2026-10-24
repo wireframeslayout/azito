@@ -9,6 +9,7 @@ import { isGitDirectoryName } from '../git/gitPath';
 import storageRoutes from './routes';
 import { isHostPathContained } from '../../shared/os/hostPath';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
+import { mapAppError } from '../../app/mapAppError';
 
 const localOps = (dir: string): LocalFileOps => new LocalFileOps(localFileOpsHost({ platform: process.platform, homeDir: dir }));
 
@@ -418,5 +419,58 @@ describe('isGitDirectoryName', () => {
     expect(isGitDirectoryName('win32', '.git.')).toBe(true);
     expect(isGitDirectoryName('win32', '.git. ')).toBe(true);
     expect(isGitDirectoryName('win32', '.gitignore')).toBe(false);
+  });
+});
+
+describe('GET /api/servers/:name/files/search — host feature guard', () => {
+  async function appOn(platform: 'linux' | 'win32' | null, search: () => Promise<unknown>) {
+    const app = Fastify();
+    app.setErrorHandler((err, _request, reply) => {
+      const mapped = mapAppError(err);
+      if (!mapped) return reply.status(500).send({ error: (err as Error).message });
+      return reply.status(mapped.status).send(mapped.body);
+    });
+    app.register(fileBrowseRoutes, {
+      serverRepo: { findByName: () => ({ name: 'srv', type: 'agent' }) } as unknown as IServerRepository,
+      projectServerRepo: { find: () => ({ workingDirectory: '/w' }) } as unknown as IProjectServerRepository,
+      transportFactory: {
+        hostProfileFor: () => (platform ? { platform } : null),
+        getFileOps: () => ({ platform: 'linux', realpath: async (p: string) => p, stat: async () => ({ kind: 'directory', size: 0, mtimeMs: 1, mode: 0o755 }) }),
+      } as any,
+      searchService: { search } as any,
+    } as any);
+    await app.ready();
+    return app;
+  }
+
+  it('answers 501 unsupported_os for a Windows host, before anything is searched', async () => {
+    const search = vi.fn(async () => ({}));
+    const app = await appOn('win32', search);
+    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/files/search?q=x&project_id=1' });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os' });
+    expect(search).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('answers 400 for more globs than a search request to the host can carry', async () => {
+    const search = vi.fn(async () => ({}));
+    const app = await appOn('linux', search);
+    const many = Array.from({ length: 97 }, (_, i) => `g${i}`).join(',');
+    const res = await app.inject({ method: 'GET', url: `/api/servers/srv/files/search?q=x&project_id=1&exclude=${many}` });
+    expect(res.statusCode).toBe(400);
+    expect(search).not.toHaveBeenCalled();
+    await app.close();
+  });
+
+  it('searches on a Unix host, and on one whose OS was never recorded', async () => {
+    for (const platform of ['linux', null] as const) {
+      const search = vi.fn(async () => ({ nameMatches: [], contentHits: [], engine: 'rg', truncated: false, elapsedMs: 1 }));
+      const app = await appOn(platform, search);
+      const res = await app.inject({ method: 'GET', url: '/api/servers/srv/files/search?q=x&project_id=1' });
+      expect(res.statusCode).toBe(200);
+      expect(search).toHaveBeenCalledOnce();
+      await app.close();
+    }
   });
 });

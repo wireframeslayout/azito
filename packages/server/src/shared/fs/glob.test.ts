@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compileGlob } from './glob';
+import { compileGlob, compileIncludeFilter } from './glob';
 
 describe('compileGlob', () => {
   it('reads * ? and [set] as find -name does, and everything else literally', () => {
@@ -44,5 +44,25 @@ describe('compileGlob', () => {
     const started = Date.now();
     expect(matches('a'.repeat(5000))).toBe(false);
     expect(Date.now() - started).toBeLessThan(1_000);
+  });
+});
+
+describe('compileIncludeFilter', () => {
+  const entries = ['a.ts', 'src/b.ts', 'src/deep/c.md', 'lib/d.ts'];
+  const pick = (root: string, globs: string[]): string[] => entries.filter(compileIncludeFilter(root, globs));
+
+  it('lets every file pass when there is no glob', () => {
+    expect(pick('/w', [])).toEqual(entries);
+  });
+
+  it('matches a glob without a / against the name, and one with a / against the path from the root', () => {
+    expect(pick('/w', ['*.md'])).toEqual(['src/deep/c.md']);
+    expect(pick('/w', ['src/*'])).toEqual(['src/b.ts', 'src/deep/c.md']);
+    expect(pick('/w', ['*.md', 'lib/*.ts'])).toEqual(['src/deep/c.md', 'lib/d.ts']);
+  });
+
+  it('reads a root in the Windows notation, with or without a trailing separator', () => {
+    expect(pick('C:\\proj', ['src/*.ts'])).toEqual(['src/b.ts']);
+    expect(pick('C:\\proj\\', ['lib/*'])).toEqual(['lib/d.ts']);
   });
 });

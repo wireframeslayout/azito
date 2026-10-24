@@ -37,8 +37,8 @@ export type HostFeatureSupport =
 /**
  * The Windows rows: feature -> the issue that supports it (null: never, the host has no such program). Each row says
  * which path closes it.
- *  - fileSearch (#370): `GET /files/search` runs `rg`, else `grep`, through `transport.run`, and reads the hits with `/`-rooted
- *    paths (`FileSearchService.parseHits`); Windows has no grep and returns backslash paths, so a search without rg finds nothing.
+ *  - fileSearch (#370): `GET /files/search` runs `rg`, else `grep` (Unix), else the host's own search (`IFileOps.searchContent`, Node), and
+ *    reports hit paths relative to the root with `/`. Closed here only until the whole path, UI included, is verified on a real Windows host (R5).
  *  - git (#370): diff / commits / worktree list / branch search (`modules/git/routes.ts`, `GET /branches`). The read paths take
  *    Windows paths now (`assertGitPathArg`); the row stays closed until worktree create / remove (R4) work on Windows and a host
  *    cannot be assumed to have `git`. Those routes answer `unsupported_os` (`assertGitSupported` in `shared/os/hostProfile.ts`). #370 makes git work on Windows, then removes this row and that guard.

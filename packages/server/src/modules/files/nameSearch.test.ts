@@ -42,6 +42,12 @@ function hostWalking(walk: IFileOps['walk']): IFileOps {
 }
 
 describe('searchFileNames', () => {
+  it('drops a trailing backslash of a Windows root before it joins the path, so the text matched has one separator', async () => {
+    const files = hostWalking(async () => ({ entries: [{ path: 'src/a.ts', mtimeMs: 1 }], truncated: false }));
+    const found = await searchResult({ root: 'C:\\proj\\', regex: true, query: 'C:.proj/src/a\\.ts', include: ['src/*.ts'] }, LIMITS, files);
+    expect(found.paths).toEqual(['src/a.ts']);
+  });
+
   it('finds files whose name contains the query, at any depth, as paths relative to the root', async () => {
     tree('src/test.ts', 'src/deep/er/my-test.spec.ts', 'readme.md', 'src/other.ts');
 

@@ -39,7 +39,9 @@ The search mode in the sidebar lets you search file names and file contents acro
 
 - Three inline toggles next to the search box — `Aa` (match case), `ab` (whole word), `.*` (regular expression) — narrow the search
 - Expanding the details reveals "Files to Include" / "Files to Exclude" glob fields (default exclusions such as `node_modules`, `.git`, `dist`, `.worktrees`)
-- `rg` (ripgrep) is used when available on the server, falling back to `grep` otherwise
+- File contents are searched with `rg` (ripgrep) when the server has it (it is fast, so installing it is recommended). On a Unix server without `rg`, `grep` is used; on a Windows server without `rg` (Windows has no `grep` either), AZITO's own search written in Node is used. A small label above the results (ripgrep / grep / built-in) shows which one searched
+- The built-in search is not identical to `rg`. It does match `rg` on: the default excluded directories (`node_modules`, `.git`, `dist`, `.worktrees`); how the include / exclude globs are read (as `rg -g` reads them: `src/*.ts` means the files directly in the root's `src`, `src/private/**` leaves out everything below it); at most 5 lines per file; 1 MB for all the results together; and skipping binary files (those with a NUL byte; UTF-8 and UTF-16 files that start with a byte order mark are searched as text). It differs in these ways: only the built-in search skips files over 10 MB (`rg` has no size limit); it does not read `.gitignore`, so it also searches files `rg` would skip; it searches hidden files (`.env`, `.github/`, ...) as `grep` does; regular expressions use JavaScript syntax, and "whole word" counts only ASCII letters, digits and `_` as word characters. A Unix server that has neither `rg` nor `grep` switches to it too. An older agent without the new search operation is refused with `agent_outdated` (update the agent)
+- Result paths are relative to the search root with `/` separators, whichever program searched
 - The search scope is also confined to the project's `workingDirectory`
 
 ## File Preview

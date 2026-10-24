@@ -7,9 +7,11 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
-import type { FileSearchService } from './FileSearchService';
+import { SEARCH_DEFAULT_EXCLUDES, type FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
 import { isHostPathContained, isSameHostPath, pathApiFor } from '../../shared/os/hostPath';
+import { MAX_SEARCH_GLOBS, MAX_SEARCH_GLOB_LENGTH } from '../../shared/fs/fileOpsWire';
+import { assertHostFeature } from '../../shared/os/hostFeature';
 import { isGitDirectoryName } from '../git/gitPath';
 
 export function sanitizeFileName(raw: string): string {
@@ -532,6 +534,8 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      // Before anything touches the host: the UI closes the search from the same table (`hostFeatureSupport`).
+      assertHostFeature(transportFactory.hostProfileFor(srv), 'fileSearch', 'Searching file contents');
 
       const q = (request.query.q || '').trim();
       if (!q) return reply.status(400).send({ error: 'q is required' });
@@ -543,6 +547,14 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
 
       if (/[\x00-\x1f]/.test(request.query.include || '') || /[\x00-\x1f]/.test(request.query.exclude || '')) {
         return reply.status(400).send({ error: 'Invalid search patterns' });
+      }
+      // The most a search request to the host may carry (the agent refuses more); the defaults take some of the exclude list.
+      const globsTooMany = (value: string | undefined, limit: number): boolean => {
+        const globs = (value || '').split(',').map((glob) => glob.trim()).filter(Boolean);
+        return globs.length > limit || globs.some((glob) => glob.length > MAX_SEARCH_GLOB_LENGTH);
+      };
+      if (globsTooMany(request.query.include, MAX_SEARCH_GLOBS) || globsTooMany(request.query.exclude, MAX_SEARCH_GLOBS - SEARCH_DEFAULT_EXCLUDES)) {
+        return reply.status(400).send({ error: 'Too many or too long search patterns' });
       }
 
       const ps = projectServerRepo.find(projectId, srv.name);

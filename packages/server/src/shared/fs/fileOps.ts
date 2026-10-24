@@ -48,6 +48,14 @@ export interface IFileOps {
    * `NOT_A_DIRECTORY`; a directory below it that cannot be read is passed over.
    */
   walk(root: string, options: WalkOptions): Promise<WalkResult>;
+  /**
+   * The lines of the regular files below the directory `root` that match a query, searched on the host by AZITO's own code
+   * (no `rg` / `grep` needed). The tree is walked like {@link IFileOps.walk}; a file that looks binary (a NUL byte) or is larger than
+   * {@link CONTENT_SEARCH_MAX_FILE_BYTES} is passed over (a file that starts with a byte order mark is text in UTF-8 or UTF-16). See {@link ContentSearchOptions} for the bounds; when one is reached the
+   * hits found so far are returned with `truncated`. A `root` that is missing or not a directory is `NOT_FOUND` / `NOT_A_DIRECTORY`.
+   * An expression that cannot be compiled has no hits.
+   */
+  searchContent(root: string, options: ContentSearchOptions): Promise<ContentSearchResult>;
   /** The real path of an existing entry (symbolic links and junctions followed, notation made the filesystem's own). A leading `~` is the host's home directory. */
   realpath(path: string): Promise<string>;
 }
@@ -84,6 +92,55 @@ export interface WalkResult {
   entries: WalkEntry[];
   /** A bound was reached before the whole tree was seen. */
   truncated: boolean;
+}
+
+/** Files larger than this are not searched by {@link IFileOps.searchContent} (a minified bundle or a data dump is not what a person searches for). */
+export const CONTENT_SEARCH_MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** The text of all the hits of one search together stops at this size (the 1 MB the output of `rg` / `grep` is cut at). */
+export const CONTENT_SEARCH_MAX_RESULT_BYTES = 1024 * 1024;
+/** The text of a hit is at most this many characters: a longer line is cut to a window around the match. */
+export const CONTENT_SEARCH_MAX_LINE_CHARS = 2000;
+/** A file yields at most this many matching lines (ripgrep is run with `--max-count 5` the same way). */
+export const CONTENT_SEARCH_MAX_HITS_PER_FILE = 5;
+
+export interface ContentSearchOptions {
+  query: string;
+  caseSensitive: boolean;
+  /** The match has to be a whole word: no letter, digit or `_` of the ASCII range next to it. */
+  wholeWord: boolean;
+  /** `query` is a regular expression (JavaScript syntax) that is matched against each line; otherwise it is text. */
+  regex: boolean;
+  /** Globs a file must match (any of them), read as ripgrep's `-g` reads them (see `compileSearchPathFilter`): a name at any depth, or with a `/` a path from `root`. Empty: every file. */
+  include: string[];
+  /** Globs of files and directories that are left out (`-g '!glob'`), read the same way; a directory that matches is not entered. Case-sensitive. */
+  exclude: string[];
+  /** The search stops after this many hits. */
+  maxHits: number;
+  /** The search stops after this long, by the host's clock. */
+  timeBudgetMs: number;
+}
+
+export interface ContentSearchHit {
+  /** Relative to the searched root, always with `/`. */
+  path: string;
+  /** 1-based. */
+  line: number;
+  /** 1-based, in UTF-16 units. */
+  column: number;
+  /** The line, without its line terminator (`\n` or `\r\n`); a line longer than {@link CONTENT_SEARCH_MAX_LINE_CHARS} is cut to a window around the match. */
+  text: string;
+  /** Offsets of the first match in `text`, in UTF-16 units (in the window, for a cut line). */
+  matchStart: number;
+  matchEnd: number;
+}
+
+export interface ContentSearchResult {
+  /** By file (shallower first, by name within a level), by line within a file. */
+  hits: ContentSearchHit[];
+  /** A bound was reached before every file was searched. */
+  truncated: boolean;
+  /** The time ran out in the middle of the search (it is also `truncated`): with no hits, nothing was learned. */
+  timedOut: boolean;
 }
 
 export interface FileStat {

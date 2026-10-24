@@ -5,6 +5,8 @@ import { shellQuote as sq } from '../../../shared/shellQuote';
 import { stripTerminalArtifacts } from '../../../shared/utils/stripTerminalArtifacts';
 import {
   FileOpsError,
+  type ContentSearchOptions,
+  type ContentSearchResult,
   type DirEntry,
   type EntryKind,
   type FileContent,
@@ -256,6 +258,15 @@ export class ShellFileOps implements IFileOps {
     if (stdout.includes('AZITO_NO_STAGING')) throw new FileOpsError('NOT_FOUND', `No such directory: ${staging}`);
     if (stdout.includes('AZITO_BACKUP_KEPT')) throw new FileOpsError('FAILED', `Replace failed and the previous content could not be put back; it is at ${target}.azito-old-*`);
     if (!stdout.includes('AZITO_REPLACE_OK')) throw new FileOpsError('FAILED', 'Replace failed; the previous content was put back');
+  }
+
+  /**
+   * Not offered: an agent without a recorded host is a Unix one, which has `rg` / `grep` for `FileSearchService` to run through
+   * `transport.run`, and a Node search would need `/api/fileops` (the agent update that brings it records the host too, after which
+   * this class is no longer used for that server). The service never asks for it; this is a refusal, not a second route.
+   */
+  async searchContent(_root: string, _options: ContentSearchOptions): Promise<ContentSearchResult> {
+    throw new FileOpsError('FAILED', 'agent_outdated: the built-in content search needs an agent that supports /api/fileops (update the agent)');
   }
 
   /**

@@ -1,5 +1,5 @@
 import { FileOpsError, type IFileOps, type WalkEntry } from '../../shared/fs/fileOps';
-import { compileGlob } from '../../shared/fs/glob';
+import { compileGlob, compileIncludeFilter } from '../../shared/fs/glob';
 import { DeadlineExceededError, raceDeadline } from '../../shared/fs/deadline';
 import { matchWithRegex } from './regexMatchWorker';
 
@@ -35,7 +35,8 @@ export const NAME_SEARCH_MAX_FILES = 200_000;
 /** Kept back from the budget for the answer of the host to come back, and for the matching. */
 const WALK_RESERVE_MS = 1_500;
 
-const NOTHING_TO_SEARCH: ReadonlySet<FileOpsError['code']> = new Set(['NOT_FOUND', 'NOT_A_DIRECTORY', 'PERMISSION_DENIED']);
+/** Why a search root has nothing to search: not an error of the search. */
+export const NOTHING_TO_SEARCH: ReadonlySet<FileOpsError['code']> = new Set(['NOT_FOUND', 'NOT_A_DIRECTORY', 'PERMISSION_DENIED']);
 
 function depthOf(path: string): number {
   let depth = 0;
@@ -97,13 +98,10 @@ export async function searchFileNames(files: IFileOps, search: NameSearchQuery, 
     throw err;
   }
 
-  const rootPrefix = search.root.replace(/\/+$/, '');
-  const includes = search.include.map((glob) => (glob.includes('/')
-    ? { onPath: true, matches: compileGlob(`*/${glob}`, true) }
-    : { onPath: false, matches: compileGlob(glob, true) }));
+  const rootPrefix = search.root.replace(/[\\/]+$/, '');
+  const isIncluded = compileIncludeFilter(search.root, search.include);
   const nameOf = (entry: WalkEntry): string => entry.path.slice(entry.path.lastIndexOf('/') + 1);
-  const included = (entry: WalkEntry): boolean =>
-    includes.length === 0 || includes.some((include) => include.matches(include.onPath ? `${rootPrefix}/${entry.path}` : nameOf(entry)));
+  const included = (entry: WalkEntry): boolean => isIncluded(entry.path);
 
   if (!search.regex) {
     const contains = compileGlob(`*${search.query}*`, search.caseSensitive);
