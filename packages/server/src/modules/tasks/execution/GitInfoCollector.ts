@@ -2,7 +2,8 @@ import { execFileSync } from 'child_process';
 import type { TransportFactory } from '../../servers/transport/TransportFactory';
 import type { ServerConfig } from '../../servers/Server';
 import { SAFE_BRANCH } from '../../git/GitDiffService';
-import { assertSafePath } from '../../git/assertSafeGitArgs';
+import { shellQuote } from '../../../shared/shellQuote';
+import { assertPosixHost } from '../../../shared/os/hostProfile';
 
 function parseNameStatus(diff: string): string | null {
   if (!diff) return null;
@@ -55,14 +56,15 @@ export class GitInfoCollector {
   }
 
   async collectGitInfoRemote(server: ServerConfig, workingDir: string, baseBranch?: string): Promise<GitInfo> {
-    assertSafePath(workingDir, 'workingDir');
+    const transport = this.transportFactory.getTransport(server);
+    // The command is a shell line (`cd <dir> && git ...`): refused on a Windows host, never swallowed into an empty result.
+    assertPosixHost(this.transportFactory.hostProfileFor(server), `server "${server.name}"`, 'collecting git info');
     const result: GitInfo = { branch: null, changedFiles: null };
     // Returns null on failure so callers can distinguish it from empty output.
     // SSH transports always report code 0, so git errors are detected in stdout/stderr.
     const run = async (cmd: string): Promise<string | null> => {
       try {
-        const safeDir = workingDir.replace(/'/g, "'\\''");
-        const r = await this.transportFactory.getTransport(server).exec(`cd '${safeDir}' && ${cmd}`);
+        const r = await transport.exec(`cd ${shellQuote(workingDir)} && ${cmd}`);
         if (r.code !== 0 || /^fatal:|^error:/m.test(`${r.stdout}\n${r.stderr}`)) return null;
         return r.stdout.trim();
       } catch { return null; }

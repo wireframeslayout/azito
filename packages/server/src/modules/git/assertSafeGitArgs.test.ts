@@ -2,50 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   assertGitPathArg,
   invalidStoredWorkingDirectoryReason,
-  assertSafePath,
   assertSafeBranch,
-  SAFE_PATH_PATTERN,
   SAFE_BRANCH_PATTERN,
   isFullyQualifiedRef,
   normalizeBranchRef,
   rejectQualifiedBranchInput,
 } from './assertSafeGitArgs';
-
-describe('assertSafePath', () => {
-  it('accepts normal paths', () => {
-    expect(() => assertSafePath('/home/user/project', 'test')).not.toThrow();
-    expect(() => assertSafePath('~/workspace/repo', 'test')).not.toThrow();
-    expect(() => assertSafePath('/home/user/.worktrees/task-1', 'test')).not.toThrow();
-  });
-
-  it('rejects $() command substitution', () => {
-    expect(() => assertSafePath('/x$(touch /tmp/pwn)', 'test')).toThrow('Unsafe');
-  });
-
-  it('rejects backtick command substitution', () => {
-    expect(() => assertSafePath('/x`id`', 'test')).toThrow('Unsafe');
-  });
-
-  it('rejects single quotes', () => {
-    expect(() => assertSafePath("/x'y", 'test')).toThrow('Unsafe');
-  });
-
-  it('rejects newlines', () => {
-    expect(() => assertSafePath('/x\ny', 'test')).toThrow('Unsafe');
-  });
-
-  it('rejects semicolons', () => {
-    expect(() => assertSafePath('/x;id', 'test')).toThrow('Unsafe');
-  });
-
-  it('rejects pipe', () => {
-    expect(() => assertSafePath('/x|id', 'test')).toThrow('Unsafe');
-  });
-
-  it('rejects spaces', () => {
-    expect(() => assertSafePath('/x y', 'test')).toThrow('Unsafe');
-  });
-});
 
 describe('assertSafeBranch', () => {
   it('accepts normal branch names', () => {
@@ -128,15 +90,16 @@ describe('rejectQualifiedBranchInput (Issue #87 third-party review, 11th round, 
 });
 
 describe('invalidStoredWorkingDirectoryReason', () => {
-  it('on POSIX keeps SAFE_PATH_PATTERN until R3 / R4 (spaces and non-ASCII are refused at save time)', () => {
+  it('on POSIX accepts a space and non-ASCII characters (worktree create / remove take the path as an argv)', () => {
     expect(invalidStoredWorkingDirectoryReason('linux', '/home/me/repo')).toBeNull();
     expect(invalidStoredWorkingDirectoryReason('darwin', '~/work')).toBeNull();
-    expect(invalidStoredWorkingDirectoryReason('linux', '/home/me/my repo')).toMatch(/only letters/);
-    expect(invalidStoredWorkingDirectoryReason('darwin', '/Users/me/日本語')).toMatch(/only letters/);
+    expect(invalidStoredWorkingDirectoryReason('linux', '/home/me/my repo')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason('darwin', '/Users/me/日本語')).toBeNull();
+    expect(invalidStoredWorkingDirectoryReason('linux', "/home/me/it's $(x)")).toBeNull();
     expect(invalidStoredWorkingDirectoryReason('linux', '/a\nb')).toMatch(/control character/);
   });
 
-  it('on win32 applies only the new rules', () => {
+  it('on win32 applies the same rules', () => {
     expect(invalidStoredWorkingDirectoryReason('win32', 'C:\\Users\\me\\My Repo')).toBeNull();
     expect(invalidStoredWorkingDirectoryReason('win32', 'D:/work/日本語')).toBeNull();
     expect(invalidStoredWorkingDirectoryReason('win32', 'relative')).toMatch(/drive/);
@@ -145,7 +108,7 @@ describe('invalidStoredWorkingDirectoryReason', () => {
   it('without a platform accepts what is valid on either OS', () => {
     expect(invalidStoredWorkingDirectoryReason(null, '/srv/x')).toBeNull();
     expect(invalidStoredWorkingDirectoryReason(null, 'C:\\Users\\My Repo')).toBeNull();
-    expect(invalidStoredWorkingDirectoryReason(null, '/srv/my repo')).toMatch(/only letters/);
+    expect(invalidStoredWorkingDirectoryReason(null, '/srv/my repo')).toBeNull();
     expect(invalidStoredWorkingDirectoryReason(null, 'x')).not.toBeNull();
   });
 });
@@ -158,11 +121,6 @@ describe('assertGitPathArg', () => {
     expect(() => assertGitPathArg('win32', 'C:\\Users\\me\\My Repo', 'path')).not.toThrow();
     expect(() => assertGitPathArg('win32', 'C:/Users/me', 'path')).not.toThrow();
     expect(() => assertGitPathArg('win32', '~\\work', 'path')).not.toThrow();
-  });
-
-  it('is looser than SAFE_PATH_PATTERN on POSIX in the characters it allows', () => {
-    expect(SAFE_PATH_PATTERN.test('/home/me/my repo')).toBe(false);
-    expect(() => assertGitPathArg('linux', '/home/me/my repo', 'path')).not.toThrow();
   });
 
   it('refuses a value git would read as an option', () => {

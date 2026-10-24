@@ -32,6 +32,8 @@ describe('PUT /api/projects/:id/servers/:serverName — working_directory valida
   it.each([
     [LINUX, '/home/me/repo'],
     [LINUX, '~/work'],
+    [LINUX, '/home/me/my repo'],
+    [LINUX, '/home/me/日本語'],
     [WIN, 'C:\\Users\\me\\My Repo'],
     [WIN, 'D:/work/日本語'],
     [WIN, '\\\\srv\\share\\repo'],
@@ -44,8 +46,6 @@ describe('PUT /api/projects/:id/servers/:serverName — working_directory valida
   });
 
   it.each([
-    [LINUX, '/home/me/my repo', /only letters/],
-    [LINUX, '/home/me/日本語', /only letters/],
     [LINUX, '/repo\n/x', /control character/],
     [LINUX, '/repo\r', /control character/],
     [LINUX, '/repo\x15touch /tmp/x\r', /control character/],

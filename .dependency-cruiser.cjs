@@ -86,6 +86,7 @@ module.exports = {
         '- servers/routes.ts: HTTP インターフェース層として git/DiffParser（差分表示）・' +
         'git/RepoDiscoveryService（プロジェクト作成前のリポジトリ検査エンドポイント、' +
         'GET /api/servers/:name/discover-repositories）・' +
+        'git/runGit（GET /api/servers/:name/branches が他の git 経路と同じく ~ を解決して git を実行するため）・' +
         'projects/Project・projects/ProjectServer（プロジェクト⇔サーバー関連付け表示）・' +
         'windows/SqliteWindowRepository（ウィンドウ情報表示）を参照。\n' +
         '- servers/transport/AgentEventStream.ts: notifications/NotificationBus を参照（エージェント' +
@@ -101,6 +102,7 @@ module.exports = {
           '^packages/server/src/modules/tmux',
           '^packages/server/src/modules/git/DiffParser\\.ts$',
           '^packages/server/src/modules/git/RepoDiscoveryService\\.ts$',
+          '^packages/server/src/modules/git/runGit\\.ts$',
           '^packages/server/src/modules/projects/Project\\.ts$',
           '^packages/server/src/modules/projects/ProjectServer\\.ts$',
           '^packages/server/src/modules/windows/SqliteWindowRepository\\.ts$',

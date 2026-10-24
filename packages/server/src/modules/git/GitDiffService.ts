@@ -6,6 +6,7 @@ import { FileOpsError } from '../../shared/fs/fileOps';
 import { pathApiFor } from '../../shared/os/hostPath';
 import type { CommandResult } from '../../shared/exec/commandSpec';
 import { runGit, combinedOutput } from './runGit';
+import { resolveGitPath } from './gitPath';
 
 import { SAFE_BRANCH_PATTERN, assertNotOptionLike } from './assertSafeGitArgs';
 export { SAFE_BRANCH_PATTERN as SAFE_BRANCH };
@@ -52,10 +53,11 @@ function headBranchOf(result: CommandResult): string {
 export class GitDiffService {
   constructor(private readonly transportFactory: TransportFactory) {}
 
-  async getCommits(srv: ServerConfig, dirPath: string, base?: string): Promise<GitCommit[]> {
+  async getCommits(srv: ServerConfig, requestedDirPath: string, base?: string): Promise<GitCommit[]> {
     if (base && !SAFE_BRANCH_PATTERN.test(base)) throw new Error(`Invalid base branch: ${base}`);
     if (base) assertNotOptionLike(base, 'base branch');
     const transport = this.transportFactory.getTransport(srv);
+    const dirPath = await resolveGitPath(transport, requestedDirPath);
 
     const range = base ? [`${base}..HEAD`] : ['-50', 'HEAD'];
     const FIELD_SEP = '<<>>';
@@ -77,7 +79,12 @@ export class GitDiffService {
       });
   }
 
-  async getDiff(srv: ServerConfig, dirPath: string, base: string, commit?: string, options?: GetDiffOptions): Promise<GitDiffResult> {
+  /**
+   * The directory is resolved once here (a leading `~` against the host's home); git and the file operations below get the
+   * same resolved value.
+   */
+  async getDiff(srv: ServerConfig, requestedDirPath: string, base: string, commit?: string, options?: GetDiffOptions): Promise<GitDiffResult> {
+    const dirPath = await resolveGitPath(this.transportFactory.getTransport(srv), requestedDirPath);
     const scope = options?.scope;
 
     if (scope === 'uncommitted') {

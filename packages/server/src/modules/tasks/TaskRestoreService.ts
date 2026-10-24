@@ -605,7 +605,7 @@ export class TaskRestoreService {
         const slug = branch ? `task-${task.id}` : await contentExtractor.generateSlug(task.title);
 
         const transport = transportFactory.getTransport(server);
-        const worktreeService = worktreeServiceFactory.create(server.type, transport);
+        const worktreeService = worktreeServiceFactory.create(transport);
         const wt = await worktreeService.create(workingDir, task.id, slug, worktreeCreateBaseBranch, branch);
         worktreePath = wt.path;
         worktreeBranch = wt.branch;
@@ -748,7 +748,7 @@ export class TaskRestoreService {
       if (worktreePath && repoDir) {
         try {
           const transport = transportFactory.getTransport(server);
-          const worktreeService = worktreeServiceFactory.create(server.type, transport);
+          const worktreeService = worktreeServiceFactory.create(transport);
           await worktreeService.remove(repoDir, worktreePath);
         } catch (e) {
           log.warn(`[task-restore] Failed to rollback worktree: ${(e as Error).message}`);

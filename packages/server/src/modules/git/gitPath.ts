@@ -1,5 +1,8 @@
 import { hostPathFor } from '@azito/shared';
 import type { HostPlatform } from '../../shared/os/hostEnv';
+import type { IServerTransport } from '../servers/transport/ServerTransport';
+import { isHomeRelativePath } from '../../shared/os/hostPath';
+import { assertGitPathArg } from './assertSafeGitArgs';
 
 /**
  * A path as git prints it (`rev-parse --show-toplevel`, `worktree list --porcelain`), in the host's own spelling. git for
@@ -33,4 +36,24 @@ export function taskIdOfWorktreePath(platform: HostPlatform, worktreePath: strin
   const parentName = api.basename(api.dirname(normalized));
   const isWorktreesDir = platform === 'linux' ? parentName === WORKTREES_DIR_NAME : parentName.toLowerCase() === WORKTREES_DIR_NAME;
   return isWorktreesDir ? parseInt(match[1], 10) : null;
+}
+
+/** What running git needs of a transport: `run`, and `files` to resolve a `~` (every real transport has both). */
+export type GitTransport = Pick<IServerTransport, 'run'> & Partial<Pick<IServerTransport, 'files'>>;
+
+/**
+ * A path as git must be given it. A leading `~` (`~/x`, and `~\x` on win32) is a supported form of a stored working directory,
+ * but git's `-C <dir>` and a process's `cwd` are literal: it is resolved here against the host's home, by the host's own file
+ * operations. Any other path is already absolute and passes through untouched (no round trip). The one place every git path
+ * of the diff / commits / branches / worktree code goes through (`runGit` for its `cwd` and `-C`).
+ */
+export async function resolveGitPath(transport: GitTransport, target: string): Promise<string> {
+  // `files()` is only asked for when the path starts like a home-relative one: an absolute path never costs a round trip.
+  if (target[0] !== '~') return target;
+  if (!transport.files) throw new Error(`Cannot resolve "${target}": this transport has no file operations to find the host's home directory`);
+  const files = transport.files();
+  if (!isHomeRelativePath(files.platform, target)) return target;
+  const resolved = await files.realpath(target);
+  assertGitPathArg(files.platform, resolved, 'resolved path');
+  return resolved;
 }

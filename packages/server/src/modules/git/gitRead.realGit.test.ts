@@ -15,7 +15,6 @@ import { toHostProfile } from '../../shared/os/hostProfile';
 import { buildCommandSpec } from '../../shared/exec/commandSpec';
 import { GitDiffService } from './GitDiffService';
 import { RemoteWorktreeService } from './RemoteWorktreeService';
-import { LocalWorktreeService } from './WorktreeService';
 import { RepoDiscoveryService } from './RepoDiscoveryService';
 import { runGit } from './runGit';
 import { taskIdOfWorktreePath } from './gitPath';
@@ -99,16 +98,13 @@ describe('git read paths with a real git', () => {
     expect(result.stdout.split(/\r?\n/).filter(Boolean).sort()).toEqual(['feature/x', 'main']);
   });
 
-  it('lists worktrees in the host spelling, through the remote service and the local one', async () => {
+  it('lists worktrees in the host spelling', async () => {
     const worktree = join(repo, '.worktrees', 'task-7');
     git(repo, 'worktree', 'add', '-q', '-b', 'task/7-x', worktree);
     const viaTransport = await new RemoteWorktreeService(transport).list(repo);
-    const viaLocal = await new LocalWorktreeService(profile.platform).list(repo);
-    for (const entries of [viaTransport, viaLocal]) {
-      expect(entries.map((e) => e.path)).toEqual([repo, worktree]);
-      expect(entries[0].isMain).toBe(true);
-      expect(taskIdOfWorktreePath(profile.platform, entries[1].path)).toBe(7);
-    }
+    expect(viaTransport.map((e) => e.path)).toEqual([repo, worktree]);
+    expect(viaTransport[0].isMain).toBe(true);
+    expect(taskIdOfWorktreePath(profile.platform, viaTransport[1].path)).toBe(7);
     const status = await runGit(transport, undefined, ['-C', viaTransport[1].path, 'status', '--porcelain']);
     expect(status.exitCode).toBe(0);
   });

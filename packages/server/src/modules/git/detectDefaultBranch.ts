@@ -1,5 +1,5 @@
-import type { IServerTransport } from '../servers/transport/ServerTransport';
 import { runGit } from './runGit';
+import type { GitTransport } from './gitPath';
 
 const GIT_TIMEOUT_MS = 10_000;
 
@@ -14,7 +14,7 @@ const GIT_TIMEOUT_MS = 10_000;
  * branch, not a repository) is "no answer", and the next step is tried.
  */
 export async function detectDefaultBranch(
-  transport: Pick<IServerTransport, 'run'>,
+  transport: GitTransport,
   workingDir: string,
 ): Promise<string | null> {
   // 1. Try origin/HEAD (set by git clone)

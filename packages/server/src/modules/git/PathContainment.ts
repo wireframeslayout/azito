@@ -18,7 +18,7 @@ export interface PathContainmentPair {
  * path rules (`isHostPathContained`: `relative()` of the host's path API, never a string prefix — `/a/bc` is not under
  * `/a/b` — and, on Windows, with case kept). It verifies structure only: it does not restrict the character set of a path.
  * The invariant for shell use is to quote at every shell boundary, not to filter characters up here (Issue #27 review
- * finding 2); `IWorktreeService` still calls `assertSafePath` for its own commands.
+ * finding 2); `IWorktreeService` takes its paths through `assertGitPathArg` (an argv, no shell).
  *
  * One race remains, as it always did: an ancestor directory could be swapped for a symbolic link after the check and before
  * the caller uses the path. Closing it needs an atomic "resolve and open beneath" primitive (`openat2(RESOLVE_BENEATH)`), which

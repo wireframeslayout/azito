@@ -268,7 +268,7 @@ export class ExecuteTaskUseCase {
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
     const transport = this.transportFactory.getTransport(server);
-    return this.worktreeServiceFactory.create(server.type, transport);
+    return this.worktreeServiceFactory.create(transport);
   }
 
   /**
