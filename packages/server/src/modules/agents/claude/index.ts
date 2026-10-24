@@ -50,7 +50,7 @@ function buildHeadlessCommand(model: string): string {
 }
 
 function createSessionStrategy(deps: SessionStrategyDeps): ISessionStrategy {
-  return new ClaudeSessionStrategy(deps.transportFactory);
+  return new ClaudeSessionStrategy(deps.transportFactory, deps.localHomes);
 }
 
 export const claudeProvider: IAgentProvider = {

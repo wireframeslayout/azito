@@ -1161,6 +1161,22 @@ describe('WindowRespawnService.respawn — containment (Issue #27)', () => {
   });
 
   // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
+  it.skipIf(process.platform === 'win32')('types an absolute path for a working directory written as ~/… (the shell does not expand a quoted ~)', async () => {
+    const homeRelative = `~/${path.relative(realpathSync.native(tmpdir()), rootDir)}`;
+    const win = makeWindow({ projectId: 1, taskId: null, windowType: 'terminal', workerType: null, workingDirectory: homeRelative });
+    const { service, sentCommands } = buildService({
+      window: win,
+      projectServerRepo: makeProjectServerRepo(rootDir),
+      transportFactory: makeTransportFactory(),
+    });
+
+    await service.respawn(1, makeServer());
+
+    expect(sentCommands).toContain(`cd -- '${rootDir}'`);
+    expect(sentCommands.some((c) => c.includes('~'))).toBe(false);
+  });
+
+  // Windows では動かない: Windows の短いパス名（RUNNER~1）と realpath の長い名前が一致しない、cd -- の sh 文字列前提
   it.skipIf(process.platform === 'win32')('guards a resolved path starting with "-" from being read as a cd option', async () => {
     const dashDir = path.join(rootDir, '-rf');
     mkdirSync(dashDir);

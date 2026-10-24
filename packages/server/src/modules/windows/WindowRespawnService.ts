@@ -1,5 +1,6 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
 import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
+import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
@@ -537,7 +538,7 @@ export class WindowRespawnService {
           // The caller (follow-up) will launch the agent itself.
           if (!win.paneLayout && resolvedCwds.singleCwd) {
             const paneId = await restoreDriver.resolvePane(respawnServer, newRef, 1);
-            await restoreDriver.sendKeysToHandle(respawnServer, paneId, [this.dialectOf(respawnServer).changeDirectory(resolvedCwds.singleCwd), 'Enter']);
+            await restoreDriver.sendKeysToHandle(respawnServer, paneId, [await changeDirectoryLine(() => this.transportFactory.getFileOps(respawnServer), this.dialectOf(respawnServer), resolvedCwds.singleCwd), 'Enter']);
           } else if (win.paneLayout) {
             // Multi-pane: restore layout and cds, but no agent commands.
             await this.restorePaneLayout(respawnServer, newRef, baseTarget, win.paneLayout, win, supervision, resolvedCwds.paneCwds, windowEnv, true);
@@ -1162,7 +1163,7 @@ export class WindowRespawnService {
       if (!paneId) continue;
       const cwd = paneCwds.get(pane.index);
       if (cwd) {
-        await driver.sendKeysToHandle(server, paneId, [this.dialectOf(server).changeDirectory(cwd), 'Enter']);
+        await driver.sendKeysToHandle(server, paneId, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), cwd), 'Enter']);
         await sleep(300);
       }
 
@@ -1192,7 +1193,7 @@ export class WindowRespawnService {
   ): Promise<void> {
     const driver = this.resolveDriver(server);
     if (singleCwd) {
-      await driver.sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(singleCwd), 'Enter']);
+      await driver.sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), singleCwd), 'Enter']);
       await sleep(300);
     }
 

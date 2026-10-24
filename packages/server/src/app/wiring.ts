@@ -116,6 +116,7 @@ import { HostTranscriptSourceProvider, type TranscriptSourceProvider } from '../
 import { TaskRestoreService } from '../modules/tasks/TaskRestoreService';
 import type { GitIdentity } from '../modules/git/ensureGitIdentity';
 import { SessionStrategyFactory } from '../modules/agents/SessionStrategyFactory';
+import { localAgentHomesFromEnv } from '../modules/agents/agentHomes';
 import { UsageService } from '../modules/usage/UsageService';
 import { UpdateChannelResolver } from '../modules/system/UpdateChannelResolver';
 import { UpdateStateManager } from '../modules/system/UpdateStateManager';
@@ -464,7 +465,7 @@ function buildFetchDistributionService(infra: SharedInfra, hubGitSupport: HubGit
 }
 
 function buildApplicationServices(infra: SharedInfra, repos: Repositories, uiToken: string, scopedAuthEnabled: boolean, fetchDistributionService: FetchDistributionService, distributionStateRepo: SqliteDistributionStateRepository, hubGitIdentity: GitIdentity | null, harnessPrefix?: string): ApplicationServices {
-  const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory);
+  const sessionStrategyFactory = new SessionStrategyFactory(infra.agentRegistry, infra.transportFactory, localAgentHomesFromEnv(process.env));
   const sessionCaptureService = new SessionCaptureService(repos.windowRepo, repos.taskRepo, repos.serverRepo, sessionStrategyFactory);
   // Constructed here (ahead of ExecuteTaskUseCase, built later in
   // buildWiring) and shared with it below — see ApplicationServices.taskEvents'

@@ -5,7 +5,7 @@ import * as path from 'path';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import type { IFileOps } from '../../shared/fs/fileOps';
 import { DeadlineExceededError } from '../../shared/fs/deadline';
-import { findFilesByMtime, firstLineOf, normalizePath, parseRolloutMeta } from './sessionScanUtils';
+import { findFilesByMtime, firstLineOf, normalizeCwd, parseRolloutMeta } from './sessionScanUtils';
 
 let dir: string;
 let ops: LocalFileOps;
@@ -131,9 +131,24 @@ describe('parseRolloutMeta', () => {
   });
 });
 
-describe('normalizePath', () => {
-  it('removes trailing slashes', () => {
-    expect(normalizePath('/work/project///')).toBe('/work/project');
-    expect(normalizePath('/work/project')).toBe('/work/project');
+describe('normalizeCwd', () => {
+  it.each([
+    ['linux', '/work/project///', '/work/project'],
+    ['linux', '/work/project', '/work/project'],
+    ['linux', '/Work/Project', '/Work/Project'],
+    ['darwin', '/Users/me/App/', '/Users/me/App'],
+    ['linux', '/', '/'],
+    ['win32', 'C:\\Work\\Project\\', 'c:\\work\\project'],
+    ['win32', 'c:/work/project', 'c:\\work\\project'],
+    ['win32', 'C:\\Work\\Project', 'c:\\work\\project'],
+    ['win32', 'C:\\', 'c:\\'],
+    ['win32', '\\\\Server\\Share\\Dir\\', '\\\\server\\share\\dir'],
+  ] as const)('%s: %s -> %s', (platform, input, expected) => {
+    expect(normalizeCwd(platform, input)).toBe(expected);
+  });
+
+  it('makes the spellings of one Windows directory equal, and keeps POSIX case-sensitive', () => {
+    expect(normalizeCwd('win32', 'C:/Users/Me/App')).toBe(normalizeCwd('win32', 'c:\\users\\me\\app\\'));
+    expect(normalizeCwd('linux', '/work/App')).not.toBe(normalizeCwd('linux', '/work/app'));
   });
 });

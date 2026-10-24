@@ -1,5 +1,6 @@
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
 import { pathApiFor } from '../../shared/os/hostPath';
+import type { HostPlatform } from '../../shared/os/hostEnv';
 import { DeadlineExceededError, raceDeadline } from '../../shared/fs/deadline';
 
 /** A regular file found by {@link findFilesByMtime}. */
@@ -85,6 +86,17 @@ export function parseRolloutMeta(filePath: string, firstLine: string): RolloutCa
   };
 }
 
-export function normalizePath(p: string): string {
-  return p.replace(/\/+$/, '');
+/**
+ * A working directory in the form two spellings of it can be compared in, by the rules of the host's OS: trailing separators
+ * dropped (a root keeps its own). On win32 also `/` = `\` and letters compared without case (NTFS is case-insensitive; a
+ * case-sensitive directory is rare enough that a false match is the lesser evil for picking a session). POSIX is exact.
+ */
+export function normalizeCwd(platform: HostPlatform, p: string): string {
+  if (platform !== 'win32') {
+    const root = p.startsWith('/') ? '/' : '';
+    return root + p.slice(root.length).replace(/\/+$/, '');
+  }
+  const unified = p.replace(/\//g, '\\');
+  const root = pathApiFor(platform).parse(unified).root;
+  return (root + unified.slice(root.length).replace(/\\+$/, '')).toLowerCase();
 }
