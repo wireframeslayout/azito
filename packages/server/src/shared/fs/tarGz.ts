@@ -14,11 +14,13 @@ import * as zlib from 'zlib';
 export interface TarEntry {
   /** Forward-slash path inside the archive, no leading `/` or `./`. */
   path: string;
-  type: 'file' | 'directory';
+  type: 'file' | 'directory' | 'symlink';
   /** Permission bits only (e.g. 0o755). */
   mode: number;
-  /** Contents of a file; absent for a directory. */
+  /** Contents of a file; absent for a directory and a symlink. */
   data?: Buffer;
+  /** What a symlink points to, as written (never resolved or read). */
+  linkTarget?: string;
 }
 
 export interface TreeOptions {
@@ -45,7 +47,7 @@ function writeOctal(header: Buffer, offset: number, length: number, value: numbe
   header.write(text, offset, 'ascii');
 }
 
-function buildHeader(name: string, typeflag: string, mode: number, size: number, mtimeSec: number): Buffer {
+function buildHeader(name: string, typeflag: string, mode: number, size: number, mtimeSec: number, linkName = ''): Buffer {
   const header = Buffer.alloc(BLOCK);
   writeString(header, 0, 100, name);
   writeOctal(header, 100, 8, mode);
@@ -55,6 +57,7 @@ function buildHeader(name: string, typeflag: string, mode: number, size: number,
   writeOctal(header, 136, 12, mtimeSec);
   header.fill(0x20, 148, 156);
   header.write(typeflag, 156, 'ascii');
+  writeString(header, 157, 100, linkName);
   header.write('ustar\0', 257, 'ascii');
   header.write('00', 263, 'ascii');
   let sum = 0;
@@ -68,9 +71,9 @@ function padTo(data: Buffer): Buffer {
   return rest === 0 ? data : Buffer.concat([data, Buffer.alloc(BLOCK - rest)]);
 }
 
-/** One PAX record: `<length> path=<value>\n`, where the length counts its own digits. */
-function paxPathRecord(value: string): Buffer {
-  const body = ` path=${value}\n`;
+/** One PAX record: `<length> <key>=<value>\n`, where the length counts its own digits. */
+function paxRecord(key: string, value: string): Buffer {
+  const body = ` ${key}=${value}\n`;
   let length = Buffer.byteLength(body) + 1;
   while (Buffer.byteLength(String(length)) + Buffer.byteLength(body) !== length) length = Buffer.byteLength(String(length)) + Buffer.byteLength(body);
   return Buffer.from(`${length}${body}`);
@@ -89,13 +92,18 @@ export function packTarGz(entries: readonly TarEntry[], mtimeSec: number): Buffe
     }
     const name = entryName(entry);
     const data = entry.type === 'file' ? entry.data ?? Buffer.alloc(0) : Buffer.alloc(0);
-    const plain = Buffer.byteLength(name) <= 100 && Buffer.byteLength(name) === name.length;
-    if (!plain) {
-      const record = paxPathRecord(name);
+    const linkTarget = entry.type === 'symlink' ? entry.linkTarget : undefined;
+    if (entry.type === 'symlink' && !linkTarget) throw new Error(`tar: the symlink "${entry.path}" has no target`);
+    const plainName = Buffer.byteLength(name) <= 100 && Buffer.byteLength(name) === name.length;
+    const plainLink = linkTarget === undefined || (Buffer.byteLength(linkTarget) <= 100 && Buffer.byteLength(linkTarget) === linkTarget.length);
+    if (!plainName || !plainLink) {
+      const record = Buffer.concat([...(plainName ? [] : [paxRecord('path', name)]), ...(plainLink ? [] : [paxRecord('linkpath', linkTarget!)])]);
       blocks.push(buildHeader('PaxHeader', 'x', 0o644, record.length, mtimeSec), padTo(record));
     }
-    const headerName = plain ? name : name.slice(0, 50).replace(/[^\x20-\x7e]/g, '_');
-    blocks.push(buildHeader(headerName, entry.type === 'directory' ? '5' : '0', entry.mode, data.length, mtimeSec));
+    const headerName = plainName ? name : name.slice(0, 50).replace(/[^\x20-\x7e]/g, '_');
+    const headerLink = plainLink ? linkTarget ?? '' : '_';
+    const typeflag = entry.type === 'directory' ? '5' : entry.type === 'symlink' ? '2' : '0';
+    blocks.push(buildHeader(headerName, typeflag, entry.mode, data.length, mtimeSec, headerLink));
     if (data.length > 0) blocks.push(padTo(data));
   }
   blocks.push(Buffer.alloc(BLOCK * 2));
@@ -114,15 +122,19 @@ export function collectTreeEntries(root: string, options: TreeOptions): TarEntry
       const relPath = rel === '' ? name : `${rel}/${name}`;
       const archivePath = prefix === '' ? relPath : `${prefix}/${relPath}`;
       const full = path.join(root, rel, name);
-      const stat = fs.statSync(full);
-      if (stat.isDirectory()) {
+      // lstat, never stat: a link stays a link (what cpSync(dereference:false) + tar did). Its target is not followed or read, so a link
+      // that points outside the tree, is dangling or loops cannot pull in foreign files, fail the walk or run forever.
+      const stat = fs.lstatSync(full);
+      if (stat.isSymbolicLink()) {
+        entries.push({ path: archivePath, type: 'symlink', mode: 0o777, linkTarget: fs.readlinkSync(full) });
+      } else if (stat.isDirectory()) {
         entries.push({ path: archivePath, type: 'directory', mode: options.directoryMode });
         walk(relPath);
       } else if (stat.isFile()) {
         const data = fs.readFileSync(full);
         entries.push({ path: archivePath, type: 'file', mode: options.fileMode(relPath, data), data });
       } else {
-        throw new Error(`tar: ${full} is neither a file nor a directory`);
+        throw new Error(`tar: ${full} is neither a file, a directory nor a symlink`);
       }
     }
   };
@@ -145,16 +157,18 @@ function readName(header: Buffer): string {
   return header.toString('utf8', 0, end === -1 || end > 100 ? 100 : end);
 }
 
-function parsePaxPath(record: Buffer): string | undefined {
+function parsePax(record: Buffer): { path?: string; linkpath?: string } {
+  const out: { path?: string; linkpath?: string } = {};
   let offset = 0;
   while (offset < record.length) {
     const space = record.indexOf(0x20, offset);
     const length = parseInt(record.toString('ascii', offset, space), 10);
     const body = record.toString('utf8', space + 1, offset + length).replace(/\n$/, '');
-    if (body.startsWith('path=')) return body.slice('path='.length);
+    if (body.startsWith('path=')) out.path = body.slice('path='.length);
+    if (body.startsWith('linkpath=')) out.linkpath = body.slice('linkpath='.length);
     offset += length;
   }
-  return undefined;
+  return out;
 }
 
 /** Reads a `.tar.gz` written by `packTarGz` (or any ustar / PAX archive of plain files and directories). */
@@ -162,7 +176,7 @@ export function unpackTarGz(archive: Buffer): TarEntry[] {
   const tar = zlib.gunzipSync(archive);
   const entries: TarEntry[] = [];
   let offset = 0;
-  let paxPath: string | undefined;
+  let pax: { path?: string; linkpath?: string } = {};
   while (offset + BLOCK <= tar.length) {
     const header = tar.subarray(offset, offset + BLOCK);
     if (header.every((byte) => byte === 0)) break;
@@ -171,14 +185,16 @@ export function unpackTarGz(archive: Buffer): TarEntry[] {
     const body = tar.subarray(offset + BLOCK, offset + BLOCK + size);
     offset += BLOCK + Math.ceil(size / BLOCK) * BLOCK;
     if (typeflag === 'x') {
-      paxPath = parsePaxPath(body);
+      pax = parsePax(body);
       continue;
     }
-    const name = (paxPath ?? readName(header)).replace(/^\.\//, '').replace(/\/$/, '');
-    paxPath = undefined;
+    const name = (pax.path ?? readName(header)).replace(/^\.\//, '').replace(/\/$/, '');
+    const linkTarget = pax.linkpath ?? readName(header.subarray(157));
+    pax = {};
     if (name === '' || name === '.') continue;
     const mode = readOctal(header, 100, 8) & 0o7777;
     if (typeflag === '5') entries.push({ path: name, type: 'directory', mode });
+    else if (typeflag === '2') entries.push({ path: name, type: 'symlink', mode, linkTarget });
     else if (typeflag === '0' || typeflag === '\0') entries.push({ path: name, type: 'file', mode, data: Buffer.from(body) });
     else throw new Error(`tar: entry "${name}" has the unsupported type "${typeflag}"`);
   }

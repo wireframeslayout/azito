@@ -151,7 +151,7 @@ ssh-add -l                                    # list the keys
 
 When the service is stopped and the pipe is absent, the hub logs "no ssh-agent" once, with the reason (and the command to start it), and goes on to the key files. A hub running as a Task Scheduler task uses the same pipe, so `SSH_AUTH_SOCK` need not be set.
 
-The agent installed is always the Linux x86-64 one, whatever OS the hub runs on. The release zip carries the same agent as the other bundles, with a node-pty built on Linux. To install agents from a Windows hub built from source, prepare a node-pty folder built on Linux x64 (`package.json` and `build/Release/pty.node`) and set `AZITO_AGENT_NODE_PTY_LINUX` to its path.
+The common agent bundle always includes the native module for Linux x86-64 (node-pty's `pty.node`), whatever OS the hub runs on; it also carries the macOS and Windows prebuilds, so one bundle serves every agent OS. The release zip carries the same bundle as the other hub builds. After this change the bundle hash differs, so agents already installed are redeployed automatically once by the normal update. To install agents from a Windows hub built from source, prepare a node-pty folder built on Linux x64 (`package.json` and `build/Release/pty.node`) and set `AZITO_AGENT_NODE_PTY_LINUX` to its path.
 
 ### misao on Windows
 

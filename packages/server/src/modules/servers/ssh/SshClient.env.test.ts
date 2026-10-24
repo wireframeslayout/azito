@@ -28,6 +28,14 @@ describe('SshClient.resolveHost (the machine it runs on)', () => {
     expect(resolved.identityFile).toBe(path.join(home, '.ssh', 'id_ed25519'));
   });
 
+  it('uses the first listed IdentityFile that exists, else the first listed', () => {
+    const client = clientWithHome('Host m\n  IdentityFile ~/.ssh/missing\n  IdentityFile ~/.ssh/second\n  IdentityFile ~/.ssh/third\nHost n\n  IdentityFile ~/.ssh/nope1\n  IdentityFile ~/.ssh/nope2\n');
+    fs.writeFileSync(path.join(home, '.ssh', 'second'), 'k');
+    fs.writeFileSync(path.join(home, '.ssh', 'third'), 'k');
+    expect(client.resolveHost('u@m').identityFile).toBe(`${home}/.ssh/second`);
+    expect(client.resolveHost('u@n').identityFile).toBe(`${home}/.ssh/nope1`);
+  });
+
   it('has no identity file when the home holds no default key', () => {
     expect(clientWithHome('').resolveHost('u@h').identityFile).toBeNull();
   });

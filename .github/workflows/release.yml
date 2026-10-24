@@ -13,6 +13,7 @@ jobs:
   # on Linux. It is built once here, so every hub tarball / zip carries the same agent (same bundle hash) and the same node-pty.
   agent-native:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 

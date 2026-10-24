@@ -83,6 +83,7 @@ async function main(): Promise<void> {
   const sshdBefore = serviceState('sshd');
   const agentBefore = serviceState('ssh-agent');
   const adminKeysBefore = fs.existsSync(ADMIN_KEYS) ? fs.readFileSync(ADMIN_KEYS) : null;
+  const adminKeysAcl = path.join(work, 'administrators_authorized_keys.acl');
   let wroteAdminKeys = false;
 
   try {
@@ -100,6 +101,8 @@ async function main(): Promise<void> {
 
     // sshd reads the administrators' file, and refuses it unless only Administrators and SYSTEM can touch it.
     fs.mkdirSync(PROGRAM_DATA_SSH, { recursive: true });
+    // The existing file's access rules (and inheritance) are saved first, to be restored with its content.
+    if (adminKeysBefore) ps(`icacls.exe '${ADMIN_KEYS}' /save '${adminKeysAcl}' | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls /save failed' }`);
     fs.writeFileSync(ADMIN_KEYS, `${publicKey}\r\n`);
     wroteAdminKeys = true;
     ps(`icacls.exe '${ADMIN_KEYS}' /inheritance:r /grant 'Administrators:F' /grant 'SYSTEM:F' | Out-Null`);
@@ -159,16 +162,23 @@ async function main(): Promise<void> {
         problems.push(`${what}: ${err instanceof Error ? err.message : String(err)}`);
       }
     };
-    attempt('ssh-add -D', () => execFileSync(path.join(OPENSSH_DIR, 'ssh-add.exe'), ['-D'], { stdio: 'ignore' }));
+    attempt('ssh-add -D', () => {
+      if (serviceState('ssh-agent').status === 'Running') execFileSync(path.join(OPENSSH_DIR, 'ssh-add.exe'), ['-D'], { stdio: 'ignore' });
+    });
     attempt('restore ssh-agent', () => restoreService('ssh-agent', agentBefore));
     attempt('stop sshd and restore its start type', () => restoreService('sshd', sshdBefore.exists ? sshdBefore : { exists: true, status: 'Stopped', startType: 'Manual' }));
     attempt('restore administrators_authorized_keys', () => {
       if (!wroteAdminKeys) return;
-      if (adminKeysBefore) fs.writeFileSync(ADMIN_KEYS, adminKeysBefore);
-      else fs.rmSync(ADMIN_KEYS, { force: true });
+      if (adminKeysBefore) {
+        fs.writeFileSync(ADMIN_KEYS, adminKeysBefore);
+        ps(`icacls.exe '${PROGRAM_DATA_SSH}' /restore '${adminKeysAcl}' | Out-Null; if ($LASTEXITCODE -ne 0) { throw 'icacls /restore failed' }`);
+      } else {
+        fs.rmSync(ADMIN_KEYS, { force: true });
+      }
     });
     attempt('remove the temporary folder', () => fs.rmSync(work, { recursive: true, force: true }));
-    if (problems.length > 0) console.error(`[smoke-ssh-win32] clean-up problems:\n  ${problems.join('\n  ')}`);
+    // A clean-up that did not work leaves the runner changed, so it fails the job (a failure above is reported first).
+    if (problems.length > 0) throw new Error(`smoke-ssh-win32: clean-up problems:\n  ${problems.join('\n  ')}`);
   }
 }
 

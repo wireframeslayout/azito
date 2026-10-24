@@ -151,7 +151,7 @@ ssh-add -l                                    # 入っている鍵の確認
 
 サービスが止まっていてパイプが無いときは、ハブのログに「no ssh-agent」とその理由（起動のコマンド付き）を 1 回出し、鍵ファイルでの認証に進みます。ハブがタスクスケジューラのタスクとして動くときも同じパイプを使うので、`SSH_AUTH_SOCK` の設定は要りません。
 
-agent はハブの OS に関係なく Linux x86-64 用が導入されます。リリースの zip は、Linux でビルドした node-pty を含む同じ agent を載せています。ソースからビルドした Windows のハブで agent を導入したいときは、Linux x64 でビルドした node-pty のフォルダー（`package.json` と `build/Release/pty.node`）を用意し、環境変数 `AZITO_AGENT_NODE_PTY_LINUX` にそのパスを設定してください。
+共通の agent バンドルには、ハブの OS に関係なく Linux x86-64 用のネイティブモジュール（node-pty の `pty.node`）が必ず含まれます（macOS / Windows 用の prebuild も入っていて、1 つのバンドルがどの OS の agent にも使えます）。リリースの zip もほかのハブと同じバンドルを載せています。この変更で bundle hash が変わるため、導入済みの agent は通常の更新で一度だけ自動的に再デプロイされます。ソースからビルドした Windows のハブで agent を導入したいときは、Linux x64 でビルドした node-pty のフォルダー（`package.json` と `build/Release/pty.node`）を用意し、環境変数 `AZITO_AGENT_NODE_PTY_LINUX` にそのパスを設定してください。
 
 ### Windows の misao
 

@@ -3,6 +3,7 @@ import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as zlib from 'zlib';
 import { collectTreeEntries, modeByShebang, packTarGz, unpackTarGz, type TarEntry } from './tarGz';
 
 const MTIME = 1_700_000_000;
@@ -89,5 +90,48 @@ describe('collectTreeEntries', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it.skipIf(process.platform === 'win32')('keeps symlinks as links and never follows them: outside, dangling and looping links', () => {
+    const base = fs.mkdtempSync(path.join(os.tmpdir(), 'targz-link-'));
+    try {
+      const outside = path.join(base, 'outside-secret.txt');
+      fs.writeFileSync(outside, 'TOP-SECRET-OUTSIDE');
+      const dir = path.join(base, 'pkg');
+      fs.mkdirSync(path.join(dir, 'sub'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'real.txt'), 'real');
+      fs.symlinkSync(outside, path.join(dir, 'to-outside'));
+      fs.symlinkSync('real.txt', path.join(dir, 'to-real'));
+      fs.symlinkSync('missing-target', path.join(dir, 'dangling'));
+      fs.symlinkSync('loop-b', path.join(dir, 'loop-a'));
+      fs.symlinkSync('loop-a', path.join(dir, 'loop-b'));
+      fs.symlinkSync('..', path.join(dir, 'sub', 'up'));
+      fs.symlinkSync('.', path.join(dir, 'self'));
+
+      const entries = collectTreeEntries(dir, { fileMode: () => 0o644, directoryMode: 0o755 });
+      const links = Object.fromEntries(entries.filter((e) => e.type === 'symlink').map((e) => [e.path, e.linkTarget]));
+      expect(links).toEqual({ 'to-outside': outside, 'to-real': 'real.txt', dangling: 'missing-target', 'loop-a': 'loop-b', 'loop-b': 'loop-a', 'sub/up': '..', self: '.' });
+      expect(entries.filter((e) => e.type === 'file').map((e) => e.path)).toEqual(['real.txt']);
+
+      const archive = packTarGz(entries, MTIME);
+      expect(zlib.gunzipSync(archive).includes('TOP-SECRET-OUTSIDE')).toBe(false);
+      expect(unpackTarGz(archive).filter((e) => e.type === 'symlink')).toEqual(entries.filter((e) => e.type === 'symlink'));
+
+      const out = path.join(base, 'out');
+      fs.mkdirSync(out);
+      const file = path.join(base, 'a.tar.gz');
+      fs.writeFileSync(file, archive);
+      execFileSync('tar', ['-xzf', file, '-C', out]);
+      expect(fs.readlinkSync(path.join(out, 'to-real'))).toBe('real.txt');
+      expect(fs.readlinkSync(path.join(out, 'dangling'))).toBe('missing-target');
+    } finally {
+      fs.rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it('carries a symlink target longer than 100 bytes', () => {
+    const target = `${'long-dir/'.repeat(15)}file`;
+    const entries: TarEntry[] = [{ path: 'link', type: 'symlink', mode: 0o777, linkTarget: target }];
+    expect(unpackTarGz(packTarGz(entries, MTIME))).toEqual(entries);
   });
 });

@@ -126,11 +126,13 @@ export class SshClient {
   }
 
   private resolveIdentityFile(configured: unknown): string | null {
-    // ssh-config's compute() returns IdentityFile as a list (ssh tries them in order; the first one is used here).
-    const first = Array.isArray(configured) ? configured[0] : configured;
-    if (!first) return findDefaultKey(this.env.homeDir);
+    // ssh-config's compute() returns IdentityFile as a list; like ssh, the first one that exists is used (the first one listed when none does,
+    // so the missing file is what a failed authentication points at).
+    const listed = (Array.isArray(configured) ? configured : [configured]).filter((f): f is string => typeof f === 'string' && f !== '');
+    if (listed.length === 0) return findDefaultKey(this.env.homeDir);
     // ssh_config writes `~/.ssh/key` (or a Windows path); `~` is this user's home, whichever separator follows it.
-    return (first as string).replace(/^~(?=$|[\\/])/, this.env.homeDir);
+    const expanded = listed.map((f) => f.replace(/^~(?=$|[\\/])/, this.env.homeDir));
+    return expanded.find((f) => fs.existsSync(f)) ?? expanded[0];
   }
 
   private resolveAgent(): Pick<ResolvedHost, 'agent' | 'agentUnavailableReason'> {
