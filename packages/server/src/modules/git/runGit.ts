@@ -33,11 +33,21 @@ export async function runGit(
   } catch (err) {
     // A Windows agent from before R5b does not look for git.exe itself: it spawns a bare `git` and answers ENOENT when there is none.
     // Here the program is known to be git, so that answer is the same reason a current agent gives. Elsewhere ENOENT stays as it is.
-    if (err instanceof CommandSpawnError && !(err instanceof GitNotFoundError) && err.code === 'ENOENT' && transport.files?.().platform === 'win32') {
+    // ENOENT also means "the working directory is not there": that one is kept as it is, so the user sees the folder is missing, not git.
+    const workingDirectory = resolvedCwd ?? (dirIndex < 0 ? undefined : resolvedArgs[dirIndex]);
+    if (err instanceof CommandSpawnError && !(err instanceof GitNotFoundError) && err.code === 'ENOENT' && transport.files?.().platform === 'win32'
+      && await isExistingDirectory(transport, workingDirectory)) {
       throw new GitNotFoundError(OLD_AGENT_GIT_NOT_FOUND, err.stdout, err.stderr);
     }
     throw err;
   }
+}
+
+/** True when there is no working directory to blame, or it is a directory (following links) on the host. */
+async function isExistingDirectory(transport: GitTransport, directory: string | undefined): Promise<boolean> {
+  if (directory === undefined || !transport.files) return true;
+  const stat = await transport.files().stat(directory, { followLinks: true });
+  return stat?.kind === 'directory';
 }
 
 const OLD_AGENT_GIT_NOT_FOUND =

@@ -10,13 +10,13 @@ import { mapAppError } from '../../app/mapAppError';
 
 type Run = (spec: unknown) => Promise<CommandResult>;
 
-async function buildApp(hostProfile: HostProfile | null, run: Run) {
+async function buildApp(hostProfile: HostProfile | null, run: Run, workingDirectoryExists = true) {
   const server = { name: 'srv', type: 'agent', hostProfile } as unknown as ServerConfig;
   const opts = {
     serverRepo: { findByName: (name: string) => (name === 'srv' ? server : null) },
     transportFactory: {
       hostProfileFor: (s: ServerConfig) => s.hostProfile,
-      getTransport: () => ({ run, hostProfile, files: () => ({ platform: hostProfile?.platform ?? 'linux' }) }),
+      getTransport: () => ({ run, hostProfile, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => (workingDirectoryExists ? { kind: 'directory' } : null) }) }),
     },
     taskRepo: {},
     projectServerRepo: { find: () => ({ workingDirectory: 'C:\\work' }) },
@@ -67,6 +67,12 @@ describe('git API on a Windows server', () => {
     expect(res.statusCode).toBe(501);
     expect(res.json()).toMatchObject({ code: 'git_not_found', error: expect.stringContaining('update the agent') });
     expect(res.json().error).toContain('winget install --id Git.Git -e');
+  });
+
+  it('an ENOENT because the working directory is missing is not turned into git_not_found', async () => {
+    const res = await (await buildApp(win32, oldAgent, false)).inject({ method: 'GET', url: urls[1] });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'spawn git ENOENT' });
   });
 
   it('an ENOENT on a Linux server stays what it was (500 with the message)', async () => {

@@ -37,7 +37,7 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     transportFactory: {
       invalidate: vi.fn(),
       hostProfileFor: (s: Pick<ServerConfig, 'hostProfile'>) => s.hostProfile,
-      getTransport: () => ({ hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux' }) }),
+      getTransport: () => ({ hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux', stat: async () => ({ kind: 'directory' }) }) }),
     },
     tmuxInstaller: new TmuxInstaller(),
     harnessInstaller: new HarnessInstaller({} as SshClient),
