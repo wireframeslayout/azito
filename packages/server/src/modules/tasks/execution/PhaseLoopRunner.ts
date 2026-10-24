@@ -32,7 +32,7 @@ import type { IUnitRepository } from '../../units/Unit';
 import type { WorkerWaiter, AppendLogFn, WaitResult } from './WorkerWaiter';
 import type { WorkerInputService } from './WorkerInputService';
 import type { PushVerifier } from './PushVerifier';
-import type { GitInfoCollector } from './GitInfoCollector';
+import type { GitInfo, GitInfoCollector } from './GitInfoCollector';
 import type { GitProviderService } from '../../git/providers/GitProviderService';
 import type { HttpSignalTurnCoordinator } from './HttpSignalTurnCoordinator';
 import type { PullRequestCreator } from './PullRequestCreator';
@@ -379,6 +379,9 @@ export class PhaseLoopRunner {
     // review) — enabledPhases here is the same list already computed above.
     let { index: currentPhaseIndex } = resolveCurrentPhaseIndex(unit.phaseConfig, unitType.phases, task.currentPhase);
 
+    // Where this server keeps the task's files (an agent's OS and temp folder), resolved once for the run and handed to whatever names a file or opens a stream.
+    const tempServer = await this.transportFactory.taskTempServer(server);
+
     while (currentPhaseIndex < enabledPhases.length) {
       if (signal.aborted) {
         this.appendLog(task.id, unit.id, 'status_change', { status: 'stopped_by_user' });
@@ -473,8 +476,6 @@ export class PhaseLoopRunner {
       const nonce = randomBytes(16).toString('hex');
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
-      // Where this server keeps the task's files (an agent's OS and temp folder): known before any file or pane stream is named.
-      const tempServer = await this.transportFactory.taskTempServer(server);
       let prompt: string;
       let rulesFilePath: string | null = null;
       if (resolvedSubagentConfig?.enabled === true && phaseDef.subagentRole) {
@@ -505,7 +506,7 @@ export class PhaseLoopRunner {
       const questionsMarker = `AZITO_QUESTIONS_${task.id}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${task.id}_${nonce}`;
 
-      const phaseStream = this.workerWaiter.startPaneStream(server, handle, task.id, unit.id);
+      const phaseStream = this.workerWaiter.startPaneStream(server, tempServer, handle, task.id, unit.id);
       if (!phaseStream) return;
 
       const outputFilePath = this.taskTempFiles.outputFile(tempServer, task.id, nonce);
@@ -522,7 +523,7 @@ export class PhaseLoopRunner {
         const envelopeResult = runtime.buildEnvelope({
           phase, capability, nonce,
           taskId: task.id, unitId: unit.id, workerExecutionMode: unit.workerExecutionMode,
-          server, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
+          server, tempServer, handle, supervisorTarget: supervisorTarget, prompt, outputFilePath,
           doneMarker, questionsMarker, testFailedMarker,
         });
         const phaseSignalStream = envelopeResult.signalStream;
@@ -920,7 +921,14 @@ export class PhaseLoopRunner {
       return t?.workingDirectory || ps?.workingDirectory || '.';
     })();
     const baseBranchForDiff = taskForGitInfo?.baseBranch ?? undefined;
-    const gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, baseBranchForDiff);
+    // The phases are done: a git state that cannot be read (agent unreachable, git missing) is logged and leaves those fields
+    // as they were; it does not stop the task from reaching review.
+    let gitInfo: GitInfo = { branch: null, changedFiles: null };
+    try {
+      gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, baseBranchForDiff);
+    } catch (err) {
+      this.appendLog(task.id, unit.id, 'command', { type: 'git_info_failed', message: err instanceof Error ? err.message : String(err) });
+    }
     // Uses the caller-locked `distributionRepoEntry` (Issue #87 review,
     // forge/87-mirror follow-up, Important finding 1), not a fresh
     // re-resolution — see this method's parameter doc comment.

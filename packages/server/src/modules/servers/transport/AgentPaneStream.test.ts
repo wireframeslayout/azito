@@ -10,6 +10,8 @@ import paneStreamRoutes from '../../../agent/paneStreamRoutes';
 import { ManagedStreamFiles } from '../../files/ws/ManagedStreamFiles';
 import { handleFileTail } from '../../files/ws/fileTailHandler';
 
+const UNIX_AGENT = { type: 'agent', platform: 'linux', tmpDir: '/tmp' } as const;
+
 async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   const start = Date.now();
   while (!cond()) {
@@ -48,8 +50,7 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
 
   it('registers its file, streams what is written to it, and releases it on stop', async () => {
     const { transport, managed } = await startAgent(true);
-    await transport.loadTaskTempHost();
-    stream = transport.createPaneStream('p-1' as never) as AgentPaneStream;
+    stream = transport.createPaneStream('p-1' as never, UNIX_AGENT) as AgentPaneStream;
     const received: string[] = [];
     stream.on('data', (line: string) => received.push(line));
     stream.start();
@@ -76,8 +77,7 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
     process.on('unhandledRejection', onUnhandled);
     try {
-      await transport.loadTaskTempHost();
-      stream = transport.createPaneStream('p-3' as never) as AgentPaneStream;
+        stream = transport.createPaneStream('p-3' as never, UNIX_AGENT) as AgentPaneStream;
       const failures: Error[] = [];
       let errorEvents = 0;
       stream.on('stream_failed', (err: Error) => failures.push(err));

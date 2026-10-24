@@ -15,7 +15,7 @@ import { PaneOutputStream } from '../../tmux/PaneOutputStream';
 import type { TmuxRuntime } from './TmuxRuntime';
 import { type MuxRef, type PaneHandle, type PaneOrdinal, type MuxExecRequest, tmuxTargetFromMuxRef } from '@azito/shared';
 import { buildTmuxAttachPlan } from '../../tmux/tmuxAttach';
-import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import type { TaskTempFiles, TaskTempServer } from '../../../shared/os/taskTempFiles';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
@@ -166,7 +166,7 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
     }
   }
 
-  createPaneStream(handle: PaneHandle): IPaneStream {
-    return new PaneOutputStream(this.taskTempFiles.pipeFile({ type: 'local' }, handle as string, Date.now()));
+  createPaneStream(handle: PaneHandle, tempServer: TaskTempServer): IPaneStream {
+    return new PaneOutputStream(this.taskTempFiles.pipeFile(tempServer, handle as string, Date.now()));
   }
 }

@@ -9,6 +9,7 @@ import type { IPaneStream, IPaneStreamFactory, PaneStreamGapEvent } from '../../
 import type { LogType } from '../ExecutionLog';
 import type { WorkerInputService } from './WorkerInputService';
 import { removeCompletionSignalBlock, extractPlanMarkdown } from './PromptExpander';
+import type { TaskTempServer } from '../../../shared/os/taskTempFiles';
 import { FileOpsError } from '../../../shared/fs/fileOps';
 
 export type AppendLogFn = (taskId: number, unitId: number, type: LogType, content: unknown) => void;
@@ -74,12 +75,13 @@ export class WorkerWaiter {
 
   startPaneStream(
     server: ServerConfig,
+    tempServer: TaskTempServer,
     handle: PaneHandle,
     taskId: number,
     unitId: number,
   ): IPaneStream | null {
     const paneId = `${taskId}-${Date.now()}`;
-    const paneStream = this.paneStreamFactory.create(paneId, server, handle);
+    const paneStream = this.paneStreamFactory.create(paneId, server, tempServer, handle);
     // Attached before start(): a subscribe failure is reported right away, before waitForWorker runs.
     paneStream.on('gap', ({ reason }: PaneStreamGapEvent) => {
       this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_gap', reason });
@@ -114,12 +116,13 @@ export class WorkerWaiter {
 
   startSignalStream(
     server: ServerConfig,
+    tempServer: TaskTempServer,
     taskId: number,
     unitId: number,
     doneMarker: string,
     questionsMarker: string,
   ): IPaneStream {
-    const stream = this.paneStreamFactory.create(`${taskId}-sig`, server);
+    const stream = this.paneStreamFactory.create(`${taskId}-sig`, server, tempServer);
     this.watchStreamFailure(stream, taskId, unitId);
     stream.start();
     stream.setMarkers(doneMarker, questionsMarker);
@@ -144,8 +147,11 @@ export class WorkerWaiter {
       if (err instanceof FileOpsError && err.code === 'NOT_FOUND') return null;
       throw err;
     }
-    // A file left behind is removed with the task's other temp files (TaskCleanupService), so a failed removal is not an error here.
-    await files.remove(outputFilePath).catch(() => {});
+    // The content is already in hand, so a failed removal does not fail the phase; it is logged, as the file stays on the host
+    // (TaskCleanupService removes a task's temp files for a local server only).
+    await files.remove(outputFilePath).catch((err: unknown) => {
+      console.warn(`[WorkerWaiter] could not remove the phase output file ${outputFilePath} on server "${server.name}"`, err);
+    });
     return content.length > 0 ? content : null;
   }
 

@@ -362,6 +362,18 @@ describe('PhaseLoopRunner phase:completed lifecycle log (#263)', () => {
     expect(entries[0][3]).toMatchObject({ type: 'phase_completed', phase: 'planning', summary: null });
   });
 
+  it('still takes the task to review, and logs git_info_failed, when only the final git state cannot be read', async () => {
+    const { runner, appendLog, taskRepo } = makeRunner();
+    (runner as any).gitInfoCollector.collectGitInfo = vi.fn(async () => { throw new Error('Agent /api/run failed (503)'); });
+    const unit = makeUnitForRun();
+
+    await runner.stateMachineLoop(unit, 'local', task, server, asPaneHandle('sess:1.1'), {} as any, new AbortController().signal, 'sess:1', null, false);
+
+    expect(appendLog).toHaveBeenCalledWith(task.id, unit.id, 'command', { type: 'git_info_failed', message: 'Agent /api/run failed (503)' });
+    expect(taskRepo.updateStatus).toHaveBeenCalledWith(task.id, 'review');
+    expect(taskRepo.updateStatus).not.toHaveBeenCalledWith(task.id, 'failed');
+  });
+
   it('includes the extracted summary object in the phase_completed log when present', async () => {
     const summaryLine = 'AZITO_PHASE_SUMMARY: {"phase":"planning","status":"completed","summary":"did the plan"}';
     const { runner, appendLog } = makeRunner();

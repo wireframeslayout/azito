@@ -138,14 +138,13 @@ describe('AgentTransport host profile', () => {
       expect(await transport.loadTaskTempHost()).toEqual({ platform: 'win32', tmpDir: 'C:\\Users\\u\\AppData\\Local\\Temp' });
       expect(await transport.loadTaskTempHost()).toEqual({ platform: 'win32', tmpDir: 'C:\\Users\\u\\AppData\\Local\\Temp' });
       expect(fetchSpy).toHaveBeenCalledTimes(1);
-      expect(transport.taskTempHostLoaded().platform).toBe('win32');
     });
 
     it('names a pipe file in the notation of the agent\'s OS', async () => {
       report('win32', 'C:\\Temp');
       const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'win32', arch: 'x64' });
-      await transport.loadTaskTempHost();
-      expect(transport.createPaneStream('9-1' as never).getFilePath()).toMatch(/^C:\\Temp\\azito-pipe-9-1-\d+\.log$/);
+      const host = await transport.loadTaskTempHost();
+      expect(transport.createPaneStream('9-1' as never, { type: 'agent', ...host }).getFilePath()).toMatch(/^C:\\Temp\\azito-pipe-9-1-\d+\.log$/);
     });
 
     it('is the Unix /tmp for an agent whose host was never recorded, without asking it', async () => {
@@ -158,16 +157,34 @@ describe('AgentTransport host profile', () => {
       const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'linux', arch: 'x64' });
       fetchSpy.mockImplementation(async () => new Response('nope', { status: 500 }));
       await expect(transport.loadTaskTempHost()).rejects.toThrow(/failed \(500\)/);
-      expect(() => transport.taskTempHostLoaded()).toThrow(/not known yet/);
       report('linux', '/tmp/my dir');
       await expect(transport.loadTaskTempHost()).rejects.toThrow(/agent server "srv"/);
       report('linux', '/tmp');
       expect(await transport.loadTaskTempHost()).toEqual({ platform: 'linux', tmpDir: '/tmp' });
     });
 
-    it('refuses to create a pane stream before the temp folder is known', () => {
+    it('refuses a pane stream for a temp folder that is not an agent\'s', () => {
       const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', null);
-      expect(() => transport.createPaneStream('9-1' as never)).toThrow(/not known yet/);
+      expect(() => transport.createPaneStream('9-1' as never, { type: 'local' })).toThrow(/needs the agent's temp folder/);
+    });
+
+    it('treats an old agent that does not report the temp folder as a Unix one with /tmp (the answer of before it was reported)', async () => {
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform: 'darwin', arch: 'arm64', shell: '/bin/zsh' }), { status: 200 }));
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'darwin', arch: 'arm64' });
+      expect(await transport.fetchHostInfo()).toEqual({ platform: 'darwin', arch: 'arm64', shell: '/bin/zsh' });
+      expect(await transport.loadTaskTempHost()).toEqual({ platform: 'darwin', tmpDir: '/tmp' });
+    });
+
+    it('is an error, with the reason, for a Windows agent that does not report the temp folder', async () => {
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform: 'win32', arch: 'x64', shell: null }), { status: 200 }));
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'win32', arch: 'x64' });
+      await expect(transport.loadTaskTempHost()).rejects.toThrow(/did not report its temp folder/);
+    });
+
+    it('still rejects a malformed answer (a wrong type for tmpDir)', async () => {
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform: 'linux', arch: 'x64', shell: null, tmpDir: 5 }), { status: 200 }));
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'linux', arch: 'x64' });
+      await expect(transport.loadTaskTempHost()).rejects.toThrow();
     });
   });
 });

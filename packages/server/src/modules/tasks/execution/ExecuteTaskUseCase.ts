@@ -41,7 +41,7 @@ import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
 import { WorkerInputService, WorkerNotRunningError } from './WorkerInputService';
 import { PushVerifier } from './PushVerifier';
-import { GitInfoCollector } from './GitInfoCollector';
+import { GitInfoCollector, type GitInfo } from './GitInfoCollector';
 import { PullRequestCreator } from './PullRequestCreator';
 import { PhaseLoopRunner } from './PhaseLoopRunner';
 import { appendLogAndEmit } from './AppendLog';
@@ -1584,7 +1584,12 @@ export class ExecuteTaskUseCase {
                 this.taskRepo.update(taskId, updates);
               }
             } else if (workingDir) {
-              const gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, wtBaseBranch ?? undefined);
+              let gitInfo: GitInfo = { branch: null, changedFiles: null };
+              try {
+                gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, wtBaseBranch ?? undefined);
+              } catch (err) {
+                this.appendLog(taskId, unitId, 'command', { type: 'git_info_failed', message: err instanceof Error ? err.message : String(err) });
+              }
               const updates: Partial<Task> = {};
               if (gitInfo.changedFiles) updates.changedFiles = gitInfo.changedFiles;
               const prUrl = await this.findPrUrl(repo, gitInfo.branch);
@@ -2031,12 +2036,13 @@ export class ExecuteTaskUseCase {
       const doneMarker = `AZITO_DONE_${taskId}_${nonce}`;
       const questionsMarker = `AZITO_QUESTIONS_${taskId}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${taskId}_${nonce}`;
-      const outputFilePath = this.taskTempFiles.outputFile(await this.transportFactory.taskTempServer(server), taskId, nonce);
+      const tempServer = await this.transportFactory.taskTempServer(server);
+      const outputFilePath = this.taskTempFiles.outputFile(tempServer, taskId, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
 
       // Start pipe-pane BEFORE sending to capture all output — this capture runs
       // in BOTH execution modes (see PhaseLoopRunner.stateMachineLoop's identical note).
-      const followUpStream = this.workerWaiter.startPaneStream(server, handle, taskId, unitId);
+      const followUpStream = this.workerWaiter.startPaneStream(server, tempServer, handle, taskId, unitId);
       if (!followUpStream) return;
 
       const followUpProject = this.projectRepo.findById(task.projectId);
@@ -2083,7 +2089,7 @@ export class ExecuteTaskUseCase {
       const runtime = this.runtimeRegistry.get(unit.workerRuntime);
       const envelopeResult = runtime.buildFollowUpEnvelope({
         nonce, taskId, unitId, workerExecutionMode: unit.workerExecutionMode,
-        server, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
+        server, tempServer, handle, supervisorTarget: windowTarget, prompt: expandedComment, outputFilePath,
         doneMarker, questionsMarker, testFailedMarker,
       });
       const followUpSignalStream = envelopeResult.signalStream;

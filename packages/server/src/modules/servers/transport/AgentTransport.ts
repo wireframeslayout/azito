@@ -15,7 +15,7 @@ import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnrea
 import type { MuxRuntime } from '../Server';
 import { AGENT_HOST_PATH, AgentHostOutdatedError, parseAgentHostInfo, type AgentHostInfo } from './agentHostProtocol';
 import { assertPosixHost, toHostProfile, type HostProfile } from '../../../shared/os/hostProfile';
-import { TaskTempFiles, assertTmpDirShellSafe, LEGACY_UNIX_TMP_DIR, type AgentTempHost } from '../../../shared/os/taskTempFiles';
+import { TaskTempFiles, assertTmpDirShellSafe, LEGACY_UNIX_TMP_DIR, type AgentTempHost, type TaskTempServer } from '../../../shared/os/taskTempFiles';
 import { CommandOutputLimitError, CommandSpawnError, type CommandResult, type CommandSpec } from '../../../shared/exec/commandSpec';
 import { truncateUtf8 } from '../../../shared/exec/utf8';
 import { toPosixCommandLine } from '../../../shared/exec/posixCommandLine';
@@ -273,19 +273,20 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   private async fetchTaskTempHost(): Promise<AgentTempHost> {
     if (this.hostProfile === null) return { platform: 'linux', tmpDir: LEGACY_UNIX_TMP_DIR };
     const info = await this.fetchHostInfo();
-    const host: AgentTempHost = { platform: toHostProfile(info.platform, info.arch).platform, tmpDir: info.tmpDir };
+    const platform = toHostProfile(info.platform, info.arch).platform;
+    // An agent from before the temp folder was reported is a Unix one with /tmp. Windows agents are new in this release, so one that
+    // does not report it is not a state to paper over.
+    if (info.tmpDir === undefined && platform === 'win32') {
+      throw new Error(`Windows agent server "${this.serverName}" did not report its temp folder (GET /api/host tmpDir); update the agent`);
+    }
+    const host: AgentTempHost = { platform, tmpDir: info.tmpDir ?? LEGACY_UNIX_TMP_DIR };
     assertTmpDirShellSafe(host.platform, host.tmpDir, `agent server "${this.serverName}"`);
     return host;
   }
 
-  /** {@link loadTaskTempHost}'s answer, for the code that cannot wait (creating a pane stream): it must have been loaded first. */
-  taskTempHostLoaded(): AgentTempHost {
-    if (!this.taskTempHost) throw new Error(`The temp folder of agent server "${this.serverName}" is not known yet (loadTaskTempHost first)`);
-    return this.taskTempHost;
-  }
-
-  createPaneStream(handle: PaneHandle): IPaneStream {
-    const filePath = TaskTempFiles.remotePipeFile(this.taskTempHostLoaded(), handle as string, Date.now());
+  createPaneStream(handle: PaneHandle, tempServer: TaskTempServer): IPaneStream {
+    if (tempServer.type !== 'agent') throw new Error(`Agent server "${this.serverName}" needs the agent's temp folder to name a pane stream file`);
+    const filePath = TaskTempFiles.remotePipeFile(tempServer, handle as string, Date.now());
     return new AgentPaneStream(filePath, this, this.wsBaseUrl, this.authHeader);
   }
 

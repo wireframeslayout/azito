@@ -221,7 +221,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
     it('reads a task\'s output lines through its own server\'s connection, with the done marker detected', async () => {
       const { pane } = await openWindow('sleep 2; echo AZITO_DONE_7_abc; sleep 30');
       const factory = new PaneStreamFactory(transportFactory, (srv) => misao.servers.nodeFor(srv).connection);
-      const stream = factory.create('7-123', server, pane);
+      const stream = factory.create('7-123', server, { type: 'local' }, pane);
       stream.setMarkers('AZITO_DONE_7_abc', 'AZITO_QUESTIONS_7_abc');
       stream.enableMarkerDetection();
       const detected = new Promise<string>((resolve, reject) => {
@@ -238,9 +238,9 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
     });
 
     it('takes the completion signal file of a remote task from the agent (file-tail), not from the hub\'s own disk', async () => {
-      await transportFactory.taskTempServer(server);
+      const tempServer = await transportFactory.taskTempServer(server);
       const factory = new PaneStreamFactory(transportFactory, () => { throw new Error('no misao lines for a signal stream'); });
-      const signal = factory.create('7-sig', server);
+      const signal = factory.create('7-sig', server, tempServer);
       expect(signal.constructor.name).toBe('AgentPaneStream');
     });
   });

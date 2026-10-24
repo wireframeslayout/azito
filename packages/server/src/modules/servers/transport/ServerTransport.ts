@@ -1,3 +1,4 @@
+import type { TaskTempServer } from '../../../shared/os/taskTempFiles';
 import type { EventEmitter } from 'events';
 import type { MuxRef, PaneHandle, PaneOrdinal, MuxExecRequest } from '@azito/shared';
 import type { IPaneStream } from '../../tmux/PaneStream';
@@ -53,5 +54,6 @@ export interface OpenTerminalOpts {
 export interface IMuxTransport {
   execMux(req: MuxExecRequest): Promise<ExecResult>;
   openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: OpenTerminalOpts): Promise<ITerminalStream>;
-  createPaneStream(handle: PaneHandle): IPaneStream;
+  /** `tempServer`: where the task's files are kept on this server, resolved by the caller (the pipe file is named from it). */
+  createPaneStream(handle: PaneHandle, tempServer: TaskTempServer): IPaneStream;
 }

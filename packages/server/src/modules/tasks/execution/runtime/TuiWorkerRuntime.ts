@@ -148,6 +148,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
 
     const signalStream = this.workerWaiter.startSignalStream(
       ctx.server,
+      ctx.tempServer,
       ctx.taskId,
       ctx.unitId,
       ctx.doneMarker,
@@ -191,6 +192,7 @@ export class TuiWorkerRuntime implements IWorkerRuntime {
 
     const signalStream = this.workerWaiter.startSignalStream(
       ctx.server,
+      ctx.tempServer,
       ctx.taskId,
       ctx.unitId,
       ctx.doneMarker,

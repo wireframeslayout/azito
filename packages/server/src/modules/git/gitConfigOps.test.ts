@@ -80,8 +80,10 @@ describe('gitConfigOps (real git through LocalTransport)', () => {
     expect(calls.every((c) => c.timeoutMs === 10_000)).toBe(true);
   });
 
-  it('does not take a failure with output on stderr for an unset key', async () => {
-    const fake: GitTransport = { run: async () => ({ exitCode: 1, signal: null, stdout: '', stderr: 'error: invalid key: a' }) };
-    await expect(getGitConfigValue(fake, '/w', 'a')).rejects.toThrow(/invalid key/);
+  it('reads exit 1 as unset and any other failure as an error', async () => {
+    const unset: GitTransport = { run: async () => ({ exitCode: 1, signal: null, stdout: '', stderr: '' }) };
+    expect(await getGitConfigValue(unset, '/w', 'user.name')).toBe('');
+    const broken: GitTransport = { run: async () => ({ exitCode: 128, signal: null, stdout: '', stderr: 'fatal: not a git repository' }) };
+    await expect(getGitConfigValue(broken, '/w', 'user.name')).rejects.toThrow(/not a git repository/);
   });
 });

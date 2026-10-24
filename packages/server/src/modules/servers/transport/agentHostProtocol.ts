@@ -7,14 +7,15 @@ export const AGENT_HOST_PATH = '/api/host';
  * What an agent says about its own host. `platform` / `arch` are Node's values as they are (the hub narrows them with
  * `toHostProfile`, so an OS the hub does not know is `unsupported_host` there). `shell` is the agent process's `$SHELL`
  * (a Windows host: `%ComSpec%`), null when the process has none. `homeDir` / `tmpDir` are the agent process's own home and temp
- * folders in the host's notation: the hub names the files of a task under `tmpDir`.
+ * folders in the host's notation (the hub names the files of a task under `tmpDir`); an agent from before they were reported leaves them out,
+ * which is a Unix agent whose temp folder is `/tmp` (a Windows agent always reports them).
  */
 const agentHostInfoSchema = z.object({
   platform: z.string().min(1),
   arch: z.string().min(1),
   shell: z.string().min(1).nullable(),
-  homeDir: z.string().min(1),
-  tmpDir: z.string().min(1),
+  homeDir: z.string().min(1).optional(),
+  tmpDir: z.string().min(1).optional(),
 });
 export type AgentHostInfo = z.infer<typeof agentHostInfoSchema>;
 

@@ -1,6 +1,7 @@
 import type { EventEmitter } from 'events';
 import type { PaneHandle } from '@azito/shared';
 import type { ServerConfig } from '../servers/Server';
+import type { TaskTempServer } from '../../shared/os/taskTempFiles';
 
 /** Payload of 'gap': lines the stream will never deliver (misao: daemon restart or ring overrun). */
 export interface PaneStreamGapEvent {
@@ -25,5 +26,5 @@ export interface IPaneStream extends EventEmitter {
 
 export interface IPaneStreamFactory {
   /** `pane` is the real pane the stream reads from; it is absent for streams backed by a file the agent writes to (signal files). */
-  create(handle: PaneHandle | string, server: Pick<ServerConfig, 'type' | 'host' | 'agentPort' | 'agentToken'>, pane?: PaneHandle): IPaneStream;
+  create(handle: PaneHandle | string, server: Pick<ServerConfig, 'type' | 'host' | 'agentPort' | 'agentToken'>, tempServer: TaskTempServer, pane?: PaneHandle): IPaneStream;
 }
