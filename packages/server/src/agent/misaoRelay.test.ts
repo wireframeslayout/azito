@@ -8,8 +8,7 @@ import { MAX_MISAO_RELAYS, createMisaoRelay } from './misaoRelay';
 import { MISAO_RELAY_CLOSE, readMisaoSocketStatus, resolveAgentMisaoSocket } from '../modules/servers/transport/agentMisaoSocket';
 
 describe('resolveAgentMisaoSocket', () => {
-  // Windows では動かない: POSIX のパス連結前提（/home/u）
-  it.skipIf(process.platform === 'win32')('defaults to the managed socket under the home directory', () => {
+  it('defaults to the managed socket under the home directory', () => {
     expect(resolveAgentMisaoSocket({}, '/home/u').path).toBe('/home/u/.azito/misao/misao.sock');
   });
 
@@ -17,8 +16,7 @@ describe('resolveAgentMisaoSocket', () => {
     expect(resolveAgentMisaoSocket({ MISAO_SOCKET: '/run/misao.sock' }, '/home/u').path).toBe('/run/misao.sock');
   });
 
-  // Windows では動かない: POSIX のパス連結前提（/home/u）
-  it.skipIf(process.platform === 'win32')('treats an empty MISAO_SOCKET as unset', () => {
+  it('treats an empty MISAO_SOCKET as unset', () => {
     expect(resolveAgentMisaoSocket({ MISAO_SOCKET: '' }, '/home/u').path).toBe('/home/u/.azito/misao/misao.sock');
   });
 
