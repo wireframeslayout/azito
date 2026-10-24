@@ -178,6 +178,7 @@ async function main(): Promise<void> {
       process.exit(0);
     }, SHUTDOWN_HARD_CAP_MS);
     hardCap.unref();
+    wiring.agentRecoveryWatchdog.stop();
     app.close().then(() => process.exit(0)).catch(() => process.exit(0));
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -309,7 +310,6 @@ async function main(): Promise<void> {
     // After the start-up version check, which brings back an agent that is down by itself: the two never try at once.
     wiring.agentRecoveryWatchdog.start();
   });
-  app.addHook('onClose', async () => { wiring.agentRecoveryWatchdog.stop(); });
 
   // ─── Startup: check harness versions ───
 
