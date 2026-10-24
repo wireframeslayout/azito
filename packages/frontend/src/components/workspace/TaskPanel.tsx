@@ -342,7 +342,9 @@ export default function TaskPanel({
   const diffServerName = (windows.find((w) => w.isPrimary) || windows[windows.length - 1])?.serverName || task?.serverName || undefined;
   const handleOpenDiffFile = onOpenFile && diffPath && diffServerName
     ? (relPath: string) => {
-        onOpenFile(diffServerName, joinRelative(serverPathApi(diffServerName), diffPath, relPath));
+        const pathApi = serverPathApi(diffServerName);
+        if (!pathApi) return; // the server's OS is not known yet
+        onOpenFile(diffServerName, joinRelative(pathApi, diffPath, relPath));
       }
     : undefined;
   // Server a brand-new ＋ menu "ブラウザ" tab connects to: primary window's serverName →

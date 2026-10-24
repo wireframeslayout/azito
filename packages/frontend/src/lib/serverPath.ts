@@ -3,16 +3,25 @@ import { hostPathFor, type HostPathApi, type HostPlatform, type HostPlatformInfo
 // One instance per OS, so a component can list the result in a dependency array without re-running its effect every render.
 const APIS: Partial<Record<HostPlatform, HostPathApi>> = {};
 
-function pathApiOf(platform: HostPlatform): HostPathApi {
+/** The path functions of a host OS. */
+export function serverPathApi(platform: HostPlatform): HostPathApi {
   return (APIS[platform] ??= hostPathFor(platform));
 }
 
 /**
- * The path functions of a server's host OS. `profile` is the server's `hostProfile`: a local server carries the hub's
- * own OS, and an agent whose OS was never recorded (null / absent) is a Unix one, so it gets POSIX rules.
+ * The OS of a server's host, or null while it is not known yet: the server is missing from the list (the list has not
+ * been fetched, or the name is gone). That is different from a listed server whose `hostProfile` is null: an agent
+ * registered before its OS was kept is a Unix one, and this is the one place that says so.
  */
-export function serverPathApi(profile: HostPlatformInfo | null | undefined): HostPathApi {
-  return pathApiOf(profile?.platform ?? 'linux');
+export function platformOfServer(server: { hostProfile?: HostPlatformInfo | null } | undefined): HostPlatform | null {
+  if (!server) return null;
+  return server.hostProfile?.platform ?? 'linux';
+}
+
+/** The path functions for the named server, or null while its OS is not known (see `platformOfServer`): path-dependent work waits. */
+export function resolveServerPathApi(servers: ReadonlyArray<{ name: string; hostProfile?: HostPlatformInfo | null }>, serverName: string | null | undefined): HostPathApi | null {
+  const platform = platformOfServer(servers.find((s) => s.name === serverName));
+  return platform === null ? null : serverPathApi(platform);
 }
 
 /** Whether the host writes `\` (Windows). Everything else about its paths comes from `HostPathApi`. */
@@ -20,9 +29,14 @@ function isWindowsApi(api: HostPathApi): boolean {
   return api.sep === '\\';
 }
 
-/** `base` + a relative path written with `/` (a git path, a search hit), in the host's own spelling. */
+/**
+ * `base` + a relative path written with `/` (a git path, a search hit, a new entry's name), in the host's own spelling.
+ * POSIX keeps `base` as it is (only the separator between is settled), because tabs saved before this existed are keyed
+ * by that string; Windows is joined and normalized, which `fileTabPath` also does.
+ */
 export function joinRelative(api: HostPathApi, base: string, relativePath: string): string {
-  return api.join(base, ...relativePath.split('/'));
+  if (isWindowsApi(api)) return api.join(base, ...relativePath.split('/'));
+  return base.endsWith('/') ? base + relativePath : `${base}/${relativePath}`;
 }
 
 /** The directory that holds `p`, or `root` itself when that is where `p` lives (the tree keys the root by the string it was given). */

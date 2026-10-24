@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
+import type { HostPathApi } from '@azito/shared';
 import { useTranslation } from 'react-i18next';
 import { fetchBlob } from '../api/client';
 import { useToast } from '../hooks/useToast';
@@ -26,7 +27,14 @@ export interface FileExplorerProps {
   onRefreshRef?: (fn: () => void) => void;
 }
 
-export default function FileExplorer({ serverName, rootPath, projectId, onFileSelect, onRefreshRef }: FileExplorerProps) {
+/** Waits for the server's OS (every path it builds depends on it), then shows the tree. */
+export default function FileExplorer(props: FileExplorerProps) {
+  const pathApi = useServerPath(props.serverName);
+  if (!pathApi) return <LoadingState />;
+  return <FileExplorerTree {...props} pathApi={pathApi} />;
+}
+
+function FileExplorerTree({ serverName, rootPath, projectId, onFileSelect, onRefreshRef, pathApi }: FileExplorerProps & { pathApi: HostPathApi }) {
   const { t } = useTranslation('files');
   const { showToast } = useToast();
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -34,8 +42,6 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
   const { menu: contextMenu, show: showContextMenu, showAt: showContextMenuAt, hide: hideContextMenu } = useContextMenu();
   const bindLongPress = useLongPress();
   const bindAreaLongPress = useLongPress();
-
-  const pathApi = useServerPath(serverName);
 
   const crud = useFileCrud({
     serverName,

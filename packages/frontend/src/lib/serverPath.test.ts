@@ -1,22 +1,47 @@
 import { describe, expect, it } from 'vitest';
 import {
-  fileDisplayName, fileTabPath, findByPath, joinRelative, parentOrRoot, serverPathApi, typedDirectoryPrefix, withTrailingSeparator,
+  fileDisplayName, fileTabPath, findByPath, joinRelative, parentOrRoot, platformOfServer, resolveServerPathApi, serverPathApi,
+  typedDirectoryPrefix, withTrailingSeparator,
 } from './serverPath';
 
-const posix = serverPathApi({ platform: 'linux' });
-const win = serverPathApi({ platform: 'win32' });
+const posix = serverPathApi('linux');
+const win = serverPathApi('win32');
 
 describe('serverPathApi', () => {
-  it('treats an unrecorded host as POSIX', () => {
-    expect(serverPathApi(null).sep).toBe('/');
-    expect(serverPathApi(undefined).sep).toBe('/');
-    expect(serverPathApi({ platform: 'darwin' }).sep).toBe('/');
+  it('writes "/" on Unix hosts and "\\" on Windows', () => {
+    expect(serverPathApi('linux').sep).toBe('/');
+    expect(serverPathApi('darwin').sep).toBe('/');
     expect(win.sep).toBe('\\');
   });
 
   it('returns one instance per OS so it can sit in a dependency array', () => {
-    expect(serverPathApi({ platform: 'win32' })).toBe(win);
-    expect(serverPathApi(null)).toBe(posix);
+    expect(serverPathApi('win32')).toBe(win);
+    expect(serverPathApi('linux')).toBe(posix);
+  });
+});
+
+describe('knowing the OS of a server', () => {
+  const winServer = { name: 'win', hostProfile: { platform: 'win32' as const } };
+  const oldAgent = { name: 'old', hostProfile: null };
+  const unrecorded = { name: 'unrecorded', hostProfile: undefined };
+
+  it('is unknown while the server is not in the list, and POSIX for a listed agent that never recorded its OS', () => {
+    expect(platformOfServer(undefined)).toBeNull();
+    expect(platformOfServer(oldAgent)).toBe('linux');
+    expect(platformOfServer(unrecorded)).toBe('linux');
+    expect(platformOfServer(winServer)).toBe('win32');
+  });
+
+  it('resolves no path functions until the list reports the server, then the right ones', () => {
+    // before the first fetch
+    expect(resolveServerPathApi([], 'win')).toBeNull();
+    // after it
+    const listed = [winServer, oldAgent];
+    expect(resolveServerPathApi(listed, 'win')).toBe(win);
+    expect(resolveServerPathApi(listed, 'old')).toBe(posix);
+    // a name the list does not have stays unknown
+    expect(resolveServerPathApi(listed, 'gone')).toBeNull();
+    expect(resolveServerPathApi(listed, null)).toBeNull();
   });
 });
 
@@ -30,6 +55,11 @@ describe('joinRelative', () => {
 
   it('keeps a backslash in a POSIX file name as part of the name', () => {
     expect(joinRelative(posix, '/w', 'a\\b.txt')).toBe('/w/a\\b.txt');
+  });
+
+  it('does not normalize a POSIX base, so its strings stay what they were', () => {
+    expect(joinRelative(posix, '/work//app/.', 'src/a.ts')).toBe('/work//app/./src/a.ts');
+    expect(joinRelative(posix, '/work/../app/', 'src/a.ts')).toBe('/work/../app/src/a.ts');
   });
 });
 
@@ -105,5 +135,19 @@ describe('findByPath', () => {
     const unix = [{ path: '/Work/App' }];
     expect(findByPath(posix, unix, '/Work/App/')).toBe(unix[0]);
     expect(findByPath(posix, unix, '/work/app')).toBeNull();
+  });
+});
+
+describe('one POSIX file, one tab id', () => {
+  // A root with a doubled slash and a dot: the strings that saved tabs were keyed by.
+  const root = '/work//app/.';
+  const savedId = `file:s:${root}/src/a.ts`;
+  const idOf = (filePath: string): string => `file:s:${fileTabPath(posix, filePath)}`;
+
+  it('is the same from a saved tab, the tree, a diff and a search hit', () => {
+    const fromTree = `${root}/src/a.ts`; // the server lists dirPath + '/' + name
+    expect(idOf(fromTree)).toBe(savedId);
+    expect(idOf(joinRelative(posix, root, 'src/a.ts'))).toBe(savedId); // diff and search
+    expect(idOf(joinRelative(posix, `${root}/`, 'src/a.ts'))).toBe(`file:s:${root}/src/a.ts`);
   });
 });

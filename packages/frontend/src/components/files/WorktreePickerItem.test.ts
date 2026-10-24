@@ -6,8 +6,8 @@ import type { WorktreeItem } from './RootSwitcher';
 const item = (path: string, isMain: boolean): WorktreeItem => ({ path, isMain, branch: null, head: '' }) as WorktreeItem;
 
 describe('getWorktreeName', () => {
-  const posix = serverPathApi({ platform: 'linux' });
-  const win = serverPathApi({ platform: 'win32' });
+  const posix = serverPathApi('linux');
+  const win = serverPathApi('win32');
 
   it('names the main checkout by its directory', () => {
     expect(getWorktreeName(item('/work/app', true), posix)).toBe('app');

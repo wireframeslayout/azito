@@ -68,7 +68,7 @@ export function FileSearchPanel({ serverName, projectId, root, onOpenHit, onClos
   }, [query, caseSensitive, wholeWord, useRegex, include, exclude, performSearch]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => { if (e.key === 'Escape') { if (query) setQuery(''); else onClose(); } };
-  const handleSelect = (path: string, line: number) => { setActiveHit({ path, line }); onOpenHit(joinRelative(pathApi, root, path), line); };
+  const handleSelect = (path: string, line: number) => { if (!pathApi) return; setActiveHit({ path, line }); onOpenHit(joinRelative(pathApi, root, path), line); };
   const groups: SearchResultGroup[] = [];
   if (result) {
     const contentByPath = new Map<string, SearchHitItem[]>();

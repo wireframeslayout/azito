@@ -4,6 +4,7 @@ import { api } from '../api/client';
 import { applyRetargetTabs } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
 import { fileDisplayName, fileTabPath } from '../lib/serverPath';
+import { normalizeFileTabs } from '../lib/fileTabMigration';
 import { renameServerInTabs } from '../lib/serverAliasTabs';
 import {
   type TerminalRef,
@@ -421,6 +422,20 @@ export function useTabPersistence(storageKey?: string) {
     return idMap;
   }, []);
 
+  /**
+   * Moves the saved file tabs of Windows servers to their normalized path / id / label once the servers' OS is known
+   * (`pathApiFor` is null for a server not reported yet: its tabs wait). Returns the id renames so the caller can move the
+   * pane layout along; the active tab and the openers follow here.
+   */
+  const migrateFileTabPaths = useCallback((pathApiFor: (serverName: string) => HostPathApi | null): Map<string, string> => {
+    const { tabs: normalized, changed, idMap } = normalizeFileTabs(tabsRef.current, pathApiFor);
+    if (!changed) return idMap;
+    setTabs(normalized);
+    const active = activeTabIdRef.current;
+    if (active && idMap.has(active)) setActiveTabId(idMap.get(active)!);
+    return idMap;
+  }, []);
+
   const togglePin = useCallback((tabId: string) => {
     setTabs((prev) => prev.map((t) =>
       t.id === tabId ? { ...t, pinned: !t.pinned } : t,
@@ -701,5 +716,5 @@ export function useTabPersistence(storageKey?: string) {
     });
   }, []);
 
-  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, migrateServerAliases, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
+  return { tabs, activeTabId, setActiveTabId, openTab, connectPane, connectTarget, migrateLegacyTerminalTabIds, migrateServerAliases, migrateFileTabPaths, openFile, openUnit, openTask, openTaskForm, openUnitForm, openSidekickForm, openIssue, openIssueList, openServer, openSettings, openStorageFile, openDiff, openBrowser, updateBrowserActiveTab, closeTab, retargetTabs, retargetTabPane, reorderTab, openProjectTasks, togglePin, activateOpener, getTabDisplayName, setTabDirty };
 }

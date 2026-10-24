@@ -9,7 +9,7 @@ import { FileBrowseService, FileBrowseError } from './FileBrowseService';
 import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import type { FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
-import { isHostPathContained, pathApiFor } from '../../shared/os/hostPath';
+import { isHostPathContained, isSameHostPath, pathApiFor } from '../../shared/os/hostPath';
 import type { HostPlatform } from '../../shared/os/hostEnv';
 
 /** `.git` as the host's filesystem sees it: case-insensitive on win32 / darwin, and win32 ignores trailing dots and spaces. */
@@ -478,7 +478,7 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
         // What is deleted is the checked path itself (the contained parent + the last element), not the raw request.
         const resolvedTarget = api.join(resolvedParent, api.basename(rawPath));
         // Same rule as the containment check below (relative(), so `C:\Work` and `c:\work\` are one place on Windows).
-        if (api.relative(resolvedRoot, resolvedTarget) === '') return reply.status(400).send({ error: 'Cannot delete the root directory' });
+        if (isSameHostPath(fileOps.platform, resolvedRoot, resolvedTarget)) return reply.status(400).send({ error: 'Cannot delete the root directory' });
         if (!isHostPathContained(fileOps.platform, { target: resolvedTarget, allowedRoot: resolvedRoot })) {
           return reply.status(400).send({ error: 'target path escapes the allowed directory' });
         }

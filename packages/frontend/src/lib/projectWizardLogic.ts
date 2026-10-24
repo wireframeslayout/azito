@@ -7,7 +7,7 @@
 // repoDiscoveryDialogLogic.ts) rather than adding component tests.
 
 import type { HostPlatform, HostPlatformInfo } from '@azito/shared';
-import { serverPathApi } from './serverPath';
+import { platformOfServer, serverPathApi } from './serverPath';
 
 /**
  * The four wizard steps, in a fixed order. `environment` is the only step
@@ -27,8 +27,8 @@ export interface WizardValidationState {
   existingPath: string;
   cloneUrl: string;
   cloneDirectory: string;
-  /** The OS of the selected server's host: the clone target is a path on it. */
-  serverPlatform: HostPlatform;
+  /** The OS of the selected server's host (the clone target is a path on it); null while the server list has not reported it. */
+  serverPlatform: HostPlatform | null;
   /**
    * Server names already configured for this project ('addEnvironment' mode
    * only). A selection matching one of these must never be allowed to
@@ -87,7 +87,7 @@ export function canAdvanceFromStep(stepId: WizardStepId, state: WizardValidation
         // project's directory, or may be unwritable, under a daemon/
         // release deployment) — see `isAbsoluteWizardPath` (Issue #87
         // review, Important finding 2).
-        if (!isAbsoluteWizardPath(state.cloneDirectory, state.serverPlatform)) return false;
+        if (state.serverPlatform === null || !isAbsoluteWizardPath(state.cloneDirectory, state.serverPlatform)) return false;
         // No token check here: the hub resolves a repository's credential in
         // two steps (docs/ja/github-integration.md) — the repository's own
         // PAT first, then the hub's `gh` / `glab` CLI login. An operator who
@@ -196,7 +196,7 @@ export function isDiscoveryCurrent(key: DiscoveryKey | null, currentServer: stri
  * selected server.
  */
 export function isAbsoluteWizardPath(p: string, platform: HostPlatform): boolean {
-  return serverPathApi({ platform }).isAbsolute(p.trim());
+  return serverPathApi(platform).isAbsolute(p.trim());
 }
 
 /**
@@ -619,7 +619,7 @@ export function resolveDistributionSummary(
   return { distributed: true, repositoryName: cloneUrl.trim() || null };
 }
 
-/** The OS of the selected server's host, which decides what an absolute path looks like in the wizard (POSIX when not recorded). */
-export function serverHostPlatform(selectedServer: string, serverList: WizardServerRecord[]): HostPlatform {
-  return serverList.find((sv) => sv.name === selectedServer)?.hostProfile?.platform ?? 'linux';
+/** The OS of the selected server's host, which decides what an absolute path looks like in the wizard; null until the server list reports it. */
+export function serverHostPlatform(selectedServer: string, serverList: WizardServerRecord[]): HostPlatform | null {
+  return platformOfServer(serverList.find((sv) => sv.name === selectedServer));
 }

@@ -366,7 +366,7 @@ export function FilePreviewPanel({
     flexShrink: 0,
   };
 
-  const fileName = fileDisplayName(pathApi, filePath);
+  const fileName = pathApi ? fileDisplayName(pathApi, filePath) : filePath;
   const activeSize = file?.size ?? image?.size ?? pdf?.size;
 
   return (

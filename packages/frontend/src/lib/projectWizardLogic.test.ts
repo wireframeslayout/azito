@@ -166,6 +166,13 @@ describe('canAdvanceFromStep code step on a Windows host', () => {
     expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: 'win32', cloneDirectory: 'C:\\work\\widgets' }))).toBe(true);
   });
 
+  it('waits while the server list has not reported the OS (neither accepts nor guesses)', () => {
+    expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: null, cloneDirectory: 'C:\\work\\widgets' }))).toBe(false);
+    expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: null, cloneDirectory: '/work/widgets' }))).toBe(false);
+    // once it is reported the same input is accepted
+    expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: 'win32', cloneDirectory: 'C:\\work\\widgets' }))).toBe(true);
+  });
+
   it('refuses a drive path when the server is a POSIX host', () => {
     expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: 'linux', cloneDirectory: 'C:\\work\\widgets' }))).toBe(false);
   });
@@ -178,11 +185,12 @@ describe('serverHostPlatform', () => {
     { name: 'mac', type: 'agent', hostProfile: { platform: 'darwin' as const } },
   ];
 
-  it('is the OS of the selected server, POSIX when it was never recorded', () => {
+  it('is the OS of the selected server, POSIX when it was never recorded, unknown until the list has it', () => {
     expect(serverHostPlatform('local', servers)).toBe('win32');
     expect(serverHostPlatform('mac', servers)).toBe('darwin');
     expect(serverHostPlatform('old-agent', servers)).toBe('linux');
-    expect(serverHostPlatform('missing', servers)).toBe('linux');
+    expect(serverHostPlatform('missing', servers)).toBeNull();
+    expect(serverHostPlatform('local', [])).toBeNull();
   });
 });
 

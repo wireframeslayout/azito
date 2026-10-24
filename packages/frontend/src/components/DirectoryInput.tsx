@@ -53,6 +53,7 @@ export default function DirectoryInput({ value, onChange, serverName, placeholde
   }, [serverName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectItem = useCallback((item: string) => {
+    if (!pathApi) return;
     const newValue = withTrailingSeparator(pathApi, item);
     onChange(newValue);
     setOpen(false);
@@ -119,7 +120,7 @@ export default function DirectoryInput({ value, onChange, serverName, placeholde
 
   // Highlight the matching portion of each suggestion
   const renderItem = (item: string, idx: number) => {
-    const matchLen = typedDirectoryPrefix(pathApi, value).length;
+    const matchLen = pathApi ? typedDirectoryPrefix(pathApi, value).length : 0;
     const matched = item.substring(0, matchLen);
     const rest = item.substring(matchLen);
 

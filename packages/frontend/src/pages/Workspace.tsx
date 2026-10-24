@@ -104,7 +104,7 @@ function WorkspaceInner() {
     setThemeProjectId(activeProjectId || null);
   }, [activeProjectId, setThemeProjectId]);
 
-  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, migrateServerAliases, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
+  const { tabs, activeTabId, setActiveTabId, connectPane: connectPaneRaw, connectTarget: connectTargetRaw, migrateLegacyTerminalTabIds, migrateServerAliases, migrateFileTabPaths, closeTab, retargetTabs: retargetTabsRaw, retargetTabPane: retargetTabPaneRaw, openFile: openFileRaw, openUnit: openUnitRaw, openTask: openTaskRaw, openTaskForm: openTaskFormRaw, openUnitForm, openSidekickForm, openIssue: openIssueRaw, openIssueList: openIssueListRaw, openServer: _openServerTab, openBrowser, updateBrowserActiveTab, openStorageFile: openStorageFileRaw, openDiff: openDiffRaw, openProjectTasks, openSettings: openSettingsRaw, togglePin, setTabDirty } = useTabPersistence();
 
   const openServer = useCallback((serverName: string) => {
     navigate(paths.server(serverName, 'overview'));
@@ -287,6 +287,13 @@ function WorkspaceInner() {
     migrateServerAliases(aliases).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [servers, migrateServerAliases]);
+
+  const serverPathApi = useServerPathApi();
+  // Saved file tabs of a Windows server are keyed by the normalized path; they move there once its OS is known.
+  useEffect(() => {
+    migrateFileTabPaths(serverPathApi).forEach((newId, oldId) => layout.replaceTab(oldId, newId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [serverPathApi, migrateFileTabPaths]);
 
   const [paneDrag, setPaneDrag] = useState<PaneDrag | null>(null);
 
@@ -540,9 +547,10 @@ function WorkspaceInner() {
   // a different project's diff/task view must attribute the new file tab to *its own* project, or the
   // save-path containment check runs against the wrong project's workingDirectory (Issue #27 review
   // Important 2).
-  const serverPathApi = useServerPathApi();
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
-    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, serverPathApi(serverName));
+    const pathApi = serverPathApi(serverName);
+    if (!pathApi) return; // the server's OS is not known yet: the tab's identity depends on it
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, pathApi);
   }, [openFileRaw, currentProjectId, serverPathApi]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {

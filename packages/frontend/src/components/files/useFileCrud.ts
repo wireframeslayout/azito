@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { api } from '../../api/client';
 import type { HostPathApi } from '@azito/shared';
 import { useToast } from '../../hooks/useToast';
-import { parentOrRoot } from '../../lib/serverPath';
+import { joinRelative, parentOrRoot } from '../../lib/serverPath';
 
 export interface PendingCreate {
   parentPath: string;
@@ -43,7 +43,7 @@ export function useFileCrud({ serverName, projectId, rootPath, pathApi, loadRoot
 
   const commitCreate = useCallback(async (name: string) => {
     if (!pendingCreate || !projectId) return;
-    const fullPath = pathApi.join(pendingCreate.parentPath, name);
+    const fullPath = joinRelative(pathApi, pendingCreate.parentPath, name);
     try {
       const res = await api<{ ok?: boolean; error?: string }>(`/servers/${serverName}/files`, {
         method: 'POST',

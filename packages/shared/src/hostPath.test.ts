@@ -31,6 +31,10 @@ describe('hostPathFor: same results as Node path', () => {
       it('basename with ext', () => {
         expect(api.basename('/x/file.tar.gz', '.gz')).toBe(node.basename('/x/file.tar.gz', '.gz'));
         expect(api.basename('/x/.gz', '.gz')).toBe(node.basename('/x/.gz', '.gz'));
+        expect(api.basename('foo', 'foo')).toBe(node.basename('foo', 'foo'));
+        expect(api.basename('foo', 'foo')).toBe('');
+        expect(api.basename('/x/foo', 'foo')).toBe(node.basename('/x/foo', 'foo'));
+        expect(api.basename('/x/foo', 'foo')).toBe('foo');
       });
       it.each([
         [paths[0], 'a'], [paths[0], '..\\x'], [paths[0], '../x/y'], [paths[1], 'b/c'], ['', 'a'], ['a', ''], [paths[0], ''], ['.', 'a'],

@@ -355,7 +355,9 @@ export default function TabContentRenderer({
           baseBranch={tab.diffData.baseBranch}
           onOpenFile={openFile ? (relPath) => {
             const { serverName, path } = tab.diffData!;
-            openFile(serverName, joinRelative(serverPathApi(serverName), path, relPath), tab.projectId);
+            const pathApi = serverPathApi(serverName);
+            if (!pathApi) return; // the server's OS is not known yet
+            openFile(serverName, joinRelative(pathApi, path, relPath), tab.projectId);
           } : undefined}
         />
       )}

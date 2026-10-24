@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { HostPathApi } from '@azito/shared';
 import { api } from '../../api/client';
 import { Badge } from '../ui/Badge';
 import { Icon } from '../ui/Icon';
@@ -30,9 +31,15 @@ interface RootSwitcherProps {
   onWorktreeChange?: (worktree: WorktreeItem | null) => void;
 }
 
-export function RootSwitcher({ serverName, projectId, selectedPath, onSelect, onWorktreeChange }: RootSwitcherProps) {
+/** Waits for the server's OS (the selected worktree is matched by path), then shows the switcher. */
+export function RootSwitcher(props: RootSwitcherProps) {
+  const pathApi = useServerPath(props.serverName);
+  if (!pathApi) return null;
+  return <RootSwitcherReady {...props} pathApi={pathApi} />;
+}
+
+function RootSwitcherReady({ serverName, projectId, selectedPath, onSelect, onWorktreeChange, pathApi }: RootSwitcherProps & { pathApi: HostPathApi }) {
   const { t } = useTranslation('files');
-  const pathApi = useServerPath(serverName);
   const [open, setOpen] = useState(false);
   const [worktrees, setWorktrees] = useState<WorktreeItem[]>([]);
   const [loading, setLoading] = useState(false);
