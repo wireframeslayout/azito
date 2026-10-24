@@ -237,7 +237,8 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('an agent server\'s misao, through th
       }
     });
 
-    it('takes the completion signal file of a remote task from the agent (file-tail), not from the hub\'s own disk', () => {
+    it('takes the completion signal file of a remote task from the agent (file-tail), not from the hub\'s own disk', async () => {
+      await transportFactory.taskTempServer(server);
       const factory = new PaneStreamFactory(transportFactory, () => { throw new Error('no misao lines for a signal stream'); });
       const signal = factory.create('7-sig', server);
       expect(signal.constructor.name).toBe('AgentPaneStream');
