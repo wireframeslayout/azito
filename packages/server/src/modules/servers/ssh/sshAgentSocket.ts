@@ -1,5 +1,20 @@
+import * as fs from 'fs';
+
 /** The named pipe the Windows "OpenSSH Authentication Agent" service listens on (ssh-add and ssh.exe use it when SSH_AUTH_SOCK is unset). */
 export const WINDOWS_OPENSSH_AGENT_PIPE = '\\\\.\\pipe\\openssh-ssh-agent';
+
+const WINDOWS_PIPE_DIRECTORY = '\\\\.\\pipe\\';
+
+/**
+ * Whether a Windows named pipe (`\\.\pipe\<name>`) exists right now, by listing the pipe directory. `fs.existsSync` on the pipe itself said
+ * "no" for the OpenSSH agent's pipe on a GitHub runner although ssh-add had just used it, and opening the pipe only to look would take one
+ * of the agent's few instances.
+ */
+export function windowsNamedPipeExists(pipe: string): boolean {
+  if (!pipe.toLowerCase().startsWith(WINDOWS_PIPE_DIRECTORY)) throw new Error(`Not a local named pipe: ${pipe}`);
+  const name = pipe.slice(WINDOWS_PIPE_DIRECTORY.length).toLowerCase();
+  return fs.readdirSync(WINDOWS_PIPE_DIRECTORY).some((entry) => entry.toLowerCase() === name);
+}
 
 export type SshAgentResolution =
   | { socket: string; unavailableReason: null }

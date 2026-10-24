@@ -93,7 +93,7 @@ jobs:
       - name: Build and verify the agent bundle
         run: |
           npx -w packages/server tsx scripts/build-agent.ts
-          npx -w packages/server tsx scripts/verify-agent-tarball.ts packages/server/dist-agent/azito-agent.tar.gz
+          npx -w packages/server tsx scripts/verify-agent-tarball.ts dist-agent/azito-agent.tar.gz
 
       - name: Collect node-pty (Linux x86-64)
         run: |
@@ -149,7 +149,7 @@ jobs:
         run: npx -w packages/server tsx scripts/build-agent.ts
 
       - name: Verify the tarball (hub reader and Windows tar.exe)
-        run: npx -w packages/server tsx scripts/verify-agent-tarball.ts packages/server/dist-agent/azito-agent.tar.gz
+        run: npx -w packages/server tsx scripts/verify-agent-tarball.ts dist-agent/azito-agent.tar.gz
 
       - uses: actions/upload-artifact@v4
         with:

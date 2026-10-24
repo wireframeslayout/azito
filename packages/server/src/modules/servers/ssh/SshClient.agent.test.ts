@@ -6,6 +6,7 @@ import * as os from 'os';
 import * as path from 'path';
 import { AgentProtocol, Client, Server, utils, type ParsedKey } from 'ssh2';
 import { SshClient } from './SshClient';
+import { windowsNamedPipeExists } from './sshAgentSocket';
 
 /**
  * Authentication through an ssh-agent, with the real ssh2 client on one side and an agent speaking the OpenSSH agent protocol
@@ -118,13 +119,18 @@ describe('SshClient authenticating through an ssh-agent', () => {
   });
 });
 
-describe.skipIf(process.platform !== 'win32')('a Windows named pipe as seen by the file system', () => {
-  it('exists while a server listens on it and not after it closes (what resolveSshAgent relies on)', async () => {
+describe.skipIf(process.platform !== 'win32')('windowsNamedPipeExists (a real named pipe)', () => {
+  it('sees a pipe while a server listens on it, in any letter case, and not after it closes', async () => {
     const pipe = agentAddress();
     const server = net.createServer();
     await listen(server, pipe);
-    expect(fs.existsSync(pipe)).toBe(true);
+    expect(windowsNamedPipeExists(pipe)).toBe(true);
+    expect(windowsNamedPipeExists(pipe.toUpperCase())).toBe(true);
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    expect(fs.existsSync(pipe)).toBe(false);
+    expect(windowsNamedPipeExists(pipe)).toBe(false);
+  });
+
+  it('refuses a name that is not a local named pipe', () => {
+    expect(() => windowsNamedPipeExists('C:\\somewhere\\agent')).toThrow(/Not a local named pipe/);
   });
 });

@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import SSHConfig from 'ssh-config';
 import type { ExecResult } from '../transport/ServerTransport';
-import { resolveSshAgent } from './sshAgentSocket';
+import { resolveSshAgent, windowsNamedPipeExists } from './sshAgentSocket';
 
 // ─── Types ───
 
@@ -134,7 +134,7 @@ export class SshClient {
   }
 
   private resolveAgent(): Pick<ResolvedHost, 'agent' | 'agentUnavailableReason'> {
-    const resolution = resolveSshAgent(this.env.platform, this.env.authSock, fs.existsSync);
+    const resolution = resolveSshAgent(this.env.platform, this.env.authSock, windowsNamedPipeExists);
     return { agent: resolution.socket, agentUnavailableReason: resolution.unavailableReason };
   }
 
