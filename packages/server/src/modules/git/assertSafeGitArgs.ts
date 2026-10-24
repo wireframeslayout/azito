@@ -45,8 +45,8 @@ export function assertGitPathArg(platform: HostPlatform, value: string, label: s
 function invalidStoredPathOn(platform: HostPlatform, value: string): string | null {
   const reason = invalidWorkingDirectoryReason(platform, value);
   if (reason) return reason;
-  // TODO(#370 R3/R4): drop this POSIX restriction once the git / worktree code takes paths through `assertGitPathArg`.
-  // Until then `assertSafePath` in Local/RemoteWorktreeService, GitInfoCollector and TaskCleanupService refuses anything else,
+  // TODO(#370 R4): drop this POSIX restriction once the worktree create / remove code takes paths through `assertGitPathArg`
+  // (the git read paths already do). Until then `assertSafePath` in Local/RemoteWorktreeService.create / remove, GitInfoCollector and TaskCleanupService refuses anything else,
   // so a space or non-ASCII path that was saved would only fail later, after the phases ran.
   if (platform !== 'win32' && !SAFE_PATH_PATTERN.test(value)) {
     return 'only letters, digits and _ . / @ : ~ - are supported in a path for now';

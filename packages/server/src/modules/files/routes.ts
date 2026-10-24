@@ -10,14 +10,7 @@ import type { RouteAuthRequirement } from '../../shared/auth/routeAuth';
 import type { FileSearchService } from './FileSearchService';
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
 import { isHostPathContained, isSameHostPath, pathApiFor } from '../../shared/os/hostPath';
-import type { HostPlatform } from '../../shared/os/hostEnv';
-
-/** `.git` as the host's filesystem sees it: case-insensitive on win32 / darwin, and win32 ignores trailing dots and spaces. */
-export function isGitDirectoryName(platform: HostPlatform, name: string): boolean {
-  if (platform === 'linux') return name === '.git';
-  const folded = name.toLowerCase();
-  return (platform === 'win32' ? folded.replace(/[. ]+$/, '') : folded) === '.git';
-}
+import { isGitDirectoryName } from '../git/gitPath';
 
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');

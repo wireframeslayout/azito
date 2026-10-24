@@ -95,6 +95,16 @@ describe('GET /api/servers/:name/discover-repositories', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('rejects a home-relative path, a NUL byte and a Windows path on a Linux host with 400', async () => {
+    const opts = makeOpts();
+    const app = await buildApp(opts);
+    for (const path of ['~/work', '/work\u0000x', 'C:\\Users\\x']) {
+      const res = await app.inject({ method: 'GET', url: `/api/servers/local/discover-repositories?path=${encodeURIComponent(path)}` });
+      expect(res.statusCode, path).toBe(400);
+    }
+    expect(opts.repoDiscovery!.checkPathStatus).not.toHaveBeenCalled();
+  });
+
   it('returns 404 when the server does not exist', async () => {
     const opts = makeOpts();
     (opts.serverRepo.findByName as ReturnType<typeof vi.fn>).mockReturnValue(undefined);
