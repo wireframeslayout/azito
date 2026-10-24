@@ -106,6 +106,7 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     'function Save-State($code, $at, $wait) {',
     '  try {',
     '    $json = [pscustomobject]@{ startedAt = $started; restarts = $restarts; lastExitCode = $code; lastExitAt = $at; nextWaitSeconds = $wait } | ConvertTo-Json -Compress',
+    '    New-Item -ItemType Directory -Force -Path $logDir | Out-Null',
     '    [IO.File]::WriteAllText($stateFile, $json, (New-Object Text.UTF8Encoding($false)))',
     '  } catch { Log "cannot write ${stateFile}: $($_.Exception.Message)" }',
     '}',
