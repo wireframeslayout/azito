@@ -27,6 +27,8 @@ export interface MisaoAgentInstallerOptions {
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
+/** The installer only serves Unix agents (assertSupported), whose paths are POSIX whatever OS the hub runs on; `path` stays for the hub's own files (the bundle). */
+const remotePath = path.posix;
 const EXEC_TIMEOUT_MS = 60_000;
 
 /** The unit file is written with these characters in paths and values; whatever else is in a path is refused instead of escaped. */
@@ -251,10 +253,10 @@ export class MisaoAgentInstaller {
 
   /** Every release file of the version directory on the host is there and is the bundled one: no need to transfer it again. */
   private async hasVersion(target: MisaoInstallTarget, root: string, version: string, files: MisaoTargetFiles): Promise<boolean> {
-    const dir = path.join(root, version);
+    const dir = remotePath.join(root, version);
     const result = await target.exec(
       MISAO_RELEASE_FILE_NAMES
-        .map((name) => `(sha256sum ${shellQuote(path.join(dir, name))} 2>/dev/null || shasum -a 256 ${shellQuote(path.join(dir, name))}) | awk '{print $1}'`)
+        .map((name) => `(sha256sum ${shellQuote(remotePath.join(dir, name))} 2>/dev/null || shasum -a 256 ${shellQuote(remotePath.join(dir, name))}) | awk '{print $1}'`)
         .join('\n'),
       EXEC_TIMEOUT_MS,
     );
@@ -283,12 +285,12 @@ export class MisaoAgentInstaller {
 
   /** Moves the staged release into place as `<root>/<version>`. An older release's directory is not touched. */
   private async finalize(target: MisaoInstallTarget, root: string, version: string): Promise<void> {
-    const stage = path.join(root, `${version}.upload`);
-    const dest = path.join(root, version);
+    const stage = remotePath.join(root, `${version}.upload`);
+    const dest = remotePath.join(root, version);
     const script = [
       'set -e',
-      ...MISAO_RELEASE_FILE_NAMES.map((name) => `[ -f ${shellQuote(path.join(stage, name))} ] || { echo 'the staged release files are missing' >&2; exit 3; }`),
-      `chmod 755 ${shellQuote(path.join(stage, 'misao'))}`,
+      ...MISAO_RELEASE_FILE_NAMES.map((name) => `[ -f ${shellQuote(remotePath.join(stage, name))} ] || { echo 'the staged release files are missing' >&2; exit 3; }`),
+      `chmod 755 ${shellQuote(remotePath.join(stage, 'misao'))}`,
       `rm -rf ${shellQuote(dest)}`,
       `mv ${shellQuote(stage)} ${shellQuote(dest)}`,
     ].join('\n');
@@ -296,14 +298,14 @@ export class MisaoAgentInstaller {
   }
 
   private unitPathOf(host: AgentMisaoHost): string {
-    return path.join(host.homeDir, '.config', 'systemd', 'user', SERVICE_UNIT_FILE);
+    return remotePath.join(host.homeDir, '.config', 'systemd', 'user', SERVICE_UNIT_FILE);
   }
 
   /** Where `current` points and the unit file as they are now, to put back if what follows fails. */
   private async snapshot(target: MisaoInstallTarget, host: AgentMisaoHost, root: string): Promise<PreviousInstall> {
     const previous: PreviousInstall = {};
-    const link = await target.exec(`readlink ${shellQuote(path.join(root, 'current'))}`, EXEC_TIMEOUT_MS);
-    if (link.code === 0 && link.stdout.trim() !== '') previous.link = path.basename(link.stdout.trim());
+    const link = await target.exec(`readlink ${shellQuote(remotePath.join(root, 'current'))}`, EXEC_TIMEOUT_MS);
+    if (link.code === 0 && link.stdout.trim() !== '') previous.link = remotePath.basename(link.stdout.trim());
     if (host.platform === 'linux') {
       const unit = await target.exec(`cat ${shellQuote(this.unitPathOf(host))}`, EXEC_TIMEOUT_MS);
       if (unit.code === 0) previous.unit = unit.stdout;
@@ -326,9 +328,9 @@ export class MisaoAgentInstaller {
     const failed: string[] = [];
     if (previous.link !== undefined) {
       try {
-        await this.run(target, `ln -sfn ${shellQuote(previous.link)} ${shellQuote(path.join(root, 'current'))}`, 'Putting the previous misao release back');
+        await this.run(target, `ln -sfn ${shellQuote(previous.link)} ${shellQuote(remotePath.join(root, 'current'))}`, 'Putting the previous misao release back');
       } catch (err) {
-        failed.push(`the link ${path.join(root, 'current')}: ${describeError(err)}`);
+        failed.push(`the link ${remotePath.join(root, 'current')}: ${describeError(err)}`);
       }
     }
     if (previous.unit !== undefined) {
@@ -350,7 +352,7 @@ export class MisaoAgentInstaller {
   }
 
   private manualRestore(root: string, socket: string, previous: PreviousInstall): string {
-    const steps = [`make sure no daemon answers on ${socket} (systemctl --user stop ${MISAO_SYSTEMD_UNIT}, or terminate the process whose command line names that socket)`, previous.link !== undefined ? `ln -sfn ${previous.link} ${path.join(root, 'current')}` : undefined, previous.unit !== undefined ? `put the previous unit file back (${SERVICE_UNIT_FILE} in ~/.config/systemd/user/) and run systemctl --user daemon-reload` : undefined].filter((s) => s !== undefined);
+    const steps = [`make sure no daemon answers on ${socket} (systemctl --user stop ${MISAO_SYSTEMD_UNIT}, or terminate the process whose command line names that socket)`, previous.link !== undefined ? `ln -sfn ${previous.link} ${remotePath.join(root, 'current')}` : undefined, previous.unit !== undefined ? `put the previous unit file back (${SERVICE_UNIT_FILE} in ~/.config/systemd/user/) and run systemctl --user daemon-reload` : undefined].filter((s) => s !== undefined);
     return `To restore the previous release by hand on the agent host: ${steps.join('; ')}.`;
   }
 
@@ -358,7 +360,7 @@ export class MisaoAgentInstaller {
     const unitPath = this.unitPathOf(host);
     const script = [
       'set -e',
-      `mkdir -p ${shellQuote(path.dirname(unitPath))}`,
+      `mkdir -p ${shellQuote(remotePath.dirname(unitPath))}`,
       `printf %s ${shellQuote(Buffer.from(content).toString('base64'))} | base64 -d > ${shellQuote(`${unitPath}.tmp`)}`,
       `mv ${shellQuote(`${unitPath}.tmp`)} ${shellQuote(unitPath)}`,
     ].join('\n');
@@ -367,7 +369,7 @@ export class MisaoAgentInstaller {
 
   /** Points `current` at the bundled release, writes its unit and starts it; the daemon must be listening when this returns. */
   private async switchAndStart(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, socket: string, bundle: MisaoBundle): Promise<'systemd' | 'nohup'> {
-    await this.run(target, `ln -sfn ${shellQuote(bundle.version)} ${shellQuote(path.join(root, 'current'))}`, 'Switching misao to the new release on the agent');
+    await this.run(target, `ln -sfn ${shellQuote(bundle.version)} ${shellQuote(remotePath.join(root, 'current'))}`, 'Switching misao to the new release on the agent');
     const startMethod = await this.start(target, host, root, socket, bundle);
     await this.waitUntilListening(target, host, socket);
     return startMethod;
@@ -394,9 +396,9 @@ export class MisaoAgentInstaller {
    */
   private backgroundCommand(host: AgentMisaoHost, root: string, socket: string): string {
     const env = `env -i HOME=${shellQuote(host.homeDir)} USER="$(id -un)" LOGNAME="$(id -un)" PATH=${shellQuote(host.servicePath)} LC_CTYPE=C.UTF-8`;
-    const args = `serve --socket ${shellQuote(socket)} --data ${shellQuote(root)} >> ${shellQuote(path.join(root, 'misao.log'))} 2>&1 < /dev/null &`;
-    const binary = path.join(root, 'current', 'misao');
-    const legacy = path.join(root, 'current', 'misao.mjs');
+    const args = `serve --socket ${shellQuote(socket)} --data ${shellQuote(root)} >> ${shellQuote(remotePath.join(root, 'misao.log'))} 2>&1 < /dev/null &`;
+    const binary = remotePath.join(root, 'current', 'misao');
+    const legacy = remotePath.join(root, 'current', 'misao.mjs');
     return [
       `cd ${shellQuote(host.homeDir)}`,
       `systemctl --user disable ${MISAO_SYSTEMD_UNIT} >/dev/null 2>&1 || true`,
@@ -415,7 +417,7 @@ export class MisaoAgentInstaller {
     const unit = renderMisaoUnit({
       template: fs.readFileSync(path.join(bundle.templatesDir, 'azito-misao.service'), 'utf-8'),
       manager: 'systemd',
-      prefix: path.dirname(root),
+      prefix: remotePath.dirname(root),
       servicePath: host.servicePath,
     });
     await this.writeUnitFile(target, host, unit);
@@ -436,7 +438,7 @@ export class MisaoAgentInstaller {
    * the background has no unit; the socket path is unique to AZITO's managed daemon). Throws when it still answers.
    */
   private async stopDaemon(target: MisaoInstallTarget, host: AgentMisaoHost, root: string, socket: string, previous: PreviousInstall): Promise<void> {
-    const binary = path.join(root, 'current', 'misao');
+    const binary = remotePath.join(root, 'current', 'misao');
     // `[-]-socket` matches `--socket` but not its own spelling, so the shell running this command is not matched.
     const pattern = `[-]-socket ${socket.replace(/[.+]/g, '\\$&')}( |$)`;
     const steps: string[] = [];
@@ -491,6 +493,6 @@ export class MisaoAgentInstaller {
       if (await this.isListening(target, host, socket)) return;
       await new Promise((resolve) => setTimeout(resolve, this.options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS));
     }
-    throw new MisaoServiceError('daemon_not_ready', `The misao daemon was started but its socket ${socket} is not accepting connections yet. Check ${path.join(path.dirname(socket), 'misao.log')} or \`journalctl --user -u ${MISAO_SYSTEMD_UNIT}\` on the agent host.`);
+    throw new MisaoServiceError('daemon_not_ready', `The misao daemon was started but its socket ${socket} is not accepting connections yet. Check ${remotePath.join(remotePath.dirname(socket), 'misao.log')} or \`journalctl --user -u ${MISAO_SYSTEMD_UNIT}\` on the agent host.`);
   }
 }
