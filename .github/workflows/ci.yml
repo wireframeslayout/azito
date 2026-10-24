@@ -265,20 +265,6 @@ jobs:
         timeout-minutes: 8
         run: npx -w packages/server tsx scripts/smoke-misao-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
 
-      # TEMPORARY PROBE (removed before merge): what Windows PowerShell 5.1's irm returns for a real release asset.
-      - name: Probe irm on a release asset
-        continue-on-error: true
-        shell: powershell
-        run: |
-          foreach ($name in 'install.sh', 'install.ps1', 'SHA256SUMS') {
-            try {
-              $r = Invoke-RestMethod -Uri "https://github.com/wireframeslayout/azito/releases/latest/download/$name"
-              Write-Output "$name irm -> $($r.GetType().FullName)"
-              $w = Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/wireframeslayout/azito/releases/latest/download/$name"
-              Write-Output "$name iwr -> $($w.Headers['Content-Type']) / Content is $($w.Content.GetType().FullName)"
-            } catch { Write-Output "$name failed: $($_.Exception.Message)" }
-          }
-
       # install.ps1 run as text, the way `irm | iex` and `& ([scriptblock]::Create((irm <url>))) <args>` run it: the options by AZITO_INSTALL_*
       # variables or arguments (-Port), the caller's session left clean, a failure that stops with a reason, a missing git, `azito restart`.
       # Runs last: it registers the same Task Scheduler tasks as the two smoke tests above and removes them again.
