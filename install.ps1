@@ -577,12 +577,11 @@ function Invoke-Install {
 Invoke-Install
 } @args
 } catch {
-    $reason = $_.Exception.Message
     # Only the file install.ps1 itself may `exit`: for `irm | iex` or a script block $PSCommandPath is the caller's, and ending it
     # would close the caller's PowerShell. There the error is thrown, which stops the caller's command and fails -Command with 1.
     if ($PSCommandPath -and [System.IO.Path]::GetFileName($PSCommandPath) -ieq 'install.ps1') {
-        [Console]::Error.WriteLine("ERROR: $reason")
+        [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
         exit 1
     }
-    throw "AZITO install failed: $reason"
+    throw "AZITO install failed: $($_.Exception.Message)"
 }

@@ -131,8 +131,8 @@ function callerScript(work: string, name: string, invocation: string): string {
     invocation,
     "Write-Output 'CALLER-CONTINUES'",
     'Write-Output "preferences=$ErrorActionPreference/$ProgressPreference"',
-    // LASTEXITCODE is the one variable every native command sets in the global scope; variablesBefore is this script's own.
-    "Write-Output ('leaked-variables=' + (@(Get-Variable | ForEach-Object { $_.Name } | Where-Object { ($variablesBefore -notcontains $_) -and ($_ -ne 'LASTEXITCODE') -and ($_ -ne 'variablesBefore') }) -join ','))",
+    // LASTEXITCODE is the one variable every native command sets in the global scope; variablesBefore is this script's own, and _ / PSItem are what its catch block sets.
+    "Write-Output ('leaked-variables=' + (@(Get-Variable | ForEach-Object { $_.Name } | Where-Object { ($variablesBefore -notcontains $_) -and ($_ -ne 'LASTEXITCODE') -and ($_ -ne 'variablesBefore') -and ($_ -ne '_') -and ($_ -ne 'PSItem') }) -join ','))",
     "Write-Output ('leaked-functions=' + (@(Get-ChildItem Function: | Where-Object { -not $_.ModuleName } | ForEach-Object { $_.Name } | Where-Object { $functionsBefore -notcontains $_ }) -join ','))",
     '',
   ].join('\r\n'));
