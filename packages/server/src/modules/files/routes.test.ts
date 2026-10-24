@@ -422,7 +422,7 @@ describe('isGitDirectoryName', () => {
   });
 });
 
-describe('GET /api/servers/:name/files/search — host feature guard', () => {
+describe('GET /api/servers/:name/files/search — request guards', () => {
   async function appOn(platform: 'linux' | 'win32' | null, search: () => Promise<unknown>) {
     const app = Fastify();
     app.setErrorHandler((err, _request, reply) => {

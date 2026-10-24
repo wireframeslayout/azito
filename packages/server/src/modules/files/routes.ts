@@ -11,7 +11,6 @@ import { SEARCH_DEFAULT_EXCLUDES, type FileSearchService } from './FileSearchSer
 import { assertDirectoryContained, assertNewPathContained } from '../git/PathContainment';
 import { isHostPathContained, isSameHostPath, pathApiFor } from '../../shared/os/hostPath';
 import { MAX_SEARCH_GLOBS, MAX_SEARCH_GLOB_LENGTH } from '../../shared/fs/fileOpsWire';
-import { assertHostFeature } from '../../shared/os/hostFeature';
 import { isGitDirectoryName } from '../git/gitPath';
 
 export function sanitizeFileName(raw: string): string {
@@ -534,8 +533,6 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
-      // Before anything touches the host: the UI closes the search from the same table (`hostFeatureSupport`).
-      assertHostFeature(transportFactory.hostProfileFor(srv), 'fileSearch', 'Searching file contents');
 
       const q = (request.query.q || '').trim();
       if (!q) return reply.status(400).send({ error: 'q is required' });

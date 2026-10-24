@@ -24,10 +24,6 @@ describe('hostFeatureSupport', () => {
     expect(hostFeatureSupport(win32, 'browserRuntime')).toEqual({ available: false, issue: 372 });
   });
 
-  it('file content search is open on Windows (the host\'s own search, or rg)', () => {
-    expect(hostFeatureSupport({ platform: 'win32' }, 'fileSearch')).toEqual({ available: true });
-  });
-
   it('tmux is unavailable on Windows for good (no issue)', () => {
     expect(hostFeatureSupport({ platform: 'win32' }, 'tmux')).toEqual({ available: false, issue: null });
   });

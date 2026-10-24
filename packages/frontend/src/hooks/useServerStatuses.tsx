@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { api } from '../api/client';
+import { api, apiWithStatus } from '../api/client';
+import { isFailureNewerThanSuccess, serverListFrom } from '../lib/serversFetch';
 import type { Server, ServerStatus } from './useServerManagement';
 
 // 画面を開き直すたびに「確認中/切断」から始まらないよう、最後に取得した
@@ -105,9 +106,11 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
 
     let srvs: Server[];
     try {
-      srvs = await api('/servers');
+      // Not `api()`: it returns the JSON body of an HTTP 500 / 502 as if it were the list.
+      srvs = serverListFrom(await apiWithStatus<unknown>('/servers'));
     } catch (err) {
-      setServersError(err instanceof Error ? err.message : String(err));
+      // Only a failure newer than the last success counts; an older request failing late must not undo a newer success.
+      if (isFailureNewerThanSuccess(seq, activeSeqRef.current)) setServersError(err instanceof Error ? err.message : String(err));
       throw err;
     }
 

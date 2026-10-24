@@ -9,7 +9,7 @@
  * Open on Windows (not listed as features, with the path that lets them work):
  *  - file list / read / write / create / delete / rename: `IFileOps` (`FileBrowseService`), Windows paths handled by `pathApiFor`.
  *  - file name search: `searchFileNames` over `IFileOps.walk`.
- *  - file content search (`fileSearch`): `GET /files/search` runs `rg` when the host has it, else the host's own search
+ *  - file content search: `GET /files/search` runs `rg` when the host has it, else the host's own search
  *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
  *
  * Closed on Windows until #370: git (see `WIN32_UNAVAILABLE`).
@@ -22,7 +22,6 @@ export interface HostPlatformInfo {
 }
 
 export type HostFeature =
-  | 'fileSearch'
   | 'git'
   | 'taskExecution'
   | 'workerLaunch'
@@ -30,7 +29,7 @@ export type HostFeature =
   | 'browserRuntime'
   | 'harness';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['fileSearch', 'git', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
+export const HOST_FEATURES: readonly HostFeature[] = ['git', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -48,7 +47,7 @@ export type HostFeatureSupport =
  *  - browserRuntime (#372): `install-browser-runtime` is sh (`assertPosixHost`).
  *  - harness (#371): `harness/install` is `setup.sh` (`assertPosixHost`).
  */
-const WIN32_UNAVAILABLE: Partial<Record<HostFeature, number | null>> = {
+const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
   git: 370,
   taskExecution: 371,
   workerLaunch: 371,
@@ -59,6 +58,5 @@ const WIN32_UNAVAILABLE: Partial<Record<HostFeature, number | null>> = {
 
 export function hostFeatureSupport(profile: HostPlatformInfo | null | undefined, feature: HostFeature): HostFeatureSupport {
   if (profile?.platform !== 'win32') return { available: true };
-  const issue = WIN32_UNAVAILABLE[feature];
-  return issue === undefined ? { available: true } : { available: false, issue };
+  return { available: false, issue: WIN32_UNAVAILABLE[feature] };
 }
