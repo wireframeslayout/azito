@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import type { ServerConfig } from '../Server';
 import { KeyedMutex } from '../../../shared/keyedMutex';
-import { AgentRecoveryWatchdog, type AgentRecoveryTiming } from './AgentRecoveryWatchdog';
+import { AgentRecoveryWatchdog } from './AgentRecoveryWatchdog';
+import type { RecoveryTiming } from '../../../shared/recoveryBackoff';
 
-const TIMING: AgentRecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 240_000 };
+const TIMING: RecoveryTiming = { tickMs: 15_000, baseMs: 60_000, maxMs: 240_000 };
 const MIN = 60_000;
 
 function server(name: string, platform: 'win32' | 'linux' = 'win32', type: ServerConfig['type'] = 'agent'): ServerConfig {

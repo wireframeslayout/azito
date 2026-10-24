@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
-import { buildHubLauncherScript, buildHubTaskXml, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix } from '../windowsHubService';
+import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
+import { HUB_RESTART_TIMING, buildHubLauncherScript, buildHubTaskXml, buildSingleRunLauncherScript, endHubProcesses, findHubProcesses, hubWindowsLayout, inspectRegisteredHub, resolveWindowsUserId, samePrefix } from '../windowsHubService';
 
 const PREFIX = 'C:\\Users\\Foo Bar (Work)\\.azito';
 
@@ -19,6 +20,7 @@ describe('hubWindowsLayout', () => {
       pointer: `${PREFIX}\\hub\\current.txt`,
       logsDir: `${PREFIX}\\logs`,
       logFile: `${PREFIX}\\logs\\hub.log`,
+      launcherState: `${PREFIX}\\logs\\hub-launcher.json`,
     });
   });
 
@@ -45,30 +47,77 @@ describe('buildHubTaskXml', () => {
 
   it('has no version in it: an update only switches current.txt', () => {
     expect(xml).not.toMatch(/v\d+\.\d+\.\d+/);
-    expect(launcherOf(xml)).toContain(`${PREFIX}\\hub\\current.txt`);
+    expect(launcherOf(xml)).toContain(`$hubRoot = '${PREFIX}\\hub'`);
   });
 });
 
 describe('buildHubLauncherScript', () => {
-  const script = buildHubLauncherScript(hubWindowsLayout(PREFIX));
+  const script = buildHubLauncherScript(hubWindowsLayout(PREFIX), HUB_RESTART_TIMING);
 
   it('validates the pointer, starts run.ps1 in service mode with the log path, and logs a bad pointer', () => {
-    expect(script).toContain("$pointer = 'C:\\Users\\Foo Bar (Work)\\.azito\\hub\\current.txt'");
+    expect(script).toContain("$hubRoot = 'C:\\Users\\Foo Bar (Work)\\.azito\\hub'");
+    expect(script).toContain('$pointer = "$hubRoot\\current.txt"');
     expect(script).toContain("-notmatch '^v?[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.-]+)?$'");
     expect(script).toContain('& $run -Service -LogFile $logFile');
     expect(script).toContain('AppendAllText($logFile');
   });
 
-  it('logs a run.ps1 that throws or exits with a code, instead of failing silently', () => {
-    expect(script).toContain('& $run -Service -LogFile $logFile');
-    expect(script).toContain('} catch {\n  Write-LauncherLog $_.Exception.Message\n  exit 1');
-    expect(script).toContain('exited with code $code');
-    expect(script.trimEnd().endsWith('exit $code')).toBe(true);
+  it('is a loop that reads the pointer again at every start', () => {
+    const loop = script.slice(script.indexOf('while ($true) {'));
+    expect(loop).toContain('ReadAllText($pointer)');
+    expect(loop).toContain('& $run -Service -LogFile $logFile');
+  });
+
+  it('does not start the hub again after exit code 0 or after the task was ended', () => {
+    expect(script).toContain('exited with code 0: not starting it again"; exit 0');
+    expect(script).toContain("Log 'the task was ended: not starting the hub again'; exit 0");
+    // The wait is checked second by second, so an /End during it is noticed.
+    expect(script).toContain('Start-Sleep -Seconds 1; Stop-IfEnded');
+  });
+
+  it('waits base, doubling up to max, starting over after a stable run, and takes the numbers from the timing it was given', () => {
+    expect(HUB_RESTART_TIMING).toEqual({ baseSeconds: 5, maxSeconds: 60, stableSeconds: 300 });
+    expect(script).toContain('$base = 5; $max = 60; $stable = 300');
+    expect(script).toContain('$delay = [Math]::Min($delay * 2, $max)');
+    expect(script).toContain('.TotalSeconds -ge $stable) { $delay = $base }');
+    expect(buildHubLauncherScript(hubWindowsLayout(PREFIX), { baseSeconds: 1, maxSeconds: 2, stableSeconds: 3 })).toContain('$base = 1; $max = 2; $stable = 3');
+  });
+
+  it('waits the longest time when there was no exit code (a bad pointer or a run.ps1 that did not start), and records restarts', () => {
+    expect(script).toContain('$wait = $max');
+    expect(script).toContain('$stateFile = "$logDir\\hub-launcher.json"');
+    expect(script).toContain('Save-State $code');
+    expect(script).toContain('start $($restarts + 1) in ${wait}s');
   });
 
   it('quotes a prefix that contains an apostrophe', () => {
-    const quoted = buildHubLauncherScript(hubWindowsLayout("C:\\Users\\O'Neil\\.azito"));
-    expect(quoted).toContain("$pointer = 'C:\\Users\\O''Neil\\.azito\\hub\\current.txt'");
+    const quoted = buildHubLauncherScript(hubWindowsLayout("C:\\Users\\O'Neil\\.azito"), HUB_RESTART_TIMING);
+    expect(quoted).toContain("$hubRoot = 'C:\\Users\\O''Neil\\.azito\\hub'");
+  });
+});
+
+describe('the launcher in the task\'s command line', () => {
+  it('fits the 8191 characters a command line can have, for a long prefix too', () => {
+    const prefix = `C:\\Users\\${'a'.repeat(100)}\\${'b'.repeat(60)}\\.azito`;
+    const xml = buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout(prefix) });
+    const line = /<Command>([^<]*)<\/Command>\s*<Arguments>([^<]*)<\/Arguments>/.exec(xml);
+    expect(line).not.toBeNull();
+    expect(line![1].length + 1 + line![2].length).toBeLessThan(8191);
+  });
+
+  it('is an error, not a task that cannot start, when the prefix is so long that it would not fit', () => {
+    const prefix = `C:\\${'a'.repeat(1500)}\\.azito`;
+    expect(() => buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout(prefix) })).toThrow(/prefix is too long/);
+  });
+});
+
+describe('a task registered by the launcher that ran the hub once', () => {
+  it('is recognised as the same install\'s (so it can be stopped and replaced), flagged singleRun', () => {
+    const layout = hubWindowsLayout(PREFIX);
+    const current = buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout });
+    const old = current.replace(/-EncodedCommand [A-Za-z0-9+/=]+/, `-EncodedCommand ${powershellEncodedArgs(buildSingleRunLauncherScript(layout)).at(-1)}`);
+    expect(old).not.toBe(current);
+    expect(inspectRegisteredHub(old, 'C:\\Windows')).toEqual({ prefix: PREFIX, singleRun: true });
   });
 });
 
@@ -90,11 +139,11 @@ describe('inspectRegisteredHub / samePrefix', () => {
   const generated = (prefix: string): string => buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout(prefix) });
 
   it('reads the prefix back from the XML the Task Scheduler holds for a generated task', () => {
-    expect(inspectRegisteredHub(generated(PREFIX), 'C:\\Windows')).toEqual({ prefix: PREFIX });
+    expect(inspectRegisteredHub(generated(PREFIX), 'C:\\Windows')).toEqual({ prefix: PREFIX, singleRun: false });
   });
 
   it.each(["C:\\Users\\O'Neil (Work)\\.azito", 'C:\\Users\\O\u2019Neil\\.azito', 'C:\\Users\\O\u2018Neil\u201A\u201B\\.azito'])('round-trips a prefix with quote characters: %s', (prefix) => {
-    expect(inspectRegisteredHub(generated(prefix), 'C:\\Windows')).toEqual({ prefix });
+    expect(inspectRegisteredHub(generated(prefix), 'C:\\Windows')).toEqual({ prefix, singleRun: false });
   });
 
   it('is unknown (undefined) for a definition that is not ours', () => {
@@ -126,7 +175,7 @@ describe('inspectRegisteredHub / samePrefix', () => {
     const xml = generated(PREFIX);
     expect(inspectRegisteredHub(xml.replace('</Actions>', 'text</Actions>'), 'C:\\Windows')).toBeUndefined();
     expect(inspectRegisteredHub(xml.replace('</Actions>', '</Actions><Actions Context="Author"><Exec><Command>x</Command></Exec></Actions>'), 'C:\\Windows')).toBeUndefined();
-    expect(inspectRegisteredHub(xml.replace('</Actions>', '<!-- note --></Actions>'), 'C:\\Windows')).toEqual({ prefix: PREFIX });
+    expect(inspectRegisteredHub(xml.replace('</Actions>', '<!-- note --></Actions>'), 'C:\\Windows')).toEqual({ prefix: PREFIX, singleRun: false });
   });
 
   it('ignores case and a trailing separator, and nothing else', () => {

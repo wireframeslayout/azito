@@ -55,6 +55,7 @@ import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
 import { resolveWindowsAgentOptions, type WindowsAgentOptions } from '../modules/servers/agent-deploy/windowsAgentConfig';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
 import { AgentRecoveryWatchdog } from '../modules/servers/agent-deploy/AgentRecoveryWatchdog';
+import { LocalMisaoWatchdog } from '../modules/system/misao/LocalMisaoWatchdog';
 import { HostProfileError, resolveHubHostProfile, type HostProfile, type HubHostProfile } from '../shared/os/hostProfile';
 import { registerTmuxDriver } from '../modules/tmux/registerTmuxDriver';
 import { AgentHostRecorder } from '../modules/servers/agent-deploy/AgentHostRecorder';
@@ -237,6 +238,8 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
   agentRecoveryWatchdog: AgentRecoveryWatchdog;
+  /** Brings back the hub's own misao when its daemon died; present only where that misao is a Windows task AZITO installs. */
+  localMisaoWatchdog: LocalMisaoWatchdog | undefined;
   harnessUpdater: HarnessUpdater;
   /** Records an agent server's OS / architecture from the agent's own report (after install / update, and when reached with none recorded). */
   agentHostRecorder: AgentHostRecorder;
@@ -421,6 +424,16 @@ function buildAgentRecoveryWatchdog(infra: SharedInfra, repos: Repositories): Ag
     lock: infra.serverIsolationMutex,
     now: Date.now,
     logger: { info: (m) => console.log(`[agent-recovery] ${m}`), warn: (m) => console.warn(`[agent-recovery] ${m}`) },
+  });
+}
+
+function buildLocalMisaoWatchdog(misaoService: MisaoServiceService): LocalMisaoWatchdog | undefined {
+  if (!misaoService.managesWindowsDaemon()) return undefined;
+  return new LocalMisaoWatchdog({
+    isDown: () => misaoService.isWindowsDaemonDown(),
+    revive: (force) => misaoService.reviveWindowsDaemon(force),
+    now: Date.now,
+    logger: { info: (m) => console.log(`[misao-recovery] ${m}`), warn: (m) => console.warn(`[misao-recovery] ${m}`) },
   });
 }
 
@@ -747,6 +760,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...pushNotification,
     agentUpdater,
     agentRecoveryWatchdog,
+    localMisaoWatchdog: buildLocalMisaoWatchdog(systemUpdateModule.misaoService),
     harnessUpdater,
     agentHostRecorder,
     ...appServices,

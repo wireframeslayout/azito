@@ -163,6 +163,57 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     expect(service().installedVersion()).toBeUndefined();
   });
 
+  describe('bringing the daemon back (LocalMisaoWatchdog)', () => {
+    let revive: ReturnType<typeof vi.fn>;
+    beforeEach(() => {
+      revive = vi.fn(async () => 'started');
+      windows = { ...windows, installer: { install, update, reviveDaemon: revive } as unknown as LocalMisaoWindows['installer'] };
+      fs.writeFileSync(paths.hubEnvFile, `MISAO_SOCKET=${PIPE}\n`);
+      taskExists = true;
+    });
+
+    it('revives through the agent installer\'s own steps for the task of this folder, with the force flag it was given', async () => {
+      expect(await service().reviveWindowsDaemon(false)).toBe('started');
+      expect(await service().reviveWindowsDaemon(true)).toBe('started');
+      expect(revive.mock.calls).toEqual([[windows.target, false], [windows.target, true]]);
+    });
+
+    it('leaves a misao the hub was pointed at by hand alone (MISAO_SOCKET is not the managed pipe, or is not set)', async () => {
+      fs.writeFileSync(paths.hubEnvFile, 'MISAO_SOCKET=\\\\.\\pipe\\someone-else\n');
+      expect(await service().reviveWindowsDaemon(false)).toBe('custom_socket');
+      fs.rmSync(paths.hubEnvFile);
+      expect(await service().reviveWindowsDaemon(false)).toBe('custom_socket');
+      expect(revive).not.toHaveBeenCalled();
+    });
+
+    it('leaves a task that starts another folder\'s misao alone', async () => {
+      exportedXml = taskXml('D:\\other\\.azito\\misao');
+      expect(await service().reviveWindowsDaemon(true)).toBe('other_task');
+      expect(revive).not.toHaveBeenCalled();
+    });
+
+    it('gives way to an install / update that holds the slot (busy, nothing done) and takes the slot itself', async () => {
+      const svc = service();
+      let release!: () => void;
+      update.mockImplementation(() => new Promise<MisaoAgentInstallResult>((resolve) => { release = () => resolve(RESULT); }));
+      fs.writeFileSync(paths.current, '0.2.0\n');
+      const updating = svc.update();
+      await vi.waitFor(() => expect(update).toHaveBeenCalled());
+      expect(await svc.reviveWindowsDaemon(false)).toBe('busy');
+      expect(revive).not.toHaveBeenCalled();
+      release();
+      await updating;
+      expect(await svc.reviveWindowsDaemon(false)).toBe('started');
+    });
+
+    it('is only for a Windows hub with a managed misao', () => {
+      expect(service().managesWindowsDaemon()).toBe(true);
+      const withoutWindows = new MisaoServiceService({ paths, bundle: BUNDLE, controller, env: {}, secretFileGuard: createSecretFileGuard(process.platform, process.env) });
+      expect(withoutWindows.managesWindowsDaemon()).toBe(false);
+      expect(new MisaoServiceService({ paths: null, bundle: BUNDLE, controller, env: {}, secretFileGuard: createSecretFileGuard(process.platform, process.env), windows }).managesWindowsDaemon()).toBe(false);
+    });
+  });
+
   it('reports an update when the installed release is not the bundled one', async () => {
     taskExists = true;
     fs.writeFileSync(paths.current, '0.2.0\n');

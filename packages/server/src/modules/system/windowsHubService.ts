@@ -33,6 +33,8 @@ export interface HubWindowsLayout {
   logsDir: string;
   /** `<prefix>\logs\hub.log`: everything the hub writes to stdout and stderr (the counterpart of the journal / `azito.log`). */
   logFile: string;
+  /** `<prefix>\logs\hub-launcher.json`: the launcher's own record of its restarts (see {@link readHubLauncherState}). */
+  launcherState: string;
 }
 
 export function hubWindowsLayout(prefix: string): HubWindowsLayout {
@@ -40,21 +42,109 @@ export function hubWindowsLayout(prefix: string): HubWindowsLayout {
   const root = prefix.replace(/[\\/]+$/, '');
   const hubRoot = path.win32.join(root, 'hub');
   const logsDir = path.win32.join(root, 'logs');
-  return { prefix: root, hubRoot, pointer: path.win32.join(hubRoot, 'current.txt'), logsDir, logFile: path.win32.join(logsDir, 'hub.log') };
+  return { prefix: root, hubRoot, pointer: path.win32.join(hubRoot, 'current.txt'), logsDir, logFile: path.win32.join(logsDir, 'hub.log'), launcherState: path.win32.join(logsDir, 'hub-launcher.json') };
 }
 
+/** How the launcher waits between two starts of a hub that exited with a non-zero code. */
+export interface HubRestartTiming {
+  /** The first wait; it doubles after every exit up to `maxSeconds`. */
+  baseSeconds: number;
+  maxSeconds: number;
+  /** A hub that ran this long before it exited starts the waits over from `baseSeconds`. */
+  stableSeconds: number;
+}
+
+export const HUB_RESTART_TIMING: HubRestartTiming = { baseSeconds: 5, maxSeconds: 60, stableSeconds: 300 };
+
+/** The launcher is in the task's command line; 8191 characters is cmd.exe's limit, the smallest on the way. */
+const MAX_COMMAND_LINE = 8191;
+
 /**
- * The script the task runs: reads the pointer, checks that it names an installed version and starts that version's `run.ps1` in
- * its service mode (`-Service -LogFile`: output goes to the log, and the hub follows the `conhost.exe` the task runs under). A
- * pointer that is missing or wrong cannot reach stderr (a task has none), so it is appended to the log, and the task fails.
+ * The script the task runs: a loop around "read the pointer, check that it names an installed version, run that version's `run.ps1`
+ * in its service mode (`-Service -LogFile`: output goes to the log, and the hub follows the `conhost.exe` the task runs under)".
+ *
+ * Why a loop here: nothing outside the hub can restart it. `conhost.exe --headless` reports exit code 0 whatever its child did, so
+ * the Task Scheduler's RestartOnFailure never fires (measured: `restartOnFailure.windows.test.ts`), and a repeating trigger would
+ * undo `/End`. So the launcher, which lives as long as the task, starts the hub again when `run.ps1` ends with a non-zero code:
+ * after `baseSeconds`, doubling up to `maxSeconds`, starting over once a start lasted `stableSeconds`. Every start reads the pointer
+ * again (an update only switches `current.txt`). Exit code 0 is a hub that shut down on purpose (SIGTERM, or the `conhost.exe` it
+ * follows being gone) and is not started again. `/End` (`azito stop`, `restart`) ends the task's `conhost.exe` and with it the
+ * launcher; should the launcher outlive its `conhost.exe` anyway it notices (same process id and start time) and ends instead of
+ * starting a hub nobody follows. A pointer that is missing or wrong cannot reach stderr (a task has none): it is appended to the
+ * log and tried again every `maxSeconds`. Each restart is appended to the log and recorded in `hub-launcher.json`.
  */
-export function buildHubLauncherScript(layout: HubWindowsLayout): string {
+export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRestartTiming): string {
+  const q = powershellDialect.quote;
+  // The prefix is written once, as $hubRoot (inspectRegisteredHub reads it back from that line); the other paths are derived from it
+  // in the script, because the whole script travels in the task's command line (8191 characters) and a path costs about 11 there.
+  // They are the same paths as `layout.pointer`, `layout.logFile` and `layout.launcherState` (a test runs the script to check).
+  return [
+    `$hubRoot = ${q(layout.hubRoot)}`,
+    `$base = ${Math.trunc(timing.baseSeconds)}; $max = ${Math.trunc(timing.maxSeconds)}; $stable = ${Math.trunc(timing.stableSeconds)}`,
+    '$pointer = "$hubRoot\\current.txt"; $logDir = Join-Path (Split-Path -Parent $hubRoot) \'logs\'',
+    '$logFile = "$logDir\\hub.log"; $stateFile = "$logDir\\hub-launcher.json"',
+    // Everything that goes wrong here is appended to the log (a task has no stderr).
+    'function Log([string]$m) {',
+    '  try {',
+    '    New-Item -ItemType Directory -Force -Path $logDir | Out-Null',
+    '    [IO.File]::AppendAllText($logFile, "[$([DateTime]::UtcNow.ToString(\'o\'))] launcher: $m`r`n")',
+    '  } catch { }',
+    '}',
+    // The conhost.exe this runs under: once it is gone the task was ended, and no hub is started for nobody.
+    '$parentId = $null',
+    'try {',
+    '  $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId',
+    '  $parentStart = (Get-Process -Id $parentId).StartTime',
+    '} catch { Log "cannot tell the parent process, so it is not followed: $($_.Exception.Message)"; $parentId = $null }',
+    'function Stop-IfEnded {',
+    '  if (-not $parentId) { return }',
+    '  $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue',
+    '  if (-not $p -or $p.StartTime -ne $parentStart) { Log \'the task was ended: not starting the hub again\'; exit 0 }',
+    '}',
+    // What `azito status` shows: when this launcher began, and how many times it started the hub again (and after which exit).
+    '$restarts = 0; $started = [DateTime]::UtcNow.ToString(\'o\')',
+    'function Save-State($code, $at, $wait) {',
+    '  try {',
+    '    $json = [pscustomobject]@{ startedAt = $started; restarts = $restarts; lastExitCode = $code; lastExitAt = $at; nextWaitSeconds = $wait } | ConvertTo-Json -Compress',
+    '    [IO.File]::WriteAllText($stateFile, $json, (New-Object Text.UTF8Encoding($false)))',
+    '  } catch { Log "cannot write ${stateFile}: $($_.Exception.Message)" }',
+    '}',
+    'Save-State $null $null 0',
+    '$delay = $base',
+    'while ($true) {',
+    '  $began = [DateTime]::UtcNow; $version = \'?\'; $code = $null',
+    '  try {',
+    '    $version = ([IO.File]::ReadAllText($pointer)).TrimStart([char]0xFEFF).Trim()',
+    `    if ($version -notmatch ${q(VERSION_PATTERN)}) { throw "$pointer does not hold a version such as v0.12.0 (it holds '$version')" }`,
+    "    $run = Join-Path (Join-Path $hubRoot $version) 'run.ps1'",
+    '    if (-not (Test-Path -LiteralPath $run -PathType Leaf)) { throw "$run does not exist (current.txt names a version that is not installed)" }',
+    '    & $run -Service -LogFile $logFile',
+    '    $code = $LASTEXITCODE',
+    '  } catch { Log $_.Exception.Message }',
+    '  if ($code -eq 0) { Log "run.ps1 ($version) exited with code 0: not starting it again"; exit 0 }',
+    '  Stop-IfEnded',
+    '  $wait = $max',
+    '  if ($null -ne $code) {',
+    '    Log "run.ps1 ($version) exited with code $code"',
+    '    if (([DateTime]::UtcNow - $began).TotalSeconds -ge $stable) { $delay = $base }',
+    '    $wait = $delay; $delay = [Math]::Min($delay * 2, $max)',
+    '  }',
+    '  $restarts++',
+    '  Log "start $($restarts + 1) in ${wait}s"',
+    '  Save-State $code ([DateTime]::UtcNow.ToString(\'o\')) $wait',
+    '  for ($i = 0; $i -lt $wait; $i++) { Start-Sleep -Seconds 1; Stop-IfEnded }',
+    '}',
+  ].join('\n');
+}
+
+
+/** The launcher the first 0.12 builds registered: it ran `run.ps1` once and exited with its code. Kept only to recognise (and replace) such a task. */
+export function buildSingleRunLauncherScript(layout: HubWindowsLayout): string {
   const q = powershellDialect.quote;
   return [
     `$pointer = ${q(layout.pointer)}`,
     `$logFile = ${q(layout.logFile)}`,
     `$hubRoot = ${q(layout.hubRoot)}`,
-    // Everything that goes wrong here is appended to the log (a task has no stderr), then the task fails and is restarted.
     'function Write-LauncherLog([string]$Message) {',
     '  try {',
     '    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $logFile) | Out-Null',
@@ -93,11 +183,14 @@ interface TaskExec {
   argumentsLine: string;
 }
 
-function hubTaskExec(systemRoot: string, layout: HubWindowsLayout): TaskExec {
-  return {
+function hubTaskExec(systemRoot: string, launcher: string): TaskExec {
+  const exec = {
     command: path.win32.join(systemRoot, 'System32', 'conhost.exe'),
-    argumentsLine: joinWindowsArgs(['--headless', windowsPowershell(systemRoot), ...powershellEncodedArgs(buildHubLauncherScript(layout))]),
+    argumentsLine: joinWindowsArgs(['--headless', windowsPowershell(systemRoot), ...powershellEncodedArgs(launcher)]),
   };
+  const length = exec.command.length + 1 + exec.argumentsLine.length;
+  if (length > MAX_COMMAND_LINE) throw new Error(`The hub launcher's command line would be ${length} characters, over the ${MAX_COMMAND_LINE} the task can run: the install prefix is too long`);
+  return exec;
 }
 
 /**
@@ -124,8 +217,10 @@ function singleExec(xml: string): TaskExec | undefined {
  * Which install a REGISTERED task (the XML the Task Scheduler gives back for it, not our copy) belongs to. The prefix is read from
  * the launcher's `$hubRoot`, and the task is recognised only when its action (program and arguments) is exactly what this code
  * generates for that prefix: a line that merely looks like ours, or an action somebody edited, is `undefined` (unknown).
+ * `singleRun` is the launcher the first 0.12 builds registered (it started the hub once and never again): the same install's task,
+ * still operable, and replaced by `azito service install`.
  */
-export function inspectRegisteredHub(xml: string, systemRoot: string): { prefix: string } | undefined {
+export function inspectRegisteredHub(xml: string, systemRoot: string): { prefix: string; singleRun: boolean } | undefined {
   const exec = singleExec(xml);
   if (exec === undefined) return undefined;
   const command = exec.command;
@@ -135,14 +230,23 @@ export function inspectRegisteredHub(xml: string, systemRoot: string): { prefix:
   const hubRoot = HUB_ROOT_LINE.exec(Buffer.from(encoded, 'base64').toString('utf16le'))?.[1];
   if (hubRoot === undefined) return undefined;
   const prefix = path.win32.dirname(hubRoot.replace(new RegExp(`([${QUOTE_CHARS}])\\1`, 'g'), '$1'));
-  let expected: TaskExec;
+  let layout: HubWindowsLayout;
   try {
-    expected = hubTaskExec(systemRoot, hubWindowsLayout(prefix));
+    layout = hubWindowsLayout(prefix);
   } catch {
     return undefined;
   }
-  if (command.toLowerCase() !== expected.command.toLowerCase() || argumentsLine !== expected.argumentsLine) return undefined;
-  return { prefix };
+  const matches = (launcher: string): boolean => {
+    try {
+      const expected = hubTaskExec(systemRoot, launcher);
+      return command.toLowerCase() === expected.command.toLowerCase() && argumentsLine === expected.argumentsLine;
+    } catch {
+      return false;
+    }
+  };
+  if (matches(buildHubLauncherScript(layout, HUB_RESTART_TIMING))) return { prefix, singleRun: false };
+  if (matches(buildSingleRunLauncherScript(layout))) return { prefix, singleRun: true };
+  return undefined;
 }
 
 /** Whether two Windows paths name the same place by spelling (case and a trailing separator do not count). */
@@ -162,14 +266,16 @@ export interface HubTaskInput {
 /**
  * The task definition (XML is only ever generated here, by `buildTaskXml`): at the user's logon, as that user with least
  * privilege, restarted when it fails. It runs `conhost.exe --headless powershell.exe <launcher>`: without `--headless` a console
- * program started in the user's session gets a visible console window, and closing it would end the hub.
+ * program started in the user's session gets a visible console window, and closing it would end the hub. The launcher is what
+ * starts the hub again when it dies ({@link buildHubLauncherScript}); RestartOnFailure only covers the launcher itself failing.
  */
 export function buildHubTaskXml(input: HubTaskInput): string {
+  const exec = hubTaskExec(input.systemRoot, buildHubLauncherScript(input.layout, HUB_RESTART_TIMING));
   return buildTaskXml({
     userId: input.userId,
     description: 'AZITO Hub: started at logon',
-    executable: hubTaskExec(input.systemRoot, input.layout).command,
-    args: ['--headless', windowsPowershell(input.systemRoot), ...powershellEncodedArgs(buildHubLauncherScript(input.layout))],
+    executable: exec.command,
+    argumentsLine: exec.argumentsLine,
     workingDirectory: input.layout.hubRoot,
     restartOnFailure: { intervalMinutes: RESTART_INTERVAL_MINUTES, count: RESTART_COUNT },
   });

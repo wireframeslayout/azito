@@ -1,5 +1,6 @@
 import { HUB_SERVICE, runCommand, type ServiceManager } from '../modules/system/serviceManager';
 import { createServiceManager, type ServiceHost } from '../modules/system/createServiceManager';
+import { describeHubLauncherState, readHubLauncherState } from '../modules/system/hubLauncherState';
 import type { ServiceCommandContext } from './serviceCommandContext';
 import { installWindowsTask, resolveWindowsHub, runOnWindows, taskExists, type WindowsHub } from './serviceCommandWindows';
 
@@ -22,6 +23,16 @@ function isServiceCommand(value: string | undefined): value is ServiceCommand {
 
 export type { ServiceCommandContext };
 
+/** The launcher restarts a hub that died; the task's own Last Result never shows it, so `status` does. A record that cannot be read is said, not skipped. */
+function printLauncherState(windowsHub: WindowsHub): void {
+  try {
+    const state = readHubLauncherState(windowsHub.layout.launcherState);
+    if (state) console.log(`launcher:  ${describeHubLauncherState(state)}`);
+  } catch (err) {
+    console.log(`launcher:  cannot read ${windowsHub.layout.launcherState}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
 async function printStatus(manager: ServiceManager, windowsHub: WindowsHub | undefined): Promise<void> {
   if (!manager.isInstalled()) {
     console.log('service:   not installed');
@@ -31,6 +42,7 @@ async function printStatus(manager: ServiceManager, windowsHub: WindowsHub | und
   console.log(`service:   ${manager.kind} (${state})`);
   if (windowsHub) {
     console.log(`log:       ${windowsHub.layout.logFile}`);
+    printLauncherState(windowsHub);
     // The definition copy outlives a task that was deleted by hand.
     if (!(await taskExists(windowsHub))) console.log('warning:   the task is not registered any more (deleted?). Run `azito service install` to register it again.');
   }

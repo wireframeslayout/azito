@@ -12,6 +12,7 @@ import { DuplicateLoadError, type ServiceInspection, type ServiceManager } from 
 import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
+import { isManagedMisaoDown } from './MisaoWindowsInstaller';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -377,6 +378,36 @@ export class MisaoServiceService {
       throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion} failed (${causeText}) and restoring ${previous} failed too (${restoreText}). misao is not running and every pane has ended. ${manual}`);
     }
     throw new MisaoServiceError('update_failed', `Updating misao to ${bundledVersion} failed (${causeText}). The previous version ${previous} was restored and started; its panes had already ended.`);
+  }
+
+  /** Whether this is a hub whose own misao is a Windows task that AZITO installs, so that `LocalMisaoWatchdog` has something to watch. */
+  managesWindowsDaemon(): boolean {
+    return this.deps.windows !== undefined && this.deps.paths !== null;
+  }
+
+  /** Windows only: the daemon AZITO installed for this hub does not answer (a daemon of another pipe, or one AZITO did not install, is not this). */
+  async isWindowsDaemonDown(): Promise<boolean> {
+    const { windows } = this.deps;
+    if (!windows) throw new MisaoServiceError('unsupported_host', 'The hub\'s own misao is a Windows task only on Windows.');
+    return isManagedMisaoDown(await windows.target.fetchMisaoStatus());
+  }
+
+  /**
+   * Windows only: starts the task of the daemon AZITO installed for this hub when it died (its task reports 0 whatever happened, so the
+   * Task Scheduler does not start it again): `MisaoWindowsInstaller.reviveDaemon`, the very steps an agent's gets. It takes the
+   * same one-at-a-time slot as install / start / update and gives way to them (`busy`, nothing done). Only the misao this hub installed
+   * is touched: a `MISAO_SOCKET` set by hand to another daemon is `custom_socket`, and a task that starts another folder's misao
+   * (`taskStartsMisaoOf`) is `other_task`.
+   */
+  async reviveWindowsDaemon(force: boolean): Promise<string> {
+    const { windows } = this.deps;
+    if (!windows) throw new MisaoServiceError('unsupported_host', 'The hub\'s own misao is a Windows task only on Windows.');
+    if (this.busy) return 'busy';
+    return this.exclusive(async () => {
+      if (this.socketSetting() !== 'managed') return 'custom_socket';
+      if ((await windows.tasks.query(windows.taskName)).exists && !taskStartsMisaoOf(await windows.tasks.exportXml(windows.taskName), this.paths.root)) return 'other_task';
+      return windows.installer.reviveDaemon(windows.target, force);
+    });
   }
 
   /** One install / start / update at a time: two of them interleaving could stop a daemon the other just started. */

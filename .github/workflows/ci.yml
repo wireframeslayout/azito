@@ -265,6 +265,15 @@ jobs:
         timeout-minutes: 8
         run: npx -w packages/server tsx scripts/smoke-misao-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
 
+      # Coming back from a crash, with the real schtasks.exe, node.exe and misao.exe (#380): `conhost.exe --headless` reports exit code 0
+      # whatever its child did, so the Task Scheduler restarts nothing. The hub's node.exe is ended forcibly and the launcher starts it
+      # again (hub.log, `azito status`, the second wait doubles); `azito service restart` still leaves one hub; misao.exe is ended
+      # forcibly and the hub's watchdog starts its task again; `azito stop` leaves the hub down; a graceful shutdown exits with code 0;
+      # a task registered by the first 0.12 builds is replaced by `azito service install`. Takes a few minutes (the watchdog waits a minute).
+      - name: Hub and misao come back from a crash on Windows (launcher loop, misao watchdog)
+        timeout-minutes: 12
+        run: npx -w packages/server tsx scripts/smoke-recovery-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
+
       # Keep the zip that passed every smoke above, so a real Windows machine can be checked with it
       # (install.ps1 -ZipPath <zip> -Sha256Sums <SHA256SUMS>) without cutting a release.
       - name: Upload the Windows hub bundle
