@@ -3,8 +3,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import SSHConfig from 'ssh-config';
-import { Client, Server, utils } from 'ssh2';
+import { Client, Server } from 'ssh2';
 import { SshClient, type SshClientEnv } from './SshClient';
+import { generateTestKeyPair } from './sshTestKeys';
 
 function sshEnv(overrides: Partial<SshClientEnv> = {}): SshClientEnv {
   return { homeDir: os.homedir(), platform: process.platform, authSock: undefined, defaultUser: 'osuser', ...overrides };
@@ -169,15 +170,14 @@ describe('SshClient.buildConnectOpts authHandler', () => {
 
   it('authenticates against a public-key-only ssh2 server', async () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ssh-test-'));
-    const hostKey = utils.generateKeyPairSync('ed25519');
-    const userKey = utils.generateKeyPairSync('ed25519');
+    const hostKey = generateTestKeyPair();
+    const userKey = generateTestKeyPair();
     const keyPath = path.join(tmpDir, 'id_ed25519');
-    fs.writeFileSync(keyPath, userKey.private, { mode: 0o600 });
-    const userPub = utils.parseKey(userKey.public);
-    if (userPub instanceof Error) throw userPub;
+    fs.writeFileSync(keyPath, userKey.privatePem, { mode: 0o600 });
+    const userPub = userKey.parsed;
 
     let acceptedUser: string | undefined;
-    const server = new Server({ hostKeys: [hostKey.private] }, (conn) => {
+    const server = new Server({ hostKeys: [hostKey.privatePem] }, (conn) => {
       conn.on('authentication', (ctx) => {
         if (ctx.method === 'publickey' && ctx.username === 'alice' && ctx.key.algo === userPub.type) {
           acceptedUser = ctx.username;
