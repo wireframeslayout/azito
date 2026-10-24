@@ -110,7 +110,7 @@ npx -w packages/server tsx scripts/build-hub.ts --version v0.3.0 --platform linu
 - In-app update: Settings → System. Works under systemd and launchd; not for a source checkout, and
   not for pre-releases (GitHub's `releases/latest` returns stable releases only).
 - Windows one-liner: `irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex` (Windows PowerShell 5.1). `install.ps1` is one script block called at the end of the file, so it runs as text
-  (iex / `& ([scriptblock]::Create((irm <url>))) -Port 3010 -Yes`) as well as `-File`: no `exit` unless the file is named `install.ps1`, nothing left in the caller's session, options also from `AZITO_INSTALL_<OPTION>`
+  (iex / `& ([scriptblock]::Create((irm <url>))) -Port 3010 -Yes`) as well as `-File`: never `exit` (a failure is a terminating error), nothing left in the caller's session, options also from `AZITO_INSTALL_<OPTION>`
   variables. `release.yml` replaces the one `__AZITO_RELEASE_TAG__` placeholder with the tag, so the downloaded installer installs its own release (a checkout asks the GitHub API for "latest"). `-Port` goes to
   `init-env --port` (PORT + AZITO_ALLOWED_ORIGINS); git is checked first and, if missing, the winget / git-scm.com guidance is printed. CI: `scripts/smoke-oneliner-win32.ts`.
 - The tarball also carries the misao **native binary** (Rust, no Node / node-pty needed) for every target

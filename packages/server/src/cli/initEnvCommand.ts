@@ -4,7 +4,8 @@ import path from 'path';
 import { hubEnvFilePath } from '../modules/system/misao/misaoPaths';
 import type { SecretFileGuard } from '../shared/os/secretFileGuard';
 
-const USAGE = 'Usage: azito-hub init-env --prefix <dir> --port <1-65535> [--tailscale-dns <MagicDNS name>]';
+const DEFAULT_PORT = 3001;
+const USAGE = 'Usage: azito-hub init-env --prefix <dir> [--port <1-65535>] [--tailscale-dns <MagicDNS name>]';
 
 export interface HubEnvOptions {
   dataDir: string;
@@ -54,7 +55,7 @@ function parsePort(value: string): number {
 
 function parseArgs(args: string[]): ParsedArgs {
   let prefix: string | undefined;
-  let port: number | undefined;
+  let port = DEFAULT_PORT;
   let tailscaleDns: string | undefined;
   for (let i = 0; i < args.length; i += 2) {
     const value = args[i + 1];
@@ -64,7 +65,7 @@ function parseArgs(args: string[]): ParsedArgs {
     else if (args[i] === '--tailscale-dns') tailscaleDns = value.replace(/\.$/, '');
     else throw new Error(`Unknown option ${args[i]}. ${USAGE}`);
   }
-  if (!prefix || port === undefined) throw new Error(USAGE);
+  if (!prefix) throw new Error(USAGE);
   if (!path.isAbsolute(prefix)) throw new Error(`--prefix must be an absolute path: ${prefix}`);
   return { prefix, port, tailscaleDns };
 }

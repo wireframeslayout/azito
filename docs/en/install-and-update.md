@@ -19,13 +19,13 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 On Windows (Windows PowerShell 5.1, no administrator rights; `git` must be installed first, see [Install on Windows](#install-on-windows-installps1)):
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
 ```
 
 To pass options, call the downloaded script as a script block (`iex` cannot take arguments):
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
 ```
 
 `--proto '=https'` restricts the entire redirect chain to HTTPS (the `latest/download/` URL goes through two redirects before reaching `release-assets.githubusercontent.com`). `--tlsv1.2` rejects TLS 1.0/1.1 downgrade. Confirmation prompts still work under the pipe — `install.sh` reads from `/dev/tty`, not stdin.
@@ -104,28 +104,28 @@ winget install --id Git.Git -e --source winget
 
 ```powershell
 # One-liner (the counterpart of `curl | bash`):
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
 
 # With options: a script block takes arguments the way `-File` does.
-& ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
 
 # From a file (download install.ps1 and SHA256SUMS from the release page, check install.ps1 against SHA256SUMS, then):
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Port <n>] [-Yes] [-NoPath]
 ```
 
-All three forms do the same. The installer is written to run as text: it never ends the PowerShell it was started from (a failure is an error that stops the command and fails `-Command` with a non-zero exit), and it leaves no variable, function, `$ErrorActionPreference` change or temporary file in that session. The release's `install.ps1` carries its own tag, so the one-liner downloads the zip and `SHA256SUMS` of **that** release and does not ask for "latest" again (a release published while the installer runs cannot make the two differ); a copy from a checkout asks the GitHub API for the latest release instead.
+All three forms do the same. The `[Net.ServicePointManager]... -bor 3072;` in front of `irm` turns on TLS 1.2 for the download of the script itself (Windows PowerShell 5.1 may not have it on by default, and GitHub requires it); the installer turns it on again for its own downloads. `iex` takes no arguments, and inside a function or script that has arguments of its own `iex` would receive them: use the script block form there. The one-liner works from v0.12.0, the first release with a Windows bundle; before that the download is a 404. The installer is written to run as text: it never ends the PowerShell it was started from (a failure is an error that stops the command and fails `-Command` with a non-zero exit), and it leaves no variable, function, `$ErrorActionPreference` change or temporary file in that session. The release's `install.ps1` carries its own tag, so the one-liner downloads the zip and `SHA256SUMS` of **that** release and does not ask for "latest" again (a release published while the installer runs cannot make the two differ); a copy from a checkout asks the GitHub API for the latest release instead.
 
 | Option | Meaning |
 |---|---|
-| `-Version <tag>` | Release to install (default: the latest release) |
+| `-Version <tag>` | Release to install (default: the release this `install.ps1` was published with; a copy from a checkout asks for the latest release) |
 | `-Prefix <dir>` | Installation prefix (default: `%USERPROFILE%\.azito`) |
 | `-Port <n>` | Port of the hub (default `3001`). Written to a new `hub\.env` as `PORT`, and `AZITO_ALLOWED_ORIGINS` lists `localhost:<n>`, `127.0.0.1:<n>` and the Tailscale name with `:<n>`; the Tailscale hint (`tailscale serve --bg <n>`) uses it too. An existing `hub\.env` is never touched (a warning says so when its `PORT` differs) |
-| `-ZipPath <file>` | Use a local `azito-hub-<tag>-win32-x64.zip` instead of downloading (offline installs). Add `-Sha256Sums <file>` to check it |
+| `-ZipPath <file>` | Use a local `azito-hub-<tag>-win32-x64.zip` instead of downloading (offline installs). Add `-Sha256Sums <file>` to check it; **without it the zip is not verified** (a warning is printed) |
 | `-Yes` | Skip the confirmation prompt |
 | `-NoPath` | Do not add `<prefix>\bin` to the user's PATH |
 | `-NoService` | Do not register the Task Scheduler task. Run the hub with `azito run`, or register it later with `azito service install` |
 
-With `irm | iex` there is no way to pass arguments, so each option can also be given by an environment variable set before the command: `AZITO_INSTALL_VERSION`, `AZITO_INSTALL_PREFIX`, `AZITO_INSTALL_PORT`, `AZITO_INSTALL_ZIPPATH`, `AZITO_INSTALL_SHA256SUMS`, and `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE` (set to `1`); an argument wins over the variable. For example `$env:AZITO_INSTALL_PORT = 3010; irm {URL} | iex`.
+With `irm | iex` there is no way to pass arguments, so each option can also be given by an environment variable set before the command: `AZITO_INSTALL_VERSION`, `AZITO_INSTALL_PREFIX`, `AZITO_INSTALL_PORT`, `AZITO_INSTALL_ZIPPATH`, `AZITO_INSTALL_SHA256SUMS`, and `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE` (set to `1`); an argument wins over the variable. A zip named by `AZITO_INSTALL_ZIPPATH` is never used unverified: the installer stops, before writing anything, unless `-Sha256Sums` or `AZITO_INSTALL_SHA256SUMS` names the checksum file (a variable left over in the session must not switch a normal install to an unchecked zip). Set the variables in the command itself so they end with it, for example `powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"`.
 
 It downloads the zip and `SHA256SUMS`, stops if the checksum does not match, and refuses a zip whose entries would land outside the install folder. Layout:
 

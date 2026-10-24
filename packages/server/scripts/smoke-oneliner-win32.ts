@@ -19,6 +19,7 @@ import { readEnvValue } from '../src/shared/envFile';
  */
 
 const STARTUP_TIMEOUT_MS = 90_000;
+const INSTALLER_URL = 'https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1';
 const RELEASE_TAG_PLACEHOLDER = '__AZITO_RELEASE_TAG__';
 const TASK_NAME = 'AzitoHub';
 const MISAO_TASK_NAME = 'AzitoMisao';
@@ -193,6 +194,26 @@ async function runHubAndCheck(azitoCmd: string, port: number): Promise<void> {
   }
 }
 
+/**
+ * The two download commands exactly as the documentation shows them (TLS 1.2 in front of `irm`), cut out of the English page; the Japanese
+ * page and both READMEs must hold the same text. Only the URL is swapped for the local server when they are run.
+ */
+function documentedCommands(repoRoot: string): { oneLiner: string; scriptBlock: string } {
+  const read = (file: string): string => fs.readFileSync(path.join(repoRoot, file), 'utf-8');
+  const en = read('docs/en/install-and-update.md');
+  const oneLiner = /^powershell -NoProfile -ExecutionPolicy Bypass -Command "(.*irm .* \| iex)"$/m.exec(en)?.[1];
+  const scriptBlock = /^(\[Net\.ServicePointManager\].*& \(\[scriptblock\]::Create\(\(irm \S+\)\)\)) /m.exec(en)?.[1];
+  assert(oneLiner !== undefined && scriptBlock !== undefined, 'the documentation must show the one-liner and the script block form');
+  for (const text of [oneLiner as string, scriptBlock as string]) {
+    assert(text.includes('SecurityProtocol -bor 3072; ') && text.includes(INSTALLER_URL), 'a documented download command must enable TLS 1.2 before irm', text);
+  }
+  for (const file of ['docs/ja/install-and-update.md', 'README.md', 'README.ja.md']) {
+    const text = read(file);
+    assert(text.includes(`-Command "${oneLiner}"`) && text.includes(scriptBlock as string), `${file} must show the same download commands as the English page`);
+  }
+  return { oneLiner: oneLiner as string, scriptBlock: scriptBlock as string };
+}
+
 /** Serves install.ps1 the way GitHub serves a release asset (application/octet-stream), for the real `irm | iex`. */
 function serveInstaller(text: string): Promise<{ url: string; close: () => void }> {
   return new Promise((resolve, reject) => {
@@ -254,19 +275,52 @@ async function checkIex(installPs1: string, zip: string, sums: string, work: str
   assert(/CAUGHT: .*SHA256 mismatch/.test(caught.output) && !caught.output.includes('NOT-REACHED'), 'a mismatch must be thrown to the caller with its reason', caught.output);
   assertCallerSurvived(caught, 'iex failure');
   assert(!fs.existsSync(path.join(failPrefix, 'hub')), 'nothing may be written under the prefix after a mismatch');
+  step('a caller that is itself named install.ps1 is not ended either (the installer never exits)');
+  const named = path.join(work, 'named', 'install.ps1');
+  fs.mkdirSync(path.dirname(named), { recursive: true });
+  fs.writeFileSync(named, [
+    'try {',
+    `  Get-Content -Raw -LiteralPath ${psQuote(installPs1)} | Invoke-Expression`,
+    "  Write-Output 'NOT-REACHED'",
+    '} catch {',
+    '  Write-Output "CAUGHT: $($_.Exception.Message)"',
+    '}',
+    "Write-Output 'NAMED-CALLER-CONTINUES'",
+    '',
+  ].join('\r\n'));
+  const namedRun = powershell(['-File', named], failEnv);
+  assert(namedRun.status === 0 && /CAUGHT: .*SHA256 mismatch/.test(namedRun.output) && namedRun.output.includes('NAMED-CALLER-CONTINUES') && !namedRun.output.includes('NOT-REACHED'), 'a failing iex from a script named install.ps1 must not end that script', namedRun.output);
+
+  step('a zip named only by AZITO_INSTALL_ZIPPATH is not installed without a checksum file');
+  const unchecked = { ...offlineEnv(zip, sums, path.join(work, 'unchecked', '.azito'), port) };
+  delete unchecked.AZITO_INSTALL_SHA256SUMS;
+  const uncheckedRun = powershell(['-Command', `Get-Content -Raw -LiteralPath ${psQuote(installPs1)} | Invoke-Expression`], unchecked);
+  assert(uncheckedRun.status !== 0 && /AZITO_INSTALL_ZIPPATH names a zip/.test(uncheckedRun.output), 'a zip from the environment without SHA256SUMS must stop with the reason', uncheckedRun.output);
+  assert(!fs.existsSync(path.join(work, 'unchecked')), 'nothing may be written under the prefix');
+  assert(!/Installation complete/.test(uncheckedRun.output), 'it must not install', uncheckedRun.output);
+
   const plain = powershell(['-Command', `Get-Content -Raw -LiteralPath ${psQuote(installPs1)} | Invoke-Expression`], failEnv);
   assert(plain.status !== 0 && /SHA256 mismatch/.test(plain.output), 'an uncaught failure must exit non-zero and say why', plain.output);
 }
 
 async function checkIrm(installPs1: string, zip: string, sums: string, work: string): Promise<void> {
-  step('the real `irm <url> | iex` (a local server answering application/octet-stream like a GitHub release asset)');
+  step('the documented download commands (TLS 1.2 + irm), run against a local server answering application/octet-stream like a GitHub release asset');
   const port = await freePort();
   const prefix = path.join(work, 'irm', '.azito');
+  const commands = documentedCommands(path.dirname(installPs1));
   const server = await serveInstaller(fs.readFileSync(installPs1, 'utf-8'));
   try {
-    const r = await powershellAsync(['-Command', `irm ${server.url} | iex`], offlineEnv(zip, sums, prefix, port));
-    assert(r.status === 0 && r.output.includes('Installation complete!'), '`irm | iex` must install', r.output);
+    const r = await powershellAsync(['-Command', commands.oneLiner.replace(INSTALLER_URL, server.url)], offlineEnv(zip, sums, prefix, port));
+    assert(r.status === 0 && r.output.includes('Installation complete!'), 'the documented one-liner must install', r.output);
     assertPortConfigured(prefix, port);
+
+    const bad = path.join(work, 'SHA256SUMS.bad3');
+    fs.writeFileSync(bad, fs.readFileSync(sums, 'utf-8').replace(/^[0-9a-f]/i, (c) => (c === '0' ? '1' : '0')));
+    const failPrefix = path.join(work, 'irm-sb', '.azito');
+    const args = `-ZipPath ${psQuote(zip)} -Sha256Sums ${psQuote(bad)} -Prefix ${psQuote(failPrefix)} -Yes -NoPath -NoService`;
+    const sb = await powershellAsync(['-Command', `${commands.scriptBlock.replace(INSTALLER_URL, server.url)} ${args}`], process.env);
+    assert(sb.status !== 0 && /SHA256 mismatch/.test(sb.output), 'the documented script block form must run the installer with its arguments', sb.output);
+    assert(!fs.existsSync(path.join(failPrefix, 'hub')), 'nothing may be written after a mismatch');
   } finally {
     server.close();
   }

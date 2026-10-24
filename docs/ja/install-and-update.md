@@ -17,13 +17,13 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/wireframeslayout/azito/
 Windows（Windows PowerShell 5.1、管理者権限は不要。先に `git` が必要です。[Windows への導入](#windows-への導入installps1)を参照）:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
 ```
 
 オプションを渡すときは、取得したスクリプトをスクリプトブロックとして呼びます（`iex` は引数を渡せません）:
 
 ```powershell
-& ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
 ```
 
 > **`| sh` ではなく `| bash`** — `install.sh` は `set -euo pipefail` を使っており、POSIX sh（dash）にはありません。Ubuntu / Debian で `| sh` を使うと即座に失敗します。
@@ -104,28 +104,28 @@ winget install --id Git.Git -e --source winget
 
 ```powershell
 # ワンライナー（`curl | bash` に当たるもの）:
-powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
 
 # オプション付き: スクリプトブロックなら `-File` と同じように引数を渡せます。
-& ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
+[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Version v0.12.0 -Port 3010 -Yes
 
 # ファイルから（リリースページから install.ps1 と SHA256SUMS を取得し、install.ps1 を SHA256SUMS で照合してから）:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-Version v0.12.0] [-Prefix <dir>] [-Port <n>] [-Yes] [-NoPath]
 ```
 
-3 つの形はどれも同じに動きます。インストーラはテキストとして実行されても困らないように書かれています。起動元の PowerShell を終了させず（失敗はそのコマンドを止めるエラーになり、`-Command` なら 0 以外で終わります）、そのセッションに変数・関数・`$ErrorActionPreference` の変更・一時ファイルを残しません。リリースに載る `install.ps1` は自分の tag を持っているので、ワンライナーは**その**リリースの zip と `SHA256SUMS` を取得し、「最新」を改めて問い合わせません（実行中に新しいリリースが出ても、2 つがずれることはありません）。リポジトリのチェックアウトにある写しは、GitHub API に最新のリリースを問い合わせます。
+3 つの形はどれも同じに動きます。`irm` の前の `[Net.ServicePointManager]... -bor 3072;` は、スクリプト自身のダウンロードで TLS 1.2 を有効にします（Windows PowerShell 5.1 では既定で有効とは限らず、GitHub は TLS 1.2 を要求します）。インストーラは自分のダウンロードのために改めて有効にします。`iex` は引数を受け取らず、自前の引数を持つ関数やスクリプトの中から呼ぶと、その引数を受け取ってしまいます。そういう場所ではスクリプトブロックの形を使ってください。ワンライナーは、Windows 用のバンドルを含む最初のリリースである v0.12.0 から使えます。それ以前は 404 になります。インストーラはテキストとして実行されても困らないように書かれています。起動元の PowerShell を終了させず（失敗はそのコマンドを止めるエラーになり、`-Command` なら 0 以外で終わります）、そのセッションに変数・関数・`$ErrorActionPreference` の変更・一時ファイルを残しません。リリースに載る `install.ps1` は自分の tag を持っているので、ワンライナーは**その**リリースの zip と `SHA256SUMS` を取得し、「最新」を改めて問い合わせません（実行中に新しいリリースが出ても、2 つがずれることはありません）。リポジトリのチェックアウトにある写しは、GitHub API に最新のリリースを問い合わせます。
 
 | オプション | 意味 |
 |---|---|
-| `-Version <tag>` | 導入する版（省略時は最新のリリース） |
+| `-Version <tag>` | 導入する版（省略時は、この `install.ps1` が載ったリリース。チェックアウトの写しは最新のリリース） |
 | `-Prefix <dir>` | 導入先（既定は `%USERPROFILE%\.azito`） |
 | `-Port <n>` | ハブのポート（既定 `3001`）。新しい `hub\.env` の `PORT` に書かれ、`AZITO_ALLOWED_ORIGINS` には `localhost:<n>`・`127.0.0.1:<n>`・Tailscale の名前の `:<n>` が入ります。Tailscale の案内（`tailscale serve --bg <n>`）にも使われます。既にある `hub\.env` には触れません（`PORT` が違うときは警告します） |
-| `-ZipPath <file>` | ダウンロードの代わりにローカルの `azito-hub-<tag>-win32-x64.zip` を使う（オフライン用）。`-Sha256Sums <file>` を足すと照合する |
+| `-ZipPath <file>` | ダウンロードの代わりにローカルの `azito-hub-<tag>-win32-x64.zip` を使う（オフライン用）。`-Sha256Sums <file>` を足すと照合する。**足さないと zip は照合されません**（警告を表示）|
 | `-Yes` | 確認を省く |
 | `-NoPath` | `<prefix>\bin` をユーザーの PATH に足さない |
 | `-NoService` | タスクスケジューラのタスクを登録しない。`azito run` で起動するか、あとから `azito service install` で登録する |
 
-`irm | iex` では引数を渡せないので、各オプションは、コマンドの前に設定した環境変数でも指定できます: `AZITO_INSTALL_VERSION`・`AZITO_INSTALL_PREFIX`・`AZITO_INSTALL_PORT`・`AZITO_INSTALL_ZIPPATH`・`AZITO_INSTALL_SHA256SUMS`、および `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE`（`1` を設定）。引数と環境変数の両方があれば引数が優先されます。例: `$env:AZITO_INSTALL_PORT = 3010; irm {URL} | iex`。
+`irm | iex` では引数を渡せないので、各オプションは、コマンドの前に設定した環境変数でも指定できます: `AZITO_INSTALL_VERSION`・`AZITO_INSTALL_PREFIX`・`AZITO_INSTALL_PORT`・`AZITO_INSTALL_ZIPPATH`・`AZITO_INSTALL_SHA256SUMS`、および `AZITO_INSTALL_YES` / `AZITO_INSTALL_NOPATH` / `AZITO_INSTALL_NOSERVICE`（`1` を設定）。引数と環境変数の両方があれば引数が優先されます。`AZITO_INSTALL_ZIPPATH` で指定した zip は、照合なしでは使われません。`-Sha256Sums` または `AZITO_INSTALL_SHA256SUMS` でチェックサムのファイルを指定しないと、何も書く前に止まります（セッションに残った変数のせいで、通常の導入が未検証の zip に切り替わらないようにするためです）。変数はコマンドの中で設定すると、そのコマンドと一緒に消えます。例: `powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:AZITO_INSTALL_PORT = 3010; [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"`。
 
 zip と `SHA256SUMS` を取得し、チェックサムが合わなければ止まります。展開先のフォルダの外に出るエントリを含む zip も拒否します。配置:
 

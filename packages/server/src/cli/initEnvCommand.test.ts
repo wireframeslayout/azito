@@ -57,9 +57,14 @@ describe('initEnvCommand', () => {
     expect(fs.readFileSync(envFile, 'utf-8')).toBe(before);
   });
 
+  it('keeps port 3001 when --port is not given', () => {
+    fs.mkdirSync(path.join(prefix, 'hub'));
+    initEnvCommand(['--prefix', prefix], guard);
+    expect(readEnvValue(path.join(prefix, 'hub', '.env'), 'PORT')).toBe('3001');
+  });
+
   it('rejects a missing, relative or unknown argument instead of guessing', () => {
     expect(() => initEnvCommand([], guard)).toThrow(/Usage/);
-    expect(() => initEnvCommand(['--prefix', prefix], guard)).toThrow(/Usage/);
     expect(() => initEnvCommand(['--prefix', 'relative/dir', '--port', '3001'], guard)).toThrow(/absolute/);
     expect(() => initEnvCommand(['--prefix', prefix, '--port', '3001', '--bogus', 'x'], guard)).toThrow(/Unknown option/);
     for (const bad of ['0', '65536', 'abc', '30.5', '-1']) {

@@ -1,14 +1,14 @@
 # AZITO Hub Installer for Windows (the counterpart of install.sh).
 #
 # Usage (Windows PowerShell 5.1, as the current user, no administrator rights):
-#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+#   powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
 #   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Version <tag>] [-Prefix <dir>] [-Port <n>] [-Yes] [-NoPath] [-NoService]
-#   & ([scriptblock]::Create((irm <url of install.ps1>))) -Version v0.12.0 -Port 3010 -Yes    # arguments with the download form
+#   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; & ([scriptblock]::Create((irm <url of install.ps1>))) -Version v0.12.0 -Port 3010 -Yes    # arguments with the download form
 #
 # The script is written to run as TEXT (`irm | iex`, a scriptblock) as well as a file. The whole installer is one script block
 # that is called at the end of the file: its functions, variables and $ErrorActionPreference stay inside it, so nothing is left in
-# the calling session. It never uses `exit` when it is not run as install.ps1 itself (that would end the caller's PowerShell): a
-# failure is an error that stops the caller's command (a non-zero exit under -Command / -File) and the caller's session goes on.
+# the calling session. It never uses `exit` (that would end the caller's PowerShell): a failure is a terminating error that stops
+# the caller's command (a non-zero exit under -Command / -File) and the caller's session goes on.
 # `iex` cannot pass arguments, so every option can also be set by an environment variable AZITO_INSTALL_<OPTION> (VERSION, PREFIX,
 # PORT, ZIPPATH, SHA256SUMS; YES, NOPATH, NOSERVICE take 1); an argument wins over the variable.
 #
@@ -54,10 +54,14 @@ $Repo = 'wireframeslayout/azito'
 $ReleaseTag = '__AZITO_RELEASE_TAG__'
 
 # An option that was not given as an argument may come from AZITO_INSTALL_<OPTION>: `irm | iex` has no way to pass arguments.
+$ZipPathFromEnvironment = $false
 foreach ($option in @('Version', 'Prefix', 'Port', 'ZipPath', 'Sha256Sums')) {
     if ($PSBoundParameters.ContainsKey($option)) { continue }
     $fromEnvironment = [Environment]::GetEnvironmentVariable('AZITO_INSTALL_' + $option.ToUpperInvariant())
-    if ($fromEnvironment) { Set-Variable -Name $option -Value $fromEnvironment }
+    if ($fromEnvironment) {
+        Set-Variable -Name $option -Value $fromEnvironment
+        if ($option -eq 'ZipPath') { $ZipPathFromEnvironment = $true }
+    }
 }
 foreach ($option in @('Yes', 'NoPath', 'NoService')) {
     if ($PSBoundParameters.ContainsKey($option)) { continue }
@@ -378,6 +382,12 @@ function Invoke-Install {
         return
     }
 
+    # A zip named only by the environment (a variable left in the session) must never be installed unchecked: an explicit -ZipPath
+    # may go without -Sha256Sums (it warns), this may not. Checked before anything is written or downloaded.
+    if ($ZipPathFromEnvironment -and $Sha256Sums -eq '') {
+        throw 'AZITO_INSTALL_ZIPPATH names a zip, but there is no checksum file to verify it with. Set AZITO_INSTALL_SHA256SUMS (or pass -Sha256Sums), or remove AZITO_INSTALL_ZIPPATH to install the release. Nothing was installed.'
+    }
+
     # AZITO drives git worktrees on this host, so git must exist (checked before anything is downloaded). It is not installed
     # for you: that changes the machine beyond the install prefix. Tailscale and the agent CLIs are optional.
     if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
@@ -577,11 +587,8 @@ function Invoke-Install {
 Invoke-Install
 } @args
 } catch {
-    # Only the file install.ps1 itself may `exit`: for `irm | iex` or a script block $PSCommandPath is the caller's, and ending it
-    # would close the caller's PowerShell. There the error is thrown, which stops the caller's command and fails -Command with 1.
-    if ($PSCommandPath -and [System.IO.Path]::GetFileName($PSCommandPath) -ieq 'install.ps1') {
-        [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
-        exit 1
-    }
+    # Never `exit` here: for `irm | iex` or a script block that would end the caller's PowerShell, and nothing tells those apart
+    # from a run of the file with certainty. A terminating error stops the caller's command, and powershell.exe -File / -Command
+    # end with 1.
     throw "AZITO install failed: $($_.Exception.Message)"
 }
