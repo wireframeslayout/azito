@@ -43,6 +43,18 @@ function powershell(args: string[], env: NodeJS.ProcessEnv = process.env): Resul
   return { status: r.status, output: `${r.stdout}${r.stderr}` };
 }
 
+/** Like powershell(), without blocking this process: the web server of checkIrm answers from it while the child downloads. */
+function powershellAsync(args: string[], env: NodeJS.ProcessEnv): Promise<Result> {
+  return new Promise((resolve) => {
+    const child = spawn(POWERSHELL, ['-NoProfile', '-ExecutionPolicy', 'Bypass', ...args], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString(); });
+    const timer = setTimeout(() => { output += '\n(timed out after 300 s)'; child.kill(); }, 300_000);
+    child.on('close', (status) => { clearTimeout(timer); resolve({ status, output }); });
+  });
+}
+
 function schtasks(args: string[]): Result {
   const r = spawnSync(SCHTASKS, args, { encoding: 'utf-8', timeout: 60_000 });
   return { status: r.status, output: `${r.stdout}${r.stderr}` };
@@ -252,7 +264,7 @@ async function checkIrm(installPs1: string, zip: string, sums: string, work: str
   const prefix = path.join(work, 'irm', '.azito');
   const server = await serveInstaller(fs.readFileSync(installPs1, 'utf-8'));
   try {
-    const r = powershell(['-Command', `irm ${server.url} | iex`], offlineEnv(zip, sums, prefix, port));
+    const r = await powershellAsync(['-Command', `irm ${server.url} | iex`], offlineEnv(zip, sums, prefix, port));
     assert(r.status === 0 && r.output.includes('Installation complete!'), '`irm | iex` must install', r.output);
     assertPortConfigured(prefix, port);
   } finally {
