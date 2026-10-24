@@ -93,7 +93,8 @@ describe('RemoteWorktreeService over LocalTransport with a real git', () => {
   it('reports a name-status diff of a worktree against its base', async () => {
     const created = await svc.create(repo, 5, 'diff', 'main');
     writeFileSync(join(created.path, 'b.txt'), 'two\n');
-    git(created.path, 'add', '.');
+    // only the new file: the checkout of a.txt may differ in line endings on Windows (core.autocrlf)
+    git(created.path, 'add', 'b.txt');
     git(created.path, 'commit', '-q', '-m', 'second');
     expect(JSON.parse((await svc.getDiff(created.path, 'main')) ?? 'null')).toEqual([{ status: 'A', file: 'b.txt' }]);
     await svc.remove(repo, created.path);

@@ -30,7 +30,7 @@ describe('TaskCleanupService temp files', () => {
       muxDriverRegistry: {} as never,
       windowRepo: {} as never,
       logRepo: { findByTask: () => logs } as never,
-      taskTempFiles: new TaskTempFiles(dir, 'linux'),
+      taskTempFiles: new TaskTempFiles(dir, process.platform === 'win32' ? 'win32' : 'linux'),
     });
   }
   const task = { id: 5, projectId: 1, serverName: 's', worktreePath: null } as unknown as Task;
