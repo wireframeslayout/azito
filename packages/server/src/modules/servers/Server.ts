@@ -22,7 +22,7 @@ export interface ServerConfig {
    * The OS / architecture of the server's host, not to be confused with `host` (the address the hub connects to).
    * An agent server's is recorded from its own report or the install preflight; null = not recorded yet, which
    * means an agent registered before Windows support, i.e. a Unix one. A local server's is the hub's own and is
-   * never stored (always null here; `TransportFactory.hostProfileFor` derives it).
+   * never stored: the repository stamps it on read (null when the hub's OS is unknown; `TransportFactory.hostProfileFor` derives the same).
    */
   hostProfile: HostProfile | null;
   agentPort: number | null;

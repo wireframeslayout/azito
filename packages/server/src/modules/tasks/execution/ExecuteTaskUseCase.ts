@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { assertHostFeature, workerLineDialect } from '../../../shared/os/hostFeature';
 import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
@@ -34,7 +35,7 @@ import type { IPaneStreamFactory } from '../../tmux/PaneStream';
 import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import type { ISessionStrategyFactory } from '../../agents/SessionStrategy';
 import { buildWorkerLaunchCommand } from '../../agents/LaunchCommand';
-import { shellDialectFor, type ShellDialect } from '../../../shared/os/shellDialect';
+import { type ShellDialect } from '../../../shared/os/shellDialect';
 import { expandTemplate } from './PromptExpander';
 import type { UnitTypeLoader } from '../../sidekicks/UnitTypeLoader';
 import { WorkerWaiter } from './WorkerWaiter';
@@ -255,9 +256,14 @@ export class ExecuteTaskUseCase {
     return this.muxDriverRegistry.resolve(server);
   }
 
-  /** The shell of the server's panes: what the lines typed into them are written in. */
+  /** Every use is a line typed into a pane for a worker (cd, launch, supervisor wrap): refused where a worker cannot run in a pane. */
   private dialectOf(server: ServerConfig): ShellDialect {
-    return shellDialectFor(this.transportFactory.hostProfileFor(server));
+    return workerLineDialect(this.transportFactory.hostProfileFor(server), 'Launching a worker in a pane');
+  }
+
+  /** Refuses, before anything is changed, an operation that would resume a worker on a host that cannot run one (Windows, #371). */
+  assertCanLaunchWorker(server: ServerConfig): void {
+    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Resuming a worker');
   }
 
   private getWorktreeService(server: ServerConfig): IWorktreeService {
@@ -733,6 +739,8 @@ export class ExecuteTaskUseCase {
 
     const serverAtStart = this.serverRepo.findByName(serverName);
     if (!serverAtStart) throw new Error('Server not found');
+    // Before anything is created: a host that cannot yet start a worker in a pane (Windows, #371) is refused as unsupported_os.
+    assertHostFeature(this.transportFactory.hostProfileFor(serverAtStart), 'taskExecution', 'Running a task');
     // `let`, not `const`: reassigned below (ensureSessionWithLock,
     // createRotatedWindow) to whatever fresher row the isolation lock
     // re-read — explicitly typed `ServerConfig` (not inferred from
@@ -1610,6 +1618,7 @@ export class ExecuteTaskUseCase {
     // See the matching comment on execute()'s own `server` declaration for
     // why this is explicitly typed `ServerConfig` rather than inferred.
     let server: ServerConfig = serverAtStart;
+    this.assertCanLaunchWorker(serverAtStart);
 
     // Issue #63: ensure baseBranch is persisted so the gate fingerprint
     // matches the approval screen. Normally execute() already persisted it,
@@ -2245,6 +2254,7 @@ export class ExecuteTaskUseCase {
 
     const server = this.serverRepo.findByName(serverName);
     if (!server) throw new Error('Server not found');
+    this.assertCanLaunchWorker(server);
 
     // Issue #63: same baseBranch detection safety net as followUp().
     const rsmProjectServer = this.projectServerRepo.find(task.projectId, serverName);

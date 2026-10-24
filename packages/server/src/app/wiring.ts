@@ -54,7 +54,8 @@ import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
 import { resolveWindowsAgentOptions, type WindowsAgentOptions } from '../modules/servers/agent-deploy/windowsAgentConfig';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
 import { AgentRecoveryWatchdog } from '../modules/servers/agent-deploy/AgentRecoveryWatchdog';
-import { resolveHubHostProfile, type HubHostProfile } from '../shared/os/hostProfile';
+import { HostProfileError, resolveHubHostProfile, type HostProfile, type HubHostProfile } from '../shared/os/hostProfile';
+import { registerTmuxDriver } from '../modules/tmux/registerTmuxDriver';
 import { AgentHostRecorder } from '../modules/servers/agent-deploy/AgentHostRecorder';
 import { HarnessInstaller } from '../modules/servers/agent-deploy/HarnessInstaller';
 import { HarnessUpdater } from '../modules/servers/agent-deploy/HarnessUpdater';
@@ -268,7 +269,7 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   taskTempFiles.assertHubDirShellSafe();
   const transportFactory = new TransportFactory(publicUrl, hostEnv, taskTempFiles, hubHost);
   const tmuxClient = new TmuxClient(transportFactory, publicUrl, uiToken, localUrl, webhookToken);
-  muxDriverRegistry.register('tmux', tmuxClient);
+  registerTmuxDriver(muxDriverRegistry, tmuxClient);
   const llmClient: ILlmClient = new CodexExecClient();
   const agentRegistry = createDefaultRegistry();
   const paneClassifier = new PaneClassifier(llmClient);
@@ -349,8 +350,8 @@ function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUr
   };
 }
 
-function buildRepositories(db: SqliteDatabase): Repositories {
-  const serverRepo = new SqliteServerRepository(db);
+function buildRepositories(db: SqliteDatabase, hubHost: HostProfile | null): Repositories {
+  const serverRepo = new SqliteServerRepository(db, hubHost);
   const serverAliasRepo = new SqliteServerAliasRepository(db);
   const windowRepo = new SqliteWindowRepository(db);
   const projectRepo = new SqliteProjectRepository(db, windowRepo);
@@ -661,11 +662,11 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     console.error('[startup] Agent bundle build failed (non-fatal):', (err as Error).message);
   }
 
-  const repos = buildRepositories(db);
   // The hub's own OS / architecture, resolved once here. A hub on an unsupported host still starts; what needs the host refuses with the reason.
   const hubHost = resolveHubHostProfile(hostEnv);
+  const repos = buildRepositories(db, hubHost instanceof HostProfileError ? null : hubHost);
   const misaoRuntime = await resolveMisaoRuntimeForHub(
-    { env: process.env, homeDir: hostEnv.homeDir, shell: process.env.SHELL || '/bin/bash', hubHost },
+    { env: process.env, homeDir: hostEnv.homeDir, shell: hostEnv.platform === 'win32' ? process.env.ComSpec ?? null : process.env.SHELL || '/bin/bash', hubHost },
     repos.serverRepo.findAll().some((s) => s.type === 'local' && s.defaultMux === 'misao'),
     console,
   );

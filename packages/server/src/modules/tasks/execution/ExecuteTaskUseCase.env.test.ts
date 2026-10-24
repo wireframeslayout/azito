@@ -629,6 +629,27 @@ describe('ExecuteTaskUseCase execution-env resolution', () => {
     expect(supervisorRegistry.clearExitMarker).toHaveBeenCalledWith('local-server', 'azito:w1');
   });
 
+  it.each(['followUp', 'resumeStateMachine'] as const)('%s(): a host that cannot run a worker in a pane (Windows, #371) is refused before the task, a window or a pane changes', async (method) => {
+    const unit = makeUnit({ id: 51, workerType: 'claude', workerModel: 'opus' });
+    const task = makeTask({ id: 6, serverName: 'local-server', unitId: 51, tmuxWindow: 'task-6', status: 'review' });
+    const { useCase, taskRepo, tmux, transportFactory, windowRepo } = buildUseCase({
+      task,
+      project: makeProject({ defaultUnitId: null }),
+      units: [unit],
+    });
+    (transportFactory.hostProfileFor as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'win32', arch: 'x64' });
+
+    const run = method === 'followUp' ? useCase.followUp(51, 6, 'please continue') : useCase.resumeStateMachine(51, 6);
+    await expect(run).rejects.toMatchObject({ code: 'unsupported_os' });
+
+    expect(taskRepo.updateStatus).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalled();
+    expect(tmux.sendKeysToHandle).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(windowRepo.add).not.toHaveBeenCalled();
+    expect(task.status).toBe('review');
+  });
+
   it('followUp() rejects and marks the task as failed when runtime.resume() throws (Issue #421 regression)', async () => {
     const unit = makeUnit({ id: 50, workerType: 'claude', workerModel: 'opus' });
     const task = makeTask({ id: 5, serverName: 'local-server', unitId: 50, tmuxWindow: null });

@@ -22,7 +22,7 @@ import type { IDistributionStateRepository } from '../git/hub-transfer/types';
 import { normalizeBranchRef } from '../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../git/ensureGitIdentity';
 import { buildWorkerLaunchCommand } from '../agents/LaunchCommand';
-import { shellDialectFor } from '../../shared/os/shellDialect';
+import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
@@ -137,6 +137,8 @@ export class TaskRestoreService {
     // `findByName`'s nullable return) so TS control-flow narrowing isn't
     // lost the moment this variable is captured by a nested closure below.
     let server: ServerConfig = serverAtStart;
+    // Before the worktree, the window or any row: a host that cannot run a worker in a pane (Windows, #371) restores nothing.
+    assertHostFeature(transportFactory.hostProfileFor(serverAtStart), 'workerLaunch', 'Restoring a task');
 
     const tmuxSession = resolveMuxWorkspace(task.projectId, serverName, projectServerRepo);
 
@@ -634,7 +636,7 @@ export class TaskRestoreService {
           // effectiveDir is a resolved (symlink-free) real path — must be
           // shell-quoted before being typed into the pane; see the matching
           // fix/comment in ExecuteTaskUseCase (Issue #27 cd injection).
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [shellDialectFor(transportFactory.hostProfileFor(server)).changeDirectory(effectiveDir), 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task').changeDirectory(effectiveDir), 'Enter']);
           await sleep(500);
         } catch (e) {
           log.warn(`[task-restore] Failed to cd into ${effectiveDir}: ${(e as Error).message}`);
@@ -660,7 +662,7 @@ export class TaskRestoreService {
         workerType: unit?.workerType ?? null,
         workerModel: unit?.workerModel ?? null,
         agentSessionId: null,
-        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, shellDialectFor(transportFactory.hostProfileFor(server))) : null,
+        launchCommand: unit ? buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, workerLineDialect(transportFactory.hostProfileFor(server), 'Restoring a task')) : null,
         workingDirectory: effectiveDir || null,
         paneLayout: null,
         sleeping: false,

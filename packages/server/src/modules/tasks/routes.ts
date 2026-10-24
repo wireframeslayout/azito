@@ -1,4 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
+import { HostProfileError } from '../../shared/os/hostProfile';
 import type { ITaskRepository, Task } from './Task';
 import { deriveInputTrust, validateTaskSourceFields } from './Task';
 import type { TaskStatus } from './TaskStatus';
@@ -1029,6 +1030,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!server) return reply.status(404).send({ error: 'Server not found' });
+      // First, before the gate, pendingQuestions or the status are touched: the resume below is fire-and-forget.
+      executeTaskUseCase.assertCanLaunchWorker(server);
 
       // Untrusted-input execution gate (Issue #328), checked synchronously
       // BEFORE anything below consumes task.pendingQuestions or the
@@ -1243,6 +1246,9 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
         // 500 — same conversion every other execution entry point applies
         // (see replyToExecutionGateError's doc comment for the full list).
         if (replyToExecutionGateError(err, reply)) return;
+        // Same answer as mapAppError gives (the reason in `error`, `unsupported_os` in `code`).
+        if (err instanceof HostProfileError)
+          return reply.status(501).send({ error: err.message, code: err.code });
         return reply.status(500).send({ error: (err as Error).message });
       }
     },

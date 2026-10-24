@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { HostProfileError } from '../../shared/os/hostProfile';
+import { mapAppError } from '../../app/mapAppError';
 import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
@@ -127,6 +129,7 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
       execute: vi.fn(),
       followUp: vi.fn(async () => {}),
       enforceExecutionGate,
+      assertCanLaunchWorker: vi.fn(),
       events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
     } as unknown as TasksRouteOptions['executeTaskUseCase'],
     unitRepo: {
@@ -199,6 +202,26 @@ function makeOpts(existingTask: Task, opts: { gateAllows: boolean }): { opts: Ta
   };
   return { opts: routeOpts, task };
 }
+
+describe('POST /api/tasks/:id/answer — a host that cannot run a worker in a pane (Windows, #371)', () => {
+  it('refuses before pendingQuestions or the status are touched and before followUp is started', async () => {
+    const originalTask = makeTask();
+    const { opts, task } = makeOpts(originalTask, { gateAllows: true });
+    (opts.executeTaskUseCase.assertCanLaunchWorker as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).'); });
+    const app = Fastify();
+    app.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/tasks/1/answer', payload: { answers: [{ index: 0, value: 'Option A' }] } });
+
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'unsupported_os' });
+    expect(task.pendingQuestions).toBe(originalTask.pendingQuestions);
+    expect(opts.taskRepo.update).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/tasks/:id/answer — untrusted-input execution gate (Issue #328 sixth-round review)', () => {
   it('blocked by the gate: returns 409, leaves pendingQuestions and task.status untouched, never calls followUp', async () => {

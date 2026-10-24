@@ -1,4 +1,5 @@
 import { isPrimaryTaskWindow, type IWindowRepository, type PaneLayout, type Window } from './Window';
+import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
 import { DuplicateAgentSessionError } from './DuplicateAgentSessionError';
 import type { ServerConfig } from '../servers/Server';
 import type { IMuxClient } from '../tmux/IMuxClient';
@@ -16,7 +17,7 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { parsePsOutput, argsContainSessionId } from '../transcripts/agentProcessDetection';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { assertDirectoryContained } from '../git/PathContainment';
-import { shellDialectFor, type ShellDialect } from '../../shared/os/shellDialect';
+import { type ShellDialect } from '../../shared/os/shellDialect';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import type { SessionCaptureService } from './SessionCaptureService';
@@ -187,6 +188,8 @@ export class WindowRespawnService {
   async respawn(windowId: number, server: ServerConfig, opts?: { skipAgentLaunch?: boolean; gateAlreadyEnforced?: boolean; inLockGate?: (freshServer: ServerConfig) => void }): Promise<{ tmuxTarget: string }> {
     const win = this.windowRepo.findById(windowId);
     if (!win) throw new Error('Window not found');
+    // Before the window is destroyed or any row changes: a host that cannot run a worker in a pane (Windows, #371) keeps the window as it is.
+    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Respawning a window');
 
     // Validated once here for a fast, early failure on an obviously-corrupt
     // row — the ACTUAL session/window names `rotate` below acts on are
@@ -833,6 +836,7 @@ export class WindowRespawnService {
    * caller for the bug this pattern avoids.
    */
   async resumeLegacySession(taskId: number, server: ServerConfig): Promise<{ windowName: string }> {
+    assertHostFeature(this.transportFactory.hostProfileFor(server), 'workerLaunch', 'Resuming a session');
     const task = this.taskRepo.findById(taskId);
     if (!task) throw new Error(`Task ${taskId} not found`);
     if (!task.agentSessionId) throw new Error(`Task ${taskId} has no agent session ID`);
@@ -1075,7 +1079,7 @@ export class WindowRespawnService {
 
   /** The shell of the server's panes: what the lines typed into them are written in. */
   private dialectOf(server: ServerConfig): ShellDialect {
-    return shellDialectFor(this.transportFactory.hostProfileFor(server));
+    return workerLineDialect(this.transportFactory.hostProfileFor(server), 'Launching or resuming a worker in a pane');
   }
 
   private wrapIfSupervised(cmd: string, server: ServerConfig, supervisorTarget: string, supervision: SupervisionContext): string {

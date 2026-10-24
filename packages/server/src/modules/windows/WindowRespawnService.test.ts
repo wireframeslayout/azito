@@ -2351,3 +2351,49 @@ describe('WindowRespawnService — misao window identity', () => {
     expect(taskRepo.update).toHaveBeenCalledWith(7, { tmuxWindow: NEW_ID });
   });
 });
+
+describe('WindowRespawnService.respawn — a host that cannot run a worker in a pane (Windows, #371)', () => {
+  const win32Factory = (): Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'> =>
+    ({ getTransport: vi.fn(() => ({})), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => ({ platform: 'win32', arch: 'x64' })) }) as unknown as Pick<TransportFactory, 'getTransport' | 'getFileOps' | 'hostProfileFor'>;
+  const twoPanes = {
+    layout: '',
+    panes: [
+      { index: 0, command: null, workingDirectory: null, title: null },
+      { index: 1, command: null, workingDirectory: null, title: null },
+    ],
+  };
+
+  it.each([
+    ['a single pane', null],
+    ['several panes', twoPanes],
+  ])('refuses the respawn of %s as unsupported_os before the window, the rows or the pane are touched', async (_name, paneLayout) => {
+    const { service, tmux, windowRepo, taskRepo, sentCommands } = buildService({
+      window: makeWindow({ id: 7, taskId: 5, paneLayout }),
+      task: makeTask({ id: 5 }),
+      transportFactory: win32Factory(),
+    });
+
+    await expect(service.respawn(7, makeServer())).rejects.toMatchObject({ code: 'unsupported_os' });
+
+    expect(tmux.closeWindow).not.toHaveBeenCalled();
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(tmux.splitPaneByHandle).not.toHaveBeenCalled();
+    expect(windowRepo.update).not.toHaveBeenCalled();
+    expect(taskRepo.update).not.toHaveBeenCalled();
+    expect(taskRepo.updateStatus).not.toHaveBeenCalled();
+    expect(sentCommands).toEqual([]);
+  });
+
+  it('refuses a legacy session resume the same way', async () => {
+    const { service, tmux, sentCommands } = buildService({
+      window: makeWindow(),
+      task: makeTask({ id: 5, agentSessionId: 'abc' }),
+      transportFactory: win32Factory(),
+    });
+
+    await expect(service.resumeLegacySession(5, makeServer())).rejects.toMatchObject({ code: 'unsupported_os' });
+
+    expect(tmux.openWindow).not.toHaveBeenCalled();
+    expect(sentCommands).toEqual([]);
+  });
+});

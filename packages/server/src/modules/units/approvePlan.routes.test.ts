@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { HostProfileError } from '../../shared/os/hostProfile';
+import { mapAppError } from '../../app/mapAppError';
 import Fastify from 'fastify';
 import unitsRoutes from './routes';
 import type { UnitsRouteOptions } from './routes';
@@ -141,6 +143,7 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
       stop: vi.fn(),
       resumeStateMachine: vi.fn(async () => {}),
       enforceExecutionGate,
+      assertCanLaunchWorker: vi.fn(),
       events: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
     } as unknown as UnitsRouteOptions['executeTaskUseCase'],
     projectRepo: {
@@ -158,6 +161,44 @@ function makeOpts(task: Task, unit: Unit, opts: { gateAllows: boolean }): { opts
   };
   return { opts: routeOpts, currentTask: () => currentTask };
 }
+
+describe('POST /api/units/:id/approve-plan — a host that cannot run a worker in a pane (Windows, #371)', () => {
+  it.each([
+    ['approved', { approved: true }],
+    ['rejected with feedback', { approved: false, feedback: 'please redo this part' }],
+  ])('%s: refuses before status / currentPhase change and before a worker is resumed', async (_name, body) => {
+    const task = makeTask({ status: 'phase_review', currentPhase: 'planning' });
+    const { opts, currentTask } = makeOpts(task, makeUnit(), { gateAllows: true });
+    (opts.executeTaskUseCase.assertCanLaunchWorker as ReturnType<typeof vi.fn>).mockImplementation(() => { throw new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).'); });
+    const app = Fastify();
+    app.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/approve-plan', payload: { taskId: 1, ...body } });
+
+    expect(res.statusCode).toBe(501);
+    expect(currentTask().status).toBe('phase_review');
+    expect(currentTask().currentPhase).toBe('planning');
+    expect(opts.executeTaskUseCase.followUp).not.toHaveBeenCalled();
+    expect(opts.executeTaskUseCase.resumeStateMachine).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/units/:id/follow-up — a host that cannot run a worker in a pane (Windows, #371)', () => {
+  it('answers 501 { error, code: unsupported_os }, not a 400', async () => {
+    const { opts } = makeOpts(makeTask({ status: 'review' }), makeUnit(), { gateAllows: true });
+    (opts.executeTaskUseCase.followUp as ReturnType<typeof vi.fn>).mockRejectedValue(new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).'));
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/follow-up', payload: { taskId: 1, comment: 'please continue' } });
+
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Resuming a worker is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
+  });
+});
 
 describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (Issue #328 sixth-round review)', () => {
   it('rejection with feedback, blocked by the gate: 409s and leaves task.status/currentPhase at phase_review/planning', async () => {
