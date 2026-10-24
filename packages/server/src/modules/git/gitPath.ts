@@ -34,8 +34,3 @@ export function taskIdOfWorktreePath(platform: HostPlatform, worktreePath: strin
   const isWorktreesDir = platform === 'linux' ? parentName === WORKTREES_DIR_NAME : parentName.toLowerCase() === WORKTREES_DIR_NAME;
   return isWorktreesDir ? parseInt(match[1], 10) : null;
 }
-
-/** A task with no recorded worktree is taken at its id; one with a recorded worktree must be that very path. */
-export function isWorktreeOfTask(platform: HostPlatform, task: { worktreePath: string | null }, worktreePath: string): boolean {
-  return task.worktreePath === null || hostPathFor(platform).samePath(task.worktreePath, worktreePath);
-}

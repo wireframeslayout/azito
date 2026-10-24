@@ -12,7 +12,7 @@ import { RepositoryCandidateService } from './RepositoryCandidateService';
 import { runGit } from './runGit';
 import { assertGitSupported, platformOfProfile } from '../../shared/os/hostProfile';
 import { assertGitPathArg } from './assertSafeGitArgs';
-import { isWorktreeOfTask, taskIdOfWorktreePath } from './gitPath';
+import { taskIdOfWorktreePath } from './gitPath';
 import type { HostPlatform } from '../../shared/os/hostEnv';
 
 const VALID_SCOPES = new Set<string>(['uncommitted', 'base', 'commit']);
@@ -34,8 +34,9 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
   const assertServerGit = (srv: ServerConfig): void => assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
   const hostPlatformOf = (srv: ServerConfig): HostPlatform => platformOfProfile(transportFactory.hostProfileFor(srv));
   const isInvalidPath = (srv: ServerConfig, dirPath: string): boolean => {
+    const platform = hostPlatformOf(srv);
     try {
-      assertGitPathArg(hostPlatformOf(srv), dirPath, 'path');
+      assertGitPathArg(platform, dirPath, 'path');
       return false;
     } catch {
       return true;
@@ -146,9 +147,9 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
         const worktrees = entries.map((entry, i) => {
           const taskId = taskIdOfWorktreePath(platform, entry.path);
           const found = taskId !== null ? taskRepo.findById(taskId) : null;
-          // The name `.worktrees/task-<id>` only says which task id; a task of another repository can carry the same id,
-          // so a task whose recorded worktree is somewhere else is not this worktree's.
-          const task = found && isWorktreeOfTask(platform, found, entry.path) ? found : null;
+          // The name `.worktrees/task-<id>` says which task; the project says whose. The recorded `worktreePath` is not compared:
+          // git prints the real path (symlinks resolved, the host's case), which the stored string need not equal.
+          const task = found && found.projectId === projectId ? found : null;
           return {
             path: entry.path,
             branch: entry.branch,

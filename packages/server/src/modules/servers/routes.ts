@@ -36,7 +36,7 @@ import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal'
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
 import { assertPosixHost, assertGitSupported, platformOfProfile } from '../../shared/os/hostProfile';
-import { invalidWorkingDirectoryReason, pathApiFor } from '../../shared/os/hostPath';
+import { invalidWorkingDirectoryReason, isHomeRelativePath } from '../../shared/os/hostPath';
 import { assertHostFeature } from '../../shared/os/hostFeature';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
@@ -1408,7 +1408,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       const path = request.query.path;
-      if (!path || !pathApiFor(platformOfProfile(transportFactory.hostProfileFor(srv))).isAbsolute(path)) {
+      const platform = platformOfProfile(transportFactory.hostProfileFor(srv));
+      // An absolute path of the host: the rules of a stored working directory, minus the `~` form (it is not expanded here).
+      if (!path || isHomeRelativePath(platform, path) || invalidWorkingDirectoryReason(platform, path)) {
         return reply.status(400).send({ error: 'An absolute path query parameter is required' });
       }
 

@@ -8,6 +8,7 @@ import { ok } from '../../shared/exec/testing/commandTesting';
 
 interface TaskStub {
   id: number;
+  projectId: number;
   title: string;
   status: string;
   worktreePath: string | null;
@@ -63,20 +64,34 @@ describe('GET /api/servers/:name/git/worktrees: task link', () => {
 
   const taskOf = (body: { worktrees: Array<{ path: string; taskId: number | null; orphaned: boolean }> }, path: string) => body.worktrees.find((w) => w.path === path)!;
 
-  it('links the task whose recorded worktree is the listed path, and leaves one of another repository unlinked', async () => {
+  it('links by the task id in the name and the project, whatever the recorded worktreePath looks like', async () => {
     const built = await build(
       linux,
-      [entry('/repo', true), entry('/repo/.worktrees/task-1'), entry('/repo/.worktrees/task-2'), entry('/repo/.worktrees/task-3')],
+      [entry('/data/ws/repo', true), entry('/data/ws/repo/.worktrees/task-1'), entry('/data/ws/repo/.worktrees/task-2'), entry('/data/ws/repo/.worktrees/task-3'), entry('/data/ws/repo/.worktrees/task-4')],
       [
-        { id: 1, title: 't1', status: 'review', worktreePath: '/repo/.worktrees/task-1/' },
-        { id: 2, title: 't2', status: 'review', worktreePath: '/other/.worktrees/task-2' },
+        // the recorded path goes through a symlink (/home/u/ws -> /data/ws)
+        { id: 1, projectId: 1, title: 't1', status: 'review', worktreePath: '/home/u/ws/repo/.worktrees/task-1' },
+        // recorded with ~ (unresolved)
+        { id: 2, projectId: 1, title: 't2', status: 'review', worktreePath: '~/ws/repo/.worktrees/task-2' },
+        // recorded with a different case
+        { id: 3, projectId: 1, title: 't3', status: 'review', worktreePath: '/Data/WS/repo/.worktrees/task-3' },
+        // the same id in another project
+        { id: 4, projectId: 9, title: 't4', status: 'review', worktreePath: '/elsewhere/.worktrees/task-4' },
       ],
     );
     app = built.app;
     const body = (await app.inject({ method: 'GET', url: '/api/servers/srv/git/worktrees?project_id=1' })).json();
-    expect(taskOf(body, '/repo/.worktrees/task-1')).toMatchObject({ taskId: 1, orphaned: false });
-    expect(taskOf(body, '/repo/.worktrees/task-2')).toMatchObject({ taskId: null, orphaned: false });
-    expect(taskOf(body, '/repo/.worktrees/task-3')).toMatchObject({ taskId: null, orphaned: true });
-    expect(taskOf(body, '/repo')).toMatchObject({ taskId: null, orphaned: false });
+    expect(taskOf(body, '/data/ws/repo/.worktrees/task-1')).toMatchObject({ taskId: 1, orphaned: false });
+    expect(taskOf(body, '/data/ws/repo/.worktrees/task-2')).toMatchObject({ taskId: 2, orphaned: false });
+    expect(taskOf(body, '/data/ws/repo/.worktrees/task-3')).toMatchObject({ taskId: 3, orphaned: false });
+    expect(taskOf(body, '/data/ws/repo/.worktrees/task-4')).toMatchObject({ taskId: null, orphaned: false });
+    expect(taskOf(body, '/data/ws/repo')).toMatchObject({ taskId: null, orphaned: false });
+  });
+
+  it('marks a task-N worktree whose task no longer exists as orphaned', async () => {
+    const built = await build(linux, [entry('/repo', true), entry('/repo/.worktrees/task-8')]);
+    app = built.app;
+    const body = (await app.inject({ method: 'GET', url: '/api/servers/srv/git/worktrees?project_id=1' })).json();
+    expect(taskOf(body, '/repo/.worktrees/task-8')).toMatchObject({ taskId: null, orphaned: true });
   });
 });

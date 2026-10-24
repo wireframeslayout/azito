@@ -12,8 +12,6 @@ import { assertDirectoryContained, assertNewPathContained } from '../git/PathCon
 import { isHostPathContained, pathApiFor } from '../../shared/os/hostPath';
 import { isGitDirectoryName } from '../git/gitPath';
 
-export { isGitDirectoryName };
-
 export function sanitizeFileName(raw: string): string {
   const nfc = raw.normalize('NFC');
   return nfc

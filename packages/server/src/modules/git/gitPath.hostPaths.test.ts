@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isGitDirectoryName, isWorktreeOfTask, taskIdOfWorktreePath } from './gitPath';
+import { isGitDirectoryName, taskIdOfWorktreePath } from './gitPath';
 import { platformOfProfile } from '../../shared/os/hostProfile';
 
 describe('taskIdOfWorktreePath', () => {
@@ -24,18 +24,6 @@ describe('taskIdOfWorktreePath', () => {
     ['win32', 'C:\\repo\\work\\task-1'],
   ] as const)('is null for %s %s', (platform, path) => {
     expect(taskIdOfWorktreePath(platform, path)).toBeNull();
-  });
-});
-
-describe('isWorktreeOfTask', () => {
-  it('takes a task with no recorded worktree at its id', () => {
-    expect(isWorktreeOfTask('win32', { worktreePath: null }, 'C:\\r\\.worktrees\\task-1')).toBe(true);
-  });
-
-  it('compares the recorded worktree with the listed one regardless of separators, a trailing one and (on win32) case', () => {
-    expect(isWorktreeOfTask('win32', { worktreePath: 'c:/R/.worktrees/task-1/' }, 'C:\\r\\.worktrees\\task-1')).toBe(true);
-    expect(isWorktreeOfTask('win32', { worktreePath: 'C:\\other\\.worktrees\\task-1' }, 'C:\\r\\.worktrees\\task-1')).toBe(false);
-    expect(isWorktreeOfTask('linux', { worktreePath: '/R/.worktrees/task-1' }, '/r/.worktrees/task-1')).toBe(false);
   });
 });
 

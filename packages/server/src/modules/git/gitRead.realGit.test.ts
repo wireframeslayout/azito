@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -111,6 +111,16 @@ describe('git read paths with a real git', () => {
     }
     const status = await runGit(transport, undefined, ['-C', viaTransport[1].path, 'status', '--porcelain']);
     expect(status.exitCode).toBe(0);
+  });
+
+  it('prints the real path of a worktree even when the working directory is reached through a link', async () => {
+    const link = join(root, 'link-to-repo');
+    // a junction needs no privilege on Windows; on POSIX the type is ignored
+    symlinkSync(repo, link, 'junction');
+    const entries = await new RemoteWorktreeService(transport).list(link);
+    expect(entries.map((e) => e.path)).toContain(join(repo, '.worktrees', 'task-7'));
+    expect(entries.some((e) => e.path.startsWith(link))).toBe(false);
+    rmSync(link, { recursive: true, force: true });
   });
 
   it('discovers repositories under a directory, with the toplevel in the host spelling', async () => {

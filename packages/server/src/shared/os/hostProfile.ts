@@ -79,8 +79,8 @@ export function assertPosixHost(profile: HostProfile | null, serverLabel: string
 }
 
 /**
- * The git API (diff, commits, worktree list, branch search) is closed on a Windows host until #370: `SAFE_PATH` in
- * `GitDiffService` accepts POSIX paths only, and `git` cannot be assumed to be installed there. The same row is closed in
+ * The git API (diff, commits, worktree list, branch search) is closed on a Windows host until #370: the read paths take
+ * Windows paths, but worktree create / remove (R4) do not yet, and `git` cannot be assumed to be installed there. The same row is closed in
  * `hostCapabilities.ts` (`git`), which is what the UI reads; this is the answer for a call that still arrives (a saved tab, a
  * direct request). Remove both with #370. A null profile is an agent registered before the OS was recorded: a Unix one.
  */
