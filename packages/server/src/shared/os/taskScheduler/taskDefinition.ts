@@ -150,3 +150,8 @@ export function decodeTaskXml(bytes: Buffer): string {
   if (bytes.length < 2 || bytes[0] !== 0xff || bytes[1] !== 0xfe) throw new Error('The task XML is not UTF-16 LE with a byte order mark');
   return bytes.subarray(2).toString('utf16le');
 }
+
+/** Whether a task definition (the XML the Task Scheduler exports) is disabled by hand (`schtasks /Change /DISABLE`): `Settings/Enabled` is false. */
+export function isTaskDefinitionDisabled(xml: string): boolean {
+  return /<Settings>[\s\S]*?<Enabled>false<\/Enabled>/.test(xml);
+}

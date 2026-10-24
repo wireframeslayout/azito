@@ -33,6 +33,7 @@ import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createMisaoServiceManager, createServiceManager } from '../modules/system/createServiceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { isManagedMisaoDown } from '../modules/system/misao/MisaoWindowsInstaller';
 import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
 import { misaoWindowsUserOf, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 import { createLocalMisaoWindows } from '../modules/system/misao/misaoLocalWindows';
@@ -409,13 +410,12 @@ function buildAgentRecoveryWatchdog(infra: SharedInfra, repos: Repositories): Ag
     checkAgent: async (server) => { await infra.transportFactory.getAgentTransport(server).fetchHealth(); },
     recoverAgent: async (server) => {
       if (!server.host || !server.agentToken) throw new Error('the server has no agent address or token');
-      await infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime);
+      return infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime);
     },
     isMisaoDown: async (server) => {
-      const status = await infra.transportFactory.getAgentTransport(server).fetchMisaoStatus();
-      return !status.socketPresent && status.installedVersion !== undefined;
+      return isManagedMisaoDown(await infra.transportFactory.getAgentTransport(server).fetchMisaoStatus());
     },
-    reviveMisao: async (server, force) => { await infra.misaoAgentInstaller.reviveWindowsDaemon(infra.transportFactory.getAgentTransport(server), force); },
+    reviveMisao: (server, force) => infra.misaoAgentInstaller.reviveWindowsDaemon(infra.transportFactory.getAgentTransport(server), force),
     lock: infra.serverIsolationMutex,
     now: Date.now,
     logger: { info: (m) => console.log(`[agent-recovery] ${m}`), warn: (m) => console.warn(`[agent-recovery] ${m}`) },

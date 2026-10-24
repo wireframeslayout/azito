@@ -19,6 +19,8 @@ import { removeTaskIfPresent } from './testing/liveTask';
 const SUFFIX = crypto.randomBytes(6).toString('hex');
 const VIA_CONHOST = `AzitoCiExit7Conhost-${SUFFIX}`;
 const DIRECT = `AzitoCiExit7Direct-${SUFFIX}`;
+/** SCHED_E_USER_NOT_LOGGED_ON and ERROR_NO_SUCH_LOGON_SESSION: the same two results the other live Task Scheduler tests accept as "no logon session". */
+const NO_INTERACTIVE_LOGON = new Set([0x8004130f, 0x80070520]);
 const WAIT_PAST_RESTART_INTERVAL_MS = 90_000;
 
 let client: SchtasksClient;
@@ -26,7 +28,7 @@ let dir: string;
 
 function runsOf(name: string): number {
   const file = path.join(dir, `${name}.count`);
-  return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter((line) => line === 'x').length : 0;
+  return fs.existsSync(file) ? fs.readFileSync(file, 'utf-8').split(/\r?\n/).filter((line) => line.trim() === 'x').length : 0;
 }
 
 describe.skipIf(process.platform !== 'win32')('what the Task Scheduler does with a program that exits with 7', () => {
@@ -54,7 +56,14 @@ describe.skipIf(process.platform !== 'win32')('what the Task Scheduler does with
     await client.start(DIRECT);
     const deadline = Date.now() + 30_000;
     while ((runsOf(VIA_CONHOST) === 0 || runsOf(DIRECT) === 0) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 500));
-    if (runsOf(VIA_CONHOST) === 0 || runsOf(DIRECT) === 0) ctx.skip('no interactive logon session on this machine: the tasks did not run');
+    if (runsOf(VIA_CONHOST) === 0 || runsOf(DIRECT) === 0) {
+      // Only a machine with no interactive logon session may skip; a task that did not run for any other reason fails the test.
+      const results = [await client.query(VIA_CONHOST), await client.query(DIRECT)].map((state) => (state.exists ? state.lastResult : -1));
+      if (!results.some((r) => NO_INTERACTIVE_LOGON.has(r))) throw new Error(`The tasks did not run within 30 s (last results ${results.join(', ')})`);
+      const reason = `no interactive logon session on this machine (last results ${results.join(', ')})`;
+      console.warn(`[restartOnFailure.windows.test] SKIPPED: ${reason}`);
+      ctx.skip(reason);
+    }
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     expect(await client.query(VIA_CONHOST)).toMatchObject({ exists: true, lastResult: 0 });
     expect(await client.query(DIRECT)).toMatchObject({ exists: true, lastResult: 7 });

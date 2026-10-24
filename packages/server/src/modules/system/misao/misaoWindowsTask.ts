@@ -137,3 +137,22 @@ export function buildMisaoTaskXml(input: MisaoTaskInput): string {
     restartOnFailure: { intervalMinutes: RESTART_INTERVAL_MINUTES, count: RESTART_COUNT },
   });
 }
+
+const XML_ENTITY = /&(lt|gt|quot|apos|amp);/g;
+const XML_ENTITIES: Readonly<Record<string, string>> = { lt: '<', gt: '>', quot: '"', apos: "'", amp: '&' };
+
+/**
+ * The folder a misao task starts the daemon in (its `--data` folder), read from the task definition: from the launcher script
+ * (`AZITO_MISAO_ROOT`, a PowerShell literal where `'` is doubled) or from the plain command line (`--data "<root>"`). Undefined when
+ * the definition has neither (not a misao task this code wrote).
+ */
+export function taskMisaoRoot(xml: string): string | undefined {
+  const decoded = xml.replace(XML_ENTITY, (_, name: string) => XML_ENTITIES[name]!);
+  const encoded = /-EncodedCommand ([A-Za-z0-9+/=]+)/.exec(decoded)?.[1];
+  if (encoded) {
+    const script = Buffer.from(encoded, 'base64').toString('utf16le');
+    const literal = /\$info\.EnvironmentVariables\['AZITO_MISAO_ROOT'\] = '((?:[^']|'')*)'/.exec(script)?.[1];
+    return literal?.replace(/''/g, "'");
+  }
+  return /--data "([^"]*)"/.exec(decoded)?.[1];
+}

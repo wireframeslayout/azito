@@ -1,10 +1,11 @@
 import fs from 'fs';
+import * as path from 'path';
 import { buildCommandSpec } from '../../../shared/exec/commandSpec';
 import { powershellDialect, powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { createScriptCommandSpecRunner } from '../../servers/agent-deploy/windowsSshRunner';
 import { powershellErrorText } from '../../servers/agent-deploy/WindowsAgentDeployer';
 import { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
-import { encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
+import { encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { PROTECT_SCRIPT } from '../../../shared/os/windowsSecretFileGuard';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { redactSecretText } from '../../../shared/redactSecretText';
@@ -13,7 +14,7 @@ import type { MisaoBundle, MisaoTargetFiles } from './MisaoBundle';
 import { bundleFilesFor, sha256Buffer } from './MisaoBundle';
 import { daemonCheckScript, parseDaemonCheck, sameProgram } from './misaoWindowsVerify';
 import { MisaoServiceError } from './MisaoServiceError';
-import { buildMisaoTaskXml, misaoWindowsLayout, misaoWindowsReleasePaths, type MisaoWindowsLayout } from './misaoWindowsTask';
+import { buildMisaoTaskXml, taskMisaoRoot, misaoWindowsLayout, misaoWindowsReleasePaths, type MisaoWindowsLayout } from './misaoWindowsTask';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
 export interface MisaoWindowsInstallerOptions {
@@ -27,9 +28,19 @@ export interface MisaoWindowsInstallerOptions {
   taskIdleTimeoutMs?: number;
 }
 
+/**
+ * The managed daemon of a Windows agent is installed by AZITO and does not answer (an agent that relays to another pipe, `MISAO_SOCKET`,
+ * has a daemon that is not ours to start or stop).
+ */
+export function isManagedMisaoDown(status: MisaoSocketStatus): boolean {
+  const { host } = status;
+  return host.platform === 'win32' && host.windows !== undefined && status.socketPath === managedEndpointOf(host) && !status.socketPresent && status.installedVersion !== undefined;
+}
+
 /** What the installer needs of an agent on Windows. */
 export type WindowsTarget = Pick<MisaoInstallTarget, 'run' | 'files' | 'fetchMisaoStatus' | 'uploadMisaoFile'>;
 
+const win32 = path.win32;
 const DEFAULT_READY_TIMEOUT_MS = 30_000;
 const DEFAULT_POLL_INTERVAL_MS = 250;
 const SCRIPT_TIMEOUT_MS = 60_000;
@@ -152,18 +163,26 @@ export class MisaoWindowsInstaller {
   /**
    * The daemon AZITO installed does not answer (it died: its task reports 0 whatever happened, so the Task Scheduler does not start it
    * again): starts the task through the agent. A task still "running" while the pipe is silent is left alone (it is starting), unless
-   * `force`: then it is ended with the `misao.exe` of this pipe first. Touches nothing when the daemon answers, when AZITO did not
-   * install it, or when its task is gone (the install is what recreates that).
+   * `force`: then it is ended with the `misao.exe` of this pipe first. Touches nothing (and says why) when the agent relays to a pipe
+   * other than the managed one (`custom_socket`: that daemon is not ours), when the daemon answers, when AZITO did not install it,
+   * when its task is gone (the install is what recreates that), when the task starts another folder's misao (`other_task`) or when
+   * it was disabled by hand (`disabled`).
    */
-  async reviveDaemon(target: WindowsTarget, force: boolean): Promise<'running' | 'not_installed' | 'no_task' | 'starting' | 'started'> {
+  async reviveDaemon(target: WindowsTarget, force: boolean): Promise<'running' | 'custom_socket' | 'not_installed' | 'no_task' | 'other_task' | 'disabled' | 'starting' | 'started'> {
     const status = await target.fetchMisaoStatus();
     const { host } = status;
     if (host.platform !== 'win32' || !host.windows) throw new MisaoServiceError('unsupported_host', `The agent reports ${host.platform}/${host.arch}, not a Windows host with its folders.`);
+    if (status.socketPath !== managedEndpointOf(host)) return 'custom_socket';
     if (status.socketPresent) return 'running';
     if (!status.installedVersion) return 'not_installed';
     const tasks = new SchtasksClient(createScriptCommandSpecRunner((script, timeoutMs) => this.runScript(target, script, timeoutMs)), { systemRoot: host.windows.systemRoot });
     const state = await tasks.query(this.options.taskName);
     if (!state.exists) return 'no_task';
+    const xml = await tasks.exportXml(this.options.taskName);
+    const taskRoot = taskMisaoRoot(xml);
+    // The agent reported its folder in its real spelling and the task was written with it: the strings are compared, never looked up on this machine.
+    if (taskRoot === undefined || win32.normalize(taskRoot).toLowerCase() !== win32.normalize(host.windows.misaoRoot).toLowerCase()) return 'other_task';
+    if (isTaskDefinitionDisabled(xml)) return 'disabled';
     if (state.running) {
       if (!force) return 'starting';
       await tasks.stop(this.options.taskName);

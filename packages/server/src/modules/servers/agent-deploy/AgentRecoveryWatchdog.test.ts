@@ -18,6 +18,7 @@ class Harness {
   misaoDown = false;
   misaoStatusFails = false;
   recoverFails = false;
+  reviveResult = 'started';
   /** The agent is up again once recoverAgent was called this many times. */
   recoversToStart = 1;
   readonly recovered: string[] = [];
@@ -35,13 +36,19 @@ class Harness {
       await this.duringRecover?.();
       if (this.recoverFails) throw new Error('ssh failed');
       if (this.recovered.length >= this.recoversToStart) this.agentUp = true;
+      return 'taskscheduler';
     },
     isMisaoDown: async () => { if (this.misaoStatusFails) throw new Error('older agent'); return this.misaoDown; },
-    reviveMisao: async (s, force) => { this.revived.push({ name: s.name, force }); },
+    reviveMisao: async (s, force) => { this.revived.push({ name: s.name, force }); return this.reviveResult; },
     lock: this.lock,
     now: () => this.clock,
     logger: { info: (m) => this.logs.push(m), warn: (m) => this.logs.push(`WARN ${m}`) },
   }, TIMING);
+
+  /** Holds the server's lock (an install in progress); resolves with the function that lets go. */
+  async hold(name: string): Promise<() => void> {
+    return new Promise<() => void>((resolve) => { void this.lock.withLock(name, () => new Promise<void>((done) => { resolve(done); })); });
+  }
 
   async advance(ms: number): Promise<void> {
     this.clock += ms;
@@ -248,5 +255,97 @@ describe('AgentRecoveryWatchdog: the misao on a reachable agent', () => {
     await h.watchdog.tick();
     await h.advance(MIN);
     expect(h.revived.map((r) => r.name)).toEqual(['a', 'b']);
+  });
+});
+
+describe('AgentRecoveryWatchdog: the server as it is when the lock is got', () => {
+  async function changedWhileWaiting(change: (h: Harness) => void): Promise<Harness> {
+    const h = new Harness();
+    h.agentUp = false;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    const release = await h.hold('win');
+    const tick = h.watchdog.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    change(h);
+    release();
+    await tick;
+    return h;
+  }
+
+  it.each([
+    ['host', (h: Harness) => { h.servers = [{ ...server('win'), host: '100.64.0.77' } as ServerConfig]; }],
+    ['token', (h: Harness) => { h.servers = [{ ...server('win'), agentToken: 'new' } as ServerConfig]; }],
+    ['SSH host', (h: Harness) => { h.servers = [{ ...server('win'), sshHost: 'other@h' } as ServerConfig]; }],
+  ])('starts over, without acting on the old %s, when it was edited while waiting for the lock', async (_what, change) => {
+    const h = await changedWhileWaiting(change);
+    expect(h.recovered).toEqual([]);
+    // The new address gets its own base interval, counted from when it is first seen down.
+    await h.advance(15_000);
+    expect(h.recovered).toEqual([]);
+    await h.advance(MIN);
+    expect(h.recovered).toEqual(['win']);
+  });
+
+  it.each([
+    ['is not a Windows host any more', (h: Harness) => { h.servers = [server('win', 'linux')]; }],
+    ['is not an agent any more', (h: Harness) => { h.servers = [server('win', 'win32', 'local')]; }],
+    ['was deleted', (h: Harness) => { h.servers = []; }],
+  ])('does nothing when the server %s while waiting for the lock', async (_what, change) => {
+    const h = await changedWhileWaiting(change);
+    await h.advance(10 * MIN);
+    expect(h.recovered).toEqual([]);
+  });
+});
+
+describe('AgentRecoveryWatchdog: one server does not hold the others', () => {
+  it('recovers B while A waits for its lock, and does not start a second look at A', async () => {
+    const h = new Harness();
+    h.servers = [server('a'), server('b')];
+    h.agentUp = false;
+    h.recoversToStart = 99;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    const release = await h.hold('a');
+    const first = h.watchdog.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(h.recovered).toEqual(['b']); // A is stuck behind the lock, B went through
+    await h.watchdog.tick(); // A is still being looked at: skipped; B is not due
+    expect(h.recovered).toEqual(['b']);
+    release();
+    await first;
+    expect(h.recovered).toEqual(['b', 'a']);
+  });
+});
+
+describe('AgentRecoveryWatchdog: what a misao revive answers', () => {
+  async function afterAttempts(result: string, attempts: number): Promise<Harness> {
+    const h = new Harness();
+    h.misaoDown = true;
+    h.reviveResult = result;
+    await h.watchdog.tick();
+    let wait = MIN;
+    for (let i = 0; i < attempts; i += 1) {
+      await h.advance(wait);
+      wait = Math.min(wait * 2, TIMING.maxMs);
+    }
+    return h;
+  }
+
+  it.each(['no_task', 'not_installed', 'other_task'])('warns once for %s, however many attempts', async (result) => {
+    const h = await afterAttempts(result, 4);
+    expect(h.revived.length).toBeGreaterThan(2);
+    expect(h.logs.filter((l) => l.startsWith('WARN') && l.includes(result))).toHaveLength(1);
+  });
+
+  it.each(['disabled', 'custom_socket', 'running'])('says nothing for %s', async (result) => {
+    const h = await afterAttempts(result, 3);
+    expect(h.revived.length).toBeGreaterThan(1);
+    expect(h.logs.filter((l) => !l.includes('trying to bring it back in'))).toEqual([]);
+  });
+
+  it('logs what it did when it started the task', async () => {
+    const h = await afterAttempts('started', 1);
+    expect(h.logs.some((l) => l.includes('tried to bring the misao back (attempt 1): started'))).toBe(true);
   });
 });
