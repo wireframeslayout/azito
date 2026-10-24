@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { assertHostFeature } from './hostFeature';
+import { assertHostFeature, workerLineDialect } from './hostFeature';
 import { HostProfileError } from './hostProfile';
 
 describe('assertHostFeature', () => {
@@ -12,7 +12,13 @@ describe('assertHostFeature', () => {
   });
 
   it('leaves out the issue for a feature that never comes to the OS', () => {
-    expect(() => assertHostFeature({ platform: 'win32' }, 'tmux', 'Installing tmux')).toThrow('Installing tmux is not available on Windows hosts yet.');
+    expect(() => assertHostFeature({ platform: 'win32' }, 'tmux', 'Installing tmux')).toThrow('Installing tmux is not available on Windows hosts.');
+  });
+
+  it('workerLineDialect refuses before building any line on Windows, and gives the host dialect elsewhere', () => {
+    expect(() => workerLineDialect({ platform: 'win32' }, 'Resuming a worker')).toThrowError(expect.objectContaining({ code: 'unsupported_os' }));
+    expect(workerLineDialect({ platform: 'linux' }, 'Resuming a worker').changeDirectory('/tmp')).toContain('/tmp');
+    expect(workerLineDialect(null, 'Resuming a worker').changeDirectory('/tmp')).toContain('/tmp');
   });
 
   it('passes on Unix hosts and on a host whose OS is not recorded', () => {

@@ -1290,7 +1290,7 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
       // First, so a host without tmux gets its reason (501 unsupported_os) rather than a hint about the runtime setting.
-      assertPosixHost(transportFactory.hostProfileFor(srv), `server "${srv.name}"`, 'installing tmux');
+      assertHostFeature(transportFactory.hostProfileFor(srv), 'tmux', 'Installing tmux');
       if (srv.muxRuntime !== 'managed') return reply.status(400).send({ error: 'Only managed mode supports tmux installation' });
       const transport = transportFactory.getTransport(srv);
       const result = await tmuxInstaller.install(transport);

@@ -1,5 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
-import { assertHostFeature } from '../../shared/os/hostFeature';
+import { assertHostFeature, workerLineDialect } from '../../shared/os/hostFeature';
 import { randomUUID } from 'node:crypto';
 import type { IWindowRepository, Window } from './Window';
 import type { IProjectRepository } from '../projects/Project';
@@ -17,7 +17,6 @@ import type { NotificationBus } from '../notifications/NotificationBus';
 import type { ResourceGuard } from '../servers/resources/ResourceGuard';
 import type { SupervisorRegistry } from '../supervisors/SupervisorRegistry';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
-import { shellDialectFor } from '../../shared/os/shellDialect';
 import { shouldSupervise, wrapWithSupervisor } from '../supervisors/SupervisorLaunch';
 import { replyToExecutionGateError } from '../tasks/execution/ExecutionGate';
 import { shouldBlockMcp, ensureMcpBlockByCommand } from '../agents/shouldBlockMcp';
@@ -490,7 +489,7 @@ const windowsRoutes: FastifyPluginCallback<WindowsRouteOptions> = (fastify, opts
       const cmd = supervised
         ? wrapWithSupervisor(effectiveCommand, {
             server: srv,
-            dialect: shellDialectFor(opts.transportFactory.hostProfileFor(srv)),
+            dialect: workerLineDialect(opts.transportFactory.hostProfileFor(srv), 'Launching an agent in a window'),
             target: win.tmuxTarget,
             harnessPrefix: opts.harnessPrefix,
             ...supervisorRegistry.issueLaunch({ serverName: srv.name, target: win.tmuxTarget, taskId: null, unitId: null, windowId: win.id }),

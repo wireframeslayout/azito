@@ -1029,6 +1029,8 @@ const tasksRoutes: FastifyPluginCallback<TasksRouteOptions> = (fastify, opts, do
       const resolvedServerName = resolveTaskServerName(task, projectServerRepo);
       const server = resolvedServerName ? serverRepo.findByName(resolvedServerName) : null;
       if (!server) return reply.status(404).send({ error: 'Server not found' });
+      // First, before the gate, pendingQuestions or the status are touched: the resume below is fire-and-forget.
+      executeTaskUseCase.assertCanLaunchWorker(server);
 
       // Untrusted-input execution gate (Issue #328), checked synchronously
       // BEFORE anything below consumes task.pendingQuestions or the

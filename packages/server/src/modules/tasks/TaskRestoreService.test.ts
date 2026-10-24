@@ -1299,7 +1299,7 @@ describe('TaskRestoreService', () => {
           findByName: vi.fn(() => ({ name: 'test-server', type: 'agent' as const, host: 'host-a', agentPort: 4021, agentToken: null, agentVersion: null, sshHost: null, hostProfile: null, sshHostFingerprint: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const, isolationIntent: true, isolationVerifiedAt: null, isolationReport: null, isolationCleanupReport: null, createdAt: '2026-01-01' })),
         },
         transportFactory: {
-          getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+          getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({
                       })),
         } as unknown as TaskRestoreDeps['transportFactory'],
         projectServerRepo: {
@@ -1320,6 +1320,20 @@ describe('TaskRestoreService', () => {
       // to fall through to `git worktree add --force` against the stale ref.
       expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
       expect(mockDriver().closeWindow).toHaveBeenCalled();
+    });
+  });
+
+  describe('a host that cannot run a worker in a pane (Windows, #371)', () => {
+    it('refuses as unsupported_os before the worktree, the window or any row is touched', async () => {
+      (deps.transportFactory.hostProfileFor as ReturnType<typeof vi.fn>).mockReturnValue({ platform: 'win32', arch: 'x64' });
+      const task = makeTask({ serverName: 'test-server' });
+
+      await expect(service.restore(task, log)).rejects.toMatchObject({ code: 'unsupported_os' });
+
+      expect(mockDriver().openWindow).not.toHaveBeenCalled();
+      expect(deps.worktreeServiceFactory.create).not.toHaveBeenCalled();
+      expect(deps.taskRepo.update).not.toHaveBeenCalled();
+      expect(deps.taskRepo.updateStatus).not.toHaveBeenCalled();
     });
   });
 
@@ -1422,7 +1436,7 @@ describe('TaskRestoreService', () => {
         ...deps,
         fetchDistributionService,
         transportFactory: {
-          getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+          getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({
                       })),
         } as unknown as TaskRestoreDeps['transportFactory'],
         serverRepo: { ...deps.serverRepo, findByName: vi.fn(() => isolatedServer) },
@@ -1519,7 +1533,7 @@ describe('TaskRestoreService base-branch detection and persistence (Issue #63 re
         find: vi.fn(() => ({ projectId: 10, serverName: 'test-server', workingDirectory: rootDir, branch: null, tmuxSession: 'azito', inputPolicy: 'manual-approval' as const, distributeCode: false, distributionRepositoryId: null })),
       },
       transportFactory: {
-        getFileOps: vi.fn(() => hostFiles), getTransport: vi.fn(() => ({
+        getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({
           run: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: 'refs/remotes/origin/develop', stderr: '' })),
         })),
       } as unknown as TaskRestoreDeps['transportFactory'],

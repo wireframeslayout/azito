@@ -64,7 +64,7 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
   const win32: HostProfile = { platform: 'win32', arch: 'x64' };
 
   it.each([
-    ['install-tmux', 'installing tmux'],
+    ['install-tmux', 'Installing tmux'],
     ['install-browser-runtime', 'installing the browser runtime'],
     ['apply-tmux-config', 'applying the tmux config'],
     ['harness/install', 'installing the harness'],
@@ -73,7 +73,8 @@ describe('Unix-only install operations on a Windows server answer unsupported_os
     const res = await app.inject({ method: 'POST', url: `/api/servers/srv/${route}`, payload: {} });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toMatchObject({ code: 'unsupported_os', error: expect.stringContaining(operation) });
-    expect(res.json().error).toContain('win32');
+    // install-tmux is answered by the host-feature table ("... on Windows hosts"), the others by assertPosixHost.
+    expect(res.json().error).toMatch(route === 'install-tmux' ? /Windows hosts/ : /win32/);
     expect(exec).not.toHaveBeenCalled();
   });
 
