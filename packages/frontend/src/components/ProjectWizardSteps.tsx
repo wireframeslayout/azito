@@ -1,3 +1,4 @@
+import type { HostPlatform } from '@azito/shared';
 import type { CSSProperties, ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge, Chip, FormInput, FormSelect, InstallSteps, Notice, Spinner, baseInputStyle, type InstallStep } from './ui';
@@ -214,12 +215,12 @@ export function EnvironmentStep({ t, serverList, selectedServer, setSelectedServ
 }
 
 export function CodeStep({
-  t, codeMode, setCodeMode, selectedServer, variant, existingPath, onExistingPathChange, discovery, discoveryBlockedReason,
+  t, codeMode, setCodeMode, selectedServer, serverPlatform, variant, existingPath, onExistingPathChange, discovery, discoveryBlockedReason,
   selectedRemoteUrls, toggleRemoteSelected, cloneUrl, setCloneUrl, onSelectRepoCandidate, cloneDirectory, setCloneDirectory, cloneBranch, setCloneBranch,
   cloneToken, setCloneToken, reusableRepo,
   showValidation,
 }: {
-  t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; variant: CodeStepVariant;
+  t: TFunc; codeMode: CodeMode; setCodeMode: (m: CodeMode) => void; selectedServer: string; serverPlatform: HostPlatform; variant: CodeStepVariant;
   existingPath: string; onExistingPathChange: (v: string) => void; discovery: DiscoveryStatus;
   /** Why the existing-directory scan is closed on the selected server's host (a Windows agent); null: open. */
   discoveryBlockedReason: string | null;
@@ -338,7 +339,7 @@ export function CodeStep({
           <FormField
             label={clonesNow ? t('wizard.code.cloneDirectoryLabel') : t('wizard.code.distributionDirectoryLabel')}
             hint={clonesNow ? undefined : t('wizard.code.distributionDirectoryHint')}
-            error={showValidation && cloneDirectory.trim() && !isAbsoluteWizardPath(cloneDirectory)
+            error={showValidation && cloneDirectory.trim() && !isAbsoluteWizardPath(cloneDirectory, serverPlatform)
               ? t('wizard.code.cloneDirectoryMustBeAbsolute')
               : showValidation && !cloneDirectory.trim() ? t('wizard.code.cloneDirectoryRequired') : undefined}
           >

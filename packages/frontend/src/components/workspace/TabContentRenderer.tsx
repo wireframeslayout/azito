@@ -20,6 +20,8 @@ import { DiffViewer } from '../diff';
 import BrowserView from '../BrowserView';
 import { Button } from '../ui';
 import type { PersistedTab } from '../../hooks/useTabPersistence';
+import { useServerPathApi } from '../../hooks/useServerPath';
+import { joinRelative } from '../../lib/serverPath';
 import type { Task, Unit, Project, Session, SidebarMode } from '../../pages/workspace/types';
 import { isSupportedProvider } from '../../lib/gitProvider';
 
@@ -111,6 +113,7 @@ export default function TabContentRenderer({
   togglePin,
 }: TabContentRendererProps) {
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
+  const serverPathApi = useServerPathApi();
   const navigate = useNavigate();
 
   // "Back to list" idiom shared with TaskPanel's onBack: activate/open the
@@ -351,8 +354,8 @@ export default function TabContentRenderer({
           path={tab.diffData.path}
           baseBranch={tab.diffData.baseBranch}
           onOpenFile={openFile ? (relPath) => {
-            const base = tab.diffData!.path.endsWith('/') ? tab.diffData!.path : tab.diffData!.path + '/';
-            openFile(tab.diffData!.serverName, base + relPath, tab.projectId);
+            const { serverName, path } = tab.diffData!;
+            openFile(serverName, joinRelative(serverPathApi(serverName), path, relPath), tab.projectId);
           } : undefined}
         />
       )}

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { stripPaneSuffix } from '@azito/shared';
+import { stripPaneSuffix, type HostPathApi } from '@azito/shared';
 import { api } from '../api/client';
 import { applyRetargetTabs } from '../lib/retargetTab';
 import { closeBrowserGroup } from '../lib/browserGroup';
+import { fileDisplayName, fileTabPath } from '../lib/serverPath';
 import { renameServerInTabs } from '../lib/serverAliasTabs';
 import {
   type TerminalRef,
@@ -459,10 +460,11 @@ export function useTabPersistence(storageKey?: string) {
     openTab(serverResolvedTerminalTab(serverName, target, projectId));
   }, [openTab]);
 
-  const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
+  /** `pathApi` is the path functions of `serverName`'s host OS: they decide the tab's identity (one file, one tab) and its name. */
+  const openFile = useCallback((serverName: string, rawFilePath: string, projectId: number | undefined, line: number | undefined, pathApi: HostPathApi) => {
+    const filePath = fileTabPath(pathApi, rawFilePath);
     const tabId = `file:${serverName}:${filePath}`;
-    const fileName = filePath.split('/').pop() || filePath;
-    openTab({ id: tabId, type: 'file', label: fileName, serverName, filePath, projectId, line });
+    openTab({ id: tabId, type: 'file', label: fileDisplayName(pathApi, filePath), serverName, filePath, projectId, line });
   }, [openTab]);
 
   const openUnit = useCallback((unitId: number, name: string, projectId?: number, openerTabId?: string) => {

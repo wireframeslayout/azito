@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { baseInputStyle } from './ui';
+import { useServerPath } from '../hooks/useServerPath';
+import { typedDirectoryPrefix, withTrailingSeparator } from '../lib/serverPath';
 
 interface DirectoryInputProps {
   value: string;
@@ -11,6 +13,7 @@ interface DirectoryInputProps {
 }
 
 export default function DirectoryInput({ value, onChange, serverName, placeholder, style }: DirectoryInputProps) {
+  const pathApi = useServerPath(serverName);
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [open, setOpen] = useState(false);
   const [highlightIdx, setHighlightIdx] = useState(0);
@@ -50,12 +53,12 @@ export default function DirectoryInput({ value, onChange, serverName, placeholde
   }, [serverName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selectItem = useCallback((item: string) => {
-    const newValue = item + '/';
+    const newValue = withTrailingSeparator(pathApi, item);
     onChange(newValue);
     setOpen(false);
     // Trigger a new search for the selected directory's children
     setTimeout(() => fetchSuggestions(newValue), 50);
-  }, [onChange, fetchSuggestions]);
+  }, [onChange, fetchSuggestions, pathApi]);
 
   const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const newValue = e.target.value;
@@ -116,8 +119,7 @@ export default function DirectoryInput({ value, onChange, serverName, placeholde
 
   // Highlight the matching portion of each suggestion
   const renderItem = (item: string, idx: number) => {
-    const inputDir = value.endsWith('/') ? value : value.substring(0, value.lastIndexOf('/') + 1);
-    const matchLen = inputDir.length;
+    const matchLen = typedDirectoryPrefix(pathApi, value).length;
     const matched = item.substring(0, matchLen);
     const rest = item.substring(matchLen);
 

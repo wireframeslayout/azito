@@ -477,7 +477,8 @@ export const fileBrowseRoutes: FastifyPluginCallback<FileBrowseRouteOptions> = (
         const resolvedRoot = await fileOps.realpath(ps.workingDirectory);
         // What is deleted is the checked path itself (the contained parent + the last element), not the raw request.
         const resolvedTarget = api.join(resolvedParent, api.basename(rawPath));
-        if (resolvedTarget === resolvedRoot) return reply.status(400).send({ error: 'Cannot delete the root directory' });
+        // Same rule as the containment check below (relative(), so `C:\Work` and `c:\work\` are one place on Windows).
+        if (api.relative(resolvedRoot, resolvedTarget) === '') return reply.status(400).send({ error: 'Cannot delete the root directory' });
         if (!isHostPathContained(fileOps.platform, { target: resolvedTarget, allowedRoot: resolvedRoot })) {
           return reply.status(400).send({ error: 'target path escapes the allowed directory' });
         }

@@ -4,7 +4,7 @@ import {
   pickAvailableServer, isDiscoveryCurrent, clonesDirectlyOnServer,
   resolveCloneDeliveryMode, repoStepSignature, envStepSignature, cloneStepSignature,
   repoIdsToCleanup, reconcileDeletedRepositoryIds, cleanupStaleRepositoryIds,
-  isAbsoluteWizardPath, normalizeRepoUrlForWizard, findReusableRepositoryWithToken, needsDirectoryCreation,
+  isAbsoluteWizardPath, serverHostPlatform, normalizeRepoUrlForWizard, findReusableRepositoryWithToken, needsDirectoryCreation,
   trackCreatedRepositoryId,
   resolveCodeStepVariant, codeModeOptionsForVariant, effectiveCodeMode, shouldPersistDistribution,
   resolveEnvironmentAdvancedSettings, resolveDistributionSummary,
@@ -20,6 +20,7 @@ function makeState(overrides: Partial<WizardValidationState> = {}): WizardValida
     existingPath: '',
     cloneUrl: '',
     cloneDirectory: '',
+    serverPlatform: 'linux',
     existingServerNames: [],
     discoveryReady: false,
     ...overrides,
@@ -125,23 +126,63 @@ describe('stepIndex / nextStep', () => {
 
 describe('isAbsoluteWizardPath (Issue #87 review, Important finding 2)', () => {
   it('accepts an absolute path', () => {
-    expect(isAbsoluteWizardPath('/work/widgets')).toBe(true);
+    expect(isAbsoluteWizardPath('/work/widgets', 'linux')).toBe(true);
   });
 
   it('rejects a bare basename', () => {
-    expect(isAbsoluteWizardPath('widgets')).toBe(false);
+    expect(isAbsoluteWizardPath('widgets', 'linux')).toBe(false);
   });
 
   it('rejects a relative path with segments', () => {
-    expect(isAbsoluteWizardPath('work/widgets')).toBe(false);
+    expect(isAbsoluteWizardPath('work/widgets', 'linux')).toBe(false);
   });
 
   it('rejects an empty string', () => {
-    expect(isAbsoluteWizardPath('')).toBe(false);
+    expect(isAbsoluteWizardPath('', 'linux')).toBe(false);
   });
 
   it('trims surrounding whitespace before checking', () => {
-    expect(isAbsoluteWizardPath('  /work/widgets  ')).toBe(true);
+    expect(isAbsoluteWizardPath('  /work/widgets  ', 'linux')).toBe(true);
+  });
+
+  it('does not take a Windows path for an absolute one on a POSIX host', () => {
+    expect(isAbsoluteWizardPath('C:\\work\\widgets', 'linux')).toBe(false);
+    expect(isAbsoluteWizardPath('C:\\work\\widgets', 'darwin')).toBe(false);
+  });
+
+  it('accepts a drive path or a UNC share on a Windows host, and rejects a relative one', () => {
+    expect(isAbsoluteWizardPath('C:\\work\\widgets', 'win32')).toBe(true);
+    expect(isAbsoluteWizardPath('C:/work/widgets', 'win32')).toBe(true);
+    expect(isAbsoluteWizardPath('\\\\srv\\share\\widgets', 'win32')).toBe(true);
+    expect(isAbsoluteWizardPath('widgets', 'win32')).toBe(false);
+    expect(isAbsoluteWizardPath('work\\widgets', 'win32')).toBe(false);
+  });
+});
+
+describe('canAdvanceFromStep code step on a Windows host', () => {
+  const clone = { codeMode: 'clone' as const, cloneUrl: 'git@github.com:acme/widgets.git', discoveryReady: false };
+
+  it('accepts a drive path as the clone target', () => {
+    expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: 'win32', cloneDirectory: 'C:\\work\\widgets' }))).toBe(true);
+  });
+
+  it('refuses a drive path when the server is a POSIX host', () => {
+    expect(canAdvanceFromStep('code', makeState({ ...clone, serverPlatform: 'linux', cloneDirectory: 'C:\\work\\widgets' }))).toBe(false);
+  });
+});
+
+describe('serverHostPlatform', () => {
+  const servers = [
+    { name: 'local', type: 'local', hostProfile: { platform: 'win32' as const } },
+    { name: 'old-agent', type: 'agent', hostProfile: null },
+    { name: 'mac', type: 'agent', hostProfile: { platform: 'darwin' as const } },
+  ];
+
+  it('is the OS of the selected server, POSIX when it was never recorded', () => {
+    expect(serverHostPlatform('local', servers)).toBe('win32');
+    expect(serverHostPlatform('mac', servers)).toBe('darwin');
+    expect(serverHostPlatform('old-agent', servers)).toBe('linux');
+    expect(serverHostPlatform('missing', servers)).toBe('linux');
   });
 });
 

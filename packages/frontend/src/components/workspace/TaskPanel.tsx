@@ -6,6 +6,8 @@ import { taskMutationFailure, type TaskMutationFailure } from '../../lib/taskMut
 import { useNotificationChannel } from '../../hooks/useNotificationChannel';
 import { useWindowActions } from '../../hooks/useWindowActions';
 import { useHostFeatureBlock } from '../../hooks/useHostFeatureBlock';
+import { useServerPathApi } from '../../hooks/useServerPath';
+import { joinRelative } from '../../lib/serverPath';
 import { StatusDot } from '../StatusBadge';
 import { MiniTabBar, IconButton, Button, BlockedActionButton, PanelHeader, Spinner, WindowActivityIndicator, SecretNamesValue, Notice, DocsLink } from '../ui';
 import type { MiniTab } from '../ui';
@@ -326,6 +328,7 @@ export default function TaskPanel({
   const [diffActiveFile, setDiffActiveFile] = useState<string | null>(null);
   const [selectedCommit, setSelectedCommit] = useState<string | null>(null);
 
+  const serverPathApi = useServerPathApi();
   const hasUnit = !!(task?.unitId);
   const unit = task ? allUnits.find((u) => u.id === task.unitId) : undefined;
   const proj = task ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -339,8 +342,7 @@ export default function TaskPanel({
   const diffServerName = (windows.find((w) => w.isPrimary) || windows[windows.length - 1])?.serverName || task?.serverName || undefined;
   const handleOpenDiffFile = onOpenFile && diffPath && diffServerName
     ? (relPath: string) => {
-        const base = diffPath.endsWith('/') ? diffPath : diffPath + '/';
-        onOpenFile(diffServerName, base + relPath);
+        onOpenFile(diffServerName, joinRelative(serverPathApi(diffServerName), diffPath, relPath));
       }
     : undefined;
   // Server a brand-new ＋ menu "ブラウザ" tab connects to: primary window's serverName →

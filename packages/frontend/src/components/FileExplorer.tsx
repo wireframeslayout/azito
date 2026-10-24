@@ -11,6 +11,8 @@ import { useLongPress, longPressStyle } from '../hooks/useLongPress';
 import { useFileTree } from './files/useFileTree';
 import type { TreeNode } from './files/useFileTree';
 import { useFileCrud } from './files/useFileCrud';
+import { useServerPath } from '../hooks/useServerPath';
+import { parentOrRoot } from '../lib/serverPath';
 import FileTree from './files/FileTree';
 import DeleteConfirmModal from './files/DeleteConfirmModal';
 
@@ -33,10 +35,13 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
   const bindLongPress = useLongPress();
   const bindAreaLongPress = useLongPress();
 
+  const pathApi = useServerPath(serverName);
+
   const crud = useFileCrud({
     serverName,
     projectId,
     rootPath,
+    pathApi,
     loadRoot,
     expandDir,
     refreshDir,
@@ -57,7 +62,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
 
   const buildMenuItems = useCallback((node: TreeNode) => {
     const isDir = node.type === 'directory';
-    const parentPath = isDir ? node.path : (node.path.substring(0, node.path.lastIndexOf('/')) || rootPath);
+    const parentPath = isDir ? node.path : parentOrRoot(pathApi, node.path, rootPath);
     return [
       { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(parentPath, 'file') },
       { label: t('explorer.newFolder'), icon: <Icon name="folder-plus" size={14} />, onClick: () => crud.startCreate(parentPath, 'directory') },
@@ -88,7 +93,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
       { separator: true, label: '', onClick: () => {} },
       { label: t('explorer.delete'), icon: <Icon name="trash" size={14} />, danger: true, onClick: () => crud.startDelete(node.path, node.type) },
     ];
-  }, [t, crud, rootPath, serverName, showToast]);
+  }, [t, crud, rootPath, pathApi, serverName, showToast]);
 
   const buildAreaMenuItems = useCallback((): ContextMenuItem[] => [
     { label: t('explorer.newFile'), icon: <Icon name="file-plus" size={14} />, onClick: () => crud.startCreate(rootPath, 'file') },
@@ -132,6 +137,7 @@ export default function FileExplorer({ serverName, rootPath, projectId, onFileSe
           nodes={tree}
           selectedPath={selectedPath}
           rootPath={rootPath}
+          pathApi={pathApi}
           pendingCreate={crud.pendingCreate}
           pendingRename={crud.pendingRename}
           onSelect={handleClick}

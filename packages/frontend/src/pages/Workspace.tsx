@@ -12,6 +12,7 @@ import type { TabItem } from '../components/ui';
 import { Icon, type IconName } from '../components/ui/Icon';
 import { useTabPersistence, type PersistedTab } from '../hooks/useTabPersistence';
 import { useTerminalTargetOpener } from '../hooks/useTerminalTargetOpener';
+import { useServerPathApi } from '../hooks/useServerPath';
 import type { TerminalOpenTarget } from '../lib/terminalTargetOpen';
 import { useBrowserKeepalive } from '../hooks/useBrowserKeepalive';
 import { useBrowserGroups } from '../hooks/useBrowserGroups';
@@ -539,9 +540,10 @@ function WorkspaceInner() {
   // a different project's diff/task view must attribute the new file tab to *its own* project, or the
   // save-path containment check runs against the wrong project's workingDirectory (Issue #27 review
   // Important 2).
+  const serverPathApi = useServerPathApi();
   const openFile = useCallback((serverName: string, filePath: string, projectId?: number, line?: number) => {
-    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line);
-  }, [openFileRaw, currentProjectId]);
+    openFileRaw(serverName, filePath, projectId ?? currentProjectId, line, serverPathApi(serverName));
+  }, [openFileRaw, currentProjectId, serverPathApi]);
 
   const openDiff = useCallback((serverName: string, path: string, baseBranch?: string) => {
     openDiffRaw(serverName, path, baseBranch, currentProjectId);
