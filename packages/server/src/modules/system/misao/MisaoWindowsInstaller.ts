@@ -149,6 +149,38 @@ export class MisaoWindowsInstaller {
     }
   }
 
+  /**
+   * The daemon AZITO installed does not answer (it died: its task reports 0 whatever happened, so the Task Scheduler does not start it
+   * again): starts the task through the agent. A task still "running" while the pipe is silent is left alone (it is starting), unless
+   * `force`: then it is ended with the `misao.exe` of this pipe first. Touches nothing when the daemon answers, when AZITO did not
+   * install it, or when its task is gone (the install is what recreates that).
+   */
+  async reviveDaemon(target: WindowsTarget, force: boolean): Promise<'running' | 'not_installed' | 'no_task' | 'starting' | 'started'> {
+    const status = await target.fetchMisaoStatus();
+    const { host } = status;
+    if (host.platform !== 'win32' || !host.windows) throw new MisaoServiceError('unsupported_host', `The agent reports ${host.platform}/${host.arch}, not a Windows host with its folders.`);
+    if (status.socketPresent) return 'running';
+    if (!status.installedVersion) return 'not_installed';
+    const tasks = new SchtasksClient(createScriptCommandSpecRunner((script, timeoutMs) => this.runScript(target, script, timeoutMs)), { systemRoot: host.windows.systemRoot });
+    const state = await tasks.query(this.options.taskName);
+    if (!state.exists) return 'no_task';
+    if (state.running) {
+      if (!force) return 'starting';
+      await tasks.stop(this.options.taskName);
+      const sweep = await this.runScript(target, buildEndProcessesScript({ image: 'misao.exe', argument: managedEndpointOf(host), label: 'misao', endParentConhost: false }), SCRIPT_TIMEOUT_MS);
+      if (sweep.code !== 0) throw new MisaoServiceError('update_failed', `Ending the misao processes failed on the Windows host (exit ${sweep.code}): ${redactSecretText(powershellErrorText(sweep.stderr) || sweep.stdout.trim()).slice(0, 600)}`);
+      const deadline = Date.now() + (this.options.taskIdleTimeoutMs ?? DEFAULT_TASK_IDLE_WAIT_MS);
+      for (;;) {
+        const now = await tasks.query(this.options.taskName);
+        if (!now.exists || !now.running) break;
+        if (Date.now() >= deadline) throw new MisaoServiceError('update_failed', `The task "${this.options.taskName}" is still running after it was ended.`);
+        await sleep(TASK_IDLE_POLL_MS);
+      }
+    }
+    await tasks.start(this.options.taskName);
+    return 'started';
+  }
+
   // ── Reading the host ──
 
   private async inspect(target: WindowsTarget, bundle: MisaoBundle): Promise<{ session: Session; status: MisaoSocketStatus }> {

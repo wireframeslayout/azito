@@ -474,6 +474,8 @@ What the install does (no administrator rights are needed or asked for):
 
 **The agent only runs while that user is logged on to Windows** (at the console or over Remote Desktop). After a reboot nothing starts until they log on, and logging off stops the agent. A server that survives logoff needs auto-logon or another service model, which is not offered yet.
 
+**When it dies.** The task's RestartOnFailure never fires for the agent: `conhost.exe --headless` always reports exit code 0 for its child, and the Task Scheduler does not restart a task for a non-zero exit code either (measured on Windows CI). So **the hub brings it back while the hub runs**: it checks every Windows agent each 15 s; when one does not answer, it runs the restart (`/Query`, `/End`, `/Run` of the task, as at the hub's start) after about a minute, then at doubling intervals up to 15 minutes, and starts over as soon as the agent answers. One attempt per server at a time, never in the middle of an install or update of that server, and not for a server that was edited away. **Nothing restarts the agent while the hub is down.** An agent stopped by hand (`schtasks /End /TN AzitoAgent`) cannot be told from a dead one, so the hub starts it again: to keep it stopped, remove the server from the hub or disable the task (`schtasks /Change /TN AzitoAgent /DISABLE`). Unix agents are not watched (systemd's `Restart=` does that; one started with nohup is brought back only by the version check at the hub's start).
+
 Operating it:
 
 | Action | How |

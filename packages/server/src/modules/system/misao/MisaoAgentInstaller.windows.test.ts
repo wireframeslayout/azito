@@ -454,4 +454,48 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(agent.schtasks()).toEqual([]);
     });
   });
+  describe('reviveWindowsDaemon (the hub starts a dead daemon again)', () => {
+    it('does nothing while the daemon answers', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('running');
+      expect(agent.schtasks()).toEqual([]);
+    });
+
+    it('does nothing when AZITO did not install it, or when its task is gone', async () => {
+      const bare = new FakeWindowsAgent(bundle);
+      expect(await installer().reviveWindowsDaemon(bare.asTarget(), false)).toBe('not_installed');
+      const noTask = new FakeWindowsAgent(bundle);
+      noTask.seedInstalled(VERSION, false);
+      noTask.host.taskState = 'absent';
+      expect(await installer().reviveWindowsDaemon(noTask.asTarget(), false)).toBe('no_task');
+      expect(bare.schtasks().concat(noTask.schtasks())).not.toContain('/Run');
+    });
+
+    it('starts the task of a daemon that died (the task ended, the pipe is silent)', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      agent.daemonUp = false;
+      agent.host.markEnded(0);
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('started');
+      expect(agent.schtasks()).toEqual(['/Query', '/Run']);
+      expect(agent.daemonUp).toBe(true);
+    });
+
+    it('leaves a task that is still running alone, unless forced; forced, it ends the task and the misao.exe of the pipe, then starts it', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      agent.daemonUp = false; // the task still says running
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('starting');
+      expect(agent.schtasks()).not.toContain('/Run');
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('started');
+      expect(agent.events.filter((e) => e.startsWith('schtasks'))).toEqual(['schtasks /End', 'schtasks /Run']);
+      expect(agent.scripts.some((t) => t.includes('function Get-AgentNodes') && t.includes(`$envArgument = '${PIPE}'`))).toBe(true);
+    });
+
+    it('is refused for a Unix agent', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      await expect(installer().reviveWindowsDaemon(agent.asTarget({ platform: 'linux', arch: 'x64' }), false)).rejects.toMatchObject({ code: 'unsupported_host' });
+    });
+  });
 });

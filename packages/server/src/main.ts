@@ -305,7 +305,11 @@ async function main(): Promise<void> {
       else if (r.status === 'error') app.log.warn(`Agent update error on ${r.name}: ${r.message}`);
       if (r.hostError) app.log.warn(`Could not record the host of agent server ${r.name}: ${r.hostError}`);
     }
-  }).catch(() => {});
+  }).catch(() => {}).finally(() => {
+    // After the start-up version check, which brings back an agent that is down by itself: the two never try at once.
+    wiring.agentRecoveryWatchdog.start();
+  });
+  app.addHook('onClose', async () => { wiring.agentRecoveryWatchdog.stop(); });
 
   // ─── Startup: check harness versions ───
 
