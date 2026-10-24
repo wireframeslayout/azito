@@ -19,6 +19,24 @@ import { taskWindowRef } from '../tmux/windowIdentity';
 import { resolveStoredWindowKind } from '../tmux/storedWindowKind';
 import { taskIdOfWorktreePath } from '../git/gitPath';
 import { platformOfProfile } from '../../shared/os/hostProfile';
+import { hostPathFor } from '@azito/shared';
+import { resolveGitPath } from '../git/gitPath';
+import type { IServerTransport } from '../servers/transport/ServerTransport';
+import type { HostPlatform } from '../../shared/os/hostEnv';
+
+/**
+ * Whether `worktreePath` is the task's own worktree directly under the repository's `.worktrees`, judged on the host's resolved
+ * paths (a `~` or a symbolic link in either spelling must not make another directory pass). A worktree below the repository as
+ * written keeps that prefix as resolved, so a directory that is already gone can still be recognised.
+ */
+async function isWorktreeOfRepo(transport: IServerTransport, platform: HostPlatform, repoDir: string, worktreePath: string, taskId: number): Promise<boolean> {
+  const api = hostPathFor(platform);
+  const realRepo = await transport.files().realpath(repoDir);
+  const relative = api.relative(repoDir, worktreePath);
+  const isBelow = relative !== '' && relative !== '..' && !relative.startsWith(`..${api.sep}`) && !api.isAbsolute(relative);
+  const actual = isBelow ? api.join(realRepo, relative) : await resolveGitPath(transport, worktreePath);
+  return api.samePath(actual, api.join(realRepo, '.worktrees', `task-${taskId}`));
+}
 
 /**
  * Removes the task's temp files of the hub's own server: the paths recorded in its execution_log first, then whatever
@@ -116,8 +134,9 @@ export class TaskCleanupService {
     if (!server || !resolvedServerName) return;
 
     if (task.worktreePath) {
-      if (taskIdOfWorktreePath(platformOfProfile(transportFactory.hostProfileFor(server)), task.worktreePath) === null) {
-        log.warn(`[task-cleanup] Skipping worktree removal: not a task worktree path (<repo>/.worktrees/task-<id>): ${task.worktreePath}`);
+      const platform = platformOfProfile(transportFactory.hostProfileFor(server));
+      if (taskIdOfWorktreePath(platform, task.worktreePath) !== task.id) {
+        log.warn(`[task-cleanup] Skipping worktree removal: not the worktree path of task ${task.id} (<repo>/.worktrees/task-${task.id}): ${task.worktreePath}`);
       } else {
         const project = projectRepo.findById(task.projectId);
         const projectServer = project
@@ -127,8 +146,11 @@ export class TaskCleanupService {
         if (repoDir) {
           try {
             const transport = transportFactory.getTransport(server);
-            const worktreeService = worktreeServiceFactory.create(transport);
-            await worktreeService.remove(repoDir, task.worktreePath);
+            if (!(await isWorktreeOfRepo(transport, platform, repoDir, task.worktreePath, task.id))) {
+              log.warn(`[task-cleanup] Skipping worktree removal: ${task.worktreePath} is not under ${repoDir}/.worktrees`);
+            } else {
+              await worktreeServiceFactory.create(transport).remove(repoDir, task.worktreePath);
+            }
           } catch (e) {
             log.warn(`[task-cleanup] Failed to remove worktree ${task.worktreePath}: ${(e as Error).message}`);
           }

@@ -88,7 +88,7 @@ describe('RemoteWorktreeService', () => {
       const result = await svc.create(WD, 42, 'my-task', 'main');
 
       expect(result).toEqual({ path: `${WD}/.worktrees/task-42`, branch: 'task/42-my-task' });
-      expect(fileCalls[0]).toBe(`create ${WD}/.worktrees`);
+      expect(fileCalls.slice(0, 2)).toEqual([`realpath ${WD}`, `create ${WD}/.worktrees`]);
       expect(gitTexts()).toEqual([
         'git branch -D task/42-my-task',
         `git worktree add -b task/42-my-task ${WD}/.worktrees/task-42 main`,

@@ -32,6 +32,7 @@ async function build(stored: ServerConfig, profile: HostProfile | null, onRun: (
     exec: async (command: string) => { execCommands.push(command); return { stdout: '', stderr: '', code: 0 }; },
     execMux: async () => ({ stdout: 'tmux 3.4\n', stderr: '', code: 0 }),
     fetchHealth,
+    files: () => ({ platform: 'linux', realpath: async (p: string) => (p.startsWith('~/') ? `/home/u${p.slice(1)}` : p) }),
   };
   const opts: ServersRouteOptions = {
     serverRepo: { findByName: () => stored, findAll: () => [stored] } as unknown as IServerRepository,
@@ -128,6 +129,20 @@ describe('GET /api/servers/:name/branches', () => {
     const res = await app.inject({ method: 'GET', url: `/api/servers/srv/branches?working_directory=${encodeURIComponent(dir)}` });
     expect(res.json()).toEqual({ branches: ['main'] });
     expect(specs[0]).toMatchObject({ file: 'git', cwd: dir });
+  });
+
+  it('resolves a ~ working directory against the host home before running git', async () => {
+    const { app, specs } = await build(server(), { platform: 'linux', arch: 'x64' }, () => ok('main\ndev\n'));
+    const res = await app.inject({ method: 'GET', url: `/api/servers/srv/branches?working_directory=${encodeURIComponent('~/repo')}` });
+    expect(res.json()).toEqual({ branches: ['main', 'dev'] });
+    expect(specs[0]).toMatchObject({ file: 'git', cwd: '/home/u/repo' });
+  });
+
+  it('resolves a ~ working directory against the host home before running git', async () => {
+    const { app, specs } = await build(server(), { platform: 'linux', arch: 'x64' }, () => ok('main\ndev\n'));
+    const res = await app.inject({ method: 'GET', url: `/api/servers/srv/branches?working_directory=${encodeURIComponent('~/repo')}` });
+    expect(res.json()).toEqual({ branches: ['main', 'dev'] });
+    expect(specs[0]).toMatchObject({ file: 'git', cwd: '/home/u/repo' });
   });
 
   it('refuses a working_directory that is not a path of the host with 400, without running git', async () => {

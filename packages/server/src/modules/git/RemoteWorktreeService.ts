@@ -34,7 +34,7 @@ export class RemoteWorktreeService implements IWorktreeService {
       assertNotOptionLike(branchName, 'branchName');
     }
 
-    const dir = await this.absolute(workingDir);
+    const dir = await this.realDirectory(workingDir);
     const branch = branchName || `task/${taskId}-${taskSlug}`;
     const api = hostPathFor(platform);
     const worktreesDir = api.join(dir, '.worktrees');
@@ -107,7 +107,7 @@ export class RemoteWorktreeService implements IWorktreeService {
     const platform = this.transport.files().platform;
     assertGitPathArg(platform, workingDir, 'workingDir');
     assertGitPathArg(platform, worktreePath, 'worktreePath');
-    const dir = await this.absolute(workingDir);
+    const dir = await this.realDirectory(workingDir);
     // A worktree under the working directory keeps that prefix as resolved: a stored `~/...` path whose directory is already
     // gone cannot be resolved by the host, and `prune` below is what settles such a registration.
     const api = hostPathFor(platform);
@@ -154,6 +154,18 @@ export class RemoteWorktreeService implements IWorktreeService {
         return null;
       }
     }
+  }
+
+  /**
+   * The working directory as the host's file system sees it: `~` expanded and symbolic links followed. A path is never
+   * normalised lexically (`link/../repo` is not `./repo` when `link` is a symbolic link), so git's cwd and every child path
+   * (`.worktrees/task-N`) are built from this one value.
+   */
+  private async realDirectory(workingDir: string): Promise<string> {
+    const files = this.transport.files();
+    const resolved = await files.realpath(workingDir);
+    assertGitPathArg(files.platform, resolved, 'resolved path');
+    return resolved;
   }
 
   /** A path as the target host sees it: a leading `~` resolved against the host's home (see `resolveGitPath`). */

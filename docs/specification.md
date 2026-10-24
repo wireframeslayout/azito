@@ -159,7 +159,7 @@ Orchestrator-Worker パターンによるタスクの自動実行。
 2. Git worktree の作成 (`git worktree add` でタスク専用ブランチを作成)
    - 作成失敗時は `failed` 状態にしエラーをthrow（フォールバックなし）
    - `IWorktreeService` インターフェース経由でworktree操作（local/remote対応）
-   - `WorktreeServiceFactory` がサーバータイプに応じた実装を返却
+   - `WorktreeServiceFactory` が transport を包んだ `RemoteWorktreeService` を返却（local も同じ）
    - ユーザー指定ブランチ名（`branch`フィールド）がある場合、既存ブランチの存在確認を行い、あればチェックアウト、なければ新規作成
 3. 既存の同名ウィンドウがあれば削除
 4. 新しい tmux ウィンドウを作成・リネーム
@@ -314,7 +314,7 @@ Workspace 内タブ／パネルとして表示される主なもの:
 | ファイル | 説明 |
 |---|---|
 | `packages/server/src/modules/git/RemoteWorktreeService.ts` | Git worktree management (local and remote servers) |
-| `packages/server/src/modules/git/WorktreeServiceFactory.ts` | サーバータイプに応じたWorktreeService実装の選択 |
+| `packages/server/src/modules/git/WorktreeServiceFactory.ts` | transport を包んだ RemoteWorktreeService の生成 |
 | `packages/server/src/modules/tasks/recovery/RecoverStuckTasksUseCase.ts` | 起動時の非終端タスク自動復旧 |
 
 ## 4. 外部インターフェース

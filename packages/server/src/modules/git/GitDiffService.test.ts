@@ -199,6 +199,24 @@ describe('GitDiffService.getDiff with scope=uncommitted', () => {
       return service.getDiff(srv, repo, '', undefined, { scope: 'uncommitted' });
     };
 
+    it('reads an untracked file of a ~ directory: git and the file operations get the same resolved directory', async () => {
+      writeFileSync(path.join(repo, 'new.ts'), 'a\nb\n');
+      const { service, gitCalls } = makeService(uncommittedAnswers(['', '', '', '?? new.ts\n', 'main']));
+      const result = await service.getDiff(srv, `~/${path.basename(repo)}`, '', undefined, { scope: 'uncommitted' });
+      const untracked = result.files.filter((f) => f.group === 'untracked');
+      expect(untracked.map((f) => [f.file, f.additions])).toEqual([['new.ts', 2]]);
+      expect(gitCalls.every((c) => c.args[c.args.indexOf('-C') + 1] === repo)).toBe(true);
+    });
+
+    it('reads an untracked file of a ~ directory: git and the file operations get the same resolved directory', async () => {
+      writeFileSync(path.join(repo, 'new.ts'), 'a\nb\n');
+      const { service, gitCalls } = makeService(uncommittedAnswers(['', '', '', '?? new.ts\n', 'main']));
+      const result = await service.getDiff(srv, `~/${path.basename(repo)}`, '', undefined, { scope: 'uncommitted' });
+      const untracked = result.files.filter((f) => f.group === 'untracked');
+      expect(untracked.map((f) => [f.file, f.additions])).toEqual([['new.ts', 2]]);
+      expect(gitCalls.every((c) => c.args[c.args.indexOf('-C') + 1] === repo)).toBe(true);
+    });
+
     it('synthesizes untracked file diffs', async () => {
       writeFileSync(path.join(repo, 'newfile.ts'), 'const x = 1;\nexport default x;\n');
       const result = await untrackedOf('?? newfile.ts\n');
