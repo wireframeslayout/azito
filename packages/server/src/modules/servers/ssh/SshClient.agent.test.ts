@@ -4,8 +4,9 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
-import { AgentProtocol, Client, Server, utils, type ParsedKey } from 'ssh2';
+import { AgentProtocol, Client, Server, type ParsedKey } from 'ssh2';
 import { SshClient } from './SshClient';
+import { generateTestKeyPair } from './sshTestKeys';
 import { windowsNamedPipeExists } from './sshAgentSocket';
 
 /**
@@ -47,8 +48,8 @@ describe('SshClient authenticating through an ssh-agent', () => {
   }
 
   async function startSshServer(acceptedKey: ParsedKey): Promise<number> {
-    const hostKey = utils.generateKeyPairSync('ed25519');
-    const server = new Server({ hostKeys: [hostKey.private] }, (conn) => {
+    const hostKey = generateTestKeyPair();
+    const server = new Server({ hostKeys: [hostKey.privatePem] }, (conn) => {
       conn.on('authentication', (ctx) => {
         if (ctx.method === 'publickey' && ctx.username === 'alice' && ctx.key.algo === acceptedKey.type && ctx.key.data.equals(acceptedKey.getPublicSSH())) {
           if (ctx.signature && ctx.blob) {
@@ -85,9 +86,7 @@ describe('SshClient authenticating through an ssh-agent', () => {
   }
 
   it('signs with the key the agent holds (no key file anywhere)', async () => {
-    const userKey = utils.generateKeyPairSync('ed25519');
-    const parsed = utils.parseKey(userKey.private);
-    if (parsed instanceof Error) throw parsed;
+    const { parsed } = generateTestKeyPair();
     const address = agentAddress();
     const agent = startAgent(address, parsed);
     await listen(agent, address);
@@ -98,9 +97,8 @@ describe('SshClient authenticating through an ssh-agent', () => {
   });
 
   it('is refused when the agent holds a different key', async () => {
-    const accepted = utils.parseKey(utils.generateKeyPairSync('ed25519').private);
-    const other = utils.parseKey(utils.generateKeyPairSync('ed25519').private);
-    if (accepted instanceof Error || other instanceof Error) throw new Error('key generation failed');
+    const accepted = generateTestKeyPair().parsed;
+    const other = generateTestKeyPair().parsed;
     const address = agentAddress();
     const agent = startAgent(address, other);
     await listen(agent, address);
@@ -111,8 +109,7 @@ describe('SshClient authenticating through an ssh-agent', () => {
   });
 
   it('is refused, with no crash, when there is no agent at all', async () => {
-    const accepted = utils.parseKey(utils.generateKeyPairSync('ed25519').private);
-    if (accepted instanceof Error) throw accepted;
+    const accepted = generateTestKeyPair().parsed;
     const port = await startSshServer(accepted);
 
     await expect(connectWith(undefined, port)).rejects.toThrow(/All configured authentication methods failed/);
