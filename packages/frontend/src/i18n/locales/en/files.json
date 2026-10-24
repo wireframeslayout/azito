@@ -3,6 +3,7 @@
     "refresh": "Refresh",
     "serverMissing": "The server \"{{server}}\" of this file no longer exists, so it cannot be opened.",
     "closeTab": "Close tab",
+    "serversUnavailable": "Could not load the server list, so this file cannot be opened yet: {{reason}}",
     "emptyDirectory": "Empty directory",
     "download": "Download",
     "downloadFailed": "Failed to download file",

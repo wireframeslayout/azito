@@ -9,6 +9,8 @@
  * Open on Windows (not listed as features, with the path that lets them work):
  *  - file list / read / write / create / delete / rename: `IFileOps` (`FileBrowseService`), Windows paths handled by `pathApiFor`.
  *  - file name search: `searchFileNames` over `IFileOps.walk`.
+ *  - file content search: `GET /files/search` runs `rg` when the host has it, else the host's own search
+ *    (`IFileOps.searchContent`, Node), and reports hit paths relative to the root with `/`.
  *
  * Closed on Windows until #370: git (see `WIN32_UNAVAILABLE`).
  */
@@ -20,7 +22,6 @@ export interface HostPlatformInfo {
 }
 
 export type HostFeature =
-  | 'fileSearch'
   | 'git'
   | 'taskExecution'
   | 'workerLaunch'
@@ -28,7 +29,7 @@ export type HostFeature =
   | 'browserRuntime'
   | 'harness';
 
-export const HOST_FEATURES: readonly HostFeature[] = ['fileSearch', 'git', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
+export const HOST_FEATURES: readonly HostFeature[] = ['git', 'taskExecution', 'workerLaunch', 'tmux', 'browserRuntime', 'harness'];
 
 export type HostFeatureSupport =
   | { available: true }
@@ -37,8 +38,6 @@ export type HostFeatureSupport =
 /**
  * The Windows rows: feature -> the issue that supports it (null: never, the host has no such program). Each row says
  * which path closes it.
- *  - fileSearch (#370): `GET /files/search` runs `rg`, else `grep` (Unix), else the host's own search (`IFileOps.searchContent`, Node), and
- *    reports hit paths relative to the root with `/`. Closed here only until the whole path, UI included, is verified on a real Windows host (R5).
  *  - git (#370): diff / commits / worktree list / branch search (`modules/git/routes.ts`, `GET /branches`). The read paths take
  *    Windows paths now (`assertGitPathArg`); the row stays closed until worktree create / remove (R4) work on Windows and a host
  *    cannot be assumed to have `git`. Those routes answer `unsupported_os` (`assertGitSupported` in `shared/os/hostProfile.ts`). #370 makes git work on Windows, then removes this row and that guard.
@@ -49,7 +48,6 @@ export type HostFeatureSupport =
  *  - harness (#371): `harness/install` is `setup.sh` (`assertPosixHost`).
  */
 const WIN32_UNAVAILABLE: Record<HostFeature, number | null> = {
-  fileSearch: 370,
   git: 370,
   taskExecution: 371,
   workerLaunch: 371,

@@ -8,13 +8,12 @@ const t = ((key: string, opts?: Record<string, unknown>) => `${key}${opts ? JSON
 describe('hostFeatureBlockReason', () => {
   it('is null on Linux, macOS and an unrecorded host', () => {
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'taskExecution', t)).toBeNull();
-    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'fileSearch', t)).toBeNull();
+    expect(hostFeatureBlockReason({ platform: 'darwin' }, 'git', t)).toBeNull();
     expect(hostFeatureBlockReason(null, 'harness', t)).toBeNull();
   });
 
   it('says the feature is pending, with its issue, on Windows', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
-    expect(hostFeatureBlockReason({ platform: 'win32' }, 'fileSearch', t)).toBe('common:hostFeature.windowsPending{"issue":370}');
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'git', t)).toBe('common:hostFeature.windowsPending{"issue":370}');
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'git', t)).toBeNull();
   });

@@ -17,7 +17,6 @@ describe('hostFeatureSupport', () => {
 
   it('names the issue that brings each feature to Windows', () => {
     const win32 = { platform: 'win32' as const };
-    expect(hostFeatureSupport(win32, 'fileSearch')).toEqual({ available: false, issue: 370 });
     expect(hostFeatureSupport(win32, 'git')).toEqual({ available: false, issue: 370 });
     expect(hostFeatureSupport(win32, 'taskExecution')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'workerLaunch')).toEqual({ available: false, issue: 371 });

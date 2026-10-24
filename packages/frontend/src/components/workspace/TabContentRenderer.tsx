@@ -1,10 +1,12 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { FilePreviewPanel } from '../FileExplorer';
+import { ServersUnavailableNotice } from '../files/ServersUnavailableNotice';
+import { fileTabServersView, retryServersFetch } from '../../lib/serversFetch';
 import StorageFilePreview from '../StorageFilePreview';
 import UnitPanel from './UnitPanel';
 import TaskPanel from './TaskPanel';
@@ -117,7 +119,11 @@ export default function TabContentRenderer({
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const { t: tf } = useTranslation('files');
   const serverPathApi = useServerPathApi();
-  const { servers, serversLoaded } = useServerStatuses();
+  const { servers, serversLoaded, serversError, refresh: refreshServers } = useServerStatuses();
+  const [retryingServers, setRetryingServers] = useState(false);
+  // A failure stays in `serversError` (the provider sets it) and is shown in the notice; the 30 s poll keeps retrying on its own too.
+  const retryServers = (): void => { void retryServersFetch(refreshServers, setRetryingServers); };
+  const { t: tc } = useTranslation('common');
   // A saved file tab whose server is gone: not listed, and not a merged server's old name either (that one is renamed).
   const isServerGone = (name: string): boolean => serversLoaded && !servers.some((s) => s.name === name || (s.aliases ?? []).includes(name));
   const navigate = useNavigate();
@@ -177,27 +183,46 @@ export default function TabContentRenderer({
               reconnectKey={tab.reconnectKey}
             />
       )}
-      {tab.type === 'file' && tab.serverName && tab.filePath && isServerGone(tab.serverName) && (
-        <div style={{ padding: 16 }}>
-          <Notice tone="warning" action={<Button variant="default" size="sm" onClick={() => closeTab(tab.id)}>{tf('explorer.closeTab')}</Button>}>
-            {tf('explorer.serverMissing', { server: tab.serverName })}
-          </Notice>
-        </div>
-      )}
-      {tab.type === 'file' && tab.serverName && tab.filePath && !isServerGone(tab.serverName) && !isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
+      {tab.type === 'file' && tab.serverName && tab.filePath && (() => {
+        const view = fileTabServersView({
+          serversLoaded,
+          serversError,
+          settled: isFileTabSettled(tab, serverPathApi(tab.serverName)),
+          serverGone: isServerGone(tab.serverName),
+        });
+        if (view === 'server-gone') {
+          return (
+            <div style={{ padding: 16 }}>
+              <Notice tone="warning" action={<Button variant="default" size="sm" onClick={() => closeTab(tab.id)}>{tf('explorer.closeTab')}</Button>}>
+                {tf('explorer.serverMissing', { server: tab.serverName })}
+              </Notice>
+            </div>
+          );
+        }
         // A restored tab can still be re-keyed (server renamed, path normalized) once this page load has the server list;
         // an editor mounted now would be rebuilt then and lose its unsaved content.
-        <LoadingState />
-      )}
-      {tab.type === 'file' && tab.serverName && tab.filePath && isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
-        <FilePreviewPanel
-          serverName={tab.serverName}
-          filePath={tab.filePath}
-          projectId={tab.projectId}
-          initialLine={tab.line}
-          onDirtyChange={setTabDirty ? (dirty) => setTabDirty(tab.id, dirty) : undefined}
-        />
-      )}
+        if (view === 'servers-unavailable') {
+          return (
+            <ServersUnavailableNotice
+              message={tf('explorer.serversUnavailable', { reason: serversError })}
+              retryLabel={tc('actions.retry')}
+              retryingLabel={tc('actions.retrying')}
+              onRetry={retryServers}
+              retrying={retryingServers}
+            />
+          );
+        }
+        if (view === 'loading') return <LoadingState />;
+        return (
+          <FilePreviewPanel
+            serverName={tab.serverName}
+            filePath={tab.filePath}
+            projectId={tab.projectId}
+            initialLine={tab.line}
+            onDirtyChange={setTabDirty ? (dirty) => setTabDirty(tab.id, dirty) : undefined}
+          />
+        );
+      })()}
       {tab.type === 'storage-file' && tab.storageFileData && (
         <StorageFilePreview
           projectId={tab.storageFileData.projectId}

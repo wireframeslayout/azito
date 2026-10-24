@@ -11,10 +11,7 @@ interface FileSidebarHeaderProps {
   serverCount: number;
   allServerNames?: string[];
   onSelectServer?: (name: string) => void;
-  /** Why file search is closed on this server's host (a Windows agent); null / absent: open. The button stays focusable, does nothing, and points at the notice `searchBlockedReasonId` names. */
-  searchBlockedReason?: string | null;
-  searchBlockedReasonId?: string;
-  /** Why git (the diff view) is closed on this server's host (a Windows agent); null / absent: open. Same contract as `searchBlockedReason`. */
+  /** Why git (the diff view) is closed on this server's host (a Windows agent); null / absent: open. The button stays focusable, does nothing, and points at the notice `diffBlockedReasonId` names. */
   diffBlockedReason?: string | null;
   diffBlockedReasonId?: string;
 }
@@ -28,8 +25,6 @@ export function FileSidebarHeader({
   serverCount,
   allServerNames,
   onSelectServer,
-  searchBlockedReason,
-  searchBlockedReasonId,
   diffBlockedReason,
   diffBlockedReasonId,
 }: FileSidebarHeaderProps) {
@@ -101,17 +96,14 @@ export function FileSidebarHeader({
       </span>
       <button
         type="button"
-        onClick={searchBlockedReason ? undefined : onSearch}
-        aria-disabled={searchBlockedReason ? true : undefined}
-        aria-describedby={searchBlockedReason ? searchBlockedReasonId : undefined}
-        title={searchBlockedReason ?? (searchActive ? tw('sidebar.fileTree') : tw('sidebar.searchFiles'))}
+        onClick={onSearch}
+        title={searchActive ? tw('sidebar.fileTree') : tw('sidebar.searchFiles')}
         aria-pressed={searchActive}
         className="icon-btn"
         style={{
           border: 'none',
           color: searchActive ? 'var(--accent)' : 'var(--text-dim)',
-          cursor: searchBlockedReason ? 'not-allowed' : 'pointer',
-          opacity: searchBlockedReason ? 0.5 : 1,
+          cursor: 'pointer',
           padding: '2px 6px',
         }}
       >

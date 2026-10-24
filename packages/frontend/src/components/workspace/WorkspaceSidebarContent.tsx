@@ -76,7 +76,6 @@ interface WorkspaceSidebarContentProps {
   onWindowFocus?: (windowId: number) => void;
 }
 
-const SEARCH_BLOCKED_NOTICE_ID = 'file-search-blocked-reason';
 const GIT_BLOCKED_NOTICE_ID = 'file-git-blocked-reason';
 
 export default function WorkspaceSidebarContent({
@@ -226,13 +225,10 @@ export default function WorkspaceSidebarContent({
               );
             }
             const effectiveRoot = selectedWorktreePath ?? rootPath;
-            const searchBlockedReason = hostFeatureBlock(selectedFileServer, 'fileSearch');
             const gitBlockedReason = hostFeatureBlock(selectedFileServer, 'git');
             return (
               <>
                 <FileSidebarHeader
-                  searchBlockedReason={searchBlockedReason}
-                  searchBlockedReasonId={SEARCH_BLOCKED_NOTICE_ID}
                   diffBlockedReason={gitBlockedReason}
                   diffBlockedReasonId={GIT_BLOCKED_NOTICE_ID}
                   onSearch={() => setFilesView(filesView === 'search' ? 'tree' : 'search')}
@@ -244,11 +240,6 @@ export default function WorkspaceSidebarContent({
                   allServerNames={projectServers.map((s) => s.serverName)}
                   onSelectServer={onSelectFileServer}
                 />
-                {searchBlockedReason && (
-                  <div id={SEARCH_BLOCKED_NOTICE_ID} style={{ padding: '0 12px 8px', flexShrink: 0 }}>
-                    <Notice tone="info">{searchBlockedReason}</Notice>
-                  </div>
-                )}
                 {gitBlockedReason && (
                   <div id={GIT_BLOCKED_NOTICE_ID} style={{ padding: '0 12px 8px', flexShrink: 0 }}>
                     <Notice tone="info">{gitBlockedReason}</Notice>
@@ -269,7 +260,7 @@ export default function WorkspaceSidebarContent({
                     <Notice tone="warning">{tf('rootSwitcher.orphanedNotice')}</Notice>
                   </div>
                 )}
-                {filesView === 'search' && project && !searchBlockedReason ? (
+                {filesView === 'search' && project ? (
                   <FileSearchPanel
                     serverName={selectedFileServer}
                     projectId={project.id}
