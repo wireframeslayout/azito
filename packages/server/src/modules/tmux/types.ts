@@ -12,6 +12,8 @@ export interface TmuxPane {
   pid: number;
   /** tmux `%<n>` pane id: stable across sibling deletion, unlike `index`. */
   handle?: string;
+  /** False when `command` is only the launch command (the foreground one is unknown). Omitted = known. */
+  commandKnown?: boolean;
 }
 
 export interface TmuxWindow {

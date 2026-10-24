@@ -241,6 +241,17 @@ describe('WorkerInputService.sendPrompt', () => {
       expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
     });
 
+    it.each(['cmd.exe', 'powershell.exe', 'pwsh.exe'])('also treats the Windows shell %s as a dead worker', async (shell) => {
+      const { service, mockDriver, registry } = makeHarness();
+      registry.isBoundConnected.mockReturnValue(false);
+      mockDriver.paneCommandByHandle.mockResolvedValue(shell);
+
+      await expect(service.sendPrompt(server, target, 'hello worker', { taskId: 1, unitId: 2 }))
+        .rejects.toThrow(WorkerNotRunningError);
+
+      expect(mockDriver.sendKeysToHandle).not.toHaveBeenCalled();
+    });
+
     it('does not run the guard on sendKeys (y/Enter is harmless in a shell) — autoConfirm keeps its exact previous behavior', async () => {
       const { service, mockDriver, registry } = makeHarness();
       registry.isBoundConnected.mockReturnValue(false);

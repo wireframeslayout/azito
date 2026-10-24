@@ -526,6 +526,7 @@ packages/
   - `GET /api/servers/:name/git/worktrees?project_id=` (worktree list for the root switcher, joined to tasks)
 - Directory autocomplete: `/api/servers/:name/directories?path=`
 - Agent routes: `/api/agent/*` (authenticated via `X-Agent-Token` header)
+- Process list (#371): `transport.listProcesses()` is the one way to list a host's processes (pid / ppid / startMs / executable / commandLine / rssBytes; `shared/os/processList.ts`). Unix runs `ps` and Windows `Get-CimInstance Win32_Process` (PowerShell EncodedCommand, FILETIME start times), both as a `CommandSpec`; an agent serves it at `GET /api/processes` (an older agent without it is read through `/api/run`, or its shell route when its host is unrecorded)
 - Task answer: `POST /api/tasks/:id/answer` (submit question responses)
 - Task recovery: `POST /api/tasks/:id/recover-session` (resume agent session)
 - Task deletion: `DELETE /api/tasks/:id` (cleans up tmux window, worktree, temp files)

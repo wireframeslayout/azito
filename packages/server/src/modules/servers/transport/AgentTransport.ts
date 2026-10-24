@@ -21,6 +21,7 @@ import { toPosixCommandLine } from '../../../shared/exec/posixCommandLine';
 import { AGENT_RUN_PATH, responseToResult } from '../../../shared/exec/runWire';
 import { AGENT_FILE_OPS_PATH, RemoteFileOps, type FileOpRequest } from '../../../shared/fs/fileOpsWire';
 import type { IFileOps } from '../../../shared/fs/fileOps';
+import { AGENT_PROCESSES_PATH, listProcessesWith, parseProcessList, type ListProcessesOptions, type ProcessEntry } from '../../../shared/os/processList';
 import { ShellFileOps } from './ShellFileOps';
 import { AgentFileOpOutdatedError, rejectsOperationName } from './agentFileOpsProtocol';
 import type { MisaoReleaseFile, MisaoSocketStatus } from './agentMisaoSocket';
@@ -39,6 +40,8 @@ const TRANSCRIPT_TIMEOUT_MS = 10_000;
 const MISAO_UPLOAD_TIMEOUT_MS = 120_000;
 /** One file operation (a read or write of up to the size limit) over a tailnet link. */
 const FILE_OPS_TIMEOUT_MS = 60_000;
+/** A Windows host's CIM query can take several seconds. */
+const PROCESS_LIST_TIMEOUT_MS = 30_000;
 
 function classifyFetchError(err: unknown): AgentUnreachableReason | null {
   if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) return 'timeout';
@@ -108,6 +111,8 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   private authHeader: string;
   private useLegacyMuxRoute = false;
   private fileOps: IFileOps | null = null;
+  /** Set when the agent answered `404` to `GET /api/processes`: it is older than the endpoint. */
+  private lacksProcessesEndpoint = false;
 
   private token: string;
 
@@ -169,6 +174,26 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
     if (this.hostProfile === null) return (this.fileOps ??= new ShellFileOps(this));
     const platform = this.hostProfile.platform;
     return (this.fileOps ??= new RemoteFileOps(platform, (request) => this.sendFileOp(request)));
+  }
+
+  /**
+   * The agent's processes (`GET /api/processes`). An agent without the endpoint (`404`, or one registered before its host was
+   * recorded, which predates it too) is older than this hub: its list is taken by running the same command through `run` instead
+   * (the shell route for an unrecorded host, which is a Unix one). A failing endpoint is never retried through `run`.
+   */
+  async listProcesses(options: ListProcessesOptions = {}): Promise<ProcessEntry[]> {
+    const run = (spec: CommandSpec): Promise<CommandResult> => this.run(spec);
+    if (this.hostProfile === null) return listProcessesWith('linux', run, options);
+    if (this.lacksProcessesEndpoint) return listProcessesWith(this.hostProfile.platform, run, options);
+    this.assertCircuitClosed();
+    const { status, text } = await this.send(AGENT_PROCESSES_PATH, { method: 'GET', headers: { authorization: this.authHeader } }, options.timeoutMs ?? PROCESS_LIST_TIMEOUT_MS);
+    if (status === 404) {
+      // Remembered: this transport is rebuilt when the agent is redeployed, so the mark cannot outlive the old agent.
+      this.lacksProcessesEndpoint = true;
+      return listProcessesWith(this.hostProfile.platform, run, options);
+    }
+    if (status < 200 || status >= 300) throw new Error(`Agent ${AGENT_PROCESSES_PATH} failed (${status}): ${text}`);
+    return parseProcessList(JSON.parse(text));
   }
 
   /** Performs one file operation on the agent's host (`POST /api/fileops`) and returns the response body, which says how it ended (see `RemoteFileOps`). */

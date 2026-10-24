@@ -14,7 +14,8 @@ import { resolveEffectiveInputPolicy } from '../projects/ProjectServer';
 import type { IServerRepository } from '../servers/Server';
 import type { SqliteProjectSecretRepository } from '../projects/SqliteProjectSecretRepository';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
-import { parsePsOutput, argsContainSessionId } from '../transcripts/agentProcessDetection';
+import { argsContainSessionId } from '../transcripts/agentProcessDetection';
+import type { ProcessEntry } from '../../shared/os/processList';
 import type { IExecutionLogRepository } from '../tasks/ExecutionLog';
 import { assertDirectoryContained } from '../git/PathContainment';
 import { type ShellDialect } from '../../shared/os/shellDialect';
@@ -599,13 +600,11 @@ export class WindowRespawnService {
     const driver = this.resolveDriver(server);
     const transport = this.transportFactory.getTransport(server);
 
-    // Single ps snapshot for the whole check — same approach as
+    // Single process-list snapshot for the whole check — same approach as
     // WindowSessionResolver.detectWindowAgentProcess().
-    let psEntries: ReturnType<typeof parsePsOutput> | null = null;
+    let psEntries: ProcessEntry[];
     try {
-      const { stdout, code } = await transport.exec('ps -e -o pid=,ppid=,etimes=,args=');
-      if (code !== 0) return null;
-      psEntries = parsePsOutput(stdout);
+      psEntries = await transport.listProcesses();
     } catch {
       return null;
     }
