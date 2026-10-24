@@ -38,6 +38,7 @@ function workspacesToTmuxSessions(workspaces: MuxWorkspace[]): LiveSession[] {
       panes: win.panes.map(p => ({
         index: p.index,
         command: p.command,
+        commandKnown: p.commandKnown,
         title: p.title,
         width: p.width,
         height: p.height,
@@ -121,13 +122,20 @@ function selectRelevantPanes(panes: TmuxWindow['panes'], paneIndex: number | nul
  * True when at least one relevant pane's foreground command is not a bare
  * shell (any OS's: see `isBareShellCommand`). A shell's presence must NOT count
  * as "agent running": merely focusing a pane and typing still bumps tmux's
- * `window_activity`, so activity freshness alone over-detects.`paneIndex` narrows to the specific pane named by the target's
- * `.<index>` suffix; when it names a pane that no longer exists, or the
- * target has no pane suffix, all panes are considered (conservative: err
- * toward "still running" rather than losing a legitimate agent window).
+ * `window_activity`, so activity freshness alone over-detects. `paneIndex`
+ * narrows to the specific pane named by the target's `.<index>` suffix; when it
+ * names a pane that no longer exists, or the target has no pane suffix, all
+ * panes are considered (conservative: err toward "still running" rather than
+ * losing a legitimate agent window).
+ *
+ * A pane whose foreground command is unknown (`commandKnown === false`, misao on
+ * Windows: `command` is only the launch command) counts as non-shell here, so
+ * "unknown" is not mistaken for "shell" by Tier 1's failsafe and Tier 2.
+ * `strict` (Tier 3 only) judges such a pane by its launch command instead, which
+ * keeps the activity-advance heuristic from over-detecting a bare shell.
  */
-function hasNonShellForegroundPane(panes: TmuxWindow['panes'], paneIndex: number | null): boolean {
-  return selectRelevantPanes(panes, paneIndex).some((p) => !isBareShellCommand(p.command));
+function hasNonShellForegroundPane(panes: TmuxWindow['panes'], paneIndex: number | null, strict = false): boolean {
+  return selectRelevantPanes(panes, paneIndex).some((p) => (p.commandKnown === false && !strict) || !isBareShellCommand(p.command));
 }
 
 /**
@@ -1541,6 +1549,8 @@ export class AgentActivityMonitor {
       const { windowSpec } = parseWindowTarget(w.tmuxTarget);
       const paneIndex = extractPaneIndex(windowSpec, window.index, window.name);
       const nonShellForeground = hasNonShellForegroundPane(window.panes, paneIndex);
+      // Tier 3 alone judges a pane with an unknown foreground by its launch command: see hasNonShellForegroundPane.
+      const nonShellLaunchOrForeground = hasNonShellForegroundPane(window.panes, paneIndex, true);
 
       const entry: AgentActivityEntry = {
         serverName: w.serverName,
@@ -1697,7 +1707,7 @@ export class AgentActivityMonitor {
         decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'idle', w.taskId ?? undefined);
         continue;
       }
-      if (!nonShellForeground) {
+      if (!nonShellLaunchOrForeground) {
         this.activityHistory.delete(key);
         if (!reasons.has(key)) reasons.set(key, 'offline');
         decide(key, w.serverName, w.tmuxTarget, 'tier3_heuristic', 'offline', w.taskId ?? undefined);

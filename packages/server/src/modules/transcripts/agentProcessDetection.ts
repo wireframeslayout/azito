@@ -18,7 +18,7 @@
 // 両方を見て、ハブ自身の path モジュールには頼らない。Windows の実行体は拡張子（.exe/.cmd/...）付きで、
 // npm 版は `node.exe ...\@anthropic-ai\claude-code\cli.js` のように node のスクリプトとして現れる。
 
-import type { ProcessEntry } from '../../shared/os/processList';
+import { startedBeforeParent, type ProcessEntry } from '../../shared/os/processList';
 
 type AgentName = 'claude' | 'codex';
 
@@ -76,8 +76,10 @@ export function matchAgentBinaryName(entry: ProcessEntry): AgentName | null {
 
 /** rootPid 自身と、entries 上で辿れる子孫すべての pid 集合を返す（BFS）。 */
 function collectDescendantPids(entries: ProcessEntry[], rootPid: number): Set<number> {
+  const startByPid = new Map(entries.map((entry) => [entry.pid, entry.startMs] as const));
   const childrenByPpid = new Map<number, number[]>();
   for (const entry of entries) {
+    if (startedBeforeParent(entry, startByPid)) continue;
     const list = childrenByPpid.get(entry.ppid);
     if (list) list.push(entry.pid);
     else childrenByPpid.set(entry.ppid, [entry.pid]);

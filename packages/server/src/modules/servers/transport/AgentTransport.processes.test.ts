@@ -51,6 +51,28 @@ describe('AgentTransport.listProcesses', () => {
     expect(JSON.parse(fetchSpy.mock.calls[1][1]!.body as string)).toMatchObject({ file: 'ps' });
   });
 
+  it('remembers the 404: the second listing goes straight to /api/run', async () => {
+    fetchSpy
+      .mockResolvedValueOnce(json({ error: 'not found' }, 404))
+      .mockImplementation(async () => json({ outcome: 'result', exitCode: 0, signal: null, stdout: '5 1 00:03 64 bash\n', stderr: '' }));
+    const transport = make();
+    await transport.listProcesses();
+    await transport.listProcesses();
+
+    expect(fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))).toEqual([
+      'http://10.0.0.1:4021/api/processes',
+      'http://10.0.0.1:4021/api/run',
+      'http://10.0.0.1:4021/api/run',
+    ]);
+  });
+
+  it('passes the deadline of the caller to the spec it runs', async () => {
+    fetchSpy.mockResolvedValue(json({ outcome: 'result', exitCode: 0, signal: null, stdout: '', stderr: '' }));
+    await new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', null).listProcesses({ timeoutMs: 5000 }).catch(() => undefined);
+    // An unrecorded agent runs ps through its shell route; the deadline reaches it.
+    expect(JSON.parse(fetchSpy.mock.calls[0][1]!.body as string)).toMatchObject({ timeoutMs: 5000 });
+  });
+
   it('takes the list of an agent registered before its host was recorded through its shell route (a Unix one)', async () => {
     fetchSpy.mockResolvedValue(json({ stdout: '5 1 00:03 64 bash\n', stderr: '', code: 0 }));
     const list = await new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', null).listProcesses();

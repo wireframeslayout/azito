@@ -19,7 +19,7 @@ import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 import type { CommandResult, CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
-import { listProcessesWith, type ProcessEntry } from '../../../shared/os/processList';
+import { listProcessesWith, type ListProcessesOptions, type ProcessEntry } from '../../../shared/os/processList';
 import type { LocalHost } from '../../../shared/os/hostEnv';
 import type { IFileOps } from '../../../shared/fs/fileOps';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
@@ -84,8 +84,8 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
     return runCommandSpec(spec, runHostOf(this.host));
   }
 
-  listProcesses(): Promise<ProcessEntry[]> {
-    return listProcessesWith(this.host.platform, (spec) => this.run(spec));
+  listProcesses(options?: ListProcessesOptions): Promise<ProcessEntry[]> {
+    return listProcessesWith(this.host.platform, (spec) => this.run(spec), options);
   }
 
   /** @deprecated POSIX-only: runs `command` with `/bin/sh -c`. Rejects on a win32 host. */

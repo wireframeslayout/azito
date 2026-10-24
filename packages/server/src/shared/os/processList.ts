@@ -33,6 +33,22 @@ export function parseProcessList(body: unknown): ProcessEntry[] {
   return processListSchema.parse(body);
 }
 
+/**
+ * True when `entry` cannot be a child of the process its `ppid` names, because it started before it. Once a parent has ended
+ * its pid can be reused by an unrelated process, and the child's ppid (on Windows, ParentProcessId) then points at that one.
+ * Decided only when both start times are known; otherwise the edge is kept. `startByPid` maps every listed pid to its start.
+ */
+export function startedBeforeParent(entry: ProcessEntry, startByPid: ReadonlyMap<number, number | null>): boolean {
+  const parentStart = startByPid.get(entry.ppid);
+  return entry.startMs !== null && parentStart !== undefined && parentStart !== null && entry.startMs < parentStart;
+}
+
+/** What a caller of `listProcesses` may ask for. */
+export interface ListProcessesOptions {
+  /** How long the listing may take before it is abandoned. Default: {@link PROCESS_LIST_TIMEOUT_MS}. */
+  timeoutMs?: number;
+}
+
 /** Runs a spec on the host that owns the processes (a transport's `run`, or the shared runner). */
 export type RunSpec = (spec: CommandSpec) => Promise<CommandResult>;
 
@@ -78,7 +94,7 @@ const WINDOWS_PROCESS_SCRIPT = `
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 $list = @(Get-CimInstance -ClassName Win32_Process | ForEach-Object {
   $created = $null
-  if ($_.CreationDate) { $created = [string]$_.CreationDate.ToFileTimeUtc() }
+  if ($_.CreationDate) { $created = [string]$_.CreationDate.ToUniversalTime().ToFileTimeUtc() }
   [ordered]@{
     pid = [int64]$_.ProcessId
     ppid = [int64]$_.ParentProcessId
@@ -115,8 +131,8 @@ export function parseWindowsProcessOutput(output: string): ProcessEntry[] {
 }
 
 /** The command that lists the processes of a host of `platform`. */
-export function buildProcessListSpec(platform: NodeJS.Platform): CommandSpec {
-  const options = { timeoutMs: PROCESS_LIST_TIMEOUT_MS, maxOutputBytes: PROCESS_LIST_MAX_OUTPUT_BYTES };
+export function buildProcessListSpec(platform: NodeJS.Platform, timeoutMs: number = PROCESS_LIST_TIMEOUT_MS): CommandSpec {
+  const options = { timeoutMs, maxOutputBytes: PROCESS_LIST_MAX_OUTPUT_BYTES };
   if (platform === 'win32') return buildCommandSpec('powershell.exe', powershellEncodedArgs(WINDOWS_PROCESS_SCRIPT), options);
   return buildCommandSpec('ps', POSIX_PS_ARGS, options);
 }
@@ -125,8 +141,8 @@ export function buildProcessListSpec(platform: NodeJS.Platform): CommandSpec {
  * Lists the processes of a host of `platform` by running {@link buildProcessListSpec} through `run`: the one place that
  * knows how, for the hub's own host and for an agent's. A failing command is an error, never an empty list.
  */
-export async function listProcessesWith(platform: NodeJS.Platform, run: RunSpec): Promise<ProcessEntry[]> {
-  const result = await run(buildProcessListSpec(platform));
+export async function listProcessesWith(platform: NodeJS.Platform, run: RunSpec, options: ListProcessesOptions = {}): Promise<ProcessEntry[]> {
+  const result = await run(buildProcessListSpec(platform, options.timeoutMs));
   const takenAt = Date.now();
   if (result.exitCode !== 0) {
     throw new Error(`Listing processes failed (exit ${result.exitCode}): ${(result.stderr || result.stdout).trim().slice(0, 600)}`);

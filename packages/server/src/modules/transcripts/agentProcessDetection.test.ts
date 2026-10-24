@@ -94,6 +94,19 @@ describe('isAgentProcessRunning', () => {
     expect(isAgentProcessRunning([proc(1, 0, 999999, '/sbin/init')], 999)).toBe(false);
   });
 
+  it('ignores a process whose ppid names a reused pid: it started before that "parent", so it is not its child', () => {
+    // pid 10 (a pane shell) is new; pid 99 claude.exe is an orphan of an earlier process that had pid 10.
+    const entries = [proc(10, 1, 5, 'cmd.exe'), proc(99, 10, 600, 'claude.exe --resume abc')];
+    expect(isAgentProcessRunning(entries, 10)).toBe(false);
+    expect(findAgentProcessStartMs(entries, 10)).toBeNull();
+    expect(findAgentProcessTypes(entries, 10).size).toBe(0);
+  });
+
+  it('keeps the edge when either start time is unknown', () => {
+    const entries: ProcessEntry[] = [{ ...proc(10, 1, 5, 'cmd.exe'), startMs: null }, proc(99, 10, 600, 'claude.exe')];
+    expect(isAgentProcessRunning(entries, 10)).toBe(true);
+  });
+
   it('terminates when the parent links form a loop (a reused pid)', () => {
     const entries = [proc(10, 11, 5, 'cmd.exe'), proc(11, 10, 5, 'node.exe x.js')];
     expect(isAgentProcessRunning(entries, 10)).toBe(false);

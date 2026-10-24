@@ -50,6 +50,24 @@ describe('measureWindowResources', () => {
     expect(result[0].rssBytes).toBe((1024 + 2048 + 512) * 1024);
   });
 
+  it('does not count a process that started before its listed parent (a reused pid) in the window\'s tree', async () => {
+    const t = {
+      listProcesses: vi.fn(async () => [
+        { pid: 100, ppid: 1, startMs: 10_000, executable: null, commandLine: '', rssBytes: 1024 },
+        { pid: 200, ppid: 100, startMs: 11_000, executable: null, commandLine: '', rssBytes: 2048 },
+        { pid: 300, ppid: 100, startMs: 1_000, executable: null, commandLine: '', rssBytes: 999_999 },
+      ]),
+    } as never;
+    const result = await measureWindowResources(t, makeMux([{ ref: ref('sess', 'win1'), pid: 100 }]), server);
+    expect(result[0].rssBytes).toBe(3072);
+  });
+
+  it('asks for the process list with the 5 second deadline the ps exec had', async () => {
+    const listProcesses = vi.fn(async () => []);
+    await measureWindowResources({ listProcesses } as never, makeMux([]), server);
+    expect(listProcesses).toHaveBeenCalledWith({ timeoutMs: 5000 });
+  });
+
   it('merges panes of the same window', async () => {
     const ps = '100 1 500\n200 1 300';
     const t = makeTransport({ stdout: ps, code: 0 });

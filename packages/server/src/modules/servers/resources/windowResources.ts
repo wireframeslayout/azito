@@ -3,6 +3,10 @@ import type { IMuxClient } from '../../tmux/IMuxClient';
 import type { ServerConfig } from '../Server';
 import { formatMuxRef, type MuxRef } from '@azito/shared';
 import { muxWindowTarget } from '../../tmux/muxWindowTarget';
+import { startedBeforeParent } from '../../../shared/os/processList';
+
+/** The deadline the process list had when it was a `ps` exec. */
+const PROCESS_LIST_TIMEOUT_MS = 5000;
 
 export interface WindowResource {
   /** Display key (`<workspace>:<window>`; misao: the window id). */
@@ -15,7 +19,7 @@ export interface WindowResource {
 export async function measureWindowResources(transport: IServerTransport, muxClient: Pick<IMuxClient, 'measurePanePids'>, server: ServerConfig): Promise<WindowResource[]> {
   const [panePidEntries, processList] = await Promise.all([
     muxClient.measurePanePids(server),
-    transport.listProcesses(),
+    transport.listProcesses({ timeoutMs: PROCESS_LIST_TIMEOUT_MS }),
   ]);
 
   const panePids = new Map<string, { ref: MuxRef; pids: number[] }>();
@@ -34,8 +38,12 @@ export async function measureWindowResources(transport: IServerTransport, muxCli
     processes.set(proc.pid, { ppid: proc.ppid, rss: proc.rssBytes ?? 0 });
   }
 
+  // A child that started before its listed parent is a reused pid's orphan, not that parent's child.
+  const startByPid = new Map(processList.map((proc) => [proc.pid, proc.startMs] as const));
   const children = new Map<number, number[]>();
-  for (const [pid, { ppid }] of processes) {
+  for (const proc of processList) {
+    if (startedBeforeParent(proc, startByPid)) continue;
+    const { pid, ppid } = proc;
     const siblings = children.get(ppid);
     if (siblings) siblings.push(pid);
     else children.set(ppid, [pid]);
@@ -51,7 +59,7 @@ export async function measureWindowResources(transport: IServerTransport, muxCli
       const childPid = queue.pop()!;
       if (visited.has(childPid)) continue;
       visited.add(childPid);
-      total +=processes.get(childPid)?.rss ?? 0;
+      total += processes.get(childPid)?.rss ?? 0;
       const grandchildren = children.get(childPid);
       if (grandchildren) queue.push(...grandchildren);
     }
