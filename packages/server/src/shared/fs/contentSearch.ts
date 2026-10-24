@@ -11,6 +11,11 @@ export interface ContentScanFile {
   relative: string;
 }
 
+/** Steps the worker takes between opening a file and checking it: for the test that replaces files at that moment, nothing else. */
+export interface ContentScanHooks {
+  afterOpen: Array<{ op: 'unlink' | 'rename'; args: string[] }>;
+}
+
 export interface ContentScanResult {
   hits: ContentSearchHit[];
   /** The worker was ended by the deadline; `hits` are the ones it had found. */
@@ -30,14 +35,17 @@ export interface ContentScanResult {
  *
  * Each file was found by a walk some time ago, so it is checked again as it is read: it is opened without following a link where the
  * OS can (`O_NOFOLLOW`), must be a regular file by the handle's own `fstat`, and its real path (every directory above it included)
- * must still be inside the real root. A file that fails any of these is passed over, as if the walk had not listed it.
+ * must still be inside the real root, and the opened handle must be that very file: the `dev` / `ino` of the handle's `fstat` equal
+ those of the real path's `stat`. (A directory put back between the open and the check would otherwise leave a handle on a file
+ outside the root next to a path inside it.) A file that fails any of these, or whose `ino` the OS does not report (0), is passed over,
+ as if the walk had not listed it. `hooks` run between the open and the checks and exist only for the test that swaps files there.
  */
 const WORKER_SOURCE = `
 const { parentPort, workerData } = require('node:worker_threads');
 const fs = require('node:fs');
 const path = require('node:path');
 (() => {
-  const { root, files, pattern, flags, wholeWord, maxHits, perFile, maxBytes, maxResultBytes, maxLineChars } = workerData;
+  const { root, files, pattern, flags, wholeWord, maxHits, perFile, maxBytes, maxResultBytes, maxLineChars, afterOpen } = workerData;
   let expression;
   try {
     new RegExp(pattern, flags);
@@ -75,9 +83,20 @@ const path = require('node:path');
     let fd;
     try {
       fd = fs.openSync(file.absolute, openFlags);
-      const stats = fs.fstatSync(fd);
-      if (!stats.isFile() || stats.size > maxBytes) return null;
-      if (!insideRoot(fs.realpathSync.native(file.absolute))) return null;
+      for (const step of afterOpen) {
+        if (step.op === 'unlink') fs.unlinkSync(step.args[0]);
+        else fs.renameSync(step.args[0], step.args[1]);
+      }
+      const stats = fs.fstatSync(fd, { bigint: true });
+      if (!stats.isFile() || stats.size > BigInt(maxBytes)) return null;
+      if (stats.ino === 0n) {
+        parentPort.postMessage({ type: 'skipped', reason: 'the OS reports no file index (ino 0)', path: file.relative });
+        return null;
+      }
+      const real = fs.realpathSync.native(file.absolute);
+      if (!insideRoot(real)) return null;
+      const there = fs.statSync(real, { bigint: true });
+      if (there.dev !== stats.dev || there.ino !== stats.ino) return null;
       return decode(fs.readFileSync(fd));
     } catch {
       return null;
@@ -107,9 +126,11 @@ const path = require('node:path');
         matchStart -= from;
         matchEnd = Math.min(matchEnd - from, text.length);
       }
-      bytes += Buffer.byteLength(text) + Buffer.byteLength(file.relative) + 64;
+      const hit = { path: file.relative, line: i + 1, column: found.index + 1, text, matchStart, matchEnd };
+      // What goes over the wire: the JSON of the hit (escapes of control characters and non-ASCII included) and the comma after it.
+      bytes += Buffer.byteLength(JSON.stringify(hit)) + 1;
       if (bytes > maxResultBytes) { cut = true; break; }
-      hits.push({ path: file.relative, line: i + 1, column: found.index + 1, text, matchStart, matchEnd });
+      hits.push(hit);
     }
     if (hits.length > 0) {
       total += hits.length;
@@ -120,7 +141,7 @@ const path = require('node:path');
 })();
 `;
 
-type WorkerMessage = { type: 'invalid' } | { type: 'done'; cut: boolean } | { type: 'hits'; hits: ContentSearchHit[] };
+type WorkerMessage = { type: 'skipped'; reason: string; path: string } | { type: 'invalid' } | { type: 'done'; cut: boolean } | { type: 'hits'; hits: ContentSearchHit[] };
 
 function escapeForRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -132,7 +153,7 @@ function escapeForRegExp(text: string): string {
  * {@link CONTENT_SEARCH_MAX_FILE_BYTES}, holds a NUL byte (a binary file, unless a byte order mark says it is UTF-16 text), or is not
  * inside `root` any more is passed over. `root` is the directory the `relative` paths are relative to.
  */
-export function scanFilesForContent(root: string, files: ContentScanFile[], options: ContentSearchOptions, timeoutMs: number): Promise<ContentScanResult> {
+export function scanFilesForContent(root: string, files: ContentScanFile[], options: ContentSearchOptions, timeoutMs: number, hooks?: ContentScanHooks): Promise<ContentScanResult> {
   return new Promise((resolve, reject) => {
     const hits: ContentSearchHit[] = [];
     let settled = false;
@@ -149,6 +170,7 @@ export function scanFilesForContent(root: string, files: ContentScanFile[], opti
         maxBytes: CONTENT_SEARCH_MAX_FILE_BYTES,
         maxResultBytes: CONTENT_SEARCH_MAX_RESULT_BYTES,
         maxLineChars: CONTENT_SEARCH_MAX_LINE_CHARS,
+        afterOpen: hooks?.afterOpen ?? [],
       },
     });
     const finish = (result: ContentScanResult | Error): void => {
@@ -161,7 +183,8 @@ export function scanFilesForContent(root: string, files: ContentScanFile[], opti
     };
     const timer = setTimeout(() => finish({ hits, timedOut: true, invalid: false, cut: false }), Math.max(1, timeoutMs));
     worker.on('message', (message: WorkerMessage) => {
-      if (message.type === 'hits') hits.push(...message.hits);
+      if (message.type === 'skipped') console.warn(`[content-search] ${message.path} was not searched: ${message.reason}`);
+      else if (message.type === 'hits') hits.push(...message.hits);
       else if (message.type === 'invalid') finish({ hits: [], timedOut: false, invalid: true, cut: false });
       else finish({ hits, timedOut: false, invalid: false, cut: message.cut });
     });

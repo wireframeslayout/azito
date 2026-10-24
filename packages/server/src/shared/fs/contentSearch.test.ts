@@ -310,3 +310,37 @@ describe('a file that is replaced after the walk', () => {
     expect((await scan([{ absolute: path.join(dir, 'now-a-directory'), relative: 'now-a-directory' }])).hits).toEqual([]);
   });
 });
+
+describe('the handle that was opened is the file that was checked', () => {
+  it.skipIf(process.platform === 'win32')('does not read a file outside the root when the directory is put back between the open and the check', async () => {
+    const outside = mkdtempSync(path.join(tmpdir(), 'azito-outside-'));
+    try {
+      writeFileSync(path.join(outside, 'secret.txt'), 'needle outside the root\n');
+      put('dreal/secret.txt', 'needle decoy inside the root\n');
+      symlinkSync(outside, path.join(dir, 'd'), 'dir');
+      // The path `d/secret.txt` opens the outside file; then `d` becomes the real directory, so the path checks out as inside.
+      const result = await scanFilesForContent(dir, [{ absolute: path.join(dir, 'd', 'secret.txt'), relative: 'd/secret.txt' }], BASE, 5_000, {
+        afterOpen: [{ op: 'unlink', args: [path.join(dir, 'd')] }, { op: 'rename', args: [path.join(dir, 'dreal'), path.join(dir, 'd')] }],
+      });
+      expect(result.hits).toEqual([]);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+  });
+
+  it('reads an ordinary file through the same checks (so a file index is reported on this OS)', async () => {
+    put('plain.txt', 'needle\n');
+    const result = await scanFilesForContent(dir, [{ absolute: path.join(dir, 'plain.txt'), relative: 'plain.txt' }], BASE, 5_000);
+    expect(result.hits.map((h) => h.path)).toEqual(['plain.txt']);
+  });
+});
+
+describe('the size limit counts what is sent', () => {
+  it('counts the JSON escapes of control characters, so the whole response stays within the limit', async () => {
+    const line = `needle${'\u0001'.repeat(1000)}\n`;
+    for (let file = 0; file < 40; file++) put(`c${String(file).padStart(2, '0')}.txt`, line.repeat(5));
+    const result = await search();
+    expect(result.truncated).toBe(true);
+    expect(Buffer.byteLength(JSON.stringify(result.hits))).toBeLessThanOrEqual(CONTENT_SEARCH_MAX_RESULT_BYTES);
+  });
+});
