@@ -44,7 +44,7 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
     const found = [];
     for (const dirName of claudeProjectDirNames(files.platform, workingDirectory)) {
       const projectDir = pathApiFor(files.platform).join(configDir, 'projects', dirName);
-      found.push(...await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, deadline));
+      for (const file of await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, deadline)) found.push(file);
     }
     const candidates = found.sort((a, b) => a.mtimeMs - b.mtimeMs);
     const latest = candidates[candidates.length - 1];
