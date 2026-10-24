@@ -48,6 +48,18 @@ const nodeIo: GitLocatorIo = {
 /** After a miss, how long the answer "not installed" is kept before the disk is searched again (so a `winget install` just done is found without a restart). */
 export const GIT_NOT_FOUND_RETRY_MS = 30_000;
 
+/**
+ * A path that names one place whatever the current directory is: a drive (`C:\` / `C:/`) or a UNC share. Empty, relative
+ * (`.`, `tools`), drive-relative (`C:foo`) and root-relative (`\foo`) entries are not: the file checked would depend on the
+ * current directory, and the one started on the cwd of the spec (the repository), which is not ours to trust.
+ */
+export function isFullyQualified(p: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(p) || /^[\\/]{2}[^\\/]/.test(p);
+}
+
+/** The extensions tried when PATHEXT names none that can be started (it is unset, or lists only .cmd / .bat). */
+const DEFAULT_EXTENSIONS = ['.exe', '.com'];
+
 /** A program started without a shell must be a real executable: `.cmd` / `.bat` from PATHEXT are not candidates (`runCommandSpec` refuses them). */
 const STARTABLE_EXTENSION = /^\.(exe|com)$/i;
 
@@ -72,12 +84,13 @@ export class GitLocator {
   constructor(private readonly env: WindowsProgramEnv, private readonly io: GitLocatorIo = nodeIo) {}
 
   private pathCandidates(): string[] {
-    const extensions = this.env.pathExt.split(';').map((e) => e.trim()).filter((e) => STARTABLE_EXTENSION.test(e));
+    const fromPathExt = this.env.pathExt.split(';').map((e) => e.trim().toLowerCase()).filter((e) => STARTABLE_EXTENSION.test(e));
+    const extensions = fromPathExt.length > 0 ? fromPathExt : DEFAULT_EXTENSIONS;
     const candidates: string[] = [];
     for (const raw of this.env.path.split(';')) {
       const dir = raw.trim().replace(/^"(.*)"$/, '$1');
-      if (dir === '') continue;
-      for (const ext of extensions) candidates.push(path.win32.join(dir, `git${ext.toLowerCase()}`));
+      if (!isFullyQualified(dir)) continue;
+      for (const ext of extensions) candidates.push(path.win32.join(dir, `git${ext}`));
     }
     return candidates;
   }
@@ -89,7 +102,7 @@ export class GitLocator {
       [this.env.programFilesX86, win.join('Git', 'cmd', 'git.exe')],
       [this.env.localAppData, win.join('Programs', 'Git', 'cmd', 'git.exe')],
     ];
-    return roots.flatMap(([root, rest]) => (root ? [win.join(root, rest)] : []));
+    return roots.flatMap(([root, rest]) => (root && isFullyQualified(root) ? [win.join(root, rest)] : []));
   }
 
   /** The absolute path of `git.exe`. Throws {@link GitNotFoundError} (with where it looked) when there is none. */
@@ -100,6 +113,7 @@ export class GitLocator {
     }
     if (this.missAt !== null && this.io.now() - this.missAt < GIT_NOT_FOUND_RETRY_MS) throw this.notFound();
     for (const file of [...this.pathCandidates(), ...this.standardCandidates()]) {
+      if (!isFullyQualified(file)) throw new Error(`git.exe candidate is not a fully qualified path: ${file}`);
       if (await this.io.isFile(file)) {
         this.found = file;
         this.missAt = null;

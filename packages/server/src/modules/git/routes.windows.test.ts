@@ -5,7 +5,7 @@ import type { GitRouteOptions } from './routes';
 import type { HostProfile } from '../../shared/os/hostProfile';
 import type { ServerConfig } from '../servers/Server';
 import type { CommandResult } from '../../shared/exec/commandSpec';
-import { GitNotFoundError } from '../../shared/exec/commandSpec';
+import { CommandSpawnError, GitNotFoundError } from '../../shared/exec/commandSpec';
 import { mapAppError } from '../../app/mapAppError';
 
 type Run = (spec: unknown) => Promise<CommandResult>;
@@ -57,5 +57,21 @@ describe('git API on a Windows server', () => {
     const res = await app.inject({ method: 'GET', url });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ code: 'git_not_found', error: reason });
+  });
+
+  // An agent from before R5b spawns a bare `git` and answers ENOENT: the hub turns it into the same reason.
+  const oldAgent = async (): Promise<CommandResult> => { throw new CommandSpawnError('ENOENT', 'spawn git ENOENT'); };
+
+  it.each(urls.slice(0, 2))('GET %s: an old Windows agent\'s ENOENT for git answers 501 git_not_found (install Git for Windows or update the agent)', async (url) => {
+    const res = await (await buildApp(win32, oldAgent)).inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'git_not_found', error: expect.stringContaining('update the agent') });
+    expect(res.json().error).toContain('winget install --id Git.Git -e');
+  });
+
+  it('an ENOENT on a Linux server stays what it was (500 with the message)', async () => {
+    const res = await (await buildApp({ platform: 'linux', arch: 'x64' }, oldAgent)).inject({ method: 'GET', url: '/api/servers/srv/git/commits?path=%2Fhome%2Fa' });
+    expect(res.statusCode).toBe(500);
+    expect(res.json()).toEqual({ error: 'spawn git ENOENT' });
   });
 });

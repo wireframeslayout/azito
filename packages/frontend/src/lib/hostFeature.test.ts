@@ -14,7 +14,6 @@ describe('hostFeatureBlockReason', () => {
 
   it('says the feature is pending, with its issue, on Windows', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
-
   });
 
   it('says tmux is not there at all, not that it is coming', () => {

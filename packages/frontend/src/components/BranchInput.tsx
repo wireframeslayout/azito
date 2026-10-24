@@ -162,9 +162,8 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
         autoComplete="off"
         aria-describedby={gitNotFoundReason ? reasonId : undefined}
       />
-      {gitNotFoundReason && (
-        <div id={reasonId} role="status" style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{gitNotFoundReason}</div>
-      )}
+      {/* Always in the DOM so a screen reader announces the reason when it appears. */}
+      <div id={reasonId} role="status" style={gitNotFoundReason ? { marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' } : undefined}>{gitNotFoundReason}</div>
       {open && suggestions.length > 0 && (
         <div
           ref={listRef}

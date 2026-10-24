@@ -11,7 +11,7 @@ import { TmuxInstaller } from './agent-deploy/TmuxInstaller';
 import { HarnessInstaller } from './agent-deploy/HarnessInstaller';
 import type { SshClient } from './ssh/SshClient';
 import { mapAppError } from '../../app/mapAppError';
-import { GitNotFoundError } from '../../shared/exec/commandSpec';
+import { CommandSpawnError, GitNotFoundError } from '../../shared/exec/commandSpec';
 
 const TMUX_CAPS = { changeEvents: true, agentState: false, independentClients: true, copyMode: true };
 
@@ -37,7 +37,7 @@ async function buildApp(hostProfile: HostProfile | null, run: (spec: unknown) =>
     transportFactory: {
       invalidate: vi.fn(),
       hostProfileFor: (s: Pick<ServerConfig, 'hostProfile'>) => s.hostProfile,
-      getTransport: () => ({ hostProfile, exec, run }),
+      getTransport: () => ({ hostProfile, exec, run, files: () => ({ platform: hostProfile?.platform ?? 'linux' }) }),
     },
     tmuxInstaller: new TmuxInstaller(),
     harnessInstaller: new HarnessInstaller({} as SshClient),
@@ -106,6 +106,13 @@ describe('branch search on a Windows server (git runs there; Git for Windows mis
     const res = await app.inject({ method: 'GET', url });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ code: 'git_not_found', error: reason });
+  });
+
+  it('an old Windows agent\'s ENOENT for git is git_not_found, not an empty list', async () => {
+    const { app } = await buildApp(win32, async () => { throw new CommandSpawnError('ENOENT', 'spawn git ENOENT'); });
+    const res = await app.inject({ method: 'GET', url });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toMatchObject({ code: 'git_not_found', error: expect.stringContaining('update the agent') });
   });
 
   it('a Linux server without a working directory still answers an empty list', async () => {

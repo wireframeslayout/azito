@@ -48,6 +48,23 @@ describe('GitLocator', () => {
     expect(await new GitLocator(env({ path: ';"C:\\My Tools";' }), io).resolve()).toBe('C:\\My Tools\\git.exe');
   });
 
+  it.each(['.', 'tools', 'C:tools', '\\tools', '..\\x', '%USERPROFILE%\\bin'])('never takes the PATH entry %s as a place to look (not fully qualified)', async (entry) => {
+    const io = fakeIo([]);
+    await expect(new GitLocator(env({ path: `${entry};C:\\Tools`, programFiles: '.', programFilesX86: 'pf86', localAppData: undefined }), io).resolve()).rejects.toBeInstanceOf(GitNotFoundError);
+    // only C:\\Tools is a place
+    expect(io.checked.every((f) => /^[A-Za-z]:\\/.test(f))).toBe(true);
+    expect(io.checked).toContain('C:\\Tools\\git.exe');
+  });
+
+  it('takes a UNC share and a drive path with forward slashes', async () => {
+    const io = fakeIo(['\\\\srv\\tools\\git.exe']);
+    expect(await new GitLocator(env({ path: 'C:/bin;\\\\srv\\tools' }), io).resolve()).toBe('\\\\srv\\tools\\git.exe');
+  });
+
+  it('looks on PATH with .exe / .com when PATHEXT is empty', async () => {
+    expect(await new GitLocator(env({ pathExt: '' }), fakeIo(['C:\\Tools\\git.exe'])).resolve()).toBe('C:\\Tools\\git.exe');
+  });
+
   it('says what to install and where it looked when there is no git', async () => {
     const error = await new GitLocator(env(), fakeIo([])).resolve().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(GitNotFoundError);
