@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { assertHostFeature, workerLineDialect } from '../../../shared/os/hostFeature';
+import { changeDirectoryLine } from '../../../shared/os/changeDirectoryLine';
 import { randomUUID, randomBytes } from 'crypto';
 import type { ITaskRepository, Task } from '../Task';
 import type { TaskStatus } from '../TaskStatus';
@@ -1964,9 +1965,11 @@ export class ExecuteTaskUseCase {
 
       if (followUpDir) {
         try {
-          await this.resolveDriver(server).sendKeysToHandle(server, handle, [this.dialectOf(server).changeDirectory(followUpDir), 'Enter']);
+          await this.resolveDriver(server).sendKeysToHandle(server, handle, [await changeDirectoryLine(() => this.transportFactory.getFileOps(server), this.dialectOf(server), followUpDir), 'Enter']);
           await sleep(500);
-        } catch {}
+        } catch (err) {
+          this.appendLog(taskId, unitId, 'command', { type: 'cd_failed', directory: followUpDir, reason: err instanceof Error ? err.message : String(err) });
+        }
       }
 
       const followUpLaunchCommand = buildWorkerLaunchCommand(unit.workerType, unit.workerModel, unit.workerExtraArgs, this.dialectOf(server));

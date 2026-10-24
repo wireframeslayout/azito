@@ -5,12 +5,14 @@ import { findFilesByMtime, SESSION_SCAN_BUDGET_MS } from '../sessionScanUtils';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import type { ShellDialect } from '../../../shared/os/shellDialect';
 import { buildClaudeLaunchCommand } from './launchCommand';
+import { claudeProjectDirNames } from './projectDirName';
+import { claudeConfigDirOf, type LocalAgentHomes } from '../agentHomes';
 
 export class ClaudeSessionStrategy implements ISessionStrategy {
   readonly supportsSession = true;
   readonly needsPostLaunchScan = false;
 
-  constructor(private transportFactory: TransportFactory) {}
+  constructor(private transportFactory: TransportFactory, private localHomes: LocalAgentHomes) {}
 
   buildNewSessionFlags(sessionId: string): string {
     return `--session-id ${sessionId}`;
@@ -37,11 +39,14 @@ export class ClaudeSessionStrategy implements ISessionStrategy {
   async scanSessionId(server: ServerConfig, workingDirectory: string | null, afterTimestamp?: Date): Promise<string | null> {
     if (!workingDirectory) return null;
     const files = this.transportFactory.getFileOps(server);
-    const normalized = workingDirectory.replace(/\/+$/, '');
-    const encoded = normalized.replace(/[/.]/g, '-');
-
-    const projectDir = pathApiFor(files.platform).join(await files.realpath('~'), '.claude', 'projects', encoded);
-    const candidates = await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, Date.now() + SESSION_SCAN_BUDGET_MS);
+    const configDir = await claudeConfigDirOf(files, server.type === 'local', this.localHomes);
+    const deadline = Date.now() + SESSION_SCAN_BUDGET_MS;
+    const found = [];
+    for (const dirName of claudeProjectDirNames(files.platform, workingDirectory)) {
+      const projectDir = pathApiFor(files.platform).join(configDir, 'projects', dirName);
+      for (const file of await findFilesByMtime(files, projectDir, (name) => name.endsWith('.jsonl'), afterTimestamp, deadline)) found.push(file);
+    }
+    const candidates = found.sort((a, b) => a.mtimeMs - b.mtimeMs);
     const latest = candidates[candidates.length - 1];
     if (!latest) return null;
 
