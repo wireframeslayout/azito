@@ -89,6 +89,14 @@ export function assertGitSupported(profile: HostProfile | null, serverLabel: str
   throw new HostProfileError('unsupported_os', `git operations (diff, commits, worktrees, branches) are not available on ${serverLabel} (win32) yet: Windows git support is tracked in #370.`);
 }
 
+/**
+ * The OS whose path rules apply to a server's host. A null profile is an agent registered before the OS was recorded: a Unix
+ * one (the same reading as `assertPosixHost` / `assertGitSupported`).
+ */
+export function platformOfProfile(profile: HostProfile | null): HostPlatform {
+  return profile?.platform ?? 'linux';
+}
+
 /** The separator of a host's PATH. A null profile (a Unix agent registered before the OS was recorded) uses `:`. */
 export function pathDelimiterFor(profile: { platform: HostPlatform; arch?: HostArch } | null): ':' | ';' {
   return profile?.platform === 'win32' ? ';' : ':';

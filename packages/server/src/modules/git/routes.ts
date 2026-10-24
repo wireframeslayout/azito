@@ -4,13 +4,16 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ITaskRepository } from '../tasks/Task';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
-import { GitDiffService, SAFE_PATH, SAFE_BRANCH, SAFE_HASH, type DiffScope } from './GitDiffService';
+import { GitDiffService, SAFE_BRANCH, SAFE_HASH, type DiffScope } from './GitDiffService';
 import type { WorktreeServiceFactory } from './WorktreeServiceFactory';
 import type { GitProviderService } from './providers/GitProviderService';
 import type { ProviderFilter } from './RepositoryCandidateService';
 import { RepositoryCandidateService } from './RepositoryCandidateService';
 import { runGit } from './runGit';
-import { assertGitSupported } from '../../shared/os/hostProfile';
+import { assertGitSupported, platformOfProfile } from '../../shared/os/hostProfile';
+import { assertGitPathArg } from './assertSafeGitArgs';
+import { isWorktreeOfTask, taskIdOfWorktreePath } from './gitPath';
+import type { HostPlatform } from '../../shared/os/hostEnv';
 
 const VALID_SCOPES = new Set<string>(['uncommitted', 'base', 'commit']);
 const VALID_PROVIDER_FILTERS = new Set<string>(['github', 'gitlab', 'all']);
@@ -29,6 +32,15 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
   const { serverRepo, transportFactory, projectRepo, gitProvider } = opts;
   // A Windows host is refused with `unsupported_os` (mapAppError -> 501) until #370, before the path is even looked at.
   const assertServerGit = (srv: ServerConfig): void => assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
+  const hostPlatformOf = (srv: ServerConfig): HostPlatform => platformOfProfile(transportFactory.hostProfileFor(srv));
+  const isInvalidPath = (srv: ServerConfig, dirPath: string): boolean => {
+    try {
+      assertGitPathArg(hostPlatformOf(srv), dirPath, 'path');
+      return false;
+    } catch {
+      return true;
+    }
+  };
   const gitDiffService = new GitDiffService(transportFactory);
   const repositoryCandidateService =
     projectRepo && gitProvider ? new RepositoryCandidateService(projectRepo, gitProvider) : null;
@@ -43,7 +55,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
 
       const dirPath = (request.query.path || '').trim();
       if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
-      if (!SAFE_PATH.test(dirPath)) return reply.status(400).send({ error: 'Invalid path' });
+      if (isInvalidPath(srv, dirPath)) return reply.status(400).send({ error: 'Invalid path' });
 
       const base = (request.query.base || '').trim();
       if (base && !SAFE_BRANCH.test(base)) return reply.status(400).send({ error: 'Invalid base branch' });
@@ -66,7 +78,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
 
       const dirPath = (request.query.path || '').trim();
       if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
-      if (!SAFE_PATH.test(dirPath)) return reply.status(400).send({ error: 'Invalid path' });
+      if (isInvalidPath(srv, dirPath)) return reply.status(400).send({ error: 'Invalid path' });
 
       const base = (request.query.base || '').trim();
       if (base && !SAFE_BRANCH.test(base)) return reply.status(400).send({ error: 'Invalid base branch' });
@@ -114,6 +126,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
 
       try {
         const transport = transportFactory.getTransport(srv);
+        const platform = hostPlatformOf(srv);
         const worktreeService = wsf.create(srv.type, transport);
         const entries = await worktreeService.list(workingDir);
 
@@ -131,8 +144,11 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
         );
 
         const worktrees = entries.map((entry, i) => {
-          const match = entry.path.match(/\/\.worktrees\/task-(\d+)$/);
-          const task = match ? taskRepo.findById(parseInt(match[1], 10)) : null;
+          const taskId = taskIdOfWorktreePath(platform, entry.path);
+          const found = taskId !== null ? taskRepo.findById(taskId) : null;
+          // The name `.worktrees/task-<id>` only says which task id; a task of another repository can carry the same id,
+          // so a task whose recorded worktree is somewhere else is not this worktree's.
+          const task = found && isWorktreeOfTask(platform, found, entry.path) ? found : null;
           return {
             path: entry.path,
             branch: entry.branch,
@@ -142,7 +158,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
             taskId: task?.id ?? null,
             taskTitle: task?.title ?? null,
             taskStatus: task?.status ?? null,
-            orphaned: match != null && task == null,
+            orphaned: taskId !== null && found == null,
             changedCount: changedCounts[i],
           };
         });
