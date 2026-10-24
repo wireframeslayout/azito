@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import esbuild from 'esbuild';
 import { hostTar, listArchive } from './archive';
 import { stageNodeWin32 } from './nodeAssets';
+import { assertAgentBundleComplete } from '../src/modules/servers/agent-deploy/agentBundleCheck';
 import { MISAO_RELEASE, misaoExecutableName, misaoReleaseFileName, stageMisao, type MisaoManifest, type MisaoReleaseFile } from './misaoAssets';
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -255,6 +256,9 @@ function assertStageContents(platform: Args['platform']): void {
 
   if (isWin32) assertNodePtyWin32();
 
+  // The agent runs on Linux whichever OS built this hub: its tarball must carry the Linux node-pty and an executable launcher.
+  assertAgentBundleComplete(fs.readFileSync(path.join(STAGE, 'dist-agent', 'azito-agent.tar.gz')), 'dist-agent/azito-agent.tar.gz');
+
   // The staged misao must be exactly the pinned release: a truncated copy or a stale cache would otherwise ship
   // a daemon that fails the first time a user installs it.
   const manifest = JSON.parse(fs.readFileSync(path.join(STAGE, 'misao', 'manifest.json'), 'utf-8')) as MisaoManifest;
@@ -324,6 +328,8 @@ async function main(): Promise<void> {
   execSync('npm run build:web', { cwd: REPO_ROOT, stdio: 'inherit', timeout: 120000 });
 
   // 2. Build agent bundle
+  // Always the Linux x86-64 agent. Off a Linux x86-64 host this needs AZITO_AGENT_NODE_PTY_LINUX (a node-pty folder built
+  // on Linux x86-64; build-agent.ts says what it needs when it is missing), which execSync passes on through the environment.
   console.log('[build-hub] Building agent bundle...');
   execSync('npx tsx scripts/build-agent.ts', { cwd: SERVER_ROOT, stdio: 'inherit', timeout: 180000 });
 

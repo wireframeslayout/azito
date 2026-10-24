@@ -1,0 +1,5 @@
+# Every text file is LF in the working tree on every OS. Git for Windows checks out CRLF by default (core.autocrlf=true), and what is
+# built from a Windows checkout reaches Linux / macOS hosts: `#!/bin/bash\r` does not start, a shell script embedded in a TypeScript
+# template literal arrives with \r in it, and the agent bundle's hash would differ from the one built on Linux.
+* text=auto eol=lf
+*.png binary

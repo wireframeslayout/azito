@@ -61,6 +61,8 @@ jobs:
   windows-unit:
     name: Unit tests (Windows)
     runs-on: windows-latest
+    needs: agent-native
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -71,8 +73,142 @@ jobs:
 
       - run: npm ci
 
+      # WindowsAgentDeployer.windows.test.ts installs the agent bundle this very runner builds (AgentBundler.ensureBuild), which needs node-pty's Linux binary.
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux
+          path: ${{ runner.temp }}/node-pty-linux
+
       - name: Server unit tests
+        env:
+          AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
         run: npx -w packages/server vitest run --project unit
+
+  # The agent runs on Linux x86-64 whichever OS the hub runs on, and node-pty's Linux binary can only be built on Linux. This job builds
+  # the agent bundle on its own platform (checking the tarball the way verify-agent-tarball.ts does) and hands that node-pty to the jobs that
+  # cross-build the bundle: a Windows hub builds the very same agent from it.
+  agent-native:
+    name: Agent bundle (Linux, node-pty for other hosts)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build and verify the agent bundle
+        run: |
+          npx -w packages/server tsx scripts/build-agent.ts
+          npx -w packages/server tsx scripts/verify-agent-tarball.ts dist-agent/azito-agent.tar.gz
+
+      - name: Collect node-pty (Linux x86-64)
+        run: |
+          mkdir -p node-pty-linux/build/Release
+          cp node_modules/node-pty/package.json node-pty-linux/
+          cp node_modules/node-pty/build/Release/pty.node node-pty-linux/build/Release/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: node-pty-linux
+          path: node-pty-linux
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-bundle-linux
+          path: packages/server/dist-agent
+
+  # The agent tarball built on a Windows host, from the Linux node-pty above. Windows has no execute bit and no Linux binary of its own, so
+  # this is where the bundle's modes and contents are proved: the file list, ELF pty.node, run.sh executable, as read by the hub's reader and
+  # by Windows' own tar.exe. The bundle is then unpacked on Linux (agent-bundle-from-windows) and its node-pty is run.
+  agent-bundle-windows:
+    name: Agent bundle (built on Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    needs: agent-native
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux
+          path: ${{ runner.temp }}/node-pty-linux
+
+      - name: Without a Linux node-pty the build refuses instead of making a broken bundle
+        run: |
+          if npx -w packages/server tsx scripts/build-agent.ts > refuse.log 2>&1; then echo "build-agent must fail on a Windows host without --node-pty-linux" >&2; exit 1; fi
+          grep -q "cannot run on a Linux x86-64 agent" refuse.log
+          cat refuse.log | tail -n 5
+
+      - name: Build the agent bundle on Windows
+        env:
+          AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
+        run: npx -w packages/server tsx scripts/build-agent.ts
+
+      - name: Verify the tarball (hub reader and Windows tar.exe)
+        run: npx -w packages/server tsx scripts/verify-agent-tarball.ts dist-agent/azito-agent.tar.gz
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: agent-bundle-windows
+          path: packages/server/dist-agent
+
+  agent-bundle-from-windows:
+    name: Agent bundle built on Windows, run on Linux
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    needs: [agent-native, agent-bundle-windows]
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-bundle-linux
+          path: linux
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: agent-bundle-windows
+          path: windows
+
+      - name: Same content on both hosts
+        run: |
+          echo "linux:   $(cat linux/bundle-hash.txt)"
+          echo "windows: $(cat windows/bundle-hash.txt)"
+          if [ "$(cat linux/bundle-hash.txt)" != "$(cat windows/bundle-hash.txt)" ]; then
+            mkdir -p cmp/linux cmp/windows
+            tar xzf linux/azito-agent.tar.gz -C cmp/linux
+            tar xzf windows/azito-agent.tar.gz -C cmp/windows
+            echo "Files that differ:"
+            diff -rq cmp/linux cmp/windows || true
+            exit 1
+          fi
+
+      # What buildSafeExtractCommand does on the agent host (extract with --no-same-permissions), then the two things the agent needs.
+      - name: Unpack as the installer does and run node-pty from it
+        run: |
+          sha256sum -c <(sed 's# azito-agent.tar.gz# windows/azito-agent.tar.gz#' windows/SHA256SUMS)
+          mkdir agent && tar xzf windows/azito-agent.tar.gz -C agent --no-same-owner --no-same-permissions
+          test -x agent/run.sh
+          cd agent
+          node -e "const pty = require('./node_modules/node-pty'); const t = pty.spawn('/bin/echo', ['from-a-windows-built-bundle']); let out = ''; t.onData((d) => { out += d; }); t.onExit(() => { console.log(out.trim()); process.exit(out.includes('from-a-windows-built-bundle') ? 0 : 1); });"
 
   # Builds the Windows hub bundle (azito-hub-<ver>-win32-x64.zip) exactly as release.yml does, then boots it: extracts the zip and
   # starts the bundled node.exe on azito-hub.cjs, and installs it with install.ps1. No tag or release is involved, so a bundling or startup break on Windows
@@ -80,6 +216,7 @@ jobs:
   hub-bundle-windows:
     name: Hub bundle (Windows)
     runs-on: windows-latest
+    needs: agent-native
     timeout-minutes: 20
     defaults:
       run:
@@ -94,7 +231,15 @@ jobs:
 
       - run: npm ci
 
+      # The bundle carries the Linux agent, which needs node-pty's Linux binary (built once, in agent-native).
+      - uses: actions/download-artifact@v4
+        with:
+          name: node-pty-linux
+          path: ${{ runner.temp }}/node-pty-linux
+
       - name: Build the Windows hub bundle
+        env:
+          AZITO_AGENT_NODE_PTY_LINUX: ${{ runner.temp }}/node-pty-linux
         run: npx -w packages/server tsx scripts/build-hub.ts --version v0.0.0-ci --platform win32 --arch x64 --repo ${{ github.repository }}
 
       - name: Smoke-test the Windows hub bundle
@@ -172,6 +317,26 @@ jobs:
 
       - name: misao integration tests (Windows)
         run: npx -w packages/server vitest run --project misao-integration src/modules/system/misao/MisaoWindowsInstaller.misaoIntegration.test.ts
+
+  # A Windows hub reaching an SSH server for real: the runner's own OpenSSH server over the loopback, authenticated by a key under the hub's
+  # home and by the OpenSSH Authentication Agent service (named pipe), with a changed host key refused. The script puts the runner back as it
+  # found it (sshd, ssh-agent, administrators_authorized_keys).
+  ssh-windows:
+    name: SSH from a Windows hub (sshd, ssh-agent)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - name: SSH key file, ssh-agent pipe and host key pinning against the local sshd
+        run: npx -w packages/server tsx scripts/smoke-ssh-win32.ts
 
   shell:
     name: Shell scripts

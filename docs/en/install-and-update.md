@@ -126,7 +126,32 @@ The CLI reads `current.txt` and runs the bundled hub:
 | `azito service status\|start\|stop\|restart\|reload\|install` | The same operations the Unix service has. `install` registers the task (install.ps1 calls it); registering the same definition again does nothing, and a different one is refused while the hub runs |
 | `azito misao status\|install\|update\|start` | The hub's own misao as the Task Scheduler task `AzitoMisao` (below and `misao.md`). `install.ps1` runs `install` for you; `update` ends every pane first |
 
-**Not supported yet (#380):** misao-only local servers (B4a), SSH / agent servers of a Windows hub (B4b), and in-app update/uninstall (#381).
+**Not supported yet (#380):** in-app update/uninstall (#381).
+
+### Using SSH / agent servers from a Windows hub
+
+A Windows hub adds servers over SSH and installs / updates the Linux agent just like a Linux or macOS hub does (agents on Windows hosts: "Adding a Windows host as an agent"). Where the hub looks:
+
+| What | Where |
+|---|---|
+| Private key | `%USERPROFILE%\.ssh\id_ed25519`, else `id_rsa`, `id_ecdsa` (the user's home folder, not `$HOME`) |
+| ssh config | `%USERPROFILE%\.ssh\config` (`HostName` / `Port` / `User` / `IdentityFile`; the `~` of `IdentityFile ~/.ssh/key` is the user's home) |
+| Host keys | `known_hosts` is not read. The first connection records the fingerprint in AZITO (trust on first use) and a changed one is refused, as on a Linux / macOS hub |
+| ssh-agent | `SSH_AUTH_SOCK` if set (`\\.\pipe\...` or `pageant`); otherwise the OpenSSH named pipe `\\.\pipe\openssh-ssh-agent` |
+| User name | `user@host`, else `User` in the ssh config, else the Windows user name (`USERNAME`) |
+
+Nothing needs preparing for a plain key file (a key file protected by a passphrase cannot be used: put it in ssh-agent). To use ssh-agent, start the Windows **OpenSSH Authentication Agent** service (disabled by default). In an elevated PowerShell:
+
+```powershell
+Set-Service -Name ssh-agent -StartupType Automatic
+Start-Service ssh-agent
+ssh-add $env:USERPROFILE\.ssh\id_ed25519   # add the key (asks for the passphrase)
+ssh-add -l                                    # list the keys
+```
+
+When the service is stopped and the pipe is absent, the hub logs "no ssh-agent" once, with the reason (and the command to start it), and goes on to the key files. A hub running as a Task Scheduler task uses the same pipe, so `SSH_AUTH_SOCK` need not be set.
+
+The common agent bundle always includes the native module for Linux x86-64 (node-pty's `pty.node`), whatever OS the hub runs on; it also carries the macOS and Windows prebuilds, so one bundle serves every agent OS. The release zip carries the same bundle as the other hub builds. After this change the bundle hash differs, so agents already installed are redeployed automatically once by the normal update. To install agents from a Windows hub built from source, prepare a node-pty folder built on Linux x64 (`package.json` and `build/Release/pty.node`) and set `AZITO_AGENT_NODE_PTY_LINUX` to its path.
 
 ### misao on Windows
 

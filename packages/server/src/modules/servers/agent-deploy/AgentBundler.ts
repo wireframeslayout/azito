@@ -89,10 +89,20 @@ export class AgentBundler {
     if (!this.needsBuild()) return;
     console.log('[AgentBundler] Building agent bundle...');
     // The node binary itself loads tsx: `npx` is `npx.cmd` on Windows and cannot be run without a shell.
-    execFileSync(process.execPath, ['--import', 'tsx', 'scripts/build-agent.ts'], {
-      cwd: SERVER_ROOT,
-      stdio: 'inherit',
-      timeout: 180000,
-    });
+    // The agent is always the Linux x86-64 one; a hub of another OS / CPU builds it with a Linux node-pty that
+    // AZITO_AGENT_NODE_PTY_LINUX names (the child inherits the environment, and build-agent.ts says what it needs).
+    try {
+      execFileSync(process.execPath, ['--import', 'tsx', 'scripts/build-agent.ts'], {
+        cwd: SERVER_ROOT,
+        stdio: 'inherit',
+        timeout: 180000,
+      });
+    } catch (err) {
+      throw new Error(
+        'Building the agent bundle failed (build-agent.ts printed why to the hub log). ' +
+          'A hub that is not Linux x86-64 needs AZITO_AGENT_NODE_PTY_LINUX set to a node-pty folder built on Linux x86-64; ' +
+          `a release hub carries a ready bundle. (${(err as Error).message})`,
+      );
+    }
   }
 }

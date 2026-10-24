@@ -1,9 +1,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { Readable } from 'stream';
 import { Client as Ssh2Client } from 'ssh2';
 import type { SshClient } from '../ssh/SshClient';
 import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
 import { shellQuote } from '../../../shared/shellQuote';
+import { collectTreeEntries, modeByShebang, packTarGz } from '../../../shared/fs/tarGz';
 
 export type HarnessInstallStep = 'transfer' | 'setup';
 
@@ -143,39 +145,32 @@ export class HarnessInstaller {
       throw new Error(`Harness directory not found: ${HARNESS_DIR}`);
     }
 
-    // Create tarball in a temp file
-    const { execFile } = await import('child_process');
-    const { promisify } = await import('util');
-    const execFileAsync = promisify(execFile);
-    const os = await import('os');
+    // Packed in Node, not with the hub's `tar`: the harness goes to a Linux / macOS host, and a Windows hub's file system
+    // has no execute bit for `tar` to copy, so the scripts' modes are decided here (`#!` files are executable).
+    const tarball = packTarGz(
+      collectTreeEntries(HARNESS_DIR, {
+        prefix: path.basename(HARNESS_DIR),
+        exclude: (name) => name === 'node_modules' || name === '.git',
+        fileMode: (_rel, data) => modeByShebang(data),
+        directoryMode: 0o755,
+      }),
+      Math.floor(Date.now() / 1000),
+    );
 
-    const tmpTar = path.join(os.tmpdir(), `azito-harness-${Date.now()}.tar.gz`);
-    try {
-      await execFileAsync('tar', [
-        'czf', tmpTar,
-        '--exclude=node_modules',
-        '--exclude=.git',
-        '-C', path.dirname(HARNESS_DIR),
-        path.basename(HARNESS_DIR),
-      ]);
+    const remoteTmp = `/tmp/azito-harness-${Date.now()}.tar.gz`;
+    await this.sftpWrite(sshHost, tarball, remoteTmp);
 
-      const remoteTmp = `/tmp/azito-harness-${Date.now()}.tar.gz`;
-      await this.sftpUpload(sshHost, tmpTar, remoteTmp);
+    const harnessDir = remoteHarnessDir(prefix);
+    const deployCmd = [
+      `mkdir -p ${harnessDir}`,
+      `&& tar xzf ${remoteTmp} -C ${harnessDir} --strip-components=1`,
+      `&& rm -f ${remoteTmp}`,
+      `&& chmod +x ${harnessDir}/setup.sh`,
+    ].join(' ');
 
-      const harnessDir = remoteHarnessDir(prefix);
-      const deployCmd = [
-        `mkdir -p ${harnessDir}`,
-        `&& tar xzf ${remoteTmp} -C ${harnessDir} --strip-components=1`,
-        `&& rm -f ${remoteTmp}`,
-        `&& chmod +x ${harnessDir}/setup.sh`,
-      ].join(' ');
-
-      const result = await this.sshClient.execIsolated(sshHost, deployCmd);
-      if (result.code !== 0) {
-        throw new Error(`Deploy failed: ${result.stderr}`);
-      }
-    } finally {
-      try { fs.unlinkSync(tmpTar); } catch { /* ignore */ }
+    const result = await this.sshClient.execIsolated(sshHost, deployCmd);
+    if (result.code !== 0) {
+      throw new Error(`Deploy failed: ${result.stderr}`);
     }
   }
 
@@ -254,7 +249,7 @@ export class HarnessInstaller {
     }
   }
 
-  private sftpUpload(sshHost: string, localPath: string, remotePath: string): Promise<void> {
+  private sftpWrite(sshHost: string, data: Buffer, remotePath: string): Promise<void> {
     return new Promise((resolve, reject) => {
       const resolved = this.sshClient.resolveHost(sshHost);
       const conn = new Ssh2Client();
@@ -268,7 +263,7 @@ export class HarnessInstaller {
       conn.on('ready', () => {
         conn.sftp((err, sftp) => {
           if (err) { clearTimeout(timeout); conn.end(); return reject(err); }
-          const readStream = fs.createReadStream(localPath);
+          const readStream = Readable.from([data]);
           const writeStream = sftp.createWriteStream(remotePath);
           writeStream.on('close', () => {
             clearTimeout(timeout);

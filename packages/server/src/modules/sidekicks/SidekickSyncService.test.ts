@@ -7,6 +7,7 @@ import { gunzipSync } from 'zlib';
 import {
   SidekickSyncService,
   computeSidekicksHash,
+  buildTarball,
   resolveSidekickDir,
   REMOTE_SIDEKICKS_BASE,
   PAYLOAD_CHUNK_SIZE,
@@ -16,6 +17,7 @@ import { ShellFileOps } from '../servers/transport/ShellFileOps';
 import { LocalFileOps, localFileOpsHost } from '../../shared/fs/LocalFileOps';
 import { runCommandSpec } from '../../shared/exec/runCommandSpec';
 import { CommandSpawnError, type CommandResult, type CommandSpec } from '../../shared/exec/commandSpec';
+import { unpackTarGz } from '../../shared/fs/tarGz';
 import type { SidekickPackage } from './SidekickPackage';
 
 function makePackage(overrides: Partial<SidekickPackage> = {}): SidekickPackage {
@@ -127,6 +129,30 @@ describe('computeSidekicksHash', () => {
     writeTree(dirA, { 'references/extra.md': 'extra' });
 
     expect(computeSidekicksHash([pkg])).not.toBe(before);
+  });
+});
+
+describe('buildTarball', () => {
+  it('states the modes itself: files under scripts/ are executable, the rest are not, whatever the hub file system reports', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sidekick-tar-'));
+    try {
+      writeTree(root, { 'SKILL.md': 'body', 'references/r.md': 'ref', 'scripts/push.sh': '#!/bin/bash\n', 'scripts/lib/helper.sh': 'x' });
+      fs.chmodSync(path.join(root, 'scripts', 'push.sh'), 0o644);
+      const entries = unpackTarGz(buildTarball([{ name: 'pkg', dir: root }]));
+      const modes = Object.fromEntries(entries.map((e) => [e.path, e.mode.toString(8)]));
+      expect(modes).toEqual({
+        pkg: '755',
+        'pkg/SKILL.md': '644',
+        'pkg/references': '755',
+        'pkg/references/r.md': '644',
+        'pkg/scripts': '755',
+        'pkg/scripts/lib': '755',
+        'pkg/scripts/lib/helper.sh': '755',
+        'pkg/scripts/push.sh': '755',
+      });
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 
