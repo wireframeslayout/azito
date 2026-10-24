@@ -265,6 +265,17 @@ jobs:
         timeout-minutes: 8
         run: npx -w packages/server tsx scripts/smoke-misao-win32.ts "$(cd packages/server && ls dist-hub/azito-hub-*.zip)" dist-hub/SHA256SUMS ../../install.ps1
 
+      # Keep the zip that passed every smoke above, so a real Windows machine can be checked with it
+      # (install.ps1 -ZipPath <zip> -Sha256Sums <SHA256SUMS>) without cutting a release.
+      - name: Upload the Windows hub bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: hub-win32-x64
+          path: |
+            packages/server/dist-hub/azito-hub-*.zip
+            packages/server/dist-hub/SHA256SUMS
+          retention-days: 14
+
   # The integration tests that start a real misao daemon. They run on the very binary the hub ships (the version, URL and
   # sha256 pinned in packages/server/scripts/misaoAssets.ts), so a pin that does not start, or a protocol drift, fails here.
   misao-integration:
