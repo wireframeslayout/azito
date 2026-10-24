@@ -59,3 +59,4 @@ export {
   hostFeatureSupport,
 } from './hostCapabilities';
 export { pickTaskExecutionServer } from './taskServer';
+export { type HostPathApi, hostPathFor } from './hostPath';

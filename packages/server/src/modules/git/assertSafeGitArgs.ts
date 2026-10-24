@@ -1,3 +1,6 @@
+import type { HostPlatform } from '../../shared/os/hostEnv';
+import { invalidWorkingDirectoryReason } from '../../shared/os/hostPath';
+
 export const SAFE_PATH_PATTERN = /^[a-zA-Z0-9_./@:~-][a-zA-Z0-9_./@:~-]*$/;
 export const SAFE_BRANCH_PATTERN = /^[a-zA-Z0-9_./-]+$/;
 
@@ -19,6 +22,49 @@ export function isFullyQualifiedRef(value: string): boolean {
  */
 export function assertNotOptionLike(value: string, label: string): void {
   if (value.startsWith('-')) throw new Error(`Unsafe ${label}: ${value}`);
+}
+
+/**
+ * A host path handed to git as an argument. git runs as a CommandSpec (an argv, never a shell line), so the characters of the
+ * path cannot split the command or be interpreted: spaces, Japanese and a Windows `\` are all fine, unlike the shell-line
+ * `SAFE_PATH_PATTERN` above. What is left to refuse is a path git would not take as a path: one the host cannot use at all
+ * (empty, NUL, a Windows device path / drive-relative / stream), a relative one (resolved against an unknown directory), and
+ * one that git would read as an option (`assertNotOptionLike`).
+ *
+ * `~` is accepted but git does not expand it: the caller resolves it against the host's home directory first (today
+ * `RemoteWorktreeService.absolute()`, which still has to learn `~\` for R4). This holds for a path passed in an argv; a path
+ * that is spliced into a shell line (`GitInfoCollector.collectGitInfoRemote`, `execWithSentinel`) still needs the shell's
+ * quoting, which is POSIX-only (`shellQuote`), so R3 must make that quoting per OS before using this there.
+ */
+export function assertGitPathArg(platform: HostPlatform, value: string, label: string): void {
+  assertNotOptionLike(value, label);
+  const reason = invalidWorkingDirectoryReason(platform, value);
+  if (reason) throw new Error(`Unsafe ${label}: ${reason}`);
+}
+
+function invalidStoredPathOn(platform: HostPlatform, value: string): string | null {
+  const reason = invalidWorkingDirectoryReason(platform, value);
+  if (reason) return reason;
+  // TODO(#370 R3/R4): drop this POSIX restriction once the git / worktree code takes paths through `assertGitPathArg`.
+  // Until then `assertSafePath` in Local/RemoteWorktreeService, GitInfoCollector and TaskCleanupService refuses anything else,
+  // so a space or non-ASCII path that was saved would only fail later, after the phases ran.
+  if (platform !== 'win32' && !SAFE_PATH_PATTERN.test(value)) {
+    return 'only letters, digits and _ . / @ : ~ - are supported in a path for now';
+  }
+  return null;
+}
+
+/**
+ * Why a new working directory / worktree path (a project server's, a task's) is refused at the API boundary, or null.
+ * `platform` null is a server that is not known yet (an agent that has not reported its OS, a task whose server is chosen
+ * later from its unit or project): the path is then accepted when it is valid on at least one OS, and the host-specific
+ * check is made later where the host is known.
+ */
+export function invalidStoredWorkingDirectoryReason(platform: HostPlatform | null, value: string): string | null {
+  if (platform) return invalidStoredPathOn(platform, value);
+  const posix = invalidStoredPathOn('linux', value);
+  if (posix === null) return null;
+  return invalidStoredPathOn('win32', value) === null ? null : posix;
 }
 
 export function assertSafePath(value: string, label: string): void {

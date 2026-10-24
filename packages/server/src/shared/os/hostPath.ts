@@ -1,4 +1,5 @@
 import * as path from 'path';
+import { hostPathFor } from '@azito/shared';
 import type { HostPlatform } from './hostEnv';
 
 export type HostPathApi = typeof path.posix;
@@ -31,6 +32,34 @@ export function invalidHostPathReason(platform: HostPlatform, input: string): st
   const rest = DRIVE_PREFIX.test(input) ? input.slice(2) : input;
   if (rest.includes(':')) return 'an alternate data stream (a ":" in a name) is not allowed';
   return null;
+}
+
+/** `~`, `~/x`, and on win32 also `~\x`: the home directory of the host's user, expanded by the code that runs on that host. */
+export function isHomeRelativePath(platform: HostPlatform, input: string): boolean {
+  if (input === '~' || input.startsWith('~/')) return true;
+  return platform === 'win32' && input.startsWith('~\\');
+}
+
+const CONTROL_CHARACTER = /[\x00-\x1f\x7f]/;
+// A win32 working directory names its drive (or UNC share): `\work` and `/work` would follow the process's current drive.
+const WIN32_FULLY_QUALIFIED = /^(?:[A-Za-z]:[\\/]|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/;
+
+/**
+ * Why a stored working directory (a project server's, a task's) is refused, or null when it is acceptable: the file-operation
+ * rules of {@link invalidHostPathReason}, no control character on any OS (a follow-up types the path into a pane, where Ctrl-U
+ * or a line break would run another command), then an absolute path of the host (on win32 with its drive or UNC share) or a `~`
+ * form. A relative path would be resolved against whatever directory the next command happens to run in. Only new input is
+ * checked; a value already in the database is never run through this.
+ */
+export function invalidWorkingDirectoryReason(platform: HostPlatform, input: string): string | null {
+  const reason = invalidHostPathReason(platform, input);
+  if (reason) return reason;
+  if (CONTROL_CHARACTER.test(input)) return 'the path contains a control character';
+  if (isHomeRelativePath(platform, input)) return null;
+  if (platform === 'win32') {
+    return WIN32_FULLY_QUALIFIED.test(input) ? null : 'the path must start with a drive (C:\\) or a UNC share (or ~)';
+  }
+  return hostPathFor(platform).isAbsolute(input) ? null : 'the path must be absolute (or start with ~)';
 }
 
 /**
