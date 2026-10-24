@@ -1292,7 +1292,6 @@ export class ExecuteTaskUseCase {
 
       try {
         const identityResult = await ensureGitIdentity(
-          server.type,
           this.transportFactory.getTransport(server),
           wt.path,
           this.hubGitIdentity,
@@ -1585,9 +1584,7 @@ export class ExecuteTaskUseCase {
                 this.taskRepo.update(taskId, updates);
               }
             } else if (workingDir) {
-              const gitInfo = server.type === 'local'
-                ? this.gitInfoCollector.collectGitInfoSync(workingDir, wtBaseBranch ?? undefined)
-                : await this.gitInfoCollector.collectGitInfoRemote(server, workingDir, wtBaseBranch ?? undefined);
+              const gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, wtBaseBranch ?? undefined);
               const updates: Partial<Task> = {};
               if (gitInfo.changedFiles) updates.changedFiles = gitInfo.changedFiles;
               const prUrl = await this.findPrUrl(repo, gitInfo.branch);
@@ -2034,7 +2031,7 @@ export class ExecuteTaskUseCase {
       const doneMarker = `AZITO_DONE_${taskId}_${nonce}`;
       const questionsMarker = `AZITO_QUESTIONS_${taskId}_${nonce}`;
       const testFailedMarker = `AZITO_TEST_FAILED_${taskId}_${nonce}`;
-      const outputFilePath = this.taskTempFiles.outputFile(server, taskId, nonce);
+      const outputFilePath = this.taskTempFiles.outputFile(await this.transportFactory.taskTempServer(server), taskId, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
 
       // Start pipe-pane BEFORE sending to capture all output — this capture runs

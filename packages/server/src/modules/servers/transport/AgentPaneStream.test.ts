@@ -18,7 +18,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 5000): Promise<void> {
   }
 }
 
-// The hub names agent pipe files under /tmp for now, which is a POSIX path.
+// The agent is an unrecorded one here (a Unix agent), so the hub names its pipe files under /tmp, which is a POSIX path.
 describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent that manages its stream files', () => {
   let app: FastifyInstance | undefined;
   let stream: AgentPaneStream | undefined;
@@ -31,7 +31,7 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
   });
 
   async function startAgent(withRoutes: boolean): Promise<{ transport: AgentTransport; managed: ManagedStreamFiles }> {
-    const managed = new ManagedStreamFiles(['/tmp']);
+    const managed = new ManagedStreamFiles(process.platform, ['/tmp']);
     app = Fastify();
     await app.register(websocket);
     if (withRoutes) await app.register(paneStreamRoutes, { managed });
@@ -48,6 +48,7 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
 
   it('registers its file, streams what is written to it, and releases it on stop', async () => {
     const { transport, managed } = await startAgent(true);
+    await transport.loadTaskTempHost();
     stream = transport.createPaneStream('p-1' as never) as AgentPaneStream;
     const received: string[] = [];
     stream.on('data', (line: string) => received.push(line));
@@ -75,6 +76,7 @@ describe.skipIf(process.platform === 'win32')('AgentPaneStream against an agent 
     const onUnhandled = (reason: unknown): void => { unhandled.push(reason); };
     process.on('unhandledRejection', onUnhandled);
     try {
+      await transport.loadTaskTempHost();
       stream = transport.createPaneStream('p-3' as never) as AgentPaneStream;
       const failures: Error[] = [];
       let errorEvents = 0;

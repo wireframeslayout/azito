@@ -620,7 +620,7 @@ export class TaskRestoreService {
         }
 
         try {
-          const identityResult = await ensureGitIdentity(server.type, transport, worktreePath, hubGitIdentity);
+          const identityResult = await ensureGitIdentity(transport, worktreePath, hubGitIdentity);
           if (unitId !== null && identityResult.action === 'applied') {
             appendLogAndEmit(logRepo, events, task.id, unitId, 'command', { type: 'git_identity_applied', fields: identityResult.fields });
           } else if (unitId !== null && identityResult.action === 'hub_missing') {

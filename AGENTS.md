@@ -241,6 +241,13 @@ packages/
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
   (neither is an error; an agent too old to report keeps the hub's shell); a Windows agent's node opens its reported `%ComSpec%` bare (a pane with a launch command is `unsupported_os` until #371), and so does a Windows hub's own (`hubPaneShell`, the hub's `%ComSpec%`; #380 B4a)
 
+- Task files (#371 T2): `GET /api/host` also reports the agent's `homeDir` / `tmpDir`. `TaskTempFiles` names a task's signal / pipe / output / rules files
+  from a `TaskTempServer` (`local` = the hub's tmpDir; `agent` = the agent's OS notation via `hostPathFor` + its reported tmpDir). The hub asks once per
+  transport (`TransportFactory.taskTempServer` → `AgentTransport.loadTaskTempHost`, kept in memory, nothing stored; an unrecorded agent is a Unix `/tmp`) and it
+  must be awaited before an agent pane stream is created. `ManagedStreamFiles(platform, allowedDirs)` judges paths by the agent's own rules (a win32 agent has no `/tmp`).
+  `WorkerWaiter.readPhaseOutputFile` / `GitInfoCollector.writeRemoteFile` use `IFileOps` (a missing output file is `null`, an unreadable one throws); `GitInfoCollector.collectGitInfo`
+  and `gitConfigOps` run git as an argv through `runGit` (local and remote are one path).
+
 ### Local server on a Windows hub: misao only (#380 B4a)
 - `hostFeatureSupport(profile, 'tmux')` (`@azito/shared`) is the one decision. `SqliteServerRepository(db, hubHost)` stamps the hub's own host on a local server's `hostProfile` when it reads it
   (never stored) and reads a `tmux` default as `misao` where tmux is closed (the row is untouched). `muxKinds.hostRunsTmux` / `supportedMuxKinds` follow it; `registerTmuxDriver` registers the tmux driver

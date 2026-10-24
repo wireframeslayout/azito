@@ -28,8 +28,6 @@ const REMAINING: Record<string, number> = {
   'modules/sidekicks/shellSidekickSync.ts': 6,
   'modules/windows/WindowRespawnService.ts': 1,
   'modules/transcripts/WindowSessionResolver.ts': 2,
-  'modules/tasks/execution/WorkerWaiter.ts': 2,
-  'modules/tasks/execution/GitInfoCollector.ts': 2, // git commands, not yet moved (not in P6's list)
   // C-2: Unix-only install scripts. They stay sh; each entry point first refuses a win32 server with unsupported_os (P9,
   // `assertPosixHost`), and the Windows versions are separate functions added with the Windows agent (#369 / #380). The OS probes
   // (`uname`, `echo $HOME`) are gone: the OS comes from the recorded host profile.
@@ -42,7 +40,7 @@ const REMAINING: Record<string, number> = {
   // ps → #371
   'modules/servers/resources/ResourceGuard.ts': 1,
   'modules/servers/resources/windowResources.ts': 1,
-  // the sentinel wrapper for the remaining remote git commands, and the shell route of a recorded-host-less agent's run()
+  // the sentinel wrapper for the remaining remote git commands (the distribution bundle code), and the shell route of a recorded-host-less agent's run()
   'modules/git/execWithSentinel.ts': 2,
   'modules/servers/transport/AgentTransport.ts': 1,
 };

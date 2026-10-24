@@ -10,7 +10,7 @@ describe('agent host route', () => {
     app = Fastify();
     // Registered after the auth hook, as in agent/main.ts.
     app.addHook('onRequest', agentAuthHook((header) => header === 'Bearer secret'));
-    await app.register(hostRoutes, { host: { platform: 'linux', arch: 'x64', shell: '/bin/zsh' } });
+    await app.register(hostRoutes, { host: { platform: 'linux', arch: 'x64', shell: '/bin/zsh', homeDir: '/home/me', tmpDir: '/tmp' } });
     await app.ready();
   });
 
@@ -26,16 +26,16 @@ describe('agent host route', () => {
   it('reports the platform, architecture and default shell to the hub', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/host', headers: { authorization: 'Bearer secret' } });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toEqual({ platform: 'linux', arch: 'x64', shell: '/bin/zsh' });
+    expect(res.json()).toEqual({ platform: 'linux', arch: 'x64', shell: '/bin/zsh', homeDir: '/home/me', tmpDir: '/tmp' });
   });
 });
 
 describe('agent host route without a default shell', () => {
   it('reports null instead of inventing one', async () => {
     const app = Fastify();
-    await app.register(hostRoutes, { host: { platform: 'darwin', arch: 'arm64', shell: null } });
+    await app.register(hostRoutes, { host: { platform: 'darwin', arch: 'arm64', shell: null, homeDir: '/Users/me', tmpDir: '/var/folders/ab/c_d/T' } });
     const res = await app.inject({ method: 'GET', url: '/api/host' });
-    expect(res.json()).toEqual({ platform: 'darwin', arch: 'arm64', shell: null });
+    expect(res.json()).toEqual({ platform: 'darwin', arch: 'arm64', shell: null, homeDir: '/Users/me', tmpDir: '/var/folders/ab/c_d/T' });
     await app.close();
   });
 });

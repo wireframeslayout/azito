@@ -105,9 +105,9 @@ describe('AgentTransport host profile', () => {
 
   describe('fetchHostInfo', () => {
     it("reads the agent's report with the token", async () => {
-      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform: 'linux', arch: 'x64', shell: '/bin/bash' }), { status: 200 }));
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform: 'linux', arch: 'x64', shell: '/bin/bash', homeDir: '/home/u', tmpDir: '/tmp' }), { status: 200 }));
       const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', null);
-      expect(await transport.fetchHostInfo()).toEqual({ platform: 'linux', arch: 'x64', shell: '/bin/bash' });
+      expect(await transport.fetchHostInfo()).toEqual({ platform: 'linux', arch: 'x64', shell: '/bin/bash', homeDir: '/home/u', tmpDir: '/tmp' });
       expect(fetchSpy.mock.calls[0][0]).toBe('http://10.0.0.1:4021/api/host');
       expect(fetchSpy.mock.calls[0][1]).toMatchObject({ method: 'GET', headers: { authorization: 'Bearer tok' } });
     });
@@ -124,6 +124,50 @@ describe('AgentTransport host profile', () => {
       await expect(transport.fetchHostInfo()).rejects.toThrow(/failed \(401\)/);
       fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform: 'linux' }), { status: 200 }));
       await expect(transport.fetchHostInfo()).rejects.toThrow();
+    });
+  });
+
+  describe('task temp files (loadTaskTempHost)', () => {
+    const report = (platform: string, tmpDir: string): void => {
+      fetchSpy.mockImplementation(async () => new Response(JSON.stringify({ platform, arch: 'x64', shell: null, homeDir: '/h', tmpDir }), { status: 200 }));
+    };
+
+    it('uses the OS and temp folder the agent reports, asked once', async () => {
+      report('win32', 'C:\\Users\\u\\AppData\\Local\\Temp');
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'win32', arch: 'x64' });
+      expect(await transport.loadTaskTempHost()).toEqual({ platform: 'win32', tmpDir: 'C:\\Users\\u\\AppData\\Local\\Temp' });
+      expect(await transport.loadTaskTempHost()).toEqual({ platform: 'win32', tmpDir: 'C:\\Users\\u\\AppData\\Local\\Temp' });
+      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      expect(transport.taskTempHostLoaded().platform).toBe('win32');
+    });
+
+    it('names a pipe file in the notation of the agent\'s OS', async () => {
+      report('win32', 'C:\\Temp');
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'win32', arch: 'x64' });
+      await transport.loadTaskTempHost();
+      expect(transport.createPaneStream('9-1' as never).getFilePath()).toMatch(/^C:\\Temp\\azito-pipe-9-1-\d+\.log$/);
+    });
+
+    it('is the Unix /tmp for an agent whose host was never recorded, without asking it', async () => {
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', null);
+      expect(await transport.loadTaskTempHost()).toEqual({ platform: 'linux', tmpDir: '/tmp' });
+      expect(fetchSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects, and remembers nothing, when the agent cannot be asked or reports a Unix folder unsafe in a shell command', async () => {
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', { platform: 'linux', arch: 'x64' });
+      fetchSpy.mockImplementation(async () => new Response('nope', { status: 500 }));
+      await expect(transport.loadTaskTempHost()).rejects.toThrow(/failed \(500\)/);
+      expect(() => transport.taskTempHostLoaded()).toThrow(/not known yet/);
+      report('linux', '/tmp/my dir');
+      await expect(transport.loadTaskTempHost()).rejects.toThrow(/agent server "srv"/);
+      report('linux', '/tmp');
+      expect(await transport.loadTaskTempHost()).toEqual({ platform: 'linux', tmpDir: '/tmp' });
+    });
+
+    it('refuses to create a pane stream before the temp folder is known', () => {
+      const transport = new AgentTransport('10.0.0.1', 4021, 'tok', 'system', 'srv', null);
+      expect(() => transport.createPaneStream('9-1' as never)).toThrow(/not known yet/);
     });
   });
 });

@@ -378,7 +378,7 @@ function buildUseCase(opts: {
 
   const worktreeServiceFactory = { create: vi.fn() };
   const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-  const transportFactory = { getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
+  const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
   const paneClassifier = {};
   const contentExtractor = { generateSlug: vi.fn(async () => 'slug') };
   const paneStreamFactory = {};
@@ -1608,7 +1608,7 @@ describe('ExecuteTaskUseCase.followUp http-signal execution mode (Issue: AZITOç›
     };
     const worktreeServiceFactory = { create: vi.fn(() => ({ exists: vi.fn(async () => false) })) };
     const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-    const transportFactory = { getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
+    const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({ exec: vi.fn(async () => ({ stdout: '', stderr: '', code: 0 })) })) };
     const paneClassifier = { classify: vi.fn(async () => ({ status: 'still_working' })) };
     const contentExtractor = { generateSlug: vi.fn(async () => 'slug'), extractPlan: vi.fn(async () => ({ planMarkdown: null })) };
     const paneStreamFactory = {
@@ -2861,7 +2861,7 @@ describe('ExecuteTaskUseCase.execute() execution-gate self-invalidation regressi
       })),
     };
     const gitProvider = { findPullRequestByBranch: vi.fn(async () => null) };
-    const transportFactory = { getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({})) };
+    const transportFactory = { taskTempServer: vi.fn(async () => ({ type: 'local' as const })), getFileOps: vi.fn(() => hostFiles), hostProfileFor: vi.fn(() => null), getTransport: vi.fn(() => ({})) };
     const paneClassifier = {};
     const contentExtractor = { generateSlug: vi.fn(async () => 'slug'), extractPlan: vi.fn(async () => ({ planMarkdown: null })) };
     const windowRepo = {

@@ -9,6 +9,7 @@ import type { IPaneStream, IPaneStreamFactory, PaneStreamGapEvent } from '../../
 import type { LogType } from '../ExecutionLog';
 import type { WorkerInputService } from './WorkerInputService';
 import { removeCompletionSignalBlock, extractPlanMarkdown } from './PromptExpander';
+import { FileOpsError } from '../../../shared/fs/fileOps';
 
 export type AppendLogFn = (taskId: number, unitId: number, type: LogType, content: unknown) => void;
 
@@ -23,6 +24,9 @@ export interface WaitResult {
  * (modules/operations) so both use the same notion of "active".
  */
 export const ACTIVITY_THRESHOLD_SEC = 30;
+
+/** The largest output file the worker's result is read from. */
+const PHASE_OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
 
 const CONFIRMATION_PATTERNS = [
   /\(y\/n\)/i,
@@ -123,19 +127,26 @@ export class WorkerWaiter {
     return stream;
   }
 
+  /**
+   * The worker's output file, read (and then removed) through the host's file operations. null = the worker wrote nothing:
+   * the file is not there, or it is empty. A file that is there but cannot be read (permission, too large, an unreachable
+   * agent) is thrown, not reported as "no output".
+   */
   async readPhaseOutputFile(
     server: ServerConfig,
     outputFilePath: string,
   ): Promise<string | null> {
+    const files = this.transportFactory.getFileOps(server);
+    let content: string;
     try {
-      const transport = this.transportFactory.getTransport(server);
-      const result = await transport.exec(`cat ${outputFilePath} 2>/dev/null`);
-      void transport.exec(`rm -f ${outputFilePath}`).catch(() => {});
-      const content = result.stdout.trim();
-      return content.length > 0 ? content : null;
-    } catch {
-      return null;
+      content = (await files.read(outputFilePath, { maxBytes: PHASE_OUTPUT_MAX_BYTES })).data.toString('utf-8').trim();
+    } catch (err) {
+      if (err instanceof FileOpsError && err.code === 'NOT_FOUND') return null;
+      throw err;
     }
+    // A file left behind is removed with the task's other temp files (TaskCleanupService), so a failed removal is not an error here.
+    await files.remove(outputFilePath).catch(() => {});
+    return content.length > 0 ? content : null;
   }
 
   async capturePaneText(

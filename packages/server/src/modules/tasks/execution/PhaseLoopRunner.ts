@@ -473,10 +473,12 @@ export class PhaseLoopRunner {
       const nonce = randomBytes(16).toString('hex');
 
       const effectiveWorkerType = unit.workerType ?? 'generic';
+      // Where this server keeps the task's files (an agent's OS and temp folder): known before any file or pane stream is named.
+      const tempServer = await this.transportFactory.taskTempServer(server);
       let prompt: string;
       let rulesFilePath: string | null = null;
       if (resolvedSubagentConfig?.enabled === true && phaseDef.subagentRole) {
-        rulesFilePath = this.taskTempFiles.rulesFile(server, task.id, nonce);
+        rulesFilePath = this.taskTempFiles.rulesFile(tempServer, task.id, nonce);
         const role = phaseDef.subagentRole;
         const rulesContent = role === 'review'
           ? buildSubagentRulesFileContent('review', {
@@ -506,7 +508,7 @@ export class PhaseLoopRunner {
       const phaseStream = this.workerWaiter.startPaneStream(server, handle, task.id, unit.id);
       if (!phaseStream) return;
 
-      const outputFilePath = this.taskTempFiles.outputFile(server, task.id, nonce);
+      const outputFilePath = this.taskTempFiles.outputFile(tempServer, task.id, nonce);
       const httpSignalMode = usesHttpSignalPath(unit.workerExecutionMode);
       let httpSignalTurn: AgentTurn | null;
       let pushingProbe: (() => Promise<boolean>) | undefined;
@@ -918,9 +920,7 @@ export class PhaseLoopRunner {
       return t?.workingDirectory || ps?.workingDirectory || '.';
     })();
     const baseBranchForDiff = taskForGitInfo?.baseBranch ?? undefined;
-    const gitInfo = server.type === 'local'
-      ? this.gitInfoCollector.collectGitInfoSync(workingDir, baseBranchForDiff)
-      : await this.gitInfoCollector.collectGitInfoRemote(server, workingDir, baseBranchForDiff);
+    const gitInfo = await this.gitInfoCollector.collectGitInfo(server, workingDir, baseBranchForDiff);
     // Uses the caller-locked `distributionRepoEntry` (Issue #87 review,
     // forge/87-mirror follow-up, Important finding 1), not a fresh
     // re-resolution — see this method's parameter doc comment.

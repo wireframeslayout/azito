@@ -21,7 +21,7 @@ describe('ManagedStreamFiles leases and limits', () => {
   });
 
   const make = (maxFiles = 1024): ManagedStreamFiles =>
-    new ManagedStreamFiles([dir], { maxFiles, leaseMs: 60_000, now: () => clock, logger: { warn: (m) => warnings.push(m) } });
+    new ManagedStreamFiles(process.platform, [dir], { maxFiles, leaseMs: 60_000, now: () => clock, logger: { warn: (m) => warnings.push(m) } });
   const file = (n: number): string => path.join(dir, `azito-pipe-${n}-1.log`);
 
   it('reclaims a registration nobody connected to within the lease, on the next registration', () => {

@@ -1,7 +1,6 @@
 import WebSocket from 'ws';
 import { BasePaneStream } from '../../tmux/PaneOutputStream';
 import type { AgentTransport } from './AgentTransport';
-import { TaskTempFiles } from '../../../shared/os/taskTempFiles';
 import { AgentOutdatedError } from './agentPaneStreamProtocol';
 
 export class AgentPaneStream extends BasePaneStream {
@@ -12,14 +11,15 @@ export class AgentPaneStream extends BasePaneStream {
   private retryCount = 0;
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
 
+  /** `filePath`: the pipe file on the agent's host, named in that host's notation (see `TaskTempFiles.remotePipeFile`). */
   constructor(
-    paneId: string,
+    filePath: string,
     private transport: AgentTransport,
     private wsBaseUrl: string,
     private authHeader: string,
   ) {
     super();
-    this.filePath = TaskTempFiles.remotePipeFile(paneId, Date.now());
+    this.filePath = filePath;
   }
 
   start(): void {

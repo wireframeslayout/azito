@@ -1,4 +1,4 @@
-import type { IServerTransport } from '../servers/transport/ServerTransport';
+import type { GitTransport } from './gitPath';
 import { getGitConfigValue, setGitConfigValue } from './gitConfigOps';
 
 export type GitIdentity = { name: string; email: string };
@@ -9,13 +9,12 @@ export type EnsureGitIdentityResult =
   | { action: 'hub_missing' };
 
 export async function ensureGitIdentity(
-  serverType: string,
-  transport: IServerTransport | undefined,
+  transport: GitTransport,
   worktreePath: string,
   hubIdentity: GitIdentity | null,
 ): Promise<EnsureGitIdentityResult> {
-  const currentName = await getGitConfigValue(serverType, transport, worktreePath, 'user.name');
-  const currentEmail = await getGitConfigValue(serverType, transport, worktreePath, 'user.email');
+  const currentName = await getGitConfigValue(transport, worktreePath, 'user.name');
+  const currentEmail = await getGitConfigValue(transport, worktreePath, 'user.email');
 
   const missingName = !currentName;
   const missingEmail = !currentEmail;
@@ -27,11 +26,11 @@ export async function ensureGitIdentity(
   const applied: Array<{ key: string; value: string }> = [];
 
   if (missingName) {
-    await setGitConfigValue(serverType, transport, worktreePath, 'user.name', hubIdentity.name);
+    await setGitConfigValue(transport, worktreePath, 'user.name', hubIdentity.name);
     applied.push({ key: 'user.name', value: hubIdentity.name });
   }
   if (missingEmail) {
-    await setGitConfigValue(serverType, transport, worktreePath, 'user.email', hubIdentity.email);
+    await setGitConfigValue(transport, worktreePath, 'user.email', hubIdentity.email);
     applied.push({ key: 'user.email', value: hubIdentity.email });
   }
 
