@@ -2,7 +2,10 @@ import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
 import { parseRemoteUrl, normalizeRemoteUrl, type ParsedRemote, type RepositoryProvider } from './parseRemoteUrl';
 import { FileOpsError, type IFileOps } from '../../shared/fs/fileOps';
+import { hostPathFor } from '@azito/shared';
 import { pathApiFor } from '../../shared/os/hostPath';
+import type { HostPlatform } from '../../shared/os/hostEnv';
+import { isGitDirectoryName, normalizeGitPath } from './gitPath';
 import { CommandSpawnError, type CommandResult } from '../../shared/exec/commandSpec';
 import { runGit } from './runGit';
 import { sanitizeDiscoveredRemoteUrl } from './sanitizeDiscoveredRemoteUrl';
@@ -154,7 +157,7 @@ export class RepoDiscoveryService {
       return { toplevel: toplevel.stdout, remoteLines: remotes.exitCode === 0 ? remotes.stdout.split('\n') : [] };
     });
 
-    return dedupeByAbsolutePath(toDiscoveredRepos(inspected, workingDirectory));
+    return dedupeByAbsolutePath(toDiscoveredRepos(inspected, workingDirectory, transport.files().platform));
   }
 }
 
@@ -175,7 +178,7 @@ async function findGitEntryParents(files: IFileOps, root: string, maxDepth: numb
       throw err;
     }
     for (const entry of entries) {
-      if (entry.name === '.git') {
+      if (isGitDirectoryName(files.platform, entry.name)) {
         if (entry.kind === 'directory' || entry.kind === 'file') found.push(dir);
       } else if (entry.kind === 'directory' && entry.name !== 'node_modules' && level < maxDepth) {
         await scan(/[\\/]$/.test(dir) ? dir + entry.name : dir + separator + entry.name, level + 1);
@@ -186,12 +189,13 @@ async function findGitEntryParents(files: IFileOps, root: string, maxDepth: numb
   return found;
 }
 
-function relativize(base: string, full: string): string {
-  const normalizedBase = base.endsWith('/') ? base : base + '/';
-  if (full.startsWith(normalizedBase)) {
-    return full.slice(normalizedBase.length) || '.';
-  }
-  return full;
+/** `full` relative to `base` when it is at or below it, otherwise `full` itself. */
+function relativize(platform: HostPlatform, base: string, full: string): string {
+  const api = hostPathFor(platform);
+  const rel = api.relative(base, full);
+  if (rel === '') return '.';
+  if (api.isAbsolute(rel) || rel === '..' || rel.startsWith('..' + api.sep)) return full;
+  return rel;
 }
 
 function dedupeByAbsolutePath(repos: DiscoveredRepo[]): DiscoveredRepo[] {
@@ -218,14 +222,14 @@ async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T)
   return results;
 }
 
-function toDiscoveredRepos(inspected: Array<{ toplevel: string; remoteLines: string[] } | null>, workingDirectory: string): DiscoveredRepo[] {
+function toDiscoveredRepos(inspected: Array<{ toplevel: string; remoteLines: string[] } | null>, workingDirectory: string, platform: HostPlatform): DiscoveredRepo[] {
   const repos: DiscoveredRepo[] = [];
   for (const candidate of inspected) {
     if (!candidate) continue;
-    const absolutePath = candidate.toplevel.split('\n')[0].trim();
-    if (!absolutePath || !absolutePath.startsWith('/')) continue; // rev-parse printed nothing usable for this candidate
+    const absolutePath = normalizeGitPath(platform, candidate.toplevel.split('\n')[0].trim());
+    if (!absolutePath || !hostPathFor(platform).isAbsolute(absolutePath)) continue; // rev-parse printed nothing usable for this candidate
     repos.push({
-      relativePath: relativize(workingDirectory, absolutePath),
+      relativePath: relativize(platform, workingDirectory, absolutePath),
       absolutePath,
       remotes: parseRemoteLines(candidate.remoteLines),
     });

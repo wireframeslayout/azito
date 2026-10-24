@@ -117,6 +117,14 @@ describe('RepoDiscoveryService', () => {
     ]);
   });
 
+  it('reports the scanned directory itself as "." (with or without a trailing slash)', async () => {
+    for (const root of ['/work/repo', '/work/repo/']) {
+      const { factory } = makeTransportFactory(treeOps(['/work/repo/.git/']), gitFor({ '/work/repo': { toplevel: '/work/repo' }, '/work/repo/': { toplevel: '/work/repo' } }));
+      const repos = await new RepoDiscoveryService(factory).discover(makeServer(), root);
+      expect(repos.map((r) => [r.absolutePath, r.relativePath])).toEqual([['/work/repo', '.']]);
+    }
+  });
+
   it('dedupes when multiple candidates resolve to the same toplevel', async () => {
     const { factory } = makeTransportFactory(
       treeOps(['/work/repo/.git/', '/work/repo/sub/.git/']),

@@ -39,9 +39,9 @@ export type HostFeatureSupport =
  * which path closes it.
  *  - fileSearch (#370): `GET /files/search` runs `rg`, else `grep` (Unix), else the host's own search (`IFileOps.searchContent`, Node), and
  *    reports hit paths relative to the root with `/`. Closed here only until the whole path, UI included, is verified on a real Windows host (R5).
- *  - git (#370): diff / commits / worktree list / branch search (`modules/git/routes.ts`, `GET /branches`). `SAFE_PATH` in
- *    `GitDiffService` accepts POSIX paths only (a `C:\...` path is `Invalid path`), and a Windows host cannot be assumed to have `git`.
- *    Those routes answer `unsupported_os` (`assertGitSupported` in `shared/os/hostProfile.ts`). #370 makes git work on Windows, then removes this row and that guard.
+ *  - git (#370): diff / commits / worktree list / branch search (`modules/git/routes.ts`, `GET /branches`). The read paths take
+ *    Windows paths now (`assertGitPathArg`); the row stays closed until worktree create / remove (R4) work on Windows and a host
+ *    cannot be assumed to have `git`. Those routes answer `unsupported_os` (`assertGitSupported` in `shared/os/hostProfile.ts`). #370 makes git work on Windows, then removes this row and that guard.
  *  - taskExecution (#371): `ExecuteTaskUseCase` starts the worker in a pane with a command (`paneShell.commandArgs` is null on Windows -> `unsupported_os`).
  *  - workerLaunch (#371): a new window with claude / codex / a command: the same pane command (`MisaoServers`, `paneShell.ts`).
  *  - tmux: not installed on Windows; `install-tmux` / `apply-tmux-config` answer `unsupported_os`.

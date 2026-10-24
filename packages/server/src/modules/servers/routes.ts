@@ -35,7 +35,8 @@ import { recordAuditBestEffort } from '../../shared/audit/recordAuditBestEffort'
 import { OPERATOR_PRINCIPAL, type Principal } from '../../shared/auth/Principal';
 import type { KeyedMutex } from '../../shared/keyedMutex';
 import { runIsolationDoctor } from './isolationDoctor';
-import { assertPosixHost, assertGitSupported } from '../../shared/os/hostProfile';
+import { assertPosixHost, assertGitSupported, platformOfProfile } from '../../shared/os/hostProfile';
+import { invalidWorkingDirectoryReason, isHomeRelativePath } from '../../shared/os/hostPath';
 import { assertHostFeature } from '../../shared/os/hostFeature';
 import { getVerifiedHubCanary } from './hubCanary';
 import { assertServerIdentityUnchanged, ServerSnapshotMismatchError } from './ServerIsolationLock';
@@ -1342,7 +1343,11 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       const q = (request.query.q || '').trim().toLowerCase();
       const projectId = request.query.project_id ? parseInt(request.query.project_id, 10) : NaN;
 
+      const platform = platformOfProfile(transportFactory.hostProfileFor(srv));
       let workingDir: string | null | undefined = request.query.working_directory || undefined;
+      if (workingDir && invalidWorkingDirectoryReason(platform, workingDir)) {
+        return reply.status(400).send({ error: 'Invalid working_directory' });
+      }
       if (!workingDir && !isNaN(projectId) && projectRepo && projectServerRepo) {
         const projectServer = projectServerRepo.find(projectId, request.params.name);
         workingDir = projectServer?.workingDirectory;
@@ -1403,7 +1408,9 @@ const serversRoutes: FastifyPluginCallback<ServersRouteOptions> = (fastify, opts
       assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       const path = request.query.path;
-      if (!path || !path.startsWith('/')) {
+      const platform = platformOfProfile(transportFactory.hostProfileFor(srv));
+      // An absolute path of the host: the rules of a stored working directory, minus the `~` form (it is not expanded here).
+      if (!path || isHomeRelativePath(platform, path) || invalidWorkingDirectoryReason(platform, path)) {
         return reply.status(400).send({ error: 'An absolute path query parameter is required' });
       }
 

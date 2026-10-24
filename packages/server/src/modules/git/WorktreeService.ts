@@ -1,17 +1,21 @@
 import { execFileSync } from 'child_process';
 import { existsSync, mkdirSync, rmSync } from 'fs';
 import type { IWorktreeService, WorktreeInfo, WorktreeEntry } from './IWorktreeService';
-import { assertSafePath, assertSafeBranch } from './assertSafeGitArgs';
+import type { HostPlatform } from '../../shared/os/hostEnv';
+import { assertSafePath, assertSafeBranch, assertGitPathArg } from './assertSafeGitArgs';
 import { parseWorktreePorcelain } from './parseWorktreePorcelain';
 
 export class LocalWorktreeService implements IWorktreeService {
+  /** `platform` is the hub's own OS (the host this service runs git on). */
+  constructor(private readonly platform: HostPlatform) {}
+
   async list(workingDir: string): Promise<WorktreeEntry[]> {
-    assertSafePath(workingDir, 'workingDir');
+    assertGitPathArg(this.platform, workingDir, 'workingDir');
     try {
       const output = execFileSync('git', ['worktree', 'list', '--porcelain'], {
         cwd: workingDir, encoding: 'utf-8', timeout: 15000,
       });
-      return parseWorktreePorcelain(output);
+      return parseWorktreePorcelain(output, this.platform);
     } catch (err) {
       if (err instanceof Error && err.message.includes('not a git repository')) {
         return [];

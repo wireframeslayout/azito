@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { LocalWorktreeService } from './WorktreeService';
+import { toHostProfile } from '../../shared/os/hostProfile';
 
 describe('LocalWorktreeService', () => {
-  const svc = new LocalWorktreeService();
+  const svc = new LocalWorktreeService(toHostProfile(process.platform, process.arch).platform);
 
   describe('list()', () => {
     // Windows では動かない: 存在しない POSIX パスを cwd に使う前提（spawnSync git ENOENT）
