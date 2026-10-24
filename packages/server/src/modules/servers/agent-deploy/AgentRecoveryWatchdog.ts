@@ -73,7 +73,11 @@ interface Backoff {
 export class AgentRecoveryWatchdog {
   private readonly agents = new Map<string, Backoff>();
   private readonly misaos = new Map<string, Backoff>();
-  private readonly looking = new Set<string>();
+  /** The looks going on, by server. */
+  private readonly looking = new Map<string, Promise<void>>();
+  /** Where the next tick starts in the list, so that servers past the concurrency limit get their turn. */
+  private cursor = 0;
+  private stopped = false;
   /** The `cannot be started` answers already warned about: `<server>\0<answer>`. */
   private readonly warned = new Set<string>();
   private timer: ReturnType<typeof setInterval> | undefined;
@@ -82,33 +86,59 @@ export class AgentRecoveryWatchdog {
 
   start(): void {
     if (this.timer !== undefined) return;
+    this.stopped = false;
     this.timer = setInterval(() => { void this.tick(); }, this.timing.tickMs);
     this.timer.unref();
   }
 
+  /** Ends the timer and starts nothing more; a recovery that has not begun is dropped, one that has begun is left to finish ({@link drain}). */
   stop(): void {
+    this.stopped = true;
     if (this.timer !== undefined) clearInterval(this.timer);
     this.timer = undefined;
   }
 
+  /** Stops, then waits (at most `timeoutMs`) for the looks that are going on, so that a restart of the agent is not cut between its `/End` and `/Run`. */
+  async drain(timeoutMs: number): Promise<void> {
+    this.stop();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const limit = new Promise<void>((resolve) => { timer = setTimeout(resolve, timeoutMs); });
+    try {
+      await Promise.race([Promise.all([...this.looking.values()]), limit]);
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+    }
+  }
+
   /**
-   * Starts a look at every Windows agent server that is not being looked at, and resolves when those looks are over (the timer does
-   * not wait for that: the next tick starts its own).
+   * Starts a look at the Windows agent servers that are not being looked at (at most `MAX_CONCURRENT_LOOKS` going on at once, going
+   * round the list from where the last tick stopped), and resolves when the looks it started are over (the timer does not wait for
+   * that: the next tick starts its own).
    */
   async tick(): Promise<void> {
+    if (this.stopped) return;
     const servers = this.deps.listServers().filter(isWindowsAgent);
     const names = new Set(servers.map((s) => s.name));
     for (const map of [this.agents, this.misaos]) for (const name of map.keys()) if (!names.has(name)) map.delete(name);
     for (const key of this.warned) if (!names.has(key.split('\0')[0]!)) this.warned.delete(key);
     const started: Array<Promise<void>> = [];
-    for (const server of servers) {
-      if (this.looking.size >= MAX_CONCURRENT_LOOKS) break;
+    const first = servers.length === 0 ? 0 : this.cursor % servers.length;
+    let next = first;
+    for (let i = 0; i < servers.length; i += 1) {
+      const server = servers[(first + i) % servers.length]!;
       if (this.looking.has(server.name)) continue;
-      this.looking.add(server.name);
-      started.push(this.look(server)
+      if (this.looking.size >= MAX_CONCURRENT_LOOKS) {
+        next = (first + i) % servers.length; // this one is first in line next time
+        break;
+      }
+      next = (first + i + 1) % servers.length;
+      const look = this.look(server)
         .catch((err: unknown) => this.deps.logger.warn(`${server.name}: looking at the server failed: ${describe(err)}`))
-        .finally(() => { this.looking.delete(server.name); }));
+        .finally(() => { this.looking.delete(server.name); });
+      this.looking.set(server.name, look);
+      started.push(look);
     }
+    this.cursor = next;
     await Promise.all(started);
   }
 
@@ -164,12 +194,12 @@ export class AgentRecoveryWatchdog {
       await this.deps.lock.withLock(server.name, async () => {
         // The server may have been edited while this waited for the lock: what is acted on is what is registered now.
         const current = this.deps.listServers().find((s) => s.name === server.name);
-        if (current === undefined || !isWindowsAgent(current)) return;
+        if (this.stopped || current === undefined || !isWindowsAgent(current)) return;
         if (identityOf(current) !== identity) {
           this.reset(server.name);
           return;
         }
-        if (!(await stillDown(current))) return;
+        if (!(await stillDown(current)) || this.stopped) return; // after the stop: not begun, so not begun
         outcome = await act(current);
       });
     } catch (err) {

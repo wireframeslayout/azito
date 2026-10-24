@@ -349,3 +349,80 @@ describe('AgentRecoveryWatchdog: what a misao revive answers', () => {
     expect(h.logs.some((l) => l.includes('tried to bring the misao back (attempt 1): started'))).toBe(true);
   });
 });
+
+describe('AgentRecoveryWatchdog: more servers than looks at once', () => {
+  it('looks at every one of 6 servers, never more than 4 at the same time', async () => {
+    const h = new Harness();
+    h.servers = ['a', 'b', 'c', 'd', 'e', 'f'].map((n) => server(n));
+    let active = 0;
+    let most = 0;
+    const checked = new Set<string>();
+    const w = new AgentRecoveryWatchdog({
+      listServers: () => h.servers,
+      checkAgent: async (s: ServerConfig) => {
+        active += 1;
+        most = Math.max(most, active);
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        checked.add(s.name);
+        active -= 1;
+      },
+      recoverAgent: async () => 'taskscheduler',
+      isMisaoDown: async () => false,
+      reviveMisao: async () => 'started',
+      lock: h.lock,
+      now: () => h.clock,
+      logger: { info: () => undefined, warn: () => undefined },
+    }, TIMING);
+    await w.tick();
+    await w.tick();
+    expect(most).toBeLessThanOrEqual(4);
+    expect([...checked].sort()).toEqual(['a', 'b', 'c', 'd', 'e', 'f']);
+  });
+});
+
+describe('AgentRecoveryWatchdog: stopping', () => {
+  it('does not recover what had not begun when it was stopped while waiting for the lock', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    const release = await h.hold('win');
+    const tick = h.watchdog.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    h.watchdog.stop();
+    release();
+    await tick;
+    expect(h.recovered).toEqual([]);
+    await h.watchdog.tick();
+    expect(h.recovered).toEqual([]);
+  });
+
+  it('lets a recovery that had begun finish before drain() resolves', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    let finished = false;
+    h.duringRecover = async () => { await new Promise((resolve) => setTimeout(resolve, 30)); finished = true; };
+    const tick = h.watchdog.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    expect(h.recovered).toEqual(['win']);
+    await h.watchdog.drain(1000);
+    expect(finished).toBe(true);
+    await tick;
+  });
+
+  it('gives up waiting for a recovery after the limit', async () => {
+    const h = new Harness();
+    h.agentUp = false;
+    await h.watchdog.tick();
+    h.clock += MIN;
+    h.duringRecover = () => new Promise((resolve) => setTimeout(resolve, 300));
+    const tick = h.watchdog.tick();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const started = Date.now();
+    await h.watchdog.drain(40);
+    expect(Date.now() - started).toBeLessThan(250);
+    await tick;
+  });
+});

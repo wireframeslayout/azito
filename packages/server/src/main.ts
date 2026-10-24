@@ -34,6 +34,8 @@ import { startHubExitWithParent, takeExitWithPid } from './app/hubExitWithParent
 // ─── Graceful shutdown ───
 
 const SHUTDOWN_HARD_CAP_MS = 8000;
+/** How long shutdown waits for an agent restart that has begun: inside the hard cap, with room for app.close(). */
+const RECOVERY_DRAIN_MS = 4000;
 
 // ─── Bootstrap ───
 
@@ -178,8 +180,8 @@ async function main(): Promise<void> {
       process.exit(0);
     }, SHUTDOWN_HARD_CAP_MS);
     hardCap.unref();
-    wiring.agentRecoveryWatchdog.stop();
-    app.close().then(() => process.exit(0)).catch(() => process.exit(0));
+    // A restart of an agent that has begun is let finish (not cut between /End and /Run), within the hard cap.
+    wiring.agentRecoveryWatchdog.drain(RECOVERY_DRAIN_MS).catch(() => undefined).then(() => app.close()).then(() => process.exit(0)).catch(() => process.exit(0));
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
