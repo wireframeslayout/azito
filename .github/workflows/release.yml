@@ -140,6 +140,11 @@ jobs:
           mkdir -p release-assets
           find artifacts \( -name 'azito-hub-*.tar.gz' -o -name 'azito-hub-*.zip' \) -exec cp {} release-assets/ \;
           cp install.sh install.ps1 release-assets/
+          # install.ps1 downloaded from releases/latest/download/ must install this very release: it carries its own tag (exactly one
+          # placeholder; checked, so a renamed placeholder fails the release instead of shipping an installer that asks for "latest").
+          test "$(grep -c '__AZITO_RELEASE_TAG__' release-assets/install.ps1)" = 1
+          sed -i "s/__AZITO_RELEASE_TAG__/${{ github.ref_name }}/" release-assets/install.ps1
+          grep -q "^\$ReleaseTag = '${{ github.ref_name }}'" release-assets/install.ps1
 
           cd release-assets
           sha256sum azito-hub-*.tar.gz azito-hub-*.zip install.sh install.ps1 > SHA256SUMS

@@ -118,6 +118,14 @@ It installs to `~/.azito`, registers a systemd (Linux) or launchd (macOS) servic
 
 Supported: Linux x64 / arm64, macOS Apple Silicon.
 
+On Windows (x64), install Git for Windows first (`winget install --id Git.Git -e --source winget`, then open a new PowerShell window) and run, in Windows PowerShell 5.1:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+```
+
+To pass options such as `-Port 3010`: `& ([scriptblock]::Create((irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1))) -Port 3010 -Yes`. Details: [Installation and Updates](./docs/en/install-and-update.md#install-on-windows-installps1).
+
 ### Run from source (development)
 
 ```bash

@@ -1,20 +1,39 @@
 # AZITO Hub Installer for Windows (the counterpart of install.sh).
 #
-# Usage:
-#   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Version <tag>] [-Prefix <dir>] [-Yes] [-NoPath]
+# Usage (Windows PowerShell 5.1, as the current user, no administrator rights):
+#   powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://github.com/wireframeslayout/azito/releases/latest/download/install.ps1 | iex"
+#   powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 [-Version <tag>] [-Prefix <dir>] [-Port <n>] [-Yes] [-NoPath] [-NoService]
+#   & ([scriptblock]::Create((irm <url of install.ps1>))) -Version v0.12.0 -Port 3010 -Yes    # arguments with the download form
 #
-# Runs under Windows PowerShell 5.1 as the current user (no administrator rights needed). It installs the hub bundle
-# (azito-hub-<tag>-win32-x64.zip) into <Prefix>\hub\<tag>\ and points <Prefix>\hub\current.txt at it (Windows does not use
+# The script is written to run as TEXT (`irm | iex`, a scriptblock) as well as a file. The whole installer is one script block
+# that is called at the end of the file: its functions, variables and $ErrorActionPreference stay inside it, so nothing is left in
+# the calling session. It never uses `exit` when it is not run as install.ps1 itself (that would end the caller's PowerShell): a
+# failure is an error that stops the caller's command (a non-zero exit under -Command / -File) and the caller's session goes on.
+# `iex` cannot pass arguments, so every option can also be set by an environment variable AZITO_INSTALL_<OPTION> (VERSION, PREFIX,
+# PORT, ZIPPATH, SHA256SUMS; YES, NOPATH, NOSERVICE take 1); an argument wins over the variable.
+#
+# It installs the hub bundle (azito-hub-<tag>-win32-x64.zip) into <Prefix>\hub\<tag>\ and points <Prefix>\hub\current.txt at it (Windows does not use
 # a `current` symlink), creates <Prefix>\hub\.env and <Prefix>\data\, and puts the `azito` command in <Prefix>\bin\.
 # Unless -NoService is given, the hub is registered as a Task Scheduler task that starts at your logon (the counterpart of the
-# systemd / launchd service of install.sh), and started: `azito start|stop|status` operate it, and its log is <Prefix>\logs\hub.log.
+# systemd / launchd service of install.sh), and started: `azito start|stop|restart|status` operate it, and its log is <Prefix>\logs\hub.log.
 # The bundled misao (the pane server) is installed beside it as its own Task Scheduler task, through `azito misao install`.
+#
+# The release this file is published with replaces the value of $ReleaseTag below, so the installer downloaded from
+# releases/latest/download/ installs exactly that release (one lookup of "latest", made by the download itself). Run from a
+# checkout the value is still the placeholder, and "latest" is asked of the GitHub API.
+
+# The body below is deliberately not indented: it is long, and the here-strings need their terminators in column 0.
+try {
+& {
 [CmdletBinding()]
 param(
-    # Release tag to install (default: the latest release).
+    # Release tag to install (default: the release this file was published with; from a checkout, the latest release).
     [string]$Version = '',
     # Installation prefix (default: %USERPROFILE%\.azito).
     [string]$Prefix = '',
+    # Port the hub listens on. Written to a new hub\.env as PORT and in AZITO_ALLOWED_ORIGINS (an existing hub\.env is never touched).
+    [ValidateRange(1, 65535)]
+    [int]$Port = 3001,
     # Use this local azito-hub-<tag>-win32-x64.zip instead of downloading one (offline installs, CI).
     [string]$ZipPath = '',
     # SHA256SUMS file to check -ZipPath against (a download is always checked against the release's SHA256SUMS).
@@ -27,13 +46,28 @@ param(
     [switch]$NoService
 )
 
+# These assignments are local to this script block: the caller's preferences are not changed.
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$script:Repo = 'wireframeslayout/azito'
+$Repo = 'wireframeslayout/azito'
+# Replaced by release.yml with the tag the release is published under. Anything else (this placeholder) means "not published".
+$ReleaseTag = '__AZITO_RELEASE_TAG__'
+
+# An option that was not given as an argument may come from AZITO_INSTALL_<OPTION>: `irm | iex` has no way to pass arguments.
+foreach ($option in @('Version', 'Prefix', 'Port', 'ZipPath', 'Sha256Sums')) {
+    if ($PSBoundParameters.ContainsKey($option)) { continue }
+    $fromEnvironment = [Environment]::GetEnvironmentVariable('AZITO_INSTALL_' + $option.ToUpperInvariant())
+    if ($fromEnvironment) { Set-Variable -Name $option -Value $fromEnvironment }
+}
+foreach ($option in @('Yes', 'NoPath', 'NoService')) {
+    if ($PSBoundParameters.ContainsKey($option)) { continue }
+    if ([Environment]::GetEnvironmentVariable('AZITO_INSTALL_' + $option.ToUpperInvariant()) -eq '1') { Set-Variable -Name $option -Value ([switch]$true) }
+}
+$PortRequested = $PSBoundParameters.ContainsKey('Port') -or [bool][Environment]::GetEnvironmentVariable('AZITO_INSTALL_PORT')
 
 # The `azito` command. It lives in <prefix>\bin, so the prefix is the folder above the script: a custom -Prefix works
 # without an environment variable. Everything is quoted so a profile folder with spaces or parentheses survives.
-$script:CliWrapper = @'
+$CliWrapper = @'
 @echo off
 setlocal EnableExtensions DisableDelayedExpansion
 for %%I in ("%~dp0..") do set "AZITO_ROOT=%%~fI"
@@ -49,6 +83,7 @@ if not exist "%AZITO_HUB%\node.exe" goto :missinghub
 set "AZITO_CMD=%~1"
 if /i "%AZITO_CMD%"=="start" goto :start
 if /i "%AZITO_CMD%"=="stop" goto :stop
+if /i "%AZITO_CMD%"=="restart" goto :restart
 if /i "%AZITO_CMD%"=="status" goto :status
 if /i "%AZITO_CMD%"=="run" goto :run
 if /i "%AZITO_CMD%"=="token" goto :forward
@@ -59,7 +94,7 @@ if not defined AZITO_CMD goto :usage
 setlocal EnableDelayedExpansion
 echo Unknown command: !AZITO_CMD! 1>&2
 echo. 1>&2
-echo Usage: azito {start^|stop^|status^|run^|token show^|token rotate^|misao status^|service status^|version} 1>&2
+echo Usage: azito {start^|stop^|restart^|status^|run^|token show^|token rotate^|misao status^|service status^|version} 1>&2
 exit /b 1
 
 :forward
@@ -72,6 +107,10 @@ exit /b %ERRORLEVEL%
 
 :stop
 "%AZITO_HUB%\node.exe" "%AZITO_HUB%\azito-hub.cjs" service stop
+exit /b %ERRORLEVEL%
+
+:restart
+"%AZITO_HUB%\node.exe" "%AZITO_HUB%\azito-hub.cjs" service restart
 exit /b %ERRORLEVEL%
 
 :status
@@ -91,7 +130,7 @@ echo current: %AZITO_VER%
 exit /b %ERRORLEVEL%
 
 :usage
-echo Usage: azito {start^|stop^|status^|run^|token show^|token rotate^|misao status^|service status^|version}
+echo Usage: azito {start^|stop^|restart^|status^|run^|token show^|token rotate^|misao status^|service status^|version}
 exit /b 0
 
 :notinstalled
@@ -301,8 +340,11 @@ function Resolve-Release {
         throw '-ZipPath does not look like azito-hub-<tag>-win32-x64.zip; pass -Version as well'
     }
     if ($Version -ne '') { return $Version }
+    # The published installer names its own release: the zip and SHA256SUMS then come from that tag, and "latest" is not asked again
+    # (a release cut between the download of this file and the download of the zip cannot make the two differ).
+    if (Test-ReleaseVersion $ReleaseTag) { return $ReleaseTag }
     Write-Host 'Fetching latest release...'
-    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$($script:Repo)/releases/latest" -Headers @{ 'User-Agent' = 'azito-install' }
+    $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -Headers @{ 'User-Agent' = 'azito-install' }
     if (-not $release.tag_name) { throw 'could not determine the latest version' }
     return [string]$release.tag_name
 }
@@ -336,6 +378,15 @@ function Invoke-Install {
         return
     }
 
+    # AZITO drives git worktrees on this host, so git must exist (checked before anything is downloaded). It is not installed
+    # for you: that changes the machine beyond the install prefix. Tailscale and the agent CLIs are optional.
+    if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+        throw ("git was not found on the PATH, and AZITO needs it (it creates git worktrees for every task).`n" +
+            "  Install Git for Windows:  winget install --id Git.Git -e --source winget`n" +
+            "  (without winget, download it from https://git-scm.com/download/win)`n" +
+            "  Then open a NEW PowerShell window and run this installer again: the PATH of this window does not change when git is installed.")
+    }
+
     $resolved = Resolve-Release
     if (-not (Test-ReleaseVersion $resolved)) { throw "not a release tag: $resolved" }
     $tag = $resolved
@@ -347,6 +398,7 @@ function Invoke-Install {
     Write-Host "  Version:      $tag"
     Write-Host '  Platform:     win32-x64'
     Write-Host "  Prefix:       $Prefix"
+    Write-Host "  Port:         $Port"
     if ($NoService) {
         Write-Host '  Service:      skip (-NoService; run the hub with `azito run`)'
     } else {
@@ -354,10 +406,6 @@ function Invoke-Install {
     }
     Write-Host ''
 
-    # AZITO drives git worktrees on this host, so git must exist. Tailscale and the agent CLIs are optional.
-    if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
-        throw 'git is required (AZITO drives git worktrees on this host). Install it (for example: winget install Git.Git) and run this installer again.'
-    }
     if (-not (Get-Command node.exe -ErrorAction SilentlyContinue)) {
         Write-Host 'Note: Node.js not found on this host.'
         Write-Host '  AZITO itself runs on the bundled Node, so the hub will start fine. Host Node.js (v24+) is still needed'
@@ -392,7 +440,7 @@ function Invoke-Install {
                 Write-Warning "-Sha256Sums was not given, so $zipName is used without a checksum."
             }
         } else {
-            $base = "https://github.com/$($script:Repo)/releases/download/$tag"
+            $base = "https://github.com/$Repo/releases/download/$tag"
             $zip = Join-Path $work $zipName
             Write-Host "Downloading $zipName..."
             Invoke-WebRequest -UseBasicParsing -Uri "$base/$zipName" -OutFile $zip
@@ -418,23 +466,31 @@ function Invoke-Install {
         $dns = $null
         if ($tailscale) {
             try { $dns = Get-TailscaleDns $tailscale } catch { Write-Warning "Could not read the Tailscale status: $($_.Exception.Message)" }
-            Write-Host ''
-            if ($dns) {
-                Write-Host "Tailscale detected ($dns)."
-                Write-Host "  AZITO_PUBLIC_URL will be set to https://$dns"
-                Write-Host '  For remote access, run: tailscale serve --bg 3001'
-            } else {
-                Write-Host 'Tailscale detected, but no MagicDNS name was found.'
-                Write-Host '  To use AZITO remotely, enable MagicDNS and HTTPS certificates in Tailscale, run `tailscale serve --bg 3001`,'
-                Write-Host "  and set AZITO_PUBLIC_URL=https://<your-magicdns-name> in $hubRoot\.env. Local use works as-is."
-            }
         }
 
         # data\ and hub\.env hold secrets: the hub's own code creates them, so the owner-only access rules come from the
         # one SecretFileGuard instead of being written again here in PowerShell.
-        $initArgs = @($hub, 'init-env', '--prefix', $Prefix)
+        $initArgs = @($hub, 'init-env', '--prefix', $Prefix, '--port', [string]$Port)
         if ($dns) { $initArgs += @('--tailscale-dns', $dns) }
         Invoke-Node $node $initArgs
+
+        # An existing hub\.env is kept as it is, so the port the hub will use is the one it names (the guidance below uses it).
+        $hubPort = Get-HubPort (Join-Path $hubRoot '.env')
+        if ($PortRequested -and $hubPort -ne $Port) {
+            Write-Warning "$hubRoot\.env already exists and is kept: the hub will listen on port $hubPort, not $Port. Edit PORT and AZITO_ALLOWED_ORIGINS there to change it."
+        }
+        if ($tailscale) {
+            Write-Host ''
+            if ($dns) {
+                Write-Host "Tailscale detected ($dns)."
+                Write-Host "  AZITO_PUBLIC_URL will be set to https://$dns"
+                Write-Host "  For remote access, run: tailscale serve --bg $hubPort"
+            } else {
+                Write-Host 'Tailscale detected, but no MagicDNS name was found.'
+                Write-Host "  To use AZITO remotely, enable MagicDNS and HTTPS certificates in Tailscale, run: tailscale serve --bg $hubPort,"
+                Write-Host "  and set AZITO_PUBLIC_URL=https://<your-magicdns-name> in $hubRoot\.env. Local use works as-is."
+            }
+        }
 
         # The token the hub will accept is the one in hub\.env (run.ps1 lets .env override the environment), so a token
         # variable inherited from the calling shell must not decide what is shown here.
@@ -451,7 +507,7 @@ function Invoke-Install {
         $bin = Join-Path $Prefix 'bin'
         New-Item -ItemType Directory -Force -Path $bin | Out-Null
         # cmd needs CRLF line endings for its labels to be found reliably.
-        $wrapper = ($script:CliWrapper -replace "`r?`n", "`r`n") + "`r`n"
+        $wrapper = ($CliWrapper -replace "`r?`n", "`r`n") + "`r`n"
         [System.IO.File]::WriteAllText((Join-Path $bin 'azito.cmd'), $wrapper, (New-Object System.Text.ASCIIEncoding))
         Write-Host "CLI installed at $bin\azito.cmd"
 
@@ -511,19 +567,22 @@ function Invoke-Install {
     } else {
         Write-Host '  The hub runs as the Task Scheduler task AzitoHub: it starts when you log on and restarts when it fails.'
         Write-Host '  Its panes run on misao, the task AzitoMisao: azito misao status (a hub update or restart does not stop it).'
-        Write-Host '  Start:   azito start     (stop: azito stop, state: azito status)'
+        Write-Host '  Start:   azito start     (stop: azito stop, restart: azito restart, state: azito status)'
         Write-Host "  Log:     $Prefix\logs\hub.log"
     }
     Write-Host '  Token:   azito token show'
     Write-Host '  Version: azito version'
 }
 
-# Dot-sourcing this file (the CI test does, to call the functions above) must not install anything.
-if ($MyInvocation.InvocationName -ne '.') {
-    try {
-        Invoke-Install
-    } catch {
-        [Console]::Error.WriteLine("ERROR: $($_.Exception.Message)")
+Invoke-Install
+} @args
+} catch {
+    $reason = $_.Exception.Message
+    # Only the file install.ps1 itself may `exit`: for `irm | iex` or a script block $PSCommandPath is the caller's, and ending it
+    # would close the caller's PowerShell. There the error is thrown, which stops the caller's command and fails -Command with 1.
+    if ($PSCommandPath -and [System.IO.Path]::GetFileName($PSCommandPath) -ieq 'install.ps1') {
+        [Console]::Error.WriteLine("ERROR: $reason")
         exit 1
     }
+    throw "AZITO install failed: $reason"
 }
