@@ -1,5 +1,5 @@
 import type { FastifyPluginCallback } from 'fastify';
-import type { IServerRepository } from '../servers/Server';
+import type { IServerRepository, ServerConfig } from '../servers/Server';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ITaskRepository } from '../tasks/Task';
 import type { IProjectServerRepository } from '../projects/ProjectServer';
@@ -10,6 +10,7 @@ import type { GitProviderService } from './providers/GitProviderService';
 import type { ProviderFilter } from './RepositoryCandidateService';
 import { RepositoryCandidateService } from './RepositoryCandidateService';
 import { runGit } from './runGit';
+import { assertGitSupported } from '../../shared/os/hostProfile';
 
 const VALID_SCOPES = new Set<string>(['uncommitted', 'base', 'commit']);
 const VALID_PROVIDER_FILTERS = new Set<string>(['github', 'gitlab', 'all']);
@@ -26,6 +27,8 @@ export interface GitRouteOptions {
 
 const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) => {
   const { serverRepo, transportFactory, projectRepo, gitProvider } = opts;
+  // A Windows host is refused with `unsupported_os` (mapAppError -> 501) until #370, before the path is even looked at.
+  const assertServerGit = (srv: ServerConfig): void => assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
   const gitDiffService = new GitDiffService(transportFactory);
   const repositoryCandidateService =
     projectRepo && gitProvider ? new RepositoryCandidateService(projectRepo, gitProvider) : null;
@@ -36,6 +39,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      assertServerGit(srv);
 
       const dirPath = (request.query.path || '').trim();
       if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
@@ -58,6 +62,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
     async (request, reply) => {
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      assertServerGit(srv);
 
       const dirPath = (request.query.path || '').trim();
       if (!dirPath) return reply.status(400).send({ error: 'path query parameter required' });
@@ -98,6 +103,7 @@ const gitRoutes: FastifyPluginCallback<GitRouteOptions> = (fastify, opts, done) 
 
       const srv = serverRepo.findByName(request.params.name);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      assertServerGit(srv);
 
       const projectId = request.query.project_id ? parseInt(request.query.project_id, 10) : NaN;
       if (isNaN(projectId)) return reply.status(400).send({ error: 'project_id query parameter required' });

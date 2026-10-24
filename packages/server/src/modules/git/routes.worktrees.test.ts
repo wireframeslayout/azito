@@ -16,7 +16,7 @@ async function build(entries: WorktreeEntry[], answer: (path: string) => ReturnT
   const app = Fastify();
   await app.register(gitRoutes, {
     serverRepo: { findByName: () => ({ name: 's', type: 'local' }) } as unknown as IServerRepository,
-    transportFactory: { getTransport: () => transport } as unknown as TransportFactory,
+    transportFactory: { getTransport: () => transport, hostProfileFor: () => null } as unknown as TransportFactory,
     taskRepo: { findById: () => null } as unknown as ITaskRepository,
     projectServerRepo: { find: () => ({ workingDirectory: '/repo' }) } as unknown as IProjectServerRepository,
     worktreeServiceFactory: { create: (): IWorktreeService => ({ list: async () => entries }) as unknown as IWorktreeService } as unknown as WorktreeServiceFactory,
@@ -57,7 +57,7 @@ describe('GET /api/servers/:name/git/worktrees', () => {
     const app = Fastify();
     await app.register(gitRoutes, {
       serverRepo: { findByName: () => ({ name: 's', type: 'agent' }) } as unknown as IServerRepository,
-      transportFactory: { getTransport: () => transport } as unknown as TransportFactory,
+      transportFactory: { getTransport: () => transport, hostProfileFor: () => null } as unknown as TransportFactory,
       taskRepo: { findById: () => null } as unknown as ITaskRepository,
       projectServerRepo: { find: () => ({ workingDirectory: '~/ws/repo' }) } as unknown as IProjectServerRepository,
       worktreeServiceFactory: new WorktreeServiceFactory(),

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { api } from '../api/client';
 import { baseInputStyle } from './ui';
+import { useHostFeatureBlock } from '../hooks/useHostFeatureBlock';
 
 interface BranchInputProps {
   value: string;
@@ -21,7 +22,11 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
   const hasFocusRef = useRef(false);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const disabled = !serverName || isNaN(projectId);
+  // Suggestions come from the repository API, which is closed on some hosts (a Windows agent until #370): the branch can
+  // still be typed, so only the suggestions go, and the reason is shown under the field.
+  const gitBlockedReason = useHostFeatureBlock()(serverName, 'git');
+  const reasonId = useId();
+  const disabled = !serverName || isNaN(projectId) || !!gitBlockedReason;
 
   const fetchSuggestions = useCallback(async (q: string) => {
     if (disabled) {
@@ -148,7 +153,11 @@ export default function BranchInput({ value, onChange, serverName, projectId, wo
         placeholder={placeholder}
         style={{ ...baseInputStyle, ...style }}
         autoComplete="off"
+        aria-describedby={gitBlockedReason ? reasonId : undefined}
       />
+      {gitBlockedReason && (
+        <div id={reasonId} style={{ marginTop: 4, fontSize: 'var(--font-xs)', color: 'var(--text-dim)' }}>{gitBlockedReason}</div>
+      )}
       {open && suggestions.length > 0 && (
         <div
           ref={listRef}

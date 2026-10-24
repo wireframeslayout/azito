@@ -435,7 +435,7 @@ What works on a Windows agent, and what does not yet. The hub reads the OS from 
 | misao (pane server), its install and update from Setup | Works | — |
 | New window with a plain shell | Works (cmd.exe) | — |
 | Files (list, read, write, create, delete, rename: `IFileOps`), file name search | Open (not verified on a real host yet) | — |
-| Git diff, log and worktree list (`transport.run`, needs `git` on the host; without it the API's error is shown) | Open (not verified on a real host yet) | — |
+| Git diff, log, worktree switching and branch search (the API does not accept Windows paths, and a Windows host may not have git) | Disabled in the UI with the reason shown; the API answers `unsupported_os` (501) | #370 |
 | File content search (`rg`, else `grep`; Windows has no grep and returns backslash paths) | Disabled in the UI (the search button) | #370 |
 | Task and Unit execution | Disabled in the UI | #371 |
 | Starting claude / codex (or any command) in a new window | Disabled in the UI; choose the plain shell | #371 |

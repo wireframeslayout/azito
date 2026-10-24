@@ -15,6 +15,8 @@ import type { GitProviderService } from '../git/providers/GitProviderService';
 import type { TmuxClient } from '../tmux/TmuxClient';
 import type { MuxDriverRegistry } from '../tmux/MuxDriverRegistry';
 import type { IServerRepository } from '../servers/Server';
+import type { TransportFactory } from '../servers/transport/TransportFactory';
+import { assertGitSupported } from '../../shared/os/hostProfile';
 import type { SqliteProjectSecretRepository } from './SqliteProjectSecretRepository';
 // Issue #29 review (independent QC), M-3: imported from the base-layer
 // `modules/servers` (not `modules/tasks/execution/WindowRotation`, which
@@ -53,6 +55,8 @@ export interface ProjectsRouteOptions {
   tmux: TmuxClient;
   muxDriverRegistry: MuxDriverRegistry;
   serverRepo: IServerRepository;
+  /** Resolves a server's host OS (`hostProfileFor`): the repository scan is closed on a Windows host until #370. */
+  transportFactory: TransportFactory;
   projectSecretRepo: SqliteProjectSecretRepository;
   /** Issue #28 Phase A後半: import-issue is a task-origination path too — see TaskOriginationService's own doc comment. */
   originationService: TaskOriginationService;
@@ -107,7 +111,7 @@ export interface ProjectServerDistributionInfo {
 // ─── Plugin ───
 
 const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, opts, done) => {
-  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService } = opts;
+  const { projectRepo, projectServerRepo, taskRepo, gitProvider, tmux, serverRepo, transportFactory, projectSecretRepo, originationService, serverIsolationMutex, repoDiscovery, localRepoCloneService, distributionStateRepo, fetchDistributionService } = opts;
   const serverIsolationLock: ServerIsolationLock = { serverIsolationMutex, serverRepo };
   const SECRET_NAME_PATTERN = /^[A-Z0-9_]{1,64}$/;
 
@@ -906,6 +910,7 @@ const projectsRoutes: FastifyPluginCallback<ProjectsRouteOptions> = (fastify, op
 
       const srv = serverRepo.findByName(request.params.serverName);
       if (!srv) return reply.status(404).send({ error: 'Server not found' });
+      assertGitSupported(transportFactory.hostProfileFor(srv), `server "${srv.name}"`);
 
       let discovered;
       try {
