@@ -32,7 +32,7 @@ describe('fileTailHandler (managed stream files)', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-tail-'));
-    managed = new ManagedStreamFiles([dir]);
+    managed = new ManagedStreamFiles(process.platform, [dir]);
     ws = new FakeSocket();
   });
 
@@ -113,7 +113,7 @@ describe('ManagedStreamFiles', () => {
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'managed-streams-'));
-    managed = new ManagedStreamFiles([dir]);
+    managed = new ManagedStreamFiles(process.platform, [dir]);
   });
 
   afterEach(() => {

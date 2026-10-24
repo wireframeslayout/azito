@@ -30,8 +30,7 @@ export function assertNotOptionLike(value: string, label: string): void {
  * one that git would read as an option (`assertNotOptionLike`).
  *
  * `~` is accepted but git does not expand it: `runGit` / `resolveGitPath` resolve it against the host's home directory first.
- * This holds for a path passed in an argv; a path that is spliced into a shell line (`GitInfoCollector.collectGitInfoRemote`,
- * `execWithSentinel`) is POSIX-only and quoted with `shellQuote`.
+ * This holds for a path passed in an argv; a path that is spliced into a shell line (`execWithSentinel`) is POSIX-only and quoted with `shellQuote`.
  */
 export function assertGitPathArg(platform: HostPlatform, value: string, label: string): void {
   assertNotOptionLike(value, label);

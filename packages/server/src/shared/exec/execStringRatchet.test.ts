@@ -26,8 +26,6 @@ const REMAINING: Record<string, number> = {
   'modules/servers/transport/ShellFileOps.ts': 24,
   // - the sidekick sync of such an agent (tar + base64 through exec); every other host writes the tarball with IFileOps and runs `tar`
   'modules/sidekicks/shellSidekickSync.ts': 6,
-  'modules/tasks/execution/WorkerWaiter.ts': 2,
-  'modules/tasks/execution/GitInfoCollector.ts': 2, // git commands, not yet moved (not in P6's list)
   // C-2: Unix-only install scripts. They stay sh; each entry point first refuses a win32 server with unsupported_os (P9,
   // `assertPosixHost`), and the Windows versions are separate functions added with the Windows agent (#369 / #380). The OS probes
   // (`uname`, `echo $HOME`) are gone: the OS comes from the recorded host profile.
@@ -39,7 +37,7 @@ const REMAINING: Record<string, number> = {
   'modules/servers/routes.ts': 3, // the harness check, the Chromium check, apply-tmux-config: shell scripts
   // the host's memory / load / disk measurement script (sh): not a process list, so it was not moved with the `ps` calls (#371 T1)
   'modules/servers/resources/ResourceGuard.ts': 1,
-  // the sentinel wrapper for the remaining remote git commands, and the shell route of a recorded-host-less agent's run()
+  // the sentinel wrapper for the remaining remote git commands (the distribution bundle code), and the shell route of a recorded-host-less agent's run()
   'modules/git/execWithSentinel.ts': 2,
   'modules/servers/transport/AgentTransport.ts': 1,
 };

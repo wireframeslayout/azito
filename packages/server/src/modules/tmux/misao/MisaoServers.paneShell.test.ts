@@ -30,7 +30,7 @@ const agent = (name: string, hostProfile: ServerConfig['hostProfile'] = null): S
   { name, type: 'agent', host: 'h', hostProfile, agentPort: 3002, agentToken: 't', defaultMux: 'tmux', isolationIntent: false } as unknown as ServerConfig
 );
 
-function build(hostInfo: (server: ServerConfig) => Promise<{ platform: string; arch: string; shell: string | null }>) {
+function build(hostInfo: (server: ServerConfig) => Promise<{ platform: string; arch: string; shell: string | null; homeDir: string; tmpDir: string }>) {
   const log = { warn: vi.fn() };
   const servers = new MisaoServers({
     sdk: {} as never,
@@ -55,14 +55,14 @@ describe('MisaoServers pane shell per node', () => {
   });
 
   it("starts an agent node's panes with the shell the agent reports, not the hub's", async () => {
-    const { servers } = build(async () => ({ platform: 'darwin', arch: 'arm64', shell: '/bin/zsh' }));
+    const { servers } = build(async () => ({ platform: 'darwin', arch: 'arm64', shell: '/bin/zsh', homeDir: '/home/x', tmpDir: '/tmp' }));
     servers.ensureAgentNode(agent('a1'));
     expect(await captured[0].paneShell()).toEqual({ shell: '/bin/zsh', commandArgs: ['-lc'] });
   });
 
   it('gives each agent node the shell of its own host', async () => {
     const shells: Record<string, string> = { a1: '/bin/zsh', a2: '/usr/bin/fish' };
-    const { servers } = build(async (server) => ({ platform: 'linux', arch: 'x64', shell: shells[server.name] }));
+    const { servers } = build(async (server) => ({ platform: 'linux', arch: 'x64', shell: shells[server.name], homeDir: '/home/x', tmpDir: '/tmp' }));
     servers.ensureAgentNode(agent('a1'));
     servers.ensureAgentNode(agent('a2'));
     expect((await captured[0].paneShell()).shell).toBe('/bin/zsh');
@@ -77,11 +77,11 @@ describe('MisaoServers pane shell per node', () => {
   });
 
   it('fails for an agent with no default shell, and gives a Windows agent its own shell without command arguments', async () => {
-    const noShell = build(async () => ({ platform: 'linux', arch: 'x64', shell: null }));
+    const noShell = build(async () => ({ platform: 'linux', arch: 'x64', shell: null, homeDir: '/home/x', tmpDir: '/tmp' }));
     noShell.servers.ensureAgentNode(agent('a1'));
     await expect(captured[0].paneShell()).rejects.toThrow(/no default shell/);
 
-    const windows = build(async () => ({ platform: 'win32', arch: 'x64', shell: 'cmd.exe' }));
+    const windows = build(async () => ({ platform: 'win32', arch: 'x64', shell: 'cmd.exe', homeDir: '/home/x', tmpDir: '/tmp' }));
     windows.servers.ensureAgentNode(agent('w1', { platform: 'win32', arch: 'x64' }));
     expect(await captured[1].paneShell()).toEqual({ shell: 'cmd.exe', commandArgs: null });
   });

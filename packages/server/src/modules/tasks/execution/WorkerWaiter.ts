@@ -9,6 +9,8 @@ import type { IPaneStream, IPaneStreamFactory, PaneStreamGapEvent } from '../../
 import type { LogType } from '../ExecutionLog';
 import type { WorkerInputService } from './WorkerInputService';
 import { removeCompletionSignalBlock, extractPlanMarkdown } from './PromptExpander';
+import type { TaskTempServer } from '../../../shared/os/taskTempFiles';
+import { FileOpsError } from '../../../shared/fs/fileOps';
 
 export type AppendLogFn = (taskId: number, unitId: number, type: LogType, content: unknown) => void;
 
@@ -23,6 +25,9 @@ export interface WaitResult {
  * (modules/operations) so both use the same notion of "active".
  */
 export const ACTIVITY_THRESHOLD_SEC = 30;
+
+/** The largest output file the worker's result is read from. */
+const PHASE_OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
 
 const CONFIRMATION_PATTERNS = [
   /\(y\/n\)/i,
@@ -70,12 +75,13 @@ export class WorkerWaiter {
 
   startPaneStream(
     server: ServerConfig,
+    tempServer: TaskTempServer,
     handle: PaneHandle,
     taskId: number,
     unitId: number,
   ): IPaneStream | null {
     const paneId = `${taskId}-${Date.now()}`;
-    const paneStream = this.paneStreamFactory.create(paneId, server, handle);
+    const paneStream = this.paneStreamFactory.create(paneId, server, tempServer, handle);
     // Attached before start(): a subscribe failure is reported right away, before waitForWorker runs.
     paneStream.on('gap', ({ reason }: PaneStreamGapEvent) => {
       this.appendLog(taskId, unitId, 'command', { type: 'pane_stream_gap', reason });
@@ -110,12 +116,13 @@ export class WorkerWaiter {
 
   startSignalStream(
     server: ServerConfig,
+    tempServer: TaskTempServer,
     taskId: number,
     unitId: number,
     doneMarker: string,
     questionsMarker: string,
   ): IPaneStream {
-    const stream = this.paneStreamFactory.create(`${taskId}-sig`, server);
+    const stream = this.paneStreamFactory.create(`${taskId}-sig`, server, tempServer);
     this.watchStreamFailure(stream, taskId, unitId);
     stream.start();
     stream.setMarkers(doneMarker, questionsMarker);
@@ -123,19 +130,29 @@ export class WorkerWaiter {
     return stream;
   }
 
+  /**
+   * The worker's output file, read (and then removed) through the host's file operations. null = the worker wrote nothing:
+   * the file is not there, or it is empty. A file that is there but cannot be read (permission, too large, an unreachable
+   * agent) is thrown, not reported as "no output".
+   */
   async readPhaseOutputFile(
     server: ServerConfig,
     outputFilePath: string,
   ): Promise<string | null> {
+    const files = this.transportFactory.getFileOps(server);
+    let content: string;
     try {
-      const transport = this.transportFactory.getTransport(server);
-      const result = await transport.exec(`cat ${outputFilePath} 2>/dev/null`);
-      void transport.exec(`rm -f ${outputFilePath}`).catch(() => {});
-      const content = result.stdout.trim();
-      return content.length > 0 ? content : null;
-    } catch {
-      return null;
+      content = (await files.read(outputFilePath, { maxBytes: PHASE_OUTPUT_MAX_BYTES })).data.toString('utf-8').trim();
+    } catch (err) {
+      if (err instanceof FileOpsError && err.code === 'NOT_FOUND') return null;
+      throw err;
     }
+    // The content is already in hand, so a failed removal does not fail the phase; it is logged, as the file stays on the host
+    // (TaskCleanupService removes a task's temp files for a local server only).
+    await files.remove(outputFilePath).catch((err: unknown) => {
+      console.warn(`[WorkerWaiter] could not remove the phase output file ${outputFilePath} on server "${server.name}"`, err);
+    });
+    return content.length > 0 ? content : null;
   }
 
   async capturePaneText(

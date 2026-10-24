@@ -1,30 +1,45 @@
 import { describe, it, expect } from 'vitest';
-import * as path from 'path';
-import { TaskTempFiles } from './taskTempFiles';
+import { TaskTempFiles, assertTmpDirShellSafe } from './taskTempFiles';
 
 const local = { type: 'local' } as const;
-const agent = { type: 'agent' } as const;
+const linuxAgent = { type: 'agent', platform: 'linux', tmpDir: '/tmp' } as const;
+const macAgent = { type: 'agent', platform: 'darwin', tmpDir: '/var/folders/ab/c_d/T' } as const;
+const winAgent = { type: 'agent', platform: 'win32', tmpDir: 'C:\\Users\\u\\AppData\\Local\\Temp' } as const;
 
 describe('TaskTempFiles', () => {
   const files = new TaskTempFiles('/var/folders/xy/T', 'darwin');
 
   it('places the hub\'s own server files in the hub temp folder', () => {
-    expect(files.pipeFile(local, '12-1700', 5)).toBe(path.join('/var/folders/xy/T', 'azito-pipe-12-1700-5.log'));
-    expect(files.pipeFile(local, '12-sig', 5)).toBe(path.join('/var/folders/xy/T', 'azito-pipe-12-sig-5.log'));
-    expect(files.outputFile(local, 12, 'abc')).toBe(path.join('/var/folders/xy/T', 'azito-output-12-abc.md'));
-    expect(files.rulesFile(local, 12, 'abc')).toBe(path.join('/var/folders/xy/T', 'azito-rules-12-abc.md'));
+    expect(files.pipeFile(local, '12-1700', 5)).toBe('/var/folders/xy/T/azito-pipe-12-1700-5.log');
+    expect(files.pipeFile(local, '12-sig', 5)).toBe('/var/folders/xy/T/azito-pipe-12-sig-5.log');
+    expect(files.outputFile(local, 12, 'abc')).toBe('/var/folders/xy/T/azito-output-12-abc.md');
+    expect(files.rulesFile(local, 12, 'abc')).toBe('/var/folders/xy/T/azito-rules-12-abc.md');
   });
 
-  it('keeps /tmp for agent servers regardless of the hub temp folder (until the host OS is known: P5)', () => {
-    expect(files.pipeFile(agent, '12-1700', 5)).toBe('/tmp/azito-pipe-12-1700-5.log');
-    expect(files.outputFile(agent, 12, 'abc')).toBe('/tmp/azito-output-12-abc.md');
-    expect(files.rulesFile(agent, 12, 'abc')).toBe('/tmp/azito-rules-12-abc.md');
-    expect(TaskTempFiles.remotePipeFile('12-1700', 5)).toBe('/tmp/azito-pipe-12-1700-5.log');
+  it('names an agent server\'s files in the OS notation and temp folder the agent reported', () => {
+    expect(files.pipeFile(linuxAgent, '12-1700', 5)).toBe('/tmp/azito-pipe-12-1700-5.log');
+    expect(files.outputFile(macAgent, 12, 'abc')).toBe('/var/folders/ab/c_d/T/azito-output-12-abc.md');
+    expect(files.rulesFile(macAgent, 12, 'abc')).toBe('/var/folders/ab/c_d/T/azito-rules-12-abc.md');
+    expect(files.pipeFile(winAgent, '12-sig', 5)).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-pipe-12-sig-5.log');
+    expect(files.outputFile(winAgent, 12, 'abc')).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-output-12-abc.md');
+    expect(files.rulesFile(winAgent, 12, 'abc')).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-rules-12-abc.md');
+    expect(TaskTempFiles.remotePipeFile(winAgent, '12-1700', 5)).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-pipe-12-1700-5.log');
+  });
+
+  it('names a Windows hub\'s own files with backslashes, whatever OS runs this', () => {
+    const win = new TaskTempFiles('C:\\Users\\u\\AppData\\Local\\Temp', 'win32');
+    expect(win.outputFile(local, 3, 'n')).toBe('C:\\Users\\u\\AppData\\Local\\Temp\\azito-output-3-n.md');
+  });
+
+  it('rejects an agent temp folder that cannot be embedded in shell commands, but not a Windows one', () => {
+    expect(() => assertTmpDirShellSafe('linux', '/tmp/my dir', 'agent server "a"')).toThrow(/agent server "a"/);
+    expect(() => assertTmpDirShellSafe('darwin', '/var/folders/ab/c_d/T', 'agent server "a"')).not.toThrow();
+    expect(() => assertTmpDirShellSafe('win32', 'C:\\Users\\a b\\Temp', 'agent server "a"')).not.toThrow();
   });
 
   it('on Linux, where os.tmpdir() is /tmp, the paths are the same as before', () => {
     const linux = new TaskTempFiles('/tmp', 'linux');
-    expect(linux.outputFile(local, 3, 'n')).toBe(path.join('/tmp', 'azito-output-3-n.md'));
+    expect(linux.outputFile(local, 3, 'n')).toBe('/tmp/azito-output-3-n.md');
     expect(linux.hubScanDirs()).toEqual(['/tmp']);
   });
 

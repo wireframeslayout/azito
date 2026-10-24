@@ -7,11 +7,12 @@ import type { MisaoLineSource } from './misao/MisaoConnection';
 describe('PaneStreamFactory', () => {
   const server = { name: 's7', type: 'agent' as const, host: 'h', agentPort: 3002, agentToken: 't', hostProfile: null, defaultMux: 'tmux' as const, muxRuntime: 'system' as const };
   const fileStream = { kind: 'file' };
-  const transportFactory = { getTransport: () => ({ createPaneStream: () => fileStream }) } as never;
+  const tempServer = { type: 'local' as const };
+  const transportFactory = { getTransport: () => ({ createPaneStream: (_h: unknown, temp: unknown) => (temp === tempServer ? fileStream : null) }) } as never;
   const factory = new PaneStreamFactory(transportFactory, () => ({} as MisaoLineSource));
 
   it('creates a pane stream via transport for agent servers', () => {
-    expect(factory.create('%82', server)).toBe(fileStream);
+    expect(factory.create('%82', server, tempServer)).toBe(fileStream);
   });
 
   describe('local servers', () => {
@@ -24,25 +25,25 @@ describe('PaneStreamFactory', () => {
     const misaoPane = asPaneHandle('p_01ARZ3NDEKTSV4RRFFQ69G5FAV');
 
     it('reads a misao pane through its line stream', () => {
-      expect(misaoFactory.create('t1-123', misaoServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
+      expect(misaoFactory.create('t1-123', misaoServer, tempServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
     });
 
     it('reads a misao pane of an agent server through the line stream of that server', () => {
-      expect(misaoFactory.create('t1-123', server, misaoPane)).toBeInstanceOf(MisaoPaneStream);
+      expect(misaoFactory.create('t1-123', server, tempServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
       expect(linesOf).toHaveBeenLastCalledWith(server);
     });
 
     it('tells a misao pane by its handle, whatever the server default mux is', () => {
-      expect(misaoFactory.create('t1-123', tmuxServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
+      expect(misaoFactory.create('t1-123', tmuxServer, tempServer, misaoPane)).toBeInstanceOf(MisaoPaneStream);
     });
 
     it('takes streams without a pane (signal files) from the transport, which writes a plain file', () => {
-      expect(misaoFactory.create('t1-sig', misaoServer)).toBe(fileStream);
+      expect(misaoFactory.create('t1-sig', misaoServer, tempServer)).toBe(fileStream);
     });
 
     it('keeps the transport path for a tmux pane, even on a misao-default server', () => {
-      expect(misaoFactory.create('t1-123', tmuxServer, asPaneHandle('%5'))).toBe(fileStream);
-      expect(misaoFactory.create('t1-123', misaoServer, asPaneHandle('%5'))).toBe(fileStream);
+      expect(misaoFactory.create('t1-123', tmuxServer, tempServer, asPaneHandle('%5'))).toBe(fileStream);
+      expect(misaoFactory.create('t1-123', misaoServer, tempServer, asPaneHandle('%5'))).toBe(fileStream);
     });
   });
 });

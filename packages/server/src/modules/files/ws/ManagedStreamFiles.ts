@@ -1,5 +1,6 @@
 import * as fs from 'fs';
-import * as path from 'path';
+import { hostPathFor, type HostPathApi } from '@azito/shared';
+import { pathRulesOf } from '../../../shared/os/hostEnv';
 
 /** ハブが pane の出力を追跡させるために作らせるファイル名（`azito-pipe-<paneId>-<stamp>.log`）。 */
 const STREAM_FILE_NAME = /^azito-pipe-[A-Za-z0-9_-]+\.log$/;
@@ -45,8 +46,11 @@ export class ManagedStreamFiles {
   private readonly leaseMs: number;
   private readonly now: () => number;
 
-  /** `allowedDirs` は、管理対象のファイルを置いてよい一時フォルダ（絶対パス）。 */
-  constructor(private readonly allowedDirs: readonly string[], private readonly options: ManagedStreamFilesOptions = {}) {
+  private readonly hostPath: HostPathApi;
+
+  /** `platform` はこのプロセスのホストの OS（パスの規則）。`allowedDirs` は、管理対象のファイルを置いてよい一時フォルダ（そのホストの絶対パス）。 */
+  constructor(platform: NodeJS.Platform, private readonly allowedDirs: readonly string[], private readonly options: ManagedStreamFilesOptions = {}) {
+    this.hostPath = hostPathFor(pathRulesOf(platform));
     this.maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
     this.leaseMs = options.leaseMs ?? DEFAULT_LEASE_MS;
     this.now = options.now ?? Date.now;
@@ -135,10 +139,11 @@ export class ManagedStreamFiles {
   }
 
   private assertManageable(filePath: string): void {
-    if (!path.isAbsolute(filePath) || path.normalize(filePath) !== filePath) {
+    if (!this.hostPath.isAbsolute(filePath) || this.hostPath.normalize(filePath) !== filePath) {
       throw new InvalidStreamFileError('Stream file path must be a normalized absolute path');
     }
-    if (!this.allowedDirs.includes(path.dirname(filePath)) || !STREAM_FILE_NAME.test(path.basename(filePath))) {
+    const dir = this.hostPath.dirname(filePath);
+    if (!this.allowedDirs.some((allowed) => this.hostPath.samePath(allowed, dir)) || !STREAM_FILE_NAME.test(this.hostPath.basename(filePath))) {
       throw new InvalidStreamFileError('Stream file path is not an azito pipe file in a temp directory');
     }
   }

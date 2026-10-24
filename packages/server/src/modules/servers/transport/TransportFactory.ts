@@ -4,7 +4,7 @@ import { LocalTransport } from './LocalTransport';
 import { AgentTransport } from './AgentTransport';
 import { resolveTmuxRuntime } from './TmuxRuntime';
 import type { LocalHost } from '../../../shared/os/hostEnv';
-import type { TaskTempFiles } from '../../../shared/os/taskTempFiles';
+import type { TaskTempFiles, TaskTempServer } from '../../../shared/os/taskTempFiles';
 import type { IFileOps } from '../../../shared/fs/fileOps';
 import { HostProfileError, type HostProfile, type HubHostProfile } from '../../../shared/os/hostProfile';
 
@@ -63,6 +63,16 @@ export class TransportFactory {
   getAgentTransport(server: Parameters<TransportFactory['getTransport']>[0]): AgentTransport {
     if (server.type !== 'agent') throw new Error(`Server "${server.name}" is not an agent server`);
     return this.getTransport(server) as AgentTransport;
+  }
+
+  /**
+   * Where the task files of a server go (see `TaskTempFiles`): the hub's own temp folder for a local server, the OS and temp
+   * folder the agent reports for an agent server. Asks the agent the first time, so it rejects when the agent cannot be
+   * reached. It must be awaited before a pane stream is created for an agent server: that stream names its file from this.
+   */
+  async taskTempServer(server: TransportServer): Promise<TaskTempServer> {
+    if (server.type === 'local') return { type: 'local' };
+    return { type: 'agent', ...(await this.getAgentTransport(server).loadTaskTempHost()) };
   }
 
   invalidate(serverName: string): void {

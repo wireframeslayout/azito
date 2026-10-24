@@ -14,7 +14,8 @@ import { AGENT_PANE_STREAMS_PATH, AgentOutdatedError } from './agentPaneStreamPr
 import { AgentUnreachableError, type AgentUnreachableReason } from './AgentUnreachableError';
 import type { MuxRuntime } from '../Server';
 import { AGENT_HOST_PATH, AgentHostOutdatedError, parseAgentHostInfo, type AgentHostInfo } from './agentHostProtocol';
-import { assertPosixHost, type HostProfile } from '../../../shared/os/hostProfile';
+import { assertPosixHost, toHostProfile, type HostProfile } from '../../../shared/os/hostProfile';
+import { TaskTempFiles, assertTmpDirShellSafe, LEGACY_UNIX_TMP_DIR, type AgentTempHost, type TaskTempServer } from '../../../shared/os/taskTempFiles';
 import { CommandOutputLimitError, CommandSpawnError, type CommandResult, type CommandSpec } from '../../../shared/exec/commandSpec';
 import { truncateUtf8 } from '../../../shared/exec/utf8';
 import { toPosixCommandLine } from '../../../shared/exec/posixCommandLine';
@@ -111,6 +112,9 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
   private authHeader: string;
   private useLegacyMuxRoute = false;
   private fileOps: IFileOps | null = null;
+  /** Where this agent's task files go: learned from the agent (`loadTaskTempHost`), kept for the life of this transport (it is rebuilt when the server is edited). */
+  private taskTempHost: AgentTempHost | null = null;
+  private taskTempHostLoad: Promise<AgentTempHost> | null = null;
   /** Set when the agent answered `404` to `GET /api/processes`: it is older than the endpoint. */
   private lacksProcessesEndpoint = false;
 
@@ -278,8 +282,37 @@ export class AgentTransport implements IServerTransport, IMuxTransport, IHostBou
     });
   }
 
-  createPaneStream(handle: PaneHandle): IPaneStream {
-    return new AgentPaneStream(handle as string, this, this.wsBaseUrl, this.authHeader);
+  /**
+   * Where this agent keeps the files of a task (its OS and temp folder): asked of the agent once (`GET /api/host`) and
+   * remembered. An agent whose host was never recorded predates that endpoint and is a Unix one with `/tmp`. Rejects when the
+   * agent cannot be reached or reports a temp folder that is unsafe in a Unix shell command; nothing is remembered then.
+   */
+  loadTaskTempHost(): Promise<AgentTempHost> {
+    if (this.taskTempHost) return Promise.resolve(this.taskTempHost);
+    this.taskTempHostLoad ??= this.fetchTaskTempHost()
+      .then((host) => { this.taskTempHost = host; return host; })
+      .finally(() => { this.taskTempHostLoad = null; });
+    return this.taskTempHostLoad;
+  }
+
+  private async fetchTaskTempHost(): Promise<AgentTempHost> {
+    if (this.hostProfile === null) return { platform: 'linux', tmpDir: LEGACY_UNIX_TMP_DIR };
+    const info = await this.fetchHostInfo();
+    const platform = toHostProfile(info.platform, info.arch).platform;
+    // An agent from before the temp folder was reported is a Unix one with /tmp. Windows agents are new in this release, so one that
+    // does not report it is not a state to paper over.
+    if (info.tmpDir === undefined && platform === 'win32') {
+      throw new Error(`Windows agent server "${this.serverName}" did not report its temp folder (GET /api/host tmpDir); update the agent`);
+    }
+    const host: AgentTempHost = { platform, tmpDir: info.tmpDir ?? LEGACY_UNIX_TMP_DIR };
+    assertTmpDirShellSafe(host.platform, host.tmpDir, `agent server "${this.serverName}"`);
+    return host;
+  }
+
+  createPaneStream(handle: PaneHandle, tempServer: TaskTempServer): IPaneStream {
+    if (tempServer.type !== 'agent') throw new Error(`Agent server "${this.serverName}" needs the agent's temp folder to name a pane stream file`);
+    const filePath = TaskTempFiles.remotePipeFile(tempServer, handle as string, Date.now());
+    return new AgentPaneStream(filePath, this, this.wsBaseUrl, this.authHeader);
   }
 
   /**

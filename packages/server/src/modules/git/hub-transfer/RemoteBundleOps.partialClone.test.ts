@@ -18,6 +18,16 @@ function localTransport(): IServerTransport {
         return { code: e.status ?? 1, stdout: e.stdout ?? '', stderr: e.stderr ?? String(err) };
       }
     },
+    // `transport.run` is the program-as-argv route (git config); the real exit code is reported, not thrown.
+    run: async (spec: { file: string; args: string[]; cwd?: string }) => {
+      try {
+        const stdout = execFileSync(spec.file, spec.args, { encoding: 'utf-8', cwd: spec.cwd });
+        return { exitCode: 0, signal: null, stdout, stderr: '' };
+      } catch (err) {
+        const e = err as { status?: number; stdout?: string; stderr?: string };
+        return { exitCode: e.status ?? 1, signal: null, stdout: e.stdout ?? '', stderr: e.stderr ?? String(err) };
+      }
+    },
   } as unknown as IServerTransport;
 }
 

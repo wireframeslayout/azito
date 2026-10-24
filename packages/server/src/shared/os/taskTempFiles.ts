@@ -1,25 +1,39 @@
-import * as path from 'path';
-import type { HostEnv } from './hostEnv';
+import { hostPathFor } from '@azito/shared';
+import { pathRulesOf, type HostEnv, type HostPlatform } from './hostEnv';
 
-/** タスクの一時ファイル（signal / pipe の追跡先、output、rules）を置くサーバーの種別。 */
-export interface TaskTempServer {
-  readonly type: 'local' | 'agent';
+/** 相手ホストの OS と一時フォルダ。agent が `GET /api/host` で報告したもの（未記録の旧 agent は Unix の `/tmp`）。 */
+export interface AgentTempHost {
+  readonly platform: HostPlatform;
+  readonly tmpDir: string;
 }
+
+/** タスクの一時ファイル（signal / pipe の追跡先、output、rules）を置くサーバー。agent は相手の OS と一時フォルダで決まる。 */
+export type TaskTempServer = { readonly type: 'local' } | ({ readonly type: 'agent' } & AgentTempHost);
 
 /**
  * Unix の旧配置（`/tmp` 固定）。ハブの `os.tmpdir()` が `/tmp` 以外（macOS の `$TMPDIR` など）になった後も、
- * 旧配置に残ったファイルを復旧・片付けで拾うために読む。リモートサーバー（agent）は P5 まで `/tmp` のまま。
+ * 旧配置に残ったファイルを復旧・片付けで拾うために読む。OS を記録していない旧 agent も `/tmp`。
  */
-const LEGACY_UNIX_TMP_DIR = '/tmp';
+export const LEGACY_UNIX_TMP_DIR = '/tmp';
 
 /** Characters a Unix temp folder may contain, since its paths are embedded unquoted in shell commands. */
 const SHELL_SAFE_PATH = /^[A-Za-z0-9_./@:+,=%~-]+$/;
 
 /**
+ * A Unix temp folder with a space or shell metacharacter would split the task files' paths, which are written, unquoted,
+ * into shell commands (tmux pipe-pane, the commands in the worker's prompt). A Windows one is not written into a shell line.
+ * `subject` names whose folder it is, for the message.
+ */
+export function assertTmpDirShellSafe(platform: NodeJS.Platform, tmpDir: string, subject: string): void {
+  if (platform !== 'win32' && !SHELL_SAFE_PATH.test(tmpDir)) {
+    throw new Error(`The temp directory "${tmpDir}" of ${subject} contains characters that are not safe in shell commands (allowed: letters, digits and _ . / @ : + , = % ~ -); set TMPDIR to another directory`);
+  }
+}
+
+/**
  * signal / pipe / output / rules ファイルのパスを 1 か所で決める。
  * - ハブ自身（`local`）のサーバーは、ハブの一時フォルダ（`HostEnv.tmpDir`）に置く。
- * - agent サーバーは相手の OS をまだ知らないので `/tmp` のまま。サーバーを受け取る形にしてあるので、
- *   P5 で相手の hostProfile から決めるように差し替える。
+ * - agent サーバーは、相手の OS（`path.win32` / `path.posix`）と相手が報告した一時フォルダで決める。
  * 作ったパスは execution_log に記録され、復旧・片付けは記録されたパスを優先する。
  */
 export class TaskTempFiles {
@@ -28,14 +42,11 @@ export class TaskTempFiles {
   }
 
   /**
-   * The hub's task files are written, unquoted, into shell commands (tmux pipe-pane, `cat`/`rm`, the commands in the worker's
-   * prompt). A Unix temp folder with a space or shell metacharacter would split them, so the hub refuses it at startup instead
-   * of failing task by task. (Not part of the constructor: an agent never places task files in its own temp folder.)
+   * The hub's task files are written, unquoted, into shell commands (tmux pipe-pane, the commands in the worker's prompt). The
+   * hub refuses an unsafe Unix temp folder at startup instead of failing task by task (an agent's is checked when it is read).
    */
   assertHubDirShellSafe(): void {
-    if (this.hubPlatform !== 'win32' && !SHELL_SAFE_PATH.test(this.hubTmpDir)) {
-      throw new Error(`The temp directory "${this.hubTmpDir}" contains characters that are not safe in shell commands (allowed: letters, digits and _ . / @ : + , = % ~ -); set TMPDIR to another directory`);
-    }
+    assertTmpDirShellSafe(this.hubPlatform, this.hubTmpDir, 'the hub');
   }
 
   static fromHostEnv(hostEnv: Pick<HostEnv, 'tmpDir' | 'platform'>): TaskTempFiles {
@@ -44,7 +55,6 @@ export class TaskTempFiles {
 
   /** pane の出力を追跡するファイル（`PaneOutputStream` / `AgentPaneStream`）。signal ファイルも `<taskId>-sig` の paneId でここに入る。 */
   pipeFile(server: TaskTempServer, paneId: string, stamp: number): string {
-    if (server.type === 'agent') return TaskTempFiles.remotePipeFile(paneId, stamp);
     return this.join(server, `azito-pipe-${paneId}-${stamp}.log`);
   }
 
@@ -76,15 +86,15 @@ export class TaskTempFiles {
   }
 
   /**
-   * agent サーバーの pipe ファイル。ハブの設定に依らず、相手ホストの一時フォルダ（今は `/tmp` 固定）で決まる。
-   * `AgentTransport` が `TaskTempFiles` を持たずに使えるよう static にしてある（P5 で相手の hostProfile から決める）。
+   * agent サーバーの pipe ファイル。相手ホストの OS と一時フォルダで決まる。`AgentTransport` が `TaskTempFiles` を持たずに
+   * 使えるよう static にしてある。
    */
-  static remotePipeFile(paneId: string, stamp: number): string {
-    return path.posix.join(LEGACY_UNIX_TMP_DIR, `azito-pipe-${paneId}-${stamp}.log`);
+  static remotePipeFile(host: AgentTempHost, paneId: string, stamp: number): string {
+    return hostPathFor(host.platform).join(host.tmpDir, `azito-pipe-${paneId}-${stamp}.log`);
   }
 
   private join(server: TaskTempServer, fileName: string): string {
-    if (server.type === 'local') return path.join(this.hubTmpDir, fileName);
-    return path.posix.join(LEGACY_UNIX_TMP_DIR, fileName);
+    if (server.type === 'local') return hostPathFor(pathRulesOf(this.hubPlatform)).join(this.hubTmpDir, fileName);
+    return hostPathFor(server.platform).join(server.tmpDir, fileName);
   }
 }
