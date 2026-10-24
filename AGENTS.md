@@ -239,7 +239,15 @@ packages/
   NULL = an agent registered before the OS was kept = a Unix agent (existing sh paths keep working; a 404 from `/api/host` is `agent_outdated`
   and leaves it NULL). `exec(command: string)` is `@deprecated` (POSIX-only) and throws `unsupported_os` when the host is win32. misao pane
   shells are per node (`modules/tmux/misao/paneShell.ts`): the hub's shell for its own daemon, the agent's reported shell (`$SHELL`, else its user's passwd login shell) for an agent's
-  (neither is an error; an agent too old to report keeps the hub's shell); a Windows agent's node opens its reported `%ComSpec%` bare (a pane with a launch command is `unsupported_os` until #371); a Windows hub is `unsupported_os` (#380)
+  (neither is an error; an agent too old to report keeps the hub's shell); a Windows agent's node opens its reported `%ComSpec%` bare (a pane with a launch command is `unsupported_os` until #371), and so does a Windows hub's own (`hubPaneShell`, the hub's `%ComSpec%`; #380 B4a)
+
+### Local server on a Windows hub: misao only (#380 B4a)
+- `hostFeatureSupport(profile, 'tmux')` (`@azito/shared`) is the one decision. `SqliteServerRepository(db, hubHost)` stamps the hub's own host on a local server's `hostProfile` when it reads it
+  (never stored) and reads a `tmux` default as `misao` where tmux is closed (the row is untouched). `muxKinds.hostRunsTmux` / `supportedMuxKinds` follow it; `registerTmuxDriver` registers the tmux driver
+  so a host without tmux does not `hosted` it and answers `unsupported_os` (new `MuxDriverUnavailableReason`); `LocalTransport.execMux` / `openTerminal` refuse a stray call. `TmuxHookManager` install / uninstall,
+  the startup linked-session GC and the `install-status` tmux row are skipped for it (one info line at startup); `install-tmux` and `PUT defaultMux: tmux` answer 501 `unsupported_os`. Unix hubs: unchanged.
+- Panes are the hub's `%ComSpec%`, bare. Create / rename / delete / send-keys / capture / the browser terminal / `tier0_mux` work; anything that needs a command in a pane is `unsupported_os` until #371:
+  every path that types a worker line into a pane is closed: `workerLineDialect` (`shared/os/hostFeature.ts`) is the single place the cd / launch / respawn / supervisor-wrap lines get their dialect (the last line of defence), and each entry asserts first (`assertHostFeature`, from the `workerLaunch` / `taskExecution` rows) before any window / row / status changes: `launch-agent`, `execute`, `followUp` (follow-up / `answer` / `approve-plan`), `resumeStateMachine`, `WindowRespawnService.respawn` / `resumeLegacySession` (respawn, `recover-session`), `TaskRestoreService.restore`; the fire-and-forget routes (`answer`, `approve-plan`) call `ExecuteTaskUseCase.assertCanLaunchWorker` first. Windows CI: `scripts/smoke-misao-win32.ts`.
 
 ### Shell text (ShellDialect, #379 P9)
 - `shared/os/shellDialect.ts`: `ShellDialect` (POSIX sh / PowerShell 5.1) is for the two places text goes through a shell on the target — a fixed SSH bootstrap script and the line typed

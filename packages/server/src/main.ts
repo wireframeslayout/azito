@@ -25,6 +25,7 @@ import { authDoctorCommand } from './cli/authDoctorCommand';
 import { misaoCommand } from './cli/misaoCommand';
 import { serviceCommand } from './cli/serviceCommand';
 import { initEnvCommand } from './cli/initEnvCommand';
+import { hostRunsTmux } from './modules/servers/muxKinds';
 import { hasMisaoToRelyOn } from './modules/system/misao/misaoPaths';
 import { misaoWindowsTaskExists } from './modules/system/misao/misaoLocalWindows';
 import { runUpdate } from './modules/system/updateScript';
@@ -239,6 +240,9 @@ async function main(): Promise<void> {
     void misao.servers.discoverAgentNode(srv).catch((err) => app.log.debug(`misao discovery on ${srv.name}: ${err}`));
   }
 
+  for (const srv of allServers.filter((s) => !hostRunsTmux(s))) {
+    app.log.info(`tmux is not used on ${srv.name}: its host (${srv.hostProfile?.platform}) has no tmux, so no hooks are installed and its windows run on misao`);
+  }
   for (const srv of tmuxServers) {
     if (srv.type === 'local') {
       tmuxHookManager.install(srv).catch((err) => {
@@ -257,7 +261,7 @@ async function main(): Promise<void> {
 
   // ─── Startup GC: clean leaked linked sessions ───
 
-  for (const srv of tmuxServers) {
+  for (const srv of tmuxServers.filter(hostRunsTmux)) {
     wiring.tmuxClient.cleanupLinkedSessions(srv).then((n) => {
       if (n > 0) app.log.info(`Startup GC: cleaned ${n} linked session(s) on ${srv.name}`);
     }).catch(() => {});

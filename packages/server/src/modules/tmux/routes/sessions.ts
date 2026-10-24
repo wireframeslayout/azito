@@ -16,6 +16,7 @@ import type { IMuxClient } from '../IMuxClient';
 import { WindowExistsError } from '../WindowExistsError';
 import { MuxDriverUnavailableError, MUX_BINARY_MISSING, isMissingBinaryError, isMissingBinaryResult } from '../MuxCapabilityError';
 import { AgentUnreachableError } from '../../servers/transport/AgentUnreachableError';
+import { HostProfileError } from '../../../shared/os/hostProfile';
 import { muxWindowTarget } from '../muxWindowTarget';
 import { serverSupportsMux } from '../../servers/muxKinds';
 
@@ -228,7 +229,8 @@ function createResultFailure(kind: MuxDriverKind, result: ExecResult): { status:
 }
 
 function replyCreateError(reply: FastifyReply, kind: MuxDriverKind, err: unknown): FastifyReply {
-  if (err instanceof AgentUnreachableError) throw err;
+  // An operation this host's OS does not support is answered by the error mapper (501 with the reason), not as a failed create.
+  if (err instanceof AgentUnreachableError || err instanceof HostProfileError) throw err;
   const failure = createFailure(kind, err);
   return reply.status(failure.status).send(failure.body);
 }

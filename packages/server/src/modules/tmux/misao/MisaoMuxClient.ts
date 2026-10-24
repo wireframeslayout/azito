@@ -239,7 +239,10 @@ export class MisaoMuxClient implements IMuxClient {
    */
   async openPaneInWindow(server: ServerConfig, ref: MuxRef, opts?: { command?: string; extraEnv?: Record<string, string>; labels?: PaneWindowLabels }): Promise<PaneHandle> {
     const windowName = await this.windowName(ref);
-    const { shell } = await this.options.paneShell();
+    const paneShell = await this.options.paneShell();
+    // Before the pane exists: a host whose shell cannot be handed a command line (Windows, #371) must not get a bare pane with the command typed into it.
+    if (opts?.command) requireCommandArgs(paneShell, 'Starting a command in a new pane');
+    const { shell } = paneShell;
     const { paneId } = await this.rpc.request('pane.open', {
       cmd: [shell],
       windowId: ref.window,

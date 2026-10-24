@@ -1,4 +1,6 @@
 import { EventEmitter } from 'events';
+import { hostRunsTmux } from '../muxKinds';
+import { MuxDriverUnavailableError } from '../../tmux/MuxCapabilityError';
 import { execFile } from 'child_process';
 import * as pty from 'node-pty';
 import type {
@@ -87,11 +89,18 @@ export class LocalTransport implements IServerTransport, IMuxTransport, IHostBou
     return execLocal('/bin/sh', ['-c', command], timeoutMs);
   }
 
+  /** A host without tmux (Windows) never runs one: a stray call is refused with the reason instead of failing to spawn a missing binary. */
+  private assertHostRunsTmux(): void {
+    if (!hostRunsTmux(this)) throw new MuxDriverUnavailableError('tmux', 'unsupported_os');
+  }
+
   async execMux(req: MuxExecRequest): Promise<ExecResult> {
+    this.assertHostRunsTmux();
     return execLocal(this.rt.bin, [...this.rt.baseArgs, ...req.args]);
   }
 
   async openTerminal(ref: MuxRef, ordinal: PaneOrdinal, cols: number, rows: number, opts?: import('./ServerTransport').OpenTerminalOpts): Promise<ITerminalStream> {
+    this.assertHostRunsTmux();
     const tmuxTarget = tmuxTargetFromMuxRef(ref);
     const colonIdx = tmuxTarget.indexOf(':');
     const sessionName = tmuxTarget.slice(0, colonIdx);

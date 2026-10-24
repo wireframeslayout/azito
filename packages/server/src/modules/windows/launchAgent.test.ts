@@ -1,6 +1,7 @@
 import { KeyedMutex } from '../../shared/keyedMutex';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
+import { mapAppError } from '../../app/mapAppError';
 import windowsRoutes, { type WindowsRouteOptions } from './routes';
 import type { Window, IWindowRepository } from './Window';
 import type { ServerConfig, IServerRepository } from '../servers/Server';
@@ -139,6 +140,7 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     srv?: ServerConfig;
     strategy?: ISessionStrategy;
     tasks?: Task[];
+    hostProfile?: { platform: 'linux' | 'darwin' | 'win32'; arch: 'x64' | 'arm64' };
   }): Promise<FastifyInstance> {
     window = opts.win;
     server = opts.srv ?? makeServer();
@@ -163,12 +165,18 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     };
 
     const instance = Fastify();
+    // The hub's own error mapping, so a host-OS refusal is answered as it is in the app.
+    instance.setErrorHandler((err, _request, reply) => {
+      const mapped = mapAppError(err);
+      if (!mapped) throw err;
+      return reply.status(mapped.status).send(mapped.body);
+    });
     await instance.register(windowsRoutes, {
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
       taskRepo: { findById: (id: number) => taskStore.get(id) ?? null } as unknown as ITaskRepository,
       tmux: mux as unknown as TmuxClient,
-      transportFactory: { hostProfileFor: () => null } as unknown as WindowsRouteOptions['transportFactory'],
+      transportFactory: { hostProfileFor: () => opts.hostProfile ?? null } as unknown as WindowsRouteOptions['transportFactory'],
       muxDriverRegistry: { resolve: () => mux } as any,
       serverRepo: serverRepo as IServerRepository,
       respawnService: respawnService as unknown as WindowRespawnService,
@@ -188,6 +196,19 @@ describe('POST /api/windows/:id/launch-agent — MCP blocking', () => {
     const [, , keys] = sendKeys.mock.calls[0];
     return keys[0];
   }
+
+  it('refuses a Windows host as unsupported_os (501) and types nothing into the pane: worker launch is #371', async () => {
+    app = await buildApp({ win: makeWindow(), hostProfile: { platform: 'win32', arch: 'x64' } });
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/windows/${window.id}/launch-agent`,
+      payload: { command: 'claude' },
+    });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Launching an agent in a window is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
+    expect(sendKeys).not.toHaveBeenCalled();
+    await app.close();
+  });
 
   it('(a) isPrimary=true, claude, no session-id → both --strict-mcp-config and --session-id present', async () => {
     app = await buildApp({

@@ -28,6 +28,17 @@ describe('TmuxHookManager', () => {
     }
   });
 
+  it('installs and removes nothing on a host without tmux (Windows): out of scope, not a failure', async () => {
+    const { factory, execMux } = makeMockTransportFactory();
+    const manager = new TmuxHookManager(factory, 3001, 'token');
+    const win32 = { ...server, hostProfile: { platform: 'win32', arch: 'x64' } } as ServerConfig;
+
+    await manager.install(win32);
+    await manager.uninstall(win32);
+
+    expect(execMux).not.toHaveBeenCalled();
+  });
+
   it('sets hooks for all 7 tmux events', async () => {
     const { factory, execMux } = makeMockTransportFactory();
     const manager = new TmuxHookManager(factory, 3001, 'token');

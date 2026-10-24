@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { agentPaneShell, hubPaneShell } from './paneShell';
+import { agentPaneShell, hubPaneShell, requireCommandArgs } from './paneShell';
 import { resolveHubHostProfile } from '../../../shared/os/hostProfile';
 import { AgentHostOutdatedError } from '../../servers/transport/agentHostProtocol';
 
@@ -13,8 +13,18 @@ describe('hubPaneShell', () => {
     expect(await hubPaneShell('/bin/zsh', { platform: 'darwin', arch: 'arm64' })()).toEqual({ shell: '/bin/zsh', commandArgs: ['-lc'] });
   });
 
-  it('refuses a Windows hub as unsupported_os instead of passing it a Unix shell', async () => {
-    await expect(hubPaneShell('/bin/bash', { platform: 'win32', arch: 'x64' })()).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringContaining('this hub') });
+  it("gives a Windows hub its command interpreter (%ComSpec%), bare: no command arguments, like a Windows agent's", async () => {
+    expect(await hubPaneShell('C:\\Windows\\System32\\cmd.exe', { platform: 'win32', arch: 'x64' })()).toEqual({ shell: 'C:\\Windows\\System32\\cmd.exe', commandArgs: null });
+  });
+
+  it('says which shell is missing instead of falling back to a Unix one', async () => {
+    await expect(hubPaneShell(null, { platform: 'win32', arch: 'x64' })()).rejects.toThrow(/%ComSpec% is not set/);
+    await expect(hubPaneShell(null, { platform: 'linux', arch: 'x64' })()).rejects.toThrow(/no default shell/);
+  });
+
+  it('refuses running a command in a Windows hub pane as unsupported_os (worker launch is #371)', async () => {
+    const paneShell = await hubPaneShell('C:\\Windows\\System32\\cmd.exe', { platform: 'win32', arch: 'x64' })();
+    expect(() => requireCommandArgs(paneShell, 'Starting a command in a new pane')).toThrowError(expect.objectContaining({ code: 'unsupported_os' }));
   });
 
   it('refuses a hub on an unknown OS with that reason', async () => {
@@ -78,7 +88,7 @@ describe('agentPaneShell', () => {
   });
 
   it("tells a Windows hub's user to update the agent, not that this hub is unsupported, for an agent too old to report", async () => {
-    const winHub = hubPaneShell('/bin/bash', { platform: 'win32', arch: 'x64' });
+    const winHub = hubPaneShell('C:\\Windows\\System32\\cmd.exe', { platform: 'win32', arch: 'x64' });
     const resolve = agentPaneShell(server(), async () => { throw new AgentHostOutdatedError('a1'); }, winHub, log());
     await expect(resolve()).rejects.toMatchObject({ code: 'unsupported_os', message: expect.stringMatching(/agent server a1.*agent_outdated.*Update the agent/) });
   });

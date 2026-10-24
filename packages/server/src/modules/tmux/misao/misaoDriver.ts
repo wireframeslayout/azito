@@ -21,8 +21,8 @@ export interface MisaoRuntime {
 export interface MisaoRuntimeInput {
   env: NodeJS.ProcessEnv;
   homeDir: string;
-  /** Shell panes run when no command is given, and the interpreter for commands (`<shell> -lc <command>`). */
-  shell: string;
+  /** Shell panes run when no command is given, and the interpreter for commands (`<shell> -lc <command>`); on Windows `%ComSpec%`, bare. Null: the host has none set. */
+  shell: string | null;
   /** The hub's own host, resolved at the entry point. */
   hubHost: HubHostProfile;
 }

@@ -1,4 +1,6 @@
 import { KeyedMutex } from '../../shared/keyedMutex';
+import { HostProfileError } from '../../shared/os/hostProfile';
+import { mapAppError } from '../../app/mapAppError';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import windowsRoutes from './routes';
@@ -419,6 +421,8 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
       findByName: (name: string) => (name === server.name ? server : null),
     };
     const instance = Fastify();
+    // The hub's own error mapping, so a host-OS refusal is answered as it is in the app.
+    instance.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
     await instance.register(windowsRoutes, {
       windowRepo: windowRepo as IWindowRepository,
       projectRepo: {} as IProjectRepository,
@@ -455,6 +459,15 @@ describe('POST /api/windows/:id/respawn — execution gate (Issue #328 second-ro
     const app2 = await setup(vi.fn(async () => { throw new Error('boom'); }), failing);
     await app2.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
     expect(failing).toHaveBeenCalledWith(server.name);
+  });
+
+  it('answers 501 { error, code: unsupported_os } for a host that cannot run a worker in a pane (Windows, #371)', async () => {
+    app = await setup(vi.fn(async () => { throw new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).'); }));
+
+    const res = await app.inject({ method: 'POST', url: `/api/windows/${window.id}/respawn` });
+
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Resuming a worker is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
   });
 
   it('translates ExecutionGatePendingApprovalError into 409 execution_pending_approval (not a generic 500)', async () => {

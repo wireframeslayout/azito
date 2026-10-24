@@ -6,8 +6,8 @@ import * as path from 'path';
 /**
  * End-to-end check of the hub's own misao on a real Windows (Windows PowerShell 5.1, the real schtasks.exe, the real misao.exe of the
  * bundle, a real named pipe): install.ps1 WITHOUT -NoService installs the hub and misao into a throwaway prefix with spaces and
- * parentheses, then `azito misao status`, the hub's view of the daemon (`GET /api/system/misao`, the sessions listing), what the API
- * says of opening a misao window, `azito stop` (misao keeps running), `azito start`, a repeated install / update (nothing is
+ * parentheses, then `azito misao status`, the hub's view of the daemon (`GET /api/system/misao`, the sessions listing), the local server on misao only (create / rename /
+ * send-keys / capture / terminal WebSocket / tier0_mux / delete, and a worker refused as unsupported_os), `azito stop` (misao keeps running), `azito start`, a repeated install / update (nothing is
  * restarted), `misao stop` and `azito misao start`. The tasks are deleted at the end whatever happened.
  * The tasks keep their product names: they only exist inside the CI runner. A skipped step is a failure, never a pass.
  * Usage: tsx smoke-misao-win32.ts <azito-hub-*-win32-x64.zip> <SHA256SUMS> <install.ps1>
@@ -104,6 +104,106 @@ function envValue(envFile: string, key: string): string | undefined {
   return undefined;
 }
 
+/** Types `input` into a terminal WebSocket once it has sent its first frame; resolves with everything received as soon as `until` matches after that. */
+function terminalRoundTrip(url: string, input: string, until: RegExp, timeoutMs: number): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    let received = '';
+    const timer = setTimeout(() => { socket.close(); reject(new Error(`the terminal did not answer ${until} within ${timeoutMs / 1000}s\n${received}`)); }, timeoutMs);
+    // The hub reads input only once the pane is attached, and the first thing it sends is the pane's screen: type after that.
+    let typed = false;
+    socket.addEventListener('message', (event) => {
+      received += String(event.data);
+      if (!typed) { typed = true; socket.send(input); return; }
+      if (until.test(received)) { clearTimeout(timer); socket.close(); resolve(received); }
+    });
+    socket.addEventListener('close', (event) => {
+      if (until.test(received)) return;
+      clearTimeout(timer);
+      reject(new Error(`the terminal closed (${event.code} ${event.reason}) before it answered ${until}\n${received}`));
+    });
+  });
+}
+
+interface ActivityRow { windowId?: number; decidedBy: string; state: string }
+
+/**
+ * The local server of a Windows hub runs misao only (B4a): its tmux is closed with a reason, a window can be created, renamed,
+ * typed into, read back, attached through the browser terminal WebSocket, seen by the activity detection (tier0_mux) and
+ * deleted, and what needs a command in a pane (a worker) is `unsupported_os`. The server runs on the daemon this script installed.
+ */
+async function checkLocalServerOnMisaoOnly(token: string, hubLog: string): Promise<void> {
+  step('the local server of a Windows hub: Windows, misao by default, no tmux');
+  const server = await api(token, 'GET', '/api/servers/local');
+  assert(server.status === 200, `GET /api/servers/local must answer 200 (got ${server.status})`, server.text);
+  const info = server.json as { defaultMux?: string; hostProfile?: { platform?: string } | null; mux?: { kind?: string; kinds?: unknown[] } };
+  assert(info.hostProfile?.platform === 'win32', 'the local server must report the hub\'s own host (win32)', server.text);
+  assert(info.defaultMux === 'misao' && info.mux?.kind === 'misao' && info.mux.kinds === undefined, 'the local server must run misao only (no tmux kind listed)', server.text);
+  const installStatus = await api(token, 'GET', '/api/servers/local/install-status');
+  assert(installStatus.status === 200 && (installStatus.json as Record<string, unknown>).tmux === undefined && (installStatus.json as Record<string, unknown>).misao !== undefined, 'install-status must have a misao row and no tmux row', installStatus.text);
+  const tmuxWindow = await api(token, 'POST', '/api/servers/local/mux/workspaces', { name: 'w851-tmux', kind: 'tmux' });
+  assert(tmuxWindow.status === 409 && (tmuxWindow.json as { reason?: string } | null)?.reason === 'unsupported_os', 'a tmux window must be refused with the reason unsupported_os', tmuxWindow.text);
+  const installTmux = await api(token, 'POST', '/api/servers/local/install-tmux', {});
+  assert(installTmux.status === 501 && (installTmux.json as { code?: string } | null)?.code === 'unsupported_os', 'installing tmux must be refused as unsupported_os', installTmux.text);
+
+  step('creating a misao window (the pane is cmd.exe) and renaming it');
+  const created = await api(token, 'POST', '/api/servers/local/mux/workspaces', { name: 'w851b4a', kind: 'misao' });
+  console.log(`[smoke-misao] POST /api/servers/local/mux/workspaces -> ${created.status} ${created.text}`);
+  assert(created.status === 200, 'a misao window on a Windows hub must be created', `${created.text}\n--- hub.log ---\n${readLog(hubLog)}`);
+  const ref = (created.json as { ref?: string } | null)?.ref;
+  assert(typeof ref === 'string' && ref !== '', 'the create answer must carry the window ref', created.text);
+  const windowBase = `/api/servers/local/mux/windows/${encodeURIComponent(ref!)}`;
+  const renamed = await api(token, 'PUT', `${windowBase}/rename`, { name: 'w851-renamed' });
+  assert(renamed.status === 200, 'renaming the window must work', renamed.text);
+
+  step('send-keys and capture: the typed command ran in cmd.exe');
+  const sent = await api(token, 'POST', `${windowBase}/panes/1/send-keys`, { keys: ['echo w851-b4a-%OS%', 'Enter'] });
+  assert(sent.status === 200, 'send-keys must work', sent.text);
+  let captured = '';
+  await waitFor('the capture to show the output of the typed command', async () => {
+    const res = await api(token, 'GET', `${windowBase}/panes/1/capture`);
+    captured = res.text;
+    // %OS% is only expanded by a shell that ran the line: the typed line itself still reads "%OS%".
+    return res.status === 200 && captured.includes('w851-b4a-Windows_NT');
+  }, 30_000, () => captured);
+
+  step('the browser terminal WebSocket: one round trip through ConPTY');
+  const wsUrl = `ws://127.0.0.1:${PORT}/ws?token=${encodeURIComponent(token)}&server=local&ref=${encodeURIComponent(ref!)}&pane=1&cols=100&rows=30`;
+  await terminalRoundTrip(wsUrl, 'echo w851-ws-%OS%\r', /w851-ws-Windows_NT/, 30_000);
+
+  step('a worker (a command in a pane) is unsupported_os: #371');
+  const project = await api(token, 'POST', '/api/projects', { name: 'w851 b4a', slug: 'w851-b4a' });
+  const projectId = (project.json as { id?: number } | null)?.id;
+  assert(project.status === 200 && typeof projectId === 'number', 'a project must be created', project.text);
+  const registered = await api(token, 'POST', `/api/projects/${projectId}/windows`, { server_name: 'local', ref, window_type: 'agent', worker_type: 'claude', label: 'w851-agent' });
+  const windowId = (registered.json as { id?: number } | null)?.id;
+  assert(registered.status === 200 && typeof windowId === 'number', 'the window must be registered as an agent window', registered.text);
+  const launch = await api(token, 'POST', `/api/windows/${windowId}/launch-agent`, { command: 'claude' });
+  assert(launch.status === 501 && (launch.json as { code?: string } | null)?.code === 'unsupported_os', 'launching an agent must be refused as unsupported_os', launch.text);
+
+  step('activity detection: GET /api/debug/activity shows the window, decided by tier0_mux from the daemon\'s pane.state');
+  // A burst of output, which the daemon reads as work and then as quiet.
+  const burst = await api(token, 'POST', `${windowBase}/panes/1/send-keys`, { keys: ['for /L %i in (1,1,400) do @echo w851-burst-%i-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'Enter'] });
+  assert(burst.status === 200, 'send-keys (burst) must work', burst.text);
+  let rows = '';
+  await waitFor('the window to be decided by tier0_mux in /api/debug/activity', async () => {
+    const res = await api(token, 'GET', '/api/debug/activity');
+    rows = res.text;
+    const list = Array.isArray(res.json) ? res.json as ActivityRow[] : [];
+    return res.status === 200 && list.some((row) => row.windowId === windowId && row.decidedBy === 'tier0_mux' && (row.state === 'working' || row.state === 'idle'));
+  }, 60_000, () => `${rows}\n--- hub.log ---\n${readLog(hubLog)}`);
+
+  step('deleting the window');
+  const killed = await api(token, 'POST', `${windowBase}/kill`);
+  assert(killed.status === 200, 'killing the window must work', killed.text);
+  const after = await api(token, 'GET', '/api/servers/local/sessions?detail=1');
+  const listed = ((after.json as { sessions?: Array<{ name: string; windows: unknown[] }> } | null)?.sessions ?? []).find((session) => session.name === 'w851b4a');
+  // The workspace stays (empty) until it is deleted too, as on Unix.
+  assert(listed === undefined || listed.windows.length === 0, 'the deleted window must not be listed any more', after.text);
+  const removed = await api(token, 'DELETE', '/api/servers/local/mux/workspaces/w851b4a?kind=misao');
+  assert(removed.status === 200, 'deleting the empty workspace must work', removed.text);
+}
+
 async function main(): Promise<void> {
   const [zipArg, sumsArg, installArg] = process.argv.slice(2);
   if (!zipArg || !sumsArg || !installArg) throw new Error('usage: smoke-misao-win32.ts <zip> <SHA256SUMS> <install.ps1>');
@@ -195,12 +295,7 @@ async function main(): Promise<void> {
     const unavailable = (sessions.json as { unavailable?: Array<{ kind: string }> } | null)?.unavailable ?? [];
     assert(!unavailable.some((entry) => entry.kind === 'misao'), 'misao must not be unavailable on the local server', sessions.text);
 
-    step('opening a misao window: the panes of a Windows hub are not implemented yet (#370 / #371), and the API says so');
-    const created = await api(token, 'POST', '/api/servers/local/mux/workspaces', { name: 'smoke', kind: 'misao' });
-    console.log(`[smoke-misao] POST /api/servers/local/mux/workspaces -> ${created.status} ${created.text}`);
-    // The refusal is the pane shell's (`hubPaneShell`): the daemon is reached and asked to open nothing. How the create route reports it (a 500 today) is B4a's; PowerShell panes are #370 / #371.
-    assert(created.status >= 400 && /\(win32\) are not supported yet/.test(created.text), 'a misao window on a Windows hub must be refused because panes are not supported there yet', created.text);
-    assert(misaoPids(pipe).length === 1, 'the refused window must not have disturbed the daemon');
+    await checkLocalServerOnMisaoOnly(token, hubLog);
 
     step('azito stop ends the hub and leaves misao running');
     const before = misaoPids(pipe);

@@ -1,5 +1,6 @@
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import type { ServerConfig } from '../servers/Server';
+import { hostRunsTmux } from '../servers/muxKinds';
 import { HOOK_EVENTS, buildHookValue, buildHookSetArgs, buildHookUnsetArgs } from './tmuxHooks';
 
 export class TmuxHookManager {
@@ -11,7 +12,9 @@ export class TmuxHookManager {
     private webhookToken: string,
   ) {}
 
+  /** A host without tmux (Windows) has no hooks to install or remove: out of scope, not a failure. */
   async install(server: ServerConfig): Promise<void> {
+    if (!hostRunsTmux(server)) return;
     const transport = this.transportFactory.getTransport(server);
     const base = `http://localhost:${this.webhookPort}/api/hooks/tmux`;
     for (const event of HOOK_EVENTS) {
@@ -22,6 +25,7 @@ export class TmuxHookManager {
   }
 
   async uninstall(server: ServerConfig): Promise<void> {
+    if (!hostRunsTmux(server)) return;
     const transport = this.transportFactory.getTransport(server);
     for (const event of HOOK_EVENTS) {
       await transport.execMux({ kind: 'tmux', args: buildHookUnsetArgs(event) });

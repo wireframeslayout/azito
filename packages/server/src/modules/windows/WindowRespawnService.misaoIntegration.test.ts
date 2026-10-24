@@ -100,7 +100,7 @@ describe.skipIf(!fs.existsSync(MISAO_CLI))('WindowRespawnService against a real 
       { clearExitMarker: vi.fn(), issueLaunch: vi.fn(() => undefined) } as never,
       { find: () => null, findByProject: () => [] } as never,
       { findById: () => null } as never,
-      { getTransport: () => ({}) } as never,
+      { getTransport: () => ({}), hostProfileFor: () => null } as never,
       { append: vi.fn() } as never,
       { get: () => undefined, getOrThrow: () => { throw new Error('not used'); } } as never,
       { findByName: () => null, findDefaultForTag: () => null, list: () => [] } as never,
