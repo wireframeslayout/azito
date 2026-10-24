@@ -14,9 +14,12 @@ describe('hostFeatureBlockReason', () => {
 
   it('says the feature is pending, with its issue, on Windows', () => {
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'taskExecution', t)).toBe('common:hostFeature.windowsPending{"issue":371}');
-    expect(hostFeatureBlockReason({ platform: 'win32' }, 'fileSearch', t)).toBe('common:hostFeature.windowsPending{"issue":370}');
     expect(hostFeatureBlockReason({ platform: 'win32' }, 'git', t)).toBe('common:hostFeature.windowsPending{"issue":370}');
     expect(hostFeatureBlockReason({ platform: 'linux' }, 'git', t)).toBeNull();
+  });
+
+  it('file content search is open on Windows', () => {
+    expect(hostFeatureBlockReason({ platform: 'win32' }, 'fileSearch', t)).toBeNull();
   });
 
   it('says tmux is not there at all, not that it is coming', () => {

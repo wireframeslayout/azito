@@ -31,6 +31,8 @@ interface ServerStatusContextValue {
   servers: Server[];
   /** Whether this page load has fetched /servers successfully: `servers` may be the sessionStorage copy until then, which must not decide anything about a host. */
   serversLoaded: boolean;
+  /** Why the latest `/servers` fetch failed; null once one succeeds. With `!serversLoaded` it means this page load has no server list at all. */
+  serversError: string | null;
   statuses: Record<string, ServerStatus>;
   refresh: () => Promise<Server[]>;
 }
@@ -42,6 +44,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   const [servers, setServers] = useState<Server[]>(initialCache.current.servers);
   const [statuses, setStatuses] = useState<Record<string, ServerStatus>>(initialCache.current.statuses);
   const [serversLoaded, setServersLoaded] = useState(false);
+  const [serversError, setServersError] = useState<string | null>(null);
 
   // リクエスト識別用: refresh() 呼び出しごとに増分する（成否に関わらず）。
   const requestSeqRef = useRef(0);
@@ -100,7 +103,13 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   const refresh = useCallback(async (): Promise<Server[]> => {
     const seq = ++requestSeqRef.current;
 
-    const srvs: Server[] = await api('/servers');
+    let srvs: Server[];
+    try {
+      srvs = await api('/servers');
+    } catch (err) {
+      setServersError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
 
     // /servers 成功時点でこのリクエストを最新有効世代として確定する
     activeSeqRef.current = Math.max(activeSeqRef.current, seq);
@@ -109,6 +118,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
     serversRef.current = srvs;
     setServers(srvs);
     setServersLoaded(true);
+    setServersError(null);
 
     // 既知のステータスがあるサーバーはそのまま維持し、未取得のサーバーのみ checking にする
     // （再チェックのたびに全体をグレー化してフリッカーさせないため）
@@ -156,7 +166,7 @@ export function ServerStatusProvider({ children }: { children: React.ReactNode }
   }, [refresh]);
 
   return (
-    <ServerStatusContext.Provider value={{ servers, serversLoaded, statuses, refresh }}>
+    <ServerStatusContext.Provider value={{ servers, serversLoaded, serversError, statuses, refresh }}>
       {children}
     </ServerStatusContext.Provider>
   );

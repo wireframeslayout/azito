@@ -1,10 +1,11 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { paths } from '../../paths';
 import { TerminalContainer } from '../TerminalContainer';
 import type { ConnectPaneFn } from '../../lib/terminalRef';
 import { FilePreviewPanel } from '../FileExplorer';
+import { ServersUnavailableNotice } from '../files/ServersUnavailableNotice';
 import StorageFilePreview from '../StorageFilePreview';
 import UnitPanel from './UnitPanel';
 import TaskPanel from './TaskPanel';
@@ -117,7 +118,13 @@ export default function TabContentRenderer({
   const { t } = useTranslation(['tasks', 'workspace', 'units']);
   const { t: tf } = useTranslation('files');
   const serverPathApi = useServerPathApi();
-  const { servers, serversLoaded } = useServerStatuses();
+  const { servers, serversLoaded, serversError, refresh: refreshServers } = useServerStatuses();
+  const [retryingServers, setRetryingServers] = useState(false);
+  const retryServers = (): void => {
+    setRetryingServers(true);
+    // A failure stays in `serversError` (the provider sets it) and is shown in the notice; the 30 s poll keeps retrying on its own too.
+    refreshServers().catch(() => {}).finally(() => setRetryingServers(false));
+  };
   // A saved file tab whose server is gone: not listed, and not a merged server's old name either (that one is renamed).
   const isServerGone = (name: string): boolean => serversLoaded && !servers.some((s) => s.name === name || (s.aliases ?? []).includes(name));
   const navigate = useNavigate();
@@ -187,7 +194,9 @@ export default function TabContentRenderer({
       {tab.type === 'file' && tab.serverName && tab.filePath && !isServerGone(tab.serverName) && !isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
         // A restored tab can still be re-keyed (server renamed, path normalized) once this page load has the server list;
         // an editor mounted now would be rebuilt then and lose its unsaved content.
-        <LoadingState />
+        serversError && !serversLoaded
+          ? <ServersUnavailableNotice message={tf('explorer.serversUnavailable', { reason: serversError })} retryLabel={tf('explorer.retry')} onRetry={retryServers} retrying={retryingServers} />
+          : <LoadingState />
       )}
       {tab.type === 'file' && tab.serverName && tab.filePath && isFileTabSettled(tab, serverPathApi(tab.serverName)) && (
         <FilePreviewPanel

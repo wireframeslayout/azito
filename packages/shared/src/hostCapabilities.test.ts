@@ -17,12 +17,15 @@ describe('hostFeatureSupport', () => {
 
   it('names the issue that brings each feature to Windows', () => {
     const win32 = { platform: 'win32' as const };
-    expect(hostFeatureSupport(win32, 'fileSearch')).toEqual({ available: false, issue: 370 });
     expect(hostFeatureSupport(win32, 'git')).toEqual({ available: false, issue: 370 });
     expect(hostFeatureSupport(win32, 'taskExecution')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'workerLaunch')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'harness')).toEqual({ available: false, issue: 371 });
     expect(hostFeatureSupport(win32, 'browserRuntime')).toEqual({ available: false, issue: 372 });
+  });
+
+  it('file content search is open on Windows (the host\'s own search, or rg)', () => {
+    expect(hostFeatureSupport({ platform: 'win32' }, 'fileSearch')).toEqual({ available: true });
   });
 
   it('tmux is unavailable on Windows for good (no issue)', () => {

@@ -44,6 +44,21 @@ The search mode in the sidebar lets you search file names and file contents acro
 - Result paths are relative to the search root with `/` separators, whichever program searched
 - The search scope is also confined to the project's `workingDirectory`
 
+## File features on a Windows server
+
+On a Windows agent server, and on the Windows hub's own (local) server, these file features work. They use the same screens and the same API as on Linux / macOS, and the host's own Node does the file work (not shell commands).
+
+| Feature | On Windows |
+|---|---|
+| List, read, write, create, delete, rename | Works. Delete refuses the working directory itself and `.git` (a different case, or trailing dots or spaces, count as the same name) |
+| File name search | Works (one walk of the tree on the host, matched there) |
+| File content search | Works. `rg` when it is installed (it is fast, so installing it is recommended), otherwise the built-in search; see "File Search" above for how the built-in one differs from `rg`. Result paths are relative to the search root with `/` either way, and the UI turns them back into Windows paths to open the file |
+| Directory completion | Works (the working directory field in project settings) |
+| Working directory path | A Windows path can be set: a drive path (`C:\work\app`), a UNC path (`\\server\share\app`), or `~\work` from the home folder |
+| Git (diff, log, worktrees, branch search) | Not available yet on a Windows agent. The UI shows the reason, and the API answers `unsupported_os` (501) |
+
+Confinement to the working directory (refusing anything that leaves it) follows Windows path rules (case-insensitive, both `\` and `/`).
+
 ## File Preview
 
 Clicking a file shows a preview in the main area.

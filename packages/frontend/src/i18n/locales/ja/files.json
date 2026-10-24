@@ -3,6 +3,8 @@
     "refresh": "更新",
     "serverMissing": "このファイルのサーバー「{{server}}」はもう存在しないため、開けません。",
     "closeTab": "タブを閉じる",
+    "serversUnavailable": "サーバー一覧を取得できないため、このファイルをまだ開けません: {{reason}}",
+    "retry": "再試行",
     "emptyDirectory": "空のディレクトリ",
     "download": "ダウンロード",
     "downloadFailed": "ダウンロードに失敗しました",

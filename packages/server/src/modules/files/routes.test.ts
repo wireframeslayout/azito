@@ -443,16 +443,6 @@ describe('GET /api/servers/:name/files/search — host feature guard', () => {
     return app;
   }
 
-  it('answers 501 unsupported_os for a Windows host, before anything is searched', async () => {
-    const search = vi.fn(async () => ({}));
-    const app = await appOn('win32', search);
-    const res = await app.inject({ method: 'GET', url: '/api/servers/srv/files/search?q=x&project_id=1' });
-    expect(res.statusCode).toBe(501);
-    expect(res.json()).toMatchObject({ code: 'unsupported_os' });
-    expect(search).not.toHaveBeenCalled();
-    await app.close();
-  });
-
   it('answers 400 for more globs than a search request to the host can carry', async () => {
     const search = vi.fn(async () => ({}));
     const app = await appOn('linux', search);
@@ -463,8 +453,8 @@ describe('GET /api/servers/:name/files/search — host feature guard', () => {
     await app.close();
   });
 
-  it('searches on a Unix host, and on one whose OS was never recorded', async () => {
-    for (const platform of ['linux', null] as const) {
+  it('searches on a Unix host, a Windows host, and one whose OS was never recorded', async () => {
+    for (const platform of ['linux', 'win32', null] as const) {
       const search = vi.fn(async () => ({ nameMatches: [], contentHits: [], engine: 'rg', truncated: false, elapsedMs: 1 }));
       const app = await appOn(platform, search);
       const res = await app.inject({ method: 'GET', url: '/api/servers/srv/files/search?q=x&project_id=1' });

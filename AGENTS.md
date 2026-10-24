@@ -287,6 +287,9 @@ packages/
 - Paths of another host are plain strings handled with `pathApiFor(platform)`; `invalidHostPathReason` refuses a Windows device path, a drive-relative path and an alternate data stream before the host is touched.
 - Containment (`modules/git/PathContainment.ts`) resolves both sides on the host with `fs.realpath.native` and compares with `isHostPathContained` (the host's `relative()`, plus exact case on win32);
   `assertNewPathContained` resolves the nearest existing ancestor for a path that does not exist yet. A race with an ancestor swapped after the check remains (Node has no `openat2(RESOLVE_BENEATH)`).
+- File content search is open on Windows (#370 R5a; `fileSearch` has no win32 row in `hostFeatureSupport`): `FileSearchService` picks `rg`, else `grep` (Unix only), else `IFileOps.searchContent`
+  (Node, `engine: 'builtin'`) on the Windows hub's local server and, through `RemoteFileOps` -> `/api/fileops`, on a Windows agent; hit paths are root-relative with `/` and the frontend turns them back into host paths.
+  Git stays closed on Windows (`git` row, `assertGitSupported`) until R5b. A restored file tab whose first `/servers` fetch fails shows the reason with a retry (`ServerStatusProvider.serversError`) instead of loading forever.
 - New code that touches files on a server uses `transport.files()`, not `transport.exec(<sh string>)` (`execStringRatchet.test.ts` counts what is left).
 
 ### Agent Server Type
