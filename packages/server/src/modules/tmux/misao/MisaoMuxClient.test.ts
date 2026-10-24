@@ -141,11 +141,11 @@ class FakeDaemon implements MisaoRpc, MisaoEventSource {
   writes(): string[] { return this.callsTo('pane.write').map((p) => p.data as string); }
 }
 
-function setup(over: { wait?: (ms: number) => Promise<void>; connectAttachClient?: () => Promise<MisaoAttachClient> } = {}) {
+function setup(over: { wait?: (ms: number) => Promise<void>; connectAttachClient?: () => Promise<MisaoAttachClient>; windowsHub?: boolean } = {}) {
   const daemon = new FakeDaemon();
   const onChange = vi.fn();
   const wait = over.wait ?? vi.fn(async () => {});
-  const client = new MisaoMuxClient(daemon, { paneShell: hubPaneShell('/bin/zsh', { platform: 'linux', arch: 'x64' }), onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
+  const client = new MisaoMuxClient(daemon, { paneShell: over.windowsHub ? hubPaneShell('C:\\Windows\\System32\\cmd.exe', { platform: 'win32', arch: 'x64' }) : hubPaneShell('/bin/zsh', { platform: 'linux', arch: 'x64' }), onChange, log: { warn: vi.fn() }, hubEnv: HUB_ENV, connectAttachClient: over.connectAttachClient ?? vi.fn(async () => { throw new Error('connectAttachClient not expected'); }) }, wait);
   return { daemon, client, onChange, wait };
 }
 
@@ -389,6 +389,33 @@ describe('MisaoMuxClient writes', () => {
     const w = daemon.addWindow('proj', 'main');
     await client.openPaneInWindow(server, refOf('proj', w));
     expect(daemon.callsTo('pane.write')).toEqual([]);
+  });
+
+  describe('on a Windows hub (cmd.exe panes, no command line: #371)', () => {
+    it('opens a bare pane in a window and a new window without a command', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      const w = daemon.addWindow('proj', 'main');
+      await client.openPaneInWindow(server, refOf('proj', w));
+      await client.openWorkspace(server, 'other');
+      expect(daemon.callsTo('pane.open')).toHaveLength(2);
+      expect(daemon.callsTo('pane.open')[0]).toMatchObject({ cmd: ['C:\\Windows\\System32\\cmd.exe'], windowId: w });
+    });
+
+    it('refuses openPaneInWindow with a command as unsupported_os before any pane exists or anything is typed', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      const w = daemon.addWindow('proj', 'main');
+      await expect(client.openPaneInWindow(server, refOf('proj', w), { command: 'claude' })).rejects.toMatchObject({ code: 'unsupported_os' });
+      expect(daemon.callsTo('pane.open')).toEqual([]);
+      expect(daemon.callsTo('pane.write')).toEqual([]);
+      expect(daemon.panes).toEqual([]);
+    });
+
+    it('refuses a new window with a command before the window is created', async () => {
+      const { daemon, client } = setup({ windowsHub: true });
+      await expect(client.openWorkspace(server, 'proj', { command: 'claude' })).rejects.toMatchObject({ code: 'unsupported_os' });
+      expect(daemon.callsTo('window.create')).toEqual([]);
+      expect(daemon.callsTo('pane.open')).toEqual([]);
+    });
   });
 
   it('openPaneInWindow fails before pane.open when the window does not exist', async () => {

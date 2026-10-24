@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { HostProfileError } from '../../shared/os/hostProfile';
+import { mapAppError } from '../../app/mapAppError';
 import Fastify from 'fastify';
 import tasksRoutes from './routes';
 import type { TasksRouteOptions } from './routes';
@@ -614,6 +616,45 @@ describe('PUT /api/tasks/:id — status is locked while pending_approval (Issue 
 
     expect(res.statusCode).toBe(200);
     expect(opts.taskRepo.update).toHaveBeenCalledWith(1, expect.objectContaining({ status: 'archived' }));
+  });
+});
+
+describe('recover-session and restore — a host that cannot run a worker in a pane (Windows, #371)', () => {
+  const refuse = () => new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).');
+  async function appWith(opts: TasksRouteOptions) {
+    const app = Fastify();
+    app.setErrorHandler((err, _request, reply) => { const mapped = mapAppError(err); if (!mapped) throw err; return reply.status(mapped.status).send(mapped.body); });
+    await app.register(tasksRoutes, opts);
+    await app.ready();
+    return app;
+  }
+
+  it('recover-session (window-record path) answers 501 unsupported_os', async () => {
+    const { opts } = makeOpts(makeTask({ status: 'review' }));
+    opts.windowRepo.findByTask = vi.fn(() => [
+      { id: 1, ownerType: 'task' as const, projectId: null, taskId: 1, serverName: 'test-server', tmuxTarget: 'azito:task-1.1', label: 'task-1', isPrimary: true, windowType: 'agent' as const, workerType: 'claude', workerModel: 'opus', agentSessionId: null, launchCommand: null, workingDirectory: null, paneLayout: null, sleeping: false, createdAt: '' },
+    ]);
+    opts.respawnService = { respawn: vi.fn(async () => { throw refuse(); }) } as unknown as TasksRouteOptions['respawnService'];
+    const res = await (await appWith(opts)).inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Resuming a worker is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
+  });
+
+  it('recover-session (legacy path) answers 501 unsupported_os', async () => {
+    const { opts } = makeOpts(makeTask({ status: 'open', agentSessionId: '11111111-1111-1111-1111-111111111111' }));
+    opts.windowRepo.findByTask = vi.fn(() => []);
+    opts.respawnService = { resumeLegacySession: vi.fn(async () => { throw refuse(); }) } as unknown as TasksRouteOptions['respawnService'];
+    const res = await (await appWith(opts)).inject({ method: 'POST', url: '/api/tasks/1/recover-session' });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Resuming a worker is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
+  });
+
+  it('restore answers 501 unsupported_os (not a 500)', async () => {
+    const { opts } = makeOpts(makeTask({ status: 'archived' }));
+    opts.taskRestoreService = { restore: vi.fn(async () => { throw refuse(); }) } as unknown as TasksRouteOptions['taskRestoreService'];
+    const res = await (await appWith(opts)).inject({ method: 'POST', url: '/api/tasks/1/restore' });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Resuming a worker is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
   });
 });
 

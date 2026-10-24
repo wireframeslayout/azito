@@ -185,6 +185,21 @@ describe('POST /api/units/:id/approve-plan — a host that cannot run a worker i
   });
 });
 
+describe('POST /api/units/:id/follow-up — a host that cannot run a worker in a pane (Windows, #371)', () => {
+  it('answers 501 { error, code: unsupported_os }, not a 400', async () => {
+    const { opts } = makeOpts(makeTask({ status: 'review' }), makeUnit(), { gateAllows: true });
+    (opts.executeTaskUseCase.followUp as ReturnType<typeof vi.fn>).mockRejectedValue(new HostProfileError('unsupported_os', 'Resuming a worker is not available on Windows hosts yet (tracked in #371).'));
+    const app = Fastify();
+    await app.register(unitsRoutes, opts);
+    await app.ready();
+
+    const res = await app.inject({ method: 'POST', url: '/api/units/20/follow-up', payload: { taskId: 1, comment: 'please continue' } });
+
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ error: 'Resuming a worker is not available on Windows hosts yet (tracked in #371).', code: 'unsupported_os' });
+  });
+});
+
 describe('POST /api/units/:id/approve-plan — untrusted-input execution gate (Issue #328 sixth-round review)', () => {
   it('rejection with feedback, blocked by the gate: 409s and leaves task.status/currentPhase at phase_review/planning', async () => {
     const task = makeTask({ status: 'phase_review', currentPhase: 'planning' });

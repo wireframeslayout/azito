@@ -328,6 +328,9 @@ const unitsRoutes: FastifyPluginCallback<UnitsRouteOptions> = (fastify, opts, do
         return { ok: true };
       } catch (err: unknown) {
         if (replyToExecutionGateError(err, reply)) return;
+        // Same answer as mapAppError gives (the reason in `error`, `unsupported_os` in `code`), as the execute route does.
+        if (err instanceof HostProfileError)
+          return reply.status(501).send({ error: err.message, code: err.code });
         return reply.status(400).send({ error: (err as Error).message });
       }
     },
