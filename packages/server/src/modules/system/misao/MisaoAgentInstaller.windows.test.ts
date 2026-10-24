@@ -9,6 +9,7 @@ import { MISAO_RELEASE_FILE_NAMES, windowsMisaoPipe, type AgentMisaoHost, type M
 import { readMisaoBundle, sha256Buffer, type MisaoBundle } from './MisaoBundle';
 import { writeHubBundle } from './misaoBundleFixture';
 import { MisaoAgentInstaller, type MisaoInstallStep, type MisaoInstallTarget } from './MisaoAgentInstaller';
+import { isManagedMisaoDown } from './MisaoWindowsInstaller';
 
 const VERSION = '0.3.0';
 const OLD_VERSION = '0.2.0';
@@ -67,7 +68,7 @@ class FakeWindowsAgent {
   seedInstalled(version: string, running: boolean): void {
     this.current = version;
     this.releaseDirs.set(version, version === VERSION ? MISAO_RELEASE_FILE_NAMES.map((name) => this.bundle.targets['x86_64-pc-windows-msvc'].sha256[name]) : MISAO_RELEASE_FILE_NAMES.map((name) => `old-${name}`));
-    this.host.registeredXml = `<Task>previous definition for ${version}</Task>`;
+    this.host.registeredXml = `<Task><Actions><Exec><Arguments>--data "${ROOT}"</Arguments></Exec></Actions>previous definition for ${version}</Task>`;
     if (running) this.host.markRunning();
     else this.host.markEnded(0);
     this.daemonUp = running;
@@ -330,7 +331,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       agent.seedInstalled(OLD_VERSION, false);
       await expect(installer().install(agent.asTarget())).rejects.toMatchObject({ code: 'daemon_not_ready' });
       expect(agent.current).toBe(OLD_VERSION);
-      expect(agent.host.registeredXml).toBe(`<Task>previous definition for ${OLD_VERSION}</Task>`);
+      expect(agent.host.registeredXml).toContain(`previous definition for ${OLD_VERSION}`);
       expect(agent.daemonUp).toBe(false);
     });
   });
@@ -416,7 +417,7 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
       expect(error).toMatchObject({ code: 'update_failed' });
       expect(error!.message).toContain(`The previous release ${OLD_VERSION} was restored and started`);
       expect(agent.current).toBe(OLD_VERSION);
-      expect(agent.host.registeredXml).toBe(`<Task>previous definition for ${OLD_VERSION}</Task>`);
+      expect(agent.host.registeredXml).toContain(`previous definition for ${OLD_VERSION}`);
       expect(agent.daemonUp).toBe(true);
       // Stopped the old one, tried the new one (which never opened its pipe, so there is nothing to stop), put the old one back, started it.
       expect(agent.events).toEqual(['misao stop', `current:${VERSION}`, 'schtasks /Create', 'schtasks /Run', `current:${OLD_VERSION}`, 'schtasks /Create', 'schtasks /Run']);
@@ -452,6 +453,100 @@ describe('MisaoAgentInstaller on a Windows agent', () => {
         await expect(installer()[action](agent.asTarget(null))).rejects.toMatchObject({ code: 'unsupported_os' });
       }
       expect(agent.schtasks()).toEqual([]);
+    });
+  });
+  describe('reviveWindowsDaemon (the hub starts a dead daemon again)', () => {
+    it('does nothing while the daemon answers', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('running');
+      expect(agent.schtasks()).toEqual([]);
+    });
+
+    it('does nothing when AZITO did not install it, or when its task is gone', async () => {
+      const bare = new FakeWindowsAgent(bundle);
+      expect(await installer().reviveWindowsDaemon(bare.asTarget(), false)).toBe('not_installed');
+      const noTask = new FakeWindowsAgent(bundle);
+      noTask.seedInstalled(VERSION, false);
+      noTask.host.taskState = 'absent';
+      expect(await installer().reviveWindowsDaemon(noTask.asTarget(), false)).toBe('no_task');
+      expect(bare.schtasks().concat(noTask.schtasks())).not.toContain('/Run');
+    });
+
+    it('starts the task of a daemon that died (the task ended, the pipe is silent)', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      agent.daemonUp = false;
+      agent.host.markEnded(0);
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('started');
+      expect(agent.schtasks()).toEqual(["/Query", "/Query", "/Run"]);
+      expect(agent.daemonUp).toBe(true);
+    });
+
+    it('leaves a task that is still running alone, unless forced; forced, it ends the task and the misao.exe of the pipe, then starts it', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, true);
+      agent.daemonUp = false; // the task still says running
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('starting');
+      expect(agent.schtasks()).not.toContain('/Run');
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('started');
+      expect(agent.events.filter((e) => e.startsWith('schtasks'))).toEqual(['schtasks /End', 'schtasks /Run']);
+      expect(agent.scripts.some((t) => t.includes('function Get-AgentNodes') && t.includes(`$envArgument = '${PIPE}'`))).toBe(true);
+    });
+
+    it('leaves a daemon alone when the agent relays to another pipe (MISAO_SOCKET): it is not the managed one, whatever its state', async () => {
+      const agent = new FakeWindowsAgent(bundle, { status: { socketPath: '\\\\.\\pipe\\someone-elses-misao' } });
+      agent.seedInstalled(VERSION, true);
+      agent.daemonUp = false;
+      agent.host.markEnded(0);
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('custom_socket');
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('custom_socket');
+      expect(agent.schtasks()).toEqual([]);
+      expect(isManagedMisaoDown((await agent.asTarget().fetchMisaoStatus()))).toBe(false);
+    });
+
+    it('the managed daemon that does not answer is "down"; one that answers, or was not installed by AZITO, is not', async () => {
+      const down = new FakeWindowsAgent(bundle);
+      down.seedInstalled(VERSION, false);
+      expect(isManagedMisaoDown(await down.asTarget().fetchMisaoStatus())).toBe(true);
+      const up = new FakeWindowsAgent(bundle);
+      up.seedInstalled(VERSION, true);
+      expect(isManagedMisaoDown(await up.asTarget().fetchMisaoStatus())).toBe(false);
+      expect(isManagedMisaoDown(await new FakeWindowsAgent(bundle).asTarget().fetchMisaoStatus())).toBe(false);
+    });
+
+    it('does not touch a task that starts the misao of another folder', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      agent.host.markEnded(0);
+      agent.host.registeredXml = '<Task><Actions><Exec><Arguments>--data "C:\\Users\\other\\.azito\\misao"</Arguments></Exec></Actions></Task>';
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('other_task');
+      agent.host.registeredXml = '<Task>a task that is not a misao task at all</Task>';
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('other_task');
+      expect(agent.schtasks()).not.toContain('/Run');
+      expect(agent.schtasks()).not.toContain('/End');
+    });
+
+    it('compares the folder without regard to case or a doubled backslash', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      agent.host.markEnded(0);
+      agent.host.registeredXml = `<Task><Actions><Exec><Arguments>--data "${ROOT.toUpperCase().replace(/\\/g, '\\\\')}"</Arguments></Exec></Actions></Task>`;
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), false)).toBe('started');
+    });
+
+    it('does not start a task that was disabled by hand', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      agent.seedInstalled(VERSION, false);
+      agent.host.markEnded(0);
+      agent.host.registeredXml = `<Task><Settings><Enabled>false</Enabled></Settings><Actions><Exec><Arguments>--data "${ROOT}"</Arguments></Exec></Actions></Task>`;
+      expect(await installer().reviveWindowsDaemon(agent.asTarget(), true)).toBe('disabled');
+      expect(agent.schtasks()).not.toContain('/Run');
+    });
+
+    it('is refused for a Unix agent', async () => {
+      const agent = new FakeWindowsAgent(bundle);
+      await expect(installer().reviveWindowsDaemon(agent.asTarget({ platform: 'linux', arch: 'x64' }), false)).rejects.toMatchObject({ code: 'unsupported_host' });
     });
   });
 });

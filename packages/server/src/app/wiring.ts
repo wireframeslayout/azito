@@ -33,6 +33,7 @@ import { readMisaoBundle } from '../modules/system/misao/MisaoBundle';
 import { HUB_SERVICE, runCommand } from '../modules/system/serviceManager';
 import { createMisaoServiceManager, createServiceManager } from '../modules/system/createServiceManager';
 import { MisaoServiceService } from '../modules/system/misao/MisaoServiceService';
+import { isManagedMisaoDown } from '../modules/system/misao/MisaoWindowsInstaller';
 import { MisaoAgentInstaller } from '../modules/system/misao/MisaoAgentInstaller';
 import { misaoWindowsUserOf, resolveInstallPrefix, resolveMisaoPaths, type MisaoPaths } from '../modules/system/misao/misaoPaths';
 import { createLocalMisaoWindows } from '../modules/system/misao/misaoLocalWindows';
@@ -52,6 +53,7 @@ import { AgentBundler } from '../modules/servers/agent-deploy/AgentBundler';
 import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
 import { resolveWindowsAgentOptions, type WindowsAgentOptions } from '../modules/servers/agent-deploy/windowsAgentConfig';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
+import { AgentRecoveryWatchdog } from '../modules/servers/agent-deploy/AgentRecoveryWatchdog';
 import { HostProfileError, resolveHubHostProfile, type HostProfile, type HubHostProfile } from '../shared/os/hostProfile';
 import { registerTmuxDriver } from '../modules/tmux/registerTmuxDriver';
 import { AgentHostRecorder } from '../modules/servers/agent-deploy/AgentHostRecorder';
@@ -233,6 +235,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
   webhookToken: string;
   agentBundler: AgentBundler;
   agentUpdater: AgentUpdater;
+  agentRecoveryWatchdog: AgentRecoveryWatchdog;
   harnessUpdater: HarnessUpdater;
   /** Records an agent server's OS / architecture from the agent's own report (after install / update, and when reached with none recorded). */
   agentHostRecorder: AgentHostRecorder;
@@ -396,6 +399,28 @@ function buildPushNotificationModule(pushSubRepo: SqlitePushSubscriptionReposito
   const vapidSubject = process.env.AZITO_VAPID_SUBJECT ?? 'mailto:admin@example.com';
   const pushService = new PushNotificationService(vapidKeys, vapidSubject, pushSubRepo);
   return { vapidKeys, pushService };
+}
+
+function buildAgentRecoveryWatchdog(infra: SharedInfra, repos: Repositories): AgentRecoveryWatchdog {
+  const sshHostOf = (server: ServerConfig): string => {
+    if (!server.sshHost) throw new Error('no SSH host is configured for this server');
+    return server.sshHost;
+  };
+  return new AgentRecoveryWatchdog({
+    listServers: () => repos.serverRepo.findAll(),
+    checkAgent: async (server) => { await infra.transportFactory.getAgentTransport(server).fetchHealth(); },
+    recoverAgent: async (server) => {
+      if (!server.host || !server.agentToken) throw new Error('the server has no agent address or token');
+      return infra.agentInstaller.recoverAgent(sshHostOf(server), server.host, server.agentToken, server.hostProfile, server.muxRuntime);
+    },
+    isMisaoDown: async (server) => {
+      return isManagedMisaoDown(await infra.transportFactory.getAgentTransport(server).fetchMisaoStatus());
+    },
+    reviveMisao: (server, force) => infra.misaoAgentInstaller.reviveWindowsDaemon(infra.transportFactory.getAgentTransport(server), force),
+    lock: infra.serverIsolationMutex,
+    now: Date.now,
+    logger: { info: (m) => console.log(`[agent-recovery] ${m}`), warn: (m) => console.warn(`[agent-recovery] ${m}`) },
+  });
 }
 
 function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos: Repositories, agentHostRecorder: AgentHostRecorder): AgentUpdater {
@@ -685,6 +710,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
   const pushNotification = buildPushNotificationModule(repos.pushSubRepo);
   const agentHostRecorder = new AgentHostRecorder(repos.serverRepo, infra.transportFactory, Date.now, console);
   const agentUpdater = buildAgentUpdater(agentBundler, infra, repos, agentHostRecorder);
+  const agentRecoveryWatchdog = buildAgentRecoveryWatchdog(infra, repos);
   const harnessUpdater = new HarnessUpdater(
     infra.harnessInstaller, infra.sshClient, repos.serverRepo,
     { webhookToken, uiToken, harnessPrefix },
@@ -719,6 +745,7 @@ export async function buildWiring(db: SqliteDatabase, publicUrl: string, localUr
     ...repos,
     ...pushNotification,
     agentUpdater,
+    agentRecoveryWatchdog,
     harnessUpdater,
     agentHostRecorder,
     ...appServices,

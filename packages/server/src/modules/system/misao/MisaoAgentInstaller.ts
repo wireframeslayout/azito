@@ -96,6 +96,12 @@ export class MisaoAgentInstaller {
     return this.bundle?.version;
   }
 
+  /** A Windows agent's misao daemon died: see {@link MisaoWindowsInstaller.reviveDaemon}. Only Windows agents have this problem (a Unix daemon is a systemd unit with `Restart=`). */
+  async reviveWindowsDaemon(target: MisaoInstallTarget, force: boolean): ReturnType<MisaoWindowsInstaller['reviveDaemon']> {
+    if (target.hostProfile?.platform !== 'win32') throw new MisaoServiceError('unsupported_host', 'Only a Windows agent\'s misao daemon is started again by the hub.');
+    return this.windows().reviveDaemon(target, force);
+  }
+
   async install(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
     const bundle = this.requireBundle();
     if (target.hostProfile?.platform === 'win32') return this.windows().install(target, bundle, onProgress);

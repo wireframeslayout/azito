@@ -4,7 +4,7 @@ import { CREATE_SCRIPT, INSPECT_SCRIPT, PROTECT_SCRIPT, evaluateAcl, parseAclSna
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { buildEndProcessesScript } from '../../../shared/os/windowsProcessSweep';
 import { SchtasksClient, type TaskScheduleState } from '../../../shared/os/taskScheduler/schtasks';
-import { buildTaskXml, encodeTaskXml } from '../../../shared/os/taskScheduler/taskDefinition';
+import { buildTaskXml, encodeTaskXml, isTaskDefinitionDisabled } from '../../../shared/os/taskScheduler/taskDefinition';
 import { redactSecretText } from '../../../shared/redactSecretText';
 import { createSshCommandSpecRunner } from './windowsSshRunner';
 import { checkFirewall, describeFirewallProblem } from './windowsFirewall';
@@ -232,13 +232,16 @@ export class WindowsAgentDeployer {
     await this.stopTask(sshHost, this.schtasks(sshHost, host), windowsAgentEnvFile(host.home, this.options));
   }
 
-  /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart). */
-  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<void> {
+  /** Stops and starts the registered task. A task that is not registered is an error (nothing is installed to restart); one disabled by hand is not touched. */
+  async restart(sshHost: string, host: WindowsPreflightInfo): Promise<'restarted' | 'disabled'> {
     const client = this.schtasks(sshHost, host);
     const state = await client.query(this.options.taskName);
     if (!state.exists) throw new Error(`The task "${this.options.taskName}" is not registered on the host: install the agent first`);
+    // Disabled by hand (`schtasks /Change /DISABLE`): that is how the agent is kept stopped, so it is left alone.
+    if (isTaskDefinitionDisabled(await client.exportXml(this.options.taskName))) return 'disabled';
     await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
     await client.start(this.options.taskName);
+    return 'restarted';
   }
 
   /** What the Task Scheduler says about the task, for the message of a health check that failed. */
