@@ -498,9 +498,9 @@ What works on a Windows agent, and what does not yet. The hub reads the OS from 
 | Starting claude / codex (or a command made of plain words) in a new window, and respawning that window | Works: the window is created with the agent as its first pane (misao starts the program itself; no shell line is typed; `claude` is found as `claude.cmd` through PATHEXT). Starting an agent in a window that already exists is not available (create a new window); a command with shell syntax, or an argument with cmd.exe's `% ^ & \| < > " ! ( )`, is refused with `unsupported_os`; respawning a window with a saved pane layout, a plain shell window with a working directory, or a custom-command window (its command is not stored) is not available yet, and respawning an agent window creates the new window after the old one is gone, so a program that cannot be found (PATH / PATHEXT) leaves no window and the error says so | — |
 | tmux (default mux choice, tmux runtime, apply tmux config, install tmux) | Not offered: Windows has no tmux, misao is the only pane server | — |
 | AZITO Harness (`setup.mjs`), its install-status row | Works | — |
-| Browser runtime (Chromium) install | Disabled in the UI | #372 |
 | Update of the agent on the host | Works: when the hub starts and the agent's version differs, the update runs as the install does (deploy, start, health check) with the agent's current token, and goes back to the previous version, settings and task if the new agent does not answer. misao is not touched. Releases older than the previous one are removed afterwards (one in use is left and tried again at the next update) | — |
 | Removal of the agent on the host | Not available; remove it by hand (below) | #372 |
+| Browser runtime (Chromium) install | Disabled in the UI (out of v0.12.0) | #500 |
 
 A server whose OS is not recorded yet (a Unix agent registered before the OS was kept) is treated as Unix: nothing is disabled.
 
