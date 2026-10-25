@@ -490,7 +490,7 @@ async function main(): Promise<void> {
     ended = await waitForUpdateEnd(token, TAG_C, since, 420_000, updateLog);
     assert(ended.status === 'success', 'the update to c must succeed', `${JSON.stringify(ended)}\n${updateLog()}`);
     assert(pointerValue() === TAG_C && (await health())?.version === TAG_C, 'the hub must be c (current.txt and /api/health)');
-    assert(!fs.existsSync(path.join(hubDir, TAG_A)), 'the version before the way back (a) must have been removed', updateLog());
+    assert(!fs.existsSync(path.join(hubDir, TAG_A)), 'the version before the way back (a) must have been removed', `${JSON.stringify(ended)}\n${updateLog()}`);
     assert(fs.existsSync(path.join(hubDir, TAG_B, 'azito-hub.cjs')) && fs.existsSync(path.join(hubDir, TAG_C, 'azito-hub.cjs')), 'b (the way back) and c (current) must stay');
     assert(fs.lstatSync(linkName).isSymbolicLink() && fs.readFileSync(path.join(linkTarget, 'precious.txt'), 'utf-8') === 'keep me', 'a junction named like a version must be left alone, its target untouched');
     assert(fs.readFileSync(path.join(stagingDir, 'keep.txt'), 'utf-8') === 'keep me too', 'a folder that is not a version must not be touched');

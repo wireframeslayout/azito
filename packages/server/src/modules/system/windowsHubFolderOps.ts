@@ -62,7 +62,7 @@ export function whyHubDirIsWritableByOthers(acl: HubDirAcl): string | undefined 
 export async function assertHubDirOnlyOwnerWritable(run: SpecRunner, systemRoot: string, hubDir: string): Promise<void> {
   const q = powershellDialect.quote;
   const script = [
-    '$acl = Get-Acl -LiteralPath ' + q(hubDir),
+    '$acl = [IO.Directory]::GetAccessControl(' + q(hubDir) + ')',
     'Write-Output "me $([Security.Principal.WindowsIdentity]::GetCurrent().User.Value)"',
     'Write-Output "owner $($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value)"',
     'foreach ($r in $acl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier])) { if ($r.AccessControlType -eq \'Allow\') { Write-Output "allow $($r.IdentityReference.Value) $([int]$r.FileSystemRights)" } }',
@@ -117,10 +117,12 @@ export async function findHubVersionsInUse(run: SpecRunner, systemRoot: string, 
     '  $hit = $false',
     '  foreach ($m in [regex]::Matches("$path`n$cmd", $pattern, [Text.RegularExpressions.RegexOptions]::IgnoreCase)) { "version $($m.Groups[1].Value)"; $hit = $true }',
     '  if ($hit -or ($path -and $cmd) -or $p.ProcessId -eq 0 -or $p.ProcessId -eq 4) { continue }',
-    '  if (-not (Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue)) { continue }',
+    '  $live = Get-Process -Id $p.ProcessId -ErrorAction SilentlyContinue',
+    '  if (-not $live) { continue }',
+    "  $name = ($p.Name -replace '[^A-Za-z0-9._-]', '_')",
     '  try { $r = Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid -ErrorAction Stop } catch { $r = $null }',
-    '  if ($null -eq $r -or $r.ReturnValue -ne 0 -or -not ($r.Sid -is [string]) -or $r.Sid -eq \'\') { "unknown $($p.ProcessId) owner-unreadable"; continue }',
-    '  if ($r.Sid -eq $me) { "unknown $($p.ProcessId) no-path" }',
+    '  if ($null -eq $r -or $r.ReturnValue -ne 0 -or -not ($r.Sid -is [string]) -or $r.Sid -eq \'\') { "unknown $($p.ProcessId) $name-owner-unreadable"; continue }',
+    '  if ($r.Sid -eq $me) { "unknown $($p.ProcessId) $name-no-path" }',
     '}',
   ].join('\n');
   return parseVersionsInUse(await powershell(run, systemRoot, script, 'Looking for the version folders in use'));
