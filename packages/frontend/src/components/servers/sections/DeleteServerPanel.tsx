@@ -93,7 +93,7 @@ function Choices({ deletion }: DeleteServerPanelProps) {
           sub={(
             <>
               {t('danger.hostRemoval.staysHarness')}{' '}
-              <DocsLink page="install-and-update" label={t('danger.hostRemoval.manualSteps')} />
+              <DocsLink page={support === 'windows' ? 'windows-agent' : 'install-and-update'} label={t('danger.hostRemoval.manualSteps')} />
             </>
           )}
         >

@@ -1,6 +1,6 @@
 const DOCS_BASE_URL = 'https://github.com/wireframeslayout/azito/blob/master/docs';
 
-export type DocsPage = 'isolated-execution' | 'security-setup' | 'install-and-update';
+export type DocsPage = 'isolated-execution' | 'security-setup' | 'install-and-update' | 'windows-agent';
 
 /**
  * Builds a GitHub blob URL for a docs page, choosing `ja`/`en` from the

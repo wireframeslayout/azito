@@ -161,7 +161,7 @@ CLI は `current.txt` を読んで同梱のハブを実行します:
 
 ### Windows のハブから SSH / エージェントのサーバーを使う準備
 
-Windows のハブは、Linux / macOS のハブと同じように SSH 経由でサーバーを追加し、Linux の agent を導入・更新できます（Windows ホストへの agent の導入は「Windows ホストをエージェントとして追加する」）。ハブが探す場所は次のとおりです。
+Windows のハブは、Linux / macOS のハブと同じように SSH 経由でサーバーを追加し、Linux の agent を導入・更新できます（Windows ホストへの agent の導入は [Windows のエージェントサーバー](./windows-agent.md)）。ハブが探す場所は次のとおりです。
 
 | 何を | どこを見るか |
 |---|---|
@@ -479,68 +479,9 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 ## Windows ホストをエージェントとして追加する
 
-Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。タスク実行は #371、Windows の agent は、ハブの起動時に版が違えば更新されます。サーバーの削除で、ホストからも消せます（下記。Setup の行から再導入すると、その場で置き換わります）。
+Servers → Add → Agent で、SSH 経由で Windows ホストをエージェントサーバーとして追加できます（導入、ファイアウォールの規則、misao、更新、削除、使える機能の表、制約、トラブルシューティング）。手順と仕様は [Windows のエージェントサーバー](./windows-agent.md) にまとめてあります。Windows 側の準備は同じ文書の[準備](./windows-agent.md#準備)です。
 
-Windows のエージェントで使える機能と、まだ使えない機能は次のとおりです。ハブはエージェントから OS（`hostProfile`）を受け取り、サーバー一覧とサーバーの概要に表示します。操作ごとに、いまのコードの経路で閉じるかどうかを決めます（判定は `@azito/shared` の `hostFeatureSupport` の 1 つの表で、各行を閉じる経路はコメントに書いてあります）。閉じた入口はフォーカスできる（`aria-disabled`）まま何もせず、理由を文字かツールチップで出し、`aria-describedby` で結び付けます。それでもハブに届いた操作は、理由付きの `unsupported_os`（501）で断られ、UI はその理由をそのまま出します。タスクは、実行先のサーバー（タスク自身のサーバー、無ければプロジェクトの唯一のサーバー。ハブと同じ規則）で判定します。
-
-| 機能 | Windows のエージェント | 対応予定 |
-|---|---|---|
-| サーバーの追加（preflight・agent の導入・OS の自動判定）、Setup からの再導入 | 使える | — |
-| misao（ペインサーバー）と、Setup からの導入・更新 | 使える | — |
-| シェルだけの新しいウィンドウ | 使える（cmd.exe） | — |
-| ファイル（一覧・読み・書き・作成・削除・名前の変更。`IFileOps`）、ファイル名の検索、ファイルの中身の検索（`rg` があれば `rg`、無ければ内蔵の検索。結果のパスは相対の `/` 区切り）、ディレクトリの補完。詳しくは `files.md` | 使える | — |
-| git の diff・履歴・ワークツリーの切り替え・ブランチの検索・リポジトリの検出（Git for Windows が必要。無ければ API は `git_not_found`（501）で、理由を各画面のエラーに出す） | 使える | — |
-| タスク・Unit の実行（実行・follow-up・復元・承認後の再開・セッションの復旧） | 使える。タスクの worktree を先に作り、窓は worktree の中でワーカーを最初のペインとして作る（`cd` も起動行も打たない）。プロンプトは、出力と signal を `harness/bin/azitoctl.mjs`（Node）で行うよう指示し、pushing フェーズは `pushing-default/scripts/push.mjs`（Git for Windows の `git.exe`。`gh` / `glab` は任意）を使う。Claude Code はネイティブ版の `claude.exe` も npm 版の `claude.cmd` も PATHEXT で起動でき、Codex は npm 版の `codex.cmd` | — |
-| コード配信（プロジェクトのサーバー環境のオプション） | 使えない。Windows の agent ではオンにできず（API は 501 `unsupported_os`、フォームは理由を出す）、すでにオンの行での実行も断る。Windows のハブから Linux / macOS の agent への配信は、今までどおり使える | #464 |
-| 新しいウィンドウでの claude / codex（や、単語だけでできたコマンド）の起動と、その窓の respawn | 使える（窓をエージェントを最初のペインとして作る。misao がプログラムを直接起動し、シェルには何も打ち込まない。`claude` は PATHEXT で `claude.cmd` として見つかる）。すでにある窓にエージェントを起動することはできない（新しい窓を作る）。シェルの構文を含むコマンドと、cmd.exe の `% ^ & \| < > " ! ( )` を含む引数は `unsupported_os` で断る。ペインの配置を保存した窓、作業ディレクトリのあるシェルだけの窓、カスタムコマンドの窓（コマンドを保存していない）の respawn はまだ使えない。エージェントの窓の respawn は古い窓を消してから新しい窓を作るので、プログラムが見つからない（PATH / PATHEXT）と窓は残らず、エラーにその旨が出る | — |
-| tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
-| AZITO ハーネス（`setup.mjs`）と、その install-status の行 | 使える | — |
-| ホスト上の agent の更新 | 使える（ハブの起動時に agent の版が違えば、導入と同じ手順（配置、起動、health 確認）で、今の agent のトークンのまま更新する。新しい agent が応答しなければ、前の版・設定・タスクに戻す。misao には触れない。直前の版より古い版は更新のあとに削除する（使用中のものは残し、次の更新で再び試す）） | — |
-| ホスト上の agent の削除 | 使える（サーバーの削除の確認で「ホストからもエージェントを消す」（既定はオン）。タスクの終了と登録解除（導入が書いたとおりのタスクで、このホストの node.exe を使うものだけ）、`~\.azito\agent` の削除を行い、手順ごとの結果を返す。AZITO はプロセスを自分では止めない。例外は 1 つ: タスクを終了しても misao のデーモンは終わらないので、「misao も消す」では、そのタスクのパイプを提供しているプロセスを Windows に尋ね、それが自分のユーザーの `misao.exe` で、misao のフォルダーの下にあるときだけ、そのデーモン自身の停止（タスクが走らせる release の `misao.exe stop`。持っている窓は閉じる）を 1 回頼む。パイプを持つのがそれ以外のものなら触れず、理由を返す。それ以外は: タスクを終了したあともフォルダーから動いているプロセスが残っていれば、フォルダーは消さず、その pid とパスを返すので、手で止める。「フォルダーから動いている」は意図して広く読む: プログラムまたはコマンドラインが、フォルダーを（`/` と `\`、大文字小文字、長い名前と 8.3 名、ホームより下の部分のどれの綴りでも）含むプロセス。プログラムかコマンドラインをホストが返さない自分のプロセスがあれば、それも知らせる。ほかのユーザーのプロセスは SSH のセッションからは見えない。ファイアウォールの規則も消さず、Name と、確かめたうえで消すコマンドを一覧にして返す（サーバーを削除したあとも、同じ一覧をコピーできるコマンド付きのダイアログで見せる）。「misao も消す」（既定はオフ）を選ぶと misao のタスクとフォルダーも消す（窓はすべて閉じる。同じホストの Windows のハブの misao（タスク `AzitoHub` が持つフォルダー、またはタスク無しで動いているハブのプロセスがあるとき）や、タスクが起動したと確かめられない misao は消さず、理由を返す）。失敗したら行は消さず、「もう一度試す」「行だけ削除」「やめる」を選べる。ホストがオフラインなら、オフにして行だけ消せる。ハーネスは消さない（手作業） | — |
-| ブラウザ実行環境（Chromium）の導入 | UI で無効（v0.12.0 の範囲外） | #500 |
-
-OS がまだ記録されていないサーバー（OS を記録する前に登録された Unix の agent）は Unix として扱い、何も無効にしません。
-
-Windows 側の準備:
-
-| 前提 | 内容 |
-|---|---|
-| OpenSSH サーバー | Windows 側で有効化し、ハブから到達できること。既定シェルは **cmd.exe のままでよい**（PowerShell でも可）。ハブは先に OS を判定し、以後の確認は両方で同じに動く PowerShell スクリプトで行います。SSH で入るユーザーが、agent を動かすユーザーになります |
-| Windows | x64 のみ。OS ネイティブのアーキテクチャで判定（ARM 版 Windows は x64 エミュレーション下でも理由付きで拒否）。Windows 10 1809（ビルド 17763）以降、Windows Server 2019 以降（`tar.exe` と `conhost.exe --headless` のため。preflight が確認します）。Windows の版（10 / 11 / Server）は表示だけで検査しない |
-| Node.js v24+ | SSH セッションの PATH にあること |
-| Git for Windows | `git.exe` が入っていること（`winget install --id Git.Git -e`。AZITO には同梱しません）。agent のホスト自身が、PATH（`PATHEXT` の拡張子付き）、次に標準の場所 `%ProgramFiles%\Git\cmd\git.exe`・`%ProgramFiles(x86)%\Git\cmd\git.exe`・`%LOCALAPPDATA%\Programs\Git\cmd\git.exe`（ユーザーごとの導入）の順に探します。タスクスケジューラの agent は最小の環境で起動して PATH が足りないことがあり、winget の直後は PATH がログオンし直すまで反映されないことがあるためです。使うのは `cmd\git.exe` だけで、`bin\git.exe`（ラッパー）や `mingw64\bin` は標準の場所として探しません。見つけた場所は覚え、見つからなかった結果は 30 秒だけ覚えるので、入れた直後も再起動なしで通ります。無いときは git の API が `git_not_found` で理由を返し、導入は止まりません。ハブが Windows のときの local サーバーも同じ規則で、ハブ自身が探します |
-| Tailscale | 導入済みでサインイン済みであること。PATH に無くても `%ProgramFiles%\Tailscale\tailscale.exe` を探します |
-| Windows ファイアウォール | `node.exe` への受信 TCP 3002 を許可し、Block 規則が無いこと（下の手順 1） |
-
-OS の判定は、sh・cmd.exe・PowerShell で出力が変わる 1 本の `echo AZITO_OS:%OS%:$?`（変数を読まないので `set -u` でも動く）で行い、どれにも当てはまらない応答は推測せずエラーにします。
-
-導入で行うこと（管理者権限は要りませんし、求めません）:
-
-1. **Windows ファイアウォールの確認。** Windows は、規則が許可するまでプログラムへの受信を遮ります。初回の許可ダイアログはデスクトップに出るだけで、SSH のセッションには出ません。導入は、有効な受信の規則をすべて（ポート・プログラム・アドレスのフィルターごと）読み、TCP 3002・`node.exe`・agent が bind する Tailscale の IP について次のように判定します:
-   - **許可（Allow）** 規則は、次のすべてを満たすときだけ数えます: プロトコルが TCP か Any、ローカルポートが 3002 か Any（`3000-3010` のような**範囲指定は読まない**ので数えません）、プログラムが `node.exe` か Any、リモートアドレスが Any かタンネル範囲 `100.64.0.0/10`（LocalSubnet など**他のリモートアドレスに絞った規則**はハブに届かないので数えません）、ローカルアドレスが Any か agent の IP、プロファイルが Tailscale アダプターのもの（`Get-NetConnectionProfile`。取れないときは Any か Public）を含むこと。Tailscale アダプターが Public のとき、Private だけを許可する規則は数えません。
-   - ハブを止めうる、有効な受信の **Block** 規則があれば、その DisplayName を示して止まります。対象は、`node.exe` か全プログラムに対するポート 3002（それを含む範囲指定も）で、agent のローカルアドレスに適用され、リモートアドレスがタンネルを含み（Any・重なる範囲・`Internet`）、Tailscale アダプターのプロファイルに適用されるものです。別のポート・別のリモートネットワーク・別のプロファイルの Block は数えません（初回のダイアログをキャンセルすると Windows が作ります）。Block は Allow より優先されるので、その横に追加はしません。
-   - 条件を満たす Allow も Block も無く、SSH のセッションが管理者（昇格したトークン）なら、このプログラム・このローカルアドレス・`100.64.0.0/10` からだけ、の `AZITO Agent (TCP 3002)` を追加します。昇格していなければ、**何も転送する前に止まり**、管理者の PowerShell で 1 回だけ実行するコマンドを表示します:
-   `New-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 3002 -Program "C:\Program Files\nodejs\node.exe" -LocalAddress <Tailscale の IP> -RemoteAddress 100.64.0.0/10 -Profile Any`（実際のパスと IP が入って表示されます）。
-   - 規則は、読めれば現に有効なもの（`ActiveStore`。グループポリシーを含む）、読めなければローカルのもの（`PersistentStore`）を読みます。そのため、このセッションに読ませないホストでは、グループポリシーが配る Block は見えません。規則のインターフェースの種類による制限も見ません。ホストが答えられない場合（NetSecurity モジュールが無いなど）は止めません。ヘルスチェックが失敗したとき、ファイアウォールを名指しします。
-2. **転送。** バンドルを SFTP で `%USERPROFILE%\.azito\agent\` へ送り、ホスト上で SHA256 を照合します。
-3. **展開。** 標準の `tar.exe` で `%USERPROFILE%\.azito\agent\<version>\` に展開します（先に、フォルダーの外へ出るパスが無いか検査します）。フォルダーは本人だけが読めます。symlink は使いません。下のタスクが版のフォルダーを直接指すので、再導入のたびにタスクを登録し直します。
-4. **設定。** トークン、bind するアドレス（Tailscale の IP）、ポートは `%USERPROFILE%\.azito\agent\agent.env` に書きます。本人だけが読める ACL にし、そうなっていなければハブが検査して先へ進みません。agent は `conhost.exe --headless node.exe --env-file=<そのファイル> <版のフォルダー>\azito-agent.cjs` で起動するので、起動用のスクリプトは挟まず、デスクトップにコンソールウィンドウも出ません。設定ファイルは、トークンを書く前に本人専用で作成してから置き換えます。既存の `agent.env` には書き込みません。agent 自身のログは `%USERPROFILE%\.azito\agent\agent.log` に書かれます。
-5. **常駐。** タスクスケジューラのタスク `AzitoAgent` を登録します。**SSH で入ったユーザーのログオン時に起動**し（ユーザー権限、失敗時は再起動）、続けて `/Run` します。
-6. **ヘルスチェック。** Linux と同じです。再導入は、新しい agent が応答するまでをひとつの操作として扱います。それまでの旧タスク定義・設定・同じ版のフォルダー・稼働状態は退避しておき、新しい agent が起動しない・応答しないときは**元に戻し**（旧 agent を再起動し）ます。ハブが持つトークンとホストの `agent.env` が食い違ったまま残ることはありません。退避したものは、新しい agent の健全を確認してから削除します。
-
-**agent は、そのユーザーが Windows にログオンしている間だけ動きます**（コンソールでも、リモートデスクトップでも）。再起動後はログオンするまで何も起動せず、ログオフすると agent は止まります。ログオフしても動き続けるサーバーには、自動ログオンなど別の方式が要りますが、まだ用意していません。
-
-**落ちたとき。** agent のタスクの RestartOnFailure は発火しません。`conhost.exe --headless` は子の終了コードを常に 0 で返し、タスクスケジューラは非 0 の終了コードでもタスクを再起動しないためです（Windows CI での実測）。そのため**ハブが動いている間は、ハブが戻します**。ハブは Windows の agent を 15 秒ごとに確認し、応答しない agent があれば、約 1 分後に再起動（ハブの起動時と同じ、タスクの `/Query`・`/End`・`/Run`）を試み、以降は 15 分を上限に間隔を倍々に延ばします。agent が応答すれば最初からやり直します。試すのはサーバーごとに 1 本で、そのサーバーの導入・更新の最中には行わず、編集で外れたサーバーも対象外です。**ハブが止まっている間は戻りません。** 手で止めた（`schtasks /End /TN AzitoAgent`）ものは落ちたものと区別できないので、ハブが起動し直します。止めたままにするには、サーバーをハブから外すか、タスクを無効にしてください（`schtasks /Change /TN AzitoAgent /DISABLE`。無効のタスクはハブが黙って飛ばします）。Unix の agent は対象外です（systemd の `Restart=` があります。nohup で起動したものはハブの起動時の版確認でだけ戻ります）。
-
-運用:
-
-| 操作 | 方法 |
-|---|---|
-| 再起動 | ハブが agent に届かないとき、タスクを再起動します（`schtasks /End` のあと `/Run`）。または Setup の行の「Reinstall」 |
-| 停止 | ホスト上か SSH で `schtasks /End /TN AzitoAgent`、またはタスクスケジューラの「終了」。agent はタスクが動かす `conhost.exe` に付き従い、それがいなくなって数秒で終わります（手で `node azito-agent.cjs` を起動したものは別です）。そのとき Windows が親のプロセス ID を別のプロセスに再利用していても、親の作成時刻を比べて約 30 秒以内に気づきます。それでも残る場合は、Setup の行から停止してください（ハブは `--env-file` の引数で agent を終わらせます）。次のログオンでまた起動します。起動させたくなければ `schtasks /Change /TN AzitoAgent /DISABLE` も） |
-| 削除 | UI で行える（サーバーの削除の確認で「ホストからもエージェントを消す」）。ハーネス（`%USERPROFILE%\.azito\harness*`、`~\.claude\settings.json` のフック）は消さないので手作業で。ホストがオフラインだったり UI を使わなかったりしたときの手作業: `schtasks /End /TN AzitoAgent`、`schtasks /Delete /TN AzitoAgent /F`、`%USERPROFILE%\.azito\agent` を削除。導入が規則を追加していた場合は、管理者の PowerShell で `Get-NetFirewallRule -DisplayName "AZITO Agent (TCP 3002)"` を実行して一覧にし、導入が追加した規則（TCP 3002 の Allow、この agent の node.exe、100.64.0.0/10 から）であることを確かめて、Name で消す: `Remove-NetFirewallRule -Name '<Name>'`（UI からの削除の結果にも同じ一覧が出ます）。misao も消すなら `schtasks /Delete /TN AzitoMisao /F` と `%USERPROFILE%\.azito\misao`（窓はすべて閉じます） |
-
-本物の agent の隣で 2 つ目を試すときは、ハブの環境変数 `AZITO_WIN_AGENT_TASK_NAME`、`AZITO_WIN_AGENT_DIR`（ユーザーのホーム直下のフォルダー）、`AZITO_WIN_AGENT_PORT` を設定します。既定は `AzitoAgent`、`.azito\agent`、`3002` です。これは試験用です。サーバーごとには保存されないので、これらを付けずに起動したハブは既定のタスクを探します（使われているときはハブのログに 1 行出ます）。その一時ハブだけで使ってください。
+Windows の agent も、ハブの起動時に版が違えば自動で更新されます（[Agent サーバーの自動更新](#agent-サーバーの自動更新)と同じ判定。手順は[更新](./windows-agent.md#更新)）。
 
 ## ロールバック
 
