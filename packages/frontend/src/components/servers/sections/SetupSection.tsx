@@ -92,7 +92,7 @@ export default function SetupSection({ server, installStatus, installStatusError
     setShowUrlDialog(false);
     try {
       const encoded = encodeURIComponent(server.name);
-      const res = await api<{ ok: boolean; steps: InstallStep[]; error?: string }>(
+      const res = await api<{ ok: boolean; steps?: InstallStep[]; error?: string }>(
         `/servers/${encoded}/harness/install`,
         { method: 'POST', body: JSON.stringify({ azito_url: azitoUrl }) },
       );
@@ -100,7 +100,9 @@ export default function SetupSection({ server, installStatus, installStatusError
         setHarnessSteps([{ step: 'error', status: 'error', message: describeUnsupportedOs(res, t) }]);
         return;
       }
-      setHarnessSteps(res.steps);
+      // A 400 (e.g. azito_url_required) has no steps and a 500 has steps plus the reason: show `error` as a final step.
+      const steps = res.steps ?? [];
+      setHarnessSteps(!res.ok && res.error ? [...steps, { step: 'error', status: 'error', message: res.error }] : steps);
       if (res.ok) await refresh();
     } catch (err: unknown) {
       setHarnessSteps([{ step: 'error', status: 'error', message: (err as Error).message }]);
