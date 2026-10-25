@@ -25,6 +25,8 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
   const system32 = host ? path.join(host.systemRoot!, 'System32') : '';
   let root: string;
   let hub: string;
+  /** Set the moment `net user /add` succeeded, apart from the SID: an account whose SID could not be read still has to be removed. */
+  let accountCreated = false;
   let userSid: string | undefined;
   let setupProblem: string | undefined;
   const children: ChildProcess[] = [];
@@ -42,29 +44,56 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
     spawnSync(path.join(system32, 'icacls.exe'), [path.join(root, 'out'), '/grant', '*S-1-1-0:(OI)(CI)M'], { encoding: 'utf-8' });
     const added = net('user', user, password, '/add', '/y');
     if (added.status !== 0) { setupProblem = `net user could not make ${user}: ${added.stdout}${added.stderr}`; return; }
+    accountCreated = true;
     const sid = /S-1-5-21-[0-9-]+/.exec(powershellOut(`Write-Output ((New-Object Security.Principal.NTAccount('${user}')).Translate([Security.Principal.SecurityIdentifier]).Value)`).stdout)?.[0];
-    if (sid === undefined) { setupProblem = `could not read the SID of ${user}`; net('user', user, '/delete'); return; }
+    if (sid === undefined) { setupProblem = `could not read the SID of ${user}`; return; }
     userSid = sid;
   });
 
   afterAll(async () => {
+    // Each step stands alone: one that fails does not keep the others from running. What failed is reported together at the end.
+    const problems: string[] = [];
+    const attempt = (what: string, step: () => void): void => {
+      try {
+        step();
+      } catch (err) {
+        problems.push(`${what}: ${(err as Error).message}`);
+      }
+    };
+
     const waiting = children.splice(0).map((child) => new Promise<void>((resolve) => { if (child.exitCode !== null || child.signalCode !== null) resolve(); else { child.once('exit', () => resolve()); child.kill(); } }));
     await Promise.all(waiting);
-    fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
-    if (userSid === undefined) return;
-    // The profile that `-LoadUserProfile` made (it can stay loaded for a moment after the user's last process ends), then the account; both must be gone.
-    const profileGone = (): boolean => powershellOut(`Write-Output ('profiles ' + @(Get-CimInstance Win32_UserProfile -Filter "SID='${userSid}'").Count)`).stdout.includes('profiles 0');
-    let removed = false;
-    for (let attempt = 0; attempt < 10 && !removed; attempt++) {
-      powershellOut(`Get-CimInstance Win32_UserProfile -Filter "SID='${userSid}'" | Remove-CimInstance -ErrorAction SilentlyContinue`);
-      removed = profileGone();
-      if (!removed) sleep(1000);
+    attempt('removing the temporary folder', () => fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 }));
+
+    if (userSid !== undefined) {
+      const sid = userSid;
+      // The profile that `-LoadUserProfile` made (it can stay loaded for a moment after the user's last process ends); it must be gone. A look-up that
+      // itself fails (`-ErrorAction Stop`) cannot say it is gone, so it counts as not gone.
+      const profileGone = (): boolean => {
+        const r = powershellOut(`Write-Output ('profiles ' + @(Get-CimInstance Win32_UserProfile -Filter "SID='${sid}'" -ErrorAction Stop).Count)`);
+        return r.status === 0 && r.stdout.includes('profiles 0');
+      };
+      attempt('removing the profile', () => {
+        let removed = false;
+        for (let tries = 0; tries < 10 && !removed; tries++) {
+          powershellOut(`Get-CimInstance Win32_UserProfile -Filter "SID='${sid}'" | Remove-CimInstance -ErrorAction SilentlyContinue`);
+          removed = profileGone();
+          if (!removed) sleep(1000);
+        }
+        if (!removed) throw new Error(`the profile of ${user} (${sid}) is still there, or could not be looked up to confirm it is gone`);
+      });
     }
-    const deleted = net('user', user, '/delete');
-    const accountGone = net('user', user).status !== 0;
-    if (!removed || deleted.status !== 0 || !accountGone) {
-      throw new Error(`could not remove the test account ${user} (${userSid}): profile removed=${removed}, net user /delete exit ${deleted.status} ${deleted.stdout}${deleted.stderr}, account gone=${accountGone}`);
+
+    if (accountCreated) {
+      attempt('removing the account', () => {
+        const deleted = net('user', user, '/delete');
+        if (deleted.status !== 0 || net('user', user).status === 0) {
+          throw new Error(`net user /delete exit ${deleted.status} ${deleted.stdout}${deleted.stderr}; the account may still exist`);
+        }
+      });
     }
+
+    if (problems.length > 0) throw new Error(`could not clean up the test account ${user}: ${problems.join('; ')}`);
   }, 120_000);
 
   /** Runs a spec as the standard user (PowerShell `Start-Process -Credential`, output through files the user can write). */
