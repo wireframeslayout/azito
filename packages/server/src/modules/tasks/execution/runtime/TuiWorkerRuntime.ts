@@ -57,13 +57,16 @@ function hasTrustDialog(output: string): boolean {
  * set. Read from the shipped binary of 2.1.310 (`BypassPermissionsModeDialog`; the 2.0.50 `cli.js` has the same texts): the title is
  * "WARNING: Claude Code running in Bypass Permissions mode", the body ends "By proceeding, you accept all responsibility for actions taken
  * while running in Bypass Permissions mode.", the choices are "No, exit" / "Yes, I accept". The body also contains "bypass permissions",
- * which is why the ready check below must exclude this screen. Whitespace is collapsed because the pane wraps the lines.
+ * which is why the ready check below must exclude this screen.
+ * The screen is the pane's last lines, which can also hold a conversation that quotes any one of these sentences, next to the ready status
+ * line "bypass permissions on": only the title and both choices together (what no running session shows) are taken as the dialog.
+ * Box-drawing characters and whitespace are collapsed because the pane wraps the dialog's lines inside a frame.
  */
 function hasBypassPermissionsDialog(output: string): boolean {
-  const text = stripAnsi(output).toLowerCase().replace(/\s+/g, ' ');
-  return text.includes('warning: claude code running in bypass permissions mode') ||
-    text.includes('you accept all responsibility') ||
-    (text.includes('yes, i accept') && text.includes('no, exit'));
+  const text = stripAnsi(output).toLowerCase().replace(/[\u2500-\u257f]/g, ' ').replace(/\s+/g, ' ');
+  return text.includes('warning: claude code running in bypass permissions mode') &&
+    text.includes('yes, i accept') &&
+    text.includes('no, exit');
 }
 
 function isTuiReady(output: string): boolean {

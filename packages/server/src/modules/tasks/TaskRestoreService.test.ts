@@ -6,6 +6,9 @@ import { tmpdir } from 'os';
 import * as path from 'path';
 import { TaskRestoreService, type TaskRestoreDeps } from './TaskRestoreService';
 vi.mock('../git/ensureGitIdentity', () => ({ ensureGitIdentity: vi.fn(async () => ({ action: 'already_set' })) }));
+// What the host's Claude Code settings get is tested on its own; here only that a restore calls it before the window that starts the worker exists.
+vi.mock('../agents/claude/prepareClaudeLaunch', () => ({ prepareClaudeLaunch: vi.fn(async () => {}) }));
+import { prepareClaudeLaunch } from '../agents/claude/prepareClaudeLaunch';
 
 // The hub's own `gh`/`glab` login is the second stage of distribution's token
 // resolution (Issue #87). Stubbed to "not logged in" so these tests exercise
@@ -1349,6 +1352,17 @@ describe('TaskRestoreService', () => {
       expect(options.program).toMatchObject({ cwd: worktreeDir, cols: 120, rows: 40 });
       expect(mockDriver().sendKeysToHandle).not.toHaveBeenCalled();
       expect(deps.windowRepo.add).toHaveBeenCalledWith(expect.objectContaining({ agentSessionId: '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12', workingDirectory: worktreeDir }));
+    });
+
+    it('prepares the host\'s Claude Code settings before the window that starts a Claude worker is opened (#497)', async () => {
+      (deps.worktreeServiceFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ create: vi.fn(async () => ({ path: worktreeDir, branch: 'feat/test-task' })), remove: vi.fn(async () => {}) });
+      (deps.sessionStrategyFactory.create as ReturnType<typeof vi.fn>).mockReturnValue({ supportsSession: true, buildResumeArgs: (id: string) => ['--resume', id] });
+      vi.mocked(prepareClaudeLaunch).mockClear();
+
+      await service.restore(makeTask({ serverName: 'test-server', agentSessionId: '7a8b0f9c-1d2e-4f30-8a45-6b7c8d9e0f12' }), log);
+
+      expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan((mockDriver().openWindow as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0]);
     });
 
     it('makes the worktree only after the gate was verified again (the token is built after that check), with the slug made first', async () => {

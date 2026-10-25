@@ -57,6 +57,7 @@ import { ResourceExhaustedError, type ResourceGuard } from '../../servers/resour
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './ExecutionManifest';
 import { TuiWorkerRuntime, TuiNotReadyError } from './runtime/TuiWorkerRuntime';
+import { prepareClaudeLaunch } from '../../agents/claude/prepareClaudeLaunch';
 import { WorkerRuntimeRegistry } from './runtime/WorkerRuntimeRegistry';
 import { labelRegisteredWindow, labelAddedWindowOrRemove } from '../../tmux/labelRegisteredWindow';
 import { resolveTaskServerName, resolveMuxWorkspace, resolveUnitId, resolveBaseBranch, resolveAndDetectBaseBranch, canonicalizeBaseBranch } from './TaskExecutionEnv';
@@ -590,6 +591,12 @@ export class ExecuteTaskUseCase {
    * for the clobber this closes.
    */
   /** Saves the primary window row of a window just created for the task, replacing any earlier primary row. */
+  /** Before a Claude worker is started on `server`: the host's Claude Code settings (see {@link prepareClaudeLaunch}); anything else is left alone. */
+  private async prepareClaudeLaunchFor(server: ServerConfig, unit: Pick<Unit, 'workerType'>, taskId: number, unitId: number): Promise<void> {
+    if (unit.workerType !== 'claude') return;
+    await prepareClaudeLaunch(this.transportFactory.getTransport(server), (entry) => this.appendLog(taskId, unitId, 'command', entry));
+  }
+
   private registerCreatedPrimaryWindow(taskId: number, serverName: string, ref: MuxRef, label: string, unit: Pick<Unit, 'workerType' | 'workerModel'>): void {
     for (const w of this.windowRepo.findByTask(taskId)) {
       if (w.ownerType === 'task' && w.isPrimary) this.windowRepo.remove(w.id);
@@ -1047,6 +1054,8 @@ export class ExecuteTaskUseCase {
                 }
                 if (launchPlan) program = await programFor(launchPlan.launch, prepared.worktree?.path ?? null, () => this.transportFactory.getFileOps(fs));
               }
+              // The worker is the window's first process: the host's Claude Code settings are prepared before the window exists.
+              if (startedAsProgram) await this.prepareClaudeLaunchFor(fs, unit, taskId, unitId);
               const { ref: createdRef, result, windowName: displayName } = await execDriver.openWindow(fs, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
               return { result, windowName: createdRef.window, ref: createdRef, label: displayName ?? createdRef.window };
             },
@@ -1375,6 +1384,7 @@ export class ExecuteTaskUseCase {
         this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
       }
       const launchPrimaryWin = this.windowRepo.findByTask(taskId).find((w) => w.isPrimary);
+      if (!startedAsProgram) await this.prepareClaudeLaunchFor(server, unit, taskId, unitId);
       try {
         const actualCommand = await runtime.launch({
           server, handle, driver: executeDriver, supervisorTarget: windowTarget, taskId, unitId,
@@ -1391,7 +1401,7 @@ export class ExecuteTaskUseCase {
         if (launchErr instanceof TuiNotReadyError && launchErr.reason === 'bypass_permissions_dialog') {
           this.appendLog(taskId, unitId, 'command', {
             type: 'bypass_permissions_dialog',
-            message: 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました。対象ホストで claude --dangerously-skip-permissions を一度起動して受け入れるか、~/.claude/settings.json に "skipDangerousModePermissionPrompt": true を追加してください',
+            message: 'Claude Code の Bypass Permissions mode の確認ダイアログで起動が停止しました。対象ホストで claude --dangerously-skip-permissions を一度起動して受け入れるか、~/.claude/settings.json に "skipDangerousModePermissionPrompt": true を追加してください（Claude Code 2.0.x は ~/.claude.json の "bypassPermissionsModeAccepted": true）',
           });
           this.taskRepo.updateStatus(taskId, 'failed' as TaskStatus);
           return;
@@ -1781,6 +1791,7 @@ export class ExecuteTaskUseCase {
         }
         const created = await createRotatedWindow(this.paneEnvService, this.serverIsolationLock, server, currentTask, 'followup_create_failed', async (freshServer, env) => {
           const fuCreateDriver = this.resolveDriver(freshServer);
+          if (startedAsProgram) await this.prepareClaudeLaunchFor(freshServer, unit, taskId, unitId);
           const { ref: fuRef, result, windowName: displayName } = await fuCreateDriver.openWindow(freshServer, muxWorkspace, `task-${task.id}`, { extraEnv: env, ...(program ? { program } : {}) });
           return { result, windowName: fuRef.window, ref: fuRef, label: displayName ?? fuRef.window };
         },
@@ -1888,6 +1899,7 @@ export class ExecuteTaskUseCase {
         if (shouldSupervise(server.type, followUpWindowType, ref.kind)) {
           this.supervisorRegistry.clearExitMarker(server.name, windowTarget);
         }
+        if (!startedAsProgram) await this.prepareClaudeLaunchFor(server, unit, taskId, unitId);
         try {
           const actualCommand = await runtime.resume({
             server, handle, driver: fuMainDriver, supervisorTarget: windowTarget, taskId, unitId,

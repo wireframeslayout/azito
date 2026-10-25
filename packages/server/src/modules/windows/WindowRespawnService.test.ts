@@ -20,6 +20,10 @@ import type { IProjectServerRepository } from '../projects/ProjectServer';
 import type { IProjectRepository } from '../projects/Project';
 import type { TransportFactory } from '../servers/transport/TransportFactory';
 import { flag, type ProgramLaunch } from '../agents/WorkerLaunch';
+import { prepareClaudeLaunch } from '../agents/claude/prepareClaudeLaunch';
+
+// What the host's Claude Code settings get is tested on its own; here only that a respawn calls it, before the window that starts the worker exists.
+vi.mock('../agents/claude/prepareClaudeLaunch', () => ({ prepareClaudeLaunch: vi.fn(async () => {}) }));
 
 /** A program launch made of flags only, which a line renders as `file arg arg`. */
 function program(file: string, args: string[]): ProgramLaunch {
@@ -363,6 +367,59 @@ describe('WindowRespawnService.respawn — pane labels (misao)', () => {
     await service.respawn(7, makeServer());
 
     expect(tmux.labelWindowPanes).not.toHaveBeenCalled();
+  });
+});
+
+describe('WindowRespawnService — prepares the host for a Claude worker (Bypass Permissions dialog, #497)', () => {
+  beforeEach(() => {
+    vi.mocked(prepareClaudeLaunch).mockClear();
+  });
+
+  it('respawn() of a Claude window prepares it before the window is opened and the worker typed', async () => {
+    const task = makeTask({ id: 5, unitId: 10 });
+    const win = makeWindow({ taskId: 5, windowType: 'agent', workerType: 'claude' });
+    const { service, tmux, sentCommands } = buildService({ window: win, task, unit: makeUnit({ id: 10 }) });
+
+    await service.respawn(1, makeServer());
+
+    expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+    const prepared = vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0];
+    expect(prepared).toBeLessThan(Math.min(...[tmux.openWindow, tmux.openWorkspace].flatMap((fn) => fn.mock.invocationCallOrder)));
+    expect(sentCommands).toHaveLength(1);
+  });
+
+  it('respawn() of a multi-pane window with a Claude pane prepares it', async () => {
+    const win = makeWindow({
+      windowType: 'terminal',
+      workerType: null,
+      paneLayout: { panes: [{ index: 1, workerType: null, workingDirectory: null }, { index: 2, workerType: 'claude', workingDirectory: null }] } as never,
+    });
+    const { service } = buildService({ window: win });
+
+    await service.respawn(1, makeServer());
+
+    expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+  });
+
+  it('respawn() prepares nothing for a terminal window, a worker that is not Claude, or a respawn that does not launch the agent', async () => {
+    const terminal = buildService({ window: makeWindow({ windowType: 'terminal', workerType: null }) });
+    await terminal.service.respawn(1, makeServer());
+    const codex = buildService({ window: makeWindow({ windowType: 'agent', workerType: 'codex' }) });
+    await codex.service.respawn(1, makeServer());
+    const skipped = buildService({ window: makeWindow({ windowType: 'agent', workerType: 'claude' }) });
+    await skipped.service.respawn(1, makeServer(), { skipAgentLaunch: true });
+
+    expect(prepareClaudeLaunch).not.toHaveBeenCalled();
+  });
+
+  it('resumeLegacySession() (recover-session without a window record) prepares it before the window is opened', async () => {
+    const task = makeTask({ id: 7, unitId: 10, agentSessionId: 'sess-abc', inputTrust: 'trusted' });
+    const { service, tmux } = buildService({ window: makeWindow({ taskId: 7 }), task, unit: makeUnit({ id: 10 }) });
+
+    await service.resumeLegacySession(7, makeServer());
+
+    expect(prepareClaudeLaunch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(prepareClaudeLaunch).mock.invocationCallOrder[0]).toBeLessThan(tmux.openWindow.mock.invocationCallOrder[0]);
   });
 });
 

@@ -1,12 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, mkdirSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, lstatSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, mkdirSync, symlinkSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import type { IServerTransport } from '../../servers/transport/ServerTransport';
 import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import type { HostPlatform } from '../../../shared/os/hostEnv';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
-import { ensureClaudeBypassAccepted } from './ensureClaudeBypassAccepted';
+import { ensureClaudeBypassAccepted, ensureClaudeLegacyBypassAccepted } from './ensureClaudeBypassAccepted';
+import { ensureClaudeTrust } from './ensureClaudeTrust';
+import { prepareClaudeLaunch } from './prepareClaudeLaunch';
 
 let fakeHome: string;
 
@@ -106,6 +108,123 @@ describe('ensureClaudeBypassAccepted', () => {
     expect(readSettings()).toEqual({ theirs: 1 });
     expect(existsSync(settingsPath())).toBe(true);
   });
+
+  // Windows では symlink に権限が要る
+  it.skipIf(process.platform === 'win32')('writes through a symbolic link to its target and keeps the link', async () => {
+    mkdirSync(claudeDir());
+    const dotfiles = join(fakeHome, 'dotfiles');
+    mkdirSync(dotfiles);
+    writeFileSync(join(dotfiles, 'settings.json'), '{"model":"opus"}');
+    symlinkSync(join(dotfiles, 'settings.json'), settingsPath());
+    expect(await ensureClaudeBypassAccepted(transportWithHome(fakeHome))).toEqual({ action: 'accepted' });
+    expect(lstatSync(settingsPath()).isSymbolicLink()).toBe(true);
+    expect(JSON.parse(readFileSync(join(dotfiles, 'settings.json'), 'utf8'))).toEqual({ model: 'opus', skipDangerousModePermissionPrompt: true });
+  });
+
+  /** The real file operations with `create` / `write` of the settings file preceded by `before` (somebody else writing at that moment). */
+  function transportRacing(before: { create?: () => void; write?: () => void }): IServerTransport {
+    const real = transportWithHome(fakeHome).files();
+    return {
+      files: () => ({
+        ...real,
+        platform: real.platform,
+        realpath: real.realpath.bind(real),
+        read: real.read.bind(real),
+        create: async (...args: Parameters<typeof real.create>) => {
+          if (args[1] === 'file') before.create?.();
+          return real.create(...args);
+        },
+        write: async (...args: Parameters<typeof real.write>) => {
+          before.write?.();
+          return real.write(...args);
+        },
+      }),
+    } as unknown as IServerTransport;
+  }
+
+  it('reads a file again, and keeps its content, when it appeared after the read found nothing', async () => {
+    mkdirSync(claudeDir());
+    const transport = transportRacing({ create: () => writeFileSync(settingsPath(), '{"permissions":{"allow":["Bash(ls)"]}}') });
+    expect(await ensureClaudeBypassAccepted(transport)).toEqual({ action: 'accepted' });
+    expect(readSettings()).toEqual({ permissions: { allow: ['Bash(ls)'] }, skipDangerousModePermissionPrompt: true });
+  });
+
+  it('never overwrites a file that was filled by somebody else between the creation and the write', async () => {
+    const transport = transportRacing({ write: () => writeFileSync(settingsPath(), '{"theirs":1}') });
+    await expect(ensureClaudeBypassAccepted(transport)).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(readSettings()).toEqual({ theirs: 1 });
+  });
+});
+
+describe('ensureClaudeLegacyBypassAccepted (Claude Code 2.0.x keeps the acceptance in ~/.claude.json)', () => {
+  beforeEach(() => {
+    fakeHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-bypass-legacy-')));
+  });
+  afterEach(() => {
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+  const configPath = (): string => join(fakeHome, '.claude.json');
+
+  it('skips a host without ~/.claude.json (Claude Code makes it itself)', async () => {
+    expect(await ensureClaudeLegacyBypassAccepted(transportWithHome(fakeHome))).toEqual({ action: 'skipped', reason: '~/.claude.json not found' });
+    expect(existsSync(configPath())).toBe(false);
+  });
+
+  it('adds the key and keeps everything else', async () => {
+    writeFileSync(configPath(), JSON.stringify({ numStartups: 3, projects: { '/a': { hasTrustDialogAccepted: true } } }));
+    expect(await ensureClaudeLegacyBypassAccepted(transportWithHome(fakeHome))).toEqual({ action: 'accepted' });
+    expect(JSON.parse(readFileSync(configPath(), 'utf8'))).toEqual({ numStartups: 3, projects: { '/a': { hasTrustDialogAccepted: true } }, bypassPermissionsModeAccepted: true });
+    expect(await ensureClaudeLegacyBypassAccepted(transportWithHome(fakeHome))).toEqual({ action: 'already_accepted' });
+  });
+
+  it('skips a file that is not valid JSON without touching it', async () => {
+    writeFileSync(configPath(), '{not json');
+    expect(await ensureClaudeLegacyBypassAccepted(transportWithHome(fakeHome))).toMatchObject({ action: 'skipped' });
+    expect(readFileSync(configPath(), 'utf8')).toBe('{not json');
+  });
+
+  it('loses neither this change nor a folder trust registered at the same time (one lock on one file)', async () => {
+    writeFileSync(configPath(), JSON.stringify({ projects: {} }));
+    const transport = transportWithHome(fakeHome);
+    await Promise.all([ensureClaudeLegacyBypassAccepted(transport), ensureClaudeTrust(transport, '/wt-a'), ensureClaudeTrust(transport, '/wt-b')]);
+    const config = JSON.parse(readFileSync(configPath(), 'utf8'));
+    expect(config.bypassPermissionsModeAccepted).toBe(true);
+    expect(Object.keys(config.projects).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('prepareClaudeLaunch', () => {
+  beforeEach(() => {
+    fakeHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-prepare-')));
+  });
+  afterEach(() => {
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+
+  it('accepts the dialog in both files and reports each', async () => {
+    writeFileSync(join(fakeHome, '.claude.json'), '{}');
+    const reports: Record<string, unknown>[] = [];
+    await prepareClaudeLaunch(transportWithHome(fakeHome), (entry) => reports.push(entry));
+    expect(reports).toEqual([
+      { type: 'claude_bypass_accepted', file: 'settings.json' },
+      { type: 'claude_bypass_accepted', file: '.claude.json' },
+    ]);
+  });
+
+  it('reports a failure and a skip instead of throwing', async () => {
+    mkdirSync(claudeDir());
+    writeFileSync(settingsPath(), '{not json');
+    const broken = { files: () => { throw new Error('host unreachable'); } } as unknown as IServerTransport;
+    const reports: Record<string, unknown>[] = [];
+    await prepareClaudeLaunch(transportWithHome(fakeHome), (entry) => reports.push(entry));
+    await prepareClaudeLaunch(broken, (entry) => reports.push(entry));
+    expect(reports).toEqual([
+      { type: 'claude_bypass_skipped', file: 'settings.json', reason: expect.stringContaining('not valid JSON') },
+      { type: 'claude_bypass_skipped', file: '.claude.json', reason: '~/.claude.json not found' },
+      { type: 'claude_bypass_failed', file: 'settings.json', reason: 'host unreachable' },
+      { type: 'claude_bypass_failed', file: '.claude.json', reason: 'host unreachable' },
+    ]);
+  });
 });
 
 describe('ensureClaudeBypassAccepted on a Windows host', () => {
@@ -120,8 +239,9 @@ describe('ensureClaudeBypassAccepted on a Windows host', () => {
         if (text === undefined) throw new FileOpsError('NOT_FOUND', p);
         return { data: Buffer.from(text) };
       },
-      create: async (p: string) => {
-        dirs.push(p);
+      create: async (p: string, kind: 'file' | 'directory') => {
+        if (kind === 'directory') dirs.push(p);
+        else files.set(p, '');
         return { created: true };
       },
       write: async (p: string, data: Buffer) => {

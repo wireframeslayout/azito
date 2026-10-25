@@ -81,6 +81,14 @@ running (phase N) ────────────────────�
 review → done  (or failed — reachable from any phase)
 ```
 
+### Claude Code's confirmation dialog (Bypass Permissions mode)
+
+A Claude worker is started with `claude --dangerously-skip-permissions`. The first time that runs on a host, Claude Code shows a "Bypass Permissions mode" confirmation dialog, and the task would stop there. So before AZITO starts a Claude worker (on execute, follow-up, restore, respawn and session recovery alike) it writes the acceptance into the Claude Code settings of that server's host.
+
+- It writes `skipDangerousModePermissionPrompt: true` to `~/.claude/settings.json` (and, for Claude Code 2.0.x, `bypassPermissionsModeAccepted: true` to an existing `~/.claude.json`). Other keys are kept; a file that is not valid JSON is left untouched and the reason is written to the execution log. This is the same on Linux, macOS and Windows.
+- This is the host's Claude Code setting as a whole: **the warning also stops appearing when a person starts `claude --dangerously-skip-permissions` by hand on that host.** For a local server that is the settings of whoever runs the hub.
+- If the dialog still appears, the task does not wait: it fails with `bypass_permissions_dialog`. A window added by hand (Add Window) is not covered by this automatic write, because a person is looking at its screen and can accept the dialog.
+
 ## Worktree-Based Execution
 
 A Git worktree is created automatically when a task runs, so work happens on an isolated branch.
@@ -302,7 +310,6 @@ A task runs on a Windows agent the same way, with these differences:
 - The prompt's completion block has no shell syntax. The worker writes the output file as UTF-8 and signals with `"<node.exe>" "<home>/.azito/harness/bin/azitoctl.mjs" signal --file "<signal file>" --marker <marker>` (file-signal mode) or `... complete --turn <token> --output-file "<file>"` (http-signal mode); questions are a JSON file passed with `--json-file`. Paths are forward-slash paths in double quotes.
 - The pushing phase runs `scripts/push.mjs` (the same contract and variables as `push.sh`).
 - Claude Code's trust entry is written for the project directory and the worktree, under both spellings Claude Code uses (`C:/Users/me/repo` since 2.1.x, `C:\Users\me\repo` before). The node executable in the commands is the host's own (the agent reports it in `GET /api/host` `execPath`; the hub's local server uses the hub's node), so `node` need not be on the worker's PATH; in PowerShell a command that starts with a quoted path needs `& ` in front.
-- The "Bypass Permissions mode" confirmation that `claude --dangerously-skip-permissions` shows the first time it runs on a host is accepted in advance: when a Claude task's worktree is created, AZITO adds `skipDangerousModePermissionPrompt: true` to the host's `~/.claude/settings.json` (other keys are kept; a file that is not valid JSON is left untouched and the reason is logged). This is the same on Linux, macOS and Windows. If the dialog still appears, the task fails with `bypass_permissions_dialog`.
 - Code distribution is not available on a Windows agent (#464).
 
 ## Task Logs

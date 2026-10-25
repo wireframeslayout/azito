@@ -9,7 +9,6 @@ import { assertDirectoryContained } from '../../git/PathContainment';
 import { normalizeBranchRef } from '../../git/assertSafeGitArgs';
 import { ensureGitIdentity, type GitIdentity } from '../../git/ensureGitIdentity';
 import { ensureClaudeTrust } from '../../agents/claude/ensureClaudeTrust';
-import { ensureClaudeBypassAccepted } from '../../agents/claude/ensureClaudeBypassAccepted';
 import { resolveWorktreeCreateBaseBranch } from './TaskExecutionEnv';
 
 /** What a task's worktree step needs from the use case that runs it (the collaborators, not the use case itself). */
@@ -109,11 +108,7 @@ export async function createTaskWorktree(
 
   await applyGitIdentity(deps, server, task.id, unitId, wt.path);
   // On Windows both the project's directory and the worktree itself (see registerClaudeTrust): the worktree is a repository root of its own.
-  if (request.workerType === 'claude') {
-    await registerClaudeTrust(deps, server, task.id, unitId, workingDir, wt.path);
-    // Every Claude launch carries --dangerously-skip-permissions, so a new host's first launch would stop at its "Bypass Permissions mode" dialog.
-    await acceptClaudeBypassDialog(deps, server, task.id, unitId);
-  }
+  if (request.workerType === 'claude') await registerClaudeTrust(deps, server, task.id, unitId, workingDir, wt.path);
   return wt;
 }
 
@@ -127,19 +122,6 @@ async function applyGitIdentity(deps: TaskWorktreeDeps, server: ServerConfig, ta
     }
   } catch (err) {
     deps.appendLog(taskId, unitId, 'command', { type: 'git_identity_failed', message: err instanceof Error ? err.message : String(err) });
-  }
-}
-
-async function acceptClaudeBypassDialog(deps: TaskWorktreeDeps, server: ServerConfig, taskId: number, unitId: number): Promise<void> {
-  try {
-    const result = await ensureClaudeBypassAccepted(deps.transportFactory.getTransport(server));
-    if (result.action === 'accepted') {
-      deps.appendLog(taskId, unitId, 'command', { type: 'claude_bypass_accepted' });
-    } else if (result.action === 'skipped') {
-      deps.appendLog(taskId, unitId, 'command', { type: 'claude_bypass_skipped', reason: result.reason });
-    }
-  } catch (err) {
-    deps.appendLog(taskId, unitId, 'command', { type: 'claude_bypass_failed', reason: err instanceof Error ? err.message : String(err) });
   }
 }
 

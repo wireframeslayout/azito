@@ -32,6 +32,7 @@ import { changeDirectoryLine } from '../../shared/os/changeDirectoryLine';
 import { checkExecutionGate, ExecutionGateDeniedError, ExecutionGatePendingApprovalError, reverifyExecutionGateInLock } from './execution/ExecutionGate';
 import { resolveExecutionManifest, hashExecutionManifest } from './execution/ExecutionManifest';
 import { appendLogAndEmit } from './execution/AppendLog';
+import { prepareClaudeLaunch } from '../agents/claude/prepareClaudeLaunch';
 import type { TaskPaneEnvironmentService } from './execution/TaskPaneEnvironmentService';
 import type { UnitTypeLoader } from '../sidekicks/UnitTypeLoader';
 import type { SidekickPackageLoader } from '../sidekicks/SidekickPackageLoader';
@@ -616,6 +617,12 @@ export class TaskRestoreService {
           if (launch) {
             program = await programFor(launch, effectiveDir, () => transportFactory.getFileOps(freshServer));
             programSessionId = task.agentSessionId;
+            // The worker is the window's first process: the host's Claude Code settings are prepared before the window exists.
+            if (unit?.workerType === 'claude') {
+              await prepareClaudeLaunch(transportFactory.getTransport(freshServer), (entry) => {
+                if (unitId !== null) appendLogAndEmit(logRepo, events, task.id, unitId, 'command', entry);
+              });
+            }
           } else {
             log.warn(`[task-restore] task ${task.id} has no worker to start: its window is opened with the shell's default directory`);
           }
