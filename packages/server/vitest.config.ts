@@ -5,7 +5,9 @@ import { WINDOWS_EXCLUDED_UNIT_TESTS } from './vitest.windowsExclude';
 const isWindows = process.platform === 'win32';
 const windowsOnlyExcludes = isWindows ? WINDOWS_EXCLUDED_UNIT_TESTS.map((e) => e.file) : [];
 // 実 git を起動するテストは Windows の CI では既定の 5 秒を超えることがある（Linux / macOS は既定のまま）。
-const unitTestTimeout = isWindows ? { testTimeout: 30000 } : {};
+// フック（一時リポジトリを作る beforeAll / beforeEach）も同じで、既定の 10 秒を超えることがある（#514: pushScriptNode.test.ts の
+// beforeEach の setupRepo は通常 0.6 秒だが、並列実行中の CI では git 1 回が 2.6 秒、全体が 7.5 秒まで伸びた）。
+const unitTestTimeout = isWindows ? { testTimeout: 30000, hookTimeout: 30000 } : {};
 
 // Test-stabilization fix (third-party review): `*.tmuxIntegration.test.ts`
 // files drive REAL tmux (spawn a session, wait for a real shell prompt,
