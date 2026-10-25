@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { HostProfileError } from '../../../shared/os/hostProfile';
+import { KeyedMutex } from '../../../shared/keyedMutex';
 import { AgentUpdater } from './AgentUpdater';
 import type { ServerConfig } from '../Server';
 
@@ -71,7 +71,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks();
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     const result = await updater.checkAndUpdate(makeServer({ type: 'local' }));
@@ -82,7 +82,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks();
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     const result = await updater.checkAndUpdate(makeServer({ host: null }));
@@ -93,7 +93,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -112,7 +112,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks(sha);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     let callCount = 0;
@@ -139,7 +139,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -164,7 +164,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
@@ -181,20 +181,54 @@ describe('AgentUpdater', () => {
     vi.useRealTimers();
   });
 
-  it('reports the unsupported_os reason when the SSH restart of a Windows agent is refused', async () => {
-    const mocks = makeMocks('new-sha');
-    mocks.installer.recoverAgent.mockRejectedValue(new HostProfileError('unsupported_os', 'restarting the agent over SSH is a POSIX shell script'));
+  it('restarts an unreachable Windows agent through recoverAgent like any other, then checks health again', async () => {
+    vi.useFakeTimers();
+    const mocks = makeMocks('abc1234');
+    mocks.installer.recoverAgent.mockResolvedValue('taskscheduler' as never);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
-    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('ECONNREFUSED'))));
+    const fetchMock = vi.fn()
+      .mockRejectedValueOnce(new Error('ECONNREFUSED'))
+      .mockResolvedValue({ ok: true, json: async () => ({ version: 'abc1234' }) });
+    vi.stubGlobal('fetch', fetchMock);
 
-    const result = await updater.checkAndUpdate(makeServer({ hostProfile: { platform: 'win32', arch: 'x64' } }));
+    const pending = updater.checkAndUpdate(makeServer({ hostProfile: { platform: 'win32', arch: 'x64' } }));
+    await vi.advanceTimersByTimeAsync(5000);
+    const result = await pending;
 
     expect(mocks.installer.recoverAgent).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', { platform: 'win32', arch: 'x64' }, 'system');
-    expect(result.status).toBe('error');
-    expect(result.message).toContain('unsupported_os: restarting the agent over SSH');
+    expect(result.status).toBe('up_to_date');
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it('runs the update inside the per-server lock (the recovery watchdog takes the same one) and shows a warning of the update', async () => {
+    const mocks = makeMocks('new-sha');
+    const lock = new KeyedMutex();
+    let takenDuringUpdate: boolean | undefined;
+    let other: Promise<void> | undefined;
+    mocks.installer.update.mockImplementation(async () => {
+      let acquired = false;
+      other = lock.withLock('test-server', async () => { acquired = true; });
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      takenDuringUpdate = acquired;
+      return { success: true, version: 'new-sha', warning: 'Old releases left in place: aaaaaaaaaaaa (in use)' };
+    });
+    const updater = new AgentUpdater(
+      mocks.bundler as any, mocks.installer as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, lock,
+    );
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: async () => ({ version: 'old-sha' }) })));
+
+    const result = await updater.checkAndUpdate(makeServer({ hostProfile: { platform: 'win32', arch: 'x64' } }));
+    await other;
+
+    // While update() ran, a second taker of the same key had to wait.
+    expect(takenDuringUpdate).toBe(false);
+    expect(result).toMatchObject({ status: 'updated', currentVersion: 'new-sha', message: 'Old releases left in place: aaaaaaaaaaaa (in use)' });
+    expect(mocks.installer.update).toHaveBeenCalledWith('user@remote', '100.64.0.1', 'tok123', { platform: 'win32', arch: 'x64' }, 'system');
     vi.unstubAllGlobals();
   });
 
@@ -203,7 +237,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks(sha);
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -227,7 +261,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -252,7 +286,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -275,7 +309,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -294,7 +328,7 @@ describe('AgentUpdater', () => {
     const mocks = makeMocks('new-sha');
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -315,7 +349,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -337,7 +371,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
@@ -368,7 +402,7 @@ describe('AgentUpdater', () => {
 
     const updater = new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     const results = await updater.checkAllServers();
@@ -382,7 +416,7 @@ describe('AgentUpdater', () => {
     const reachable = (version: string) => vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: true, json: () => Promise.resolve({ version }) })));
     const build = (mocks: ReturnType<typeof makeMocks>) => new AgentUpdater(
       mocks.bundler as any, mocks.installer as any,
-      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any,
+      mocks.serverRepo as any, mocks.taskRepo as any, mocks.hostRecorder as any, new KeyedMutex(),
     );
 
     it('asks for the host of a reached agent that has none recorded (connection)', async () => {

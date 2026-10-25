@@ -399,14 +399,6 @@ describe('AgentInstaller', () => {
     expect(text).toContain('pkill -f azito-agent.cjs');
   });
 
-  it('refuses to update a win32 agent with the Unix bootstrap, with the unsupported_os reason and nothing sent', async () => {
-    const { installer, commands } = make(okMisao());
-    const result = await installer.update('user@host', '100.64.0.9', 'tok', { platform: 'win32', arch: 'x64' }, 'system');
-    expect(result.success).toBe(false);
-    expect(result.error).toMatch(/^unsupported_os: .*updating the agent over SSH/);
-    expect(commands).toEqual([]);
-  });
-
   describe('host OS / architecture preflight', () => {
     it('reads the host with a fixed node command, not uname', async () => {
       const { installer, commands } = make(okMisao(), { tmux: 'tmux 3.4' });

@@ -1,4 +1,4 @@
-import { exec as execCallback, spawn, type ChildProcess } from 'child_process';
+import { exec as execCallback, execFile, spawn, type ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import net from 'net';
@@ -9,6 +9,7 @@ import { evaluateAcl, parseAclSnapshot, INSPECT_SCRIPT } from '../../../shared/o
 import { powershellDialect } from '../../../shared/os/shellDialect';
 import { readSha256FromSumsFile } from './integrityVerifier';
 import { AgentBundler } from './AgentBundler';
+import { updateWindowsAgent } from './windowsAgentUpdate';
 import { WindowsAgentDeployer, buildAgentEnvFile, windowsAgentLayout, type WindowsDeployInput, type WindowsFileTransfer, type WindowsSshExec } from './WindowsAgentDeployer';
 import { checkFirewall, firewallRuleName } from './windowsFirewall';
 import { buildWindowsPreflightCommand, parseWindowsPreflight, type WindowsPreflightInfo } from './windowsPreflight';
@@ -481,5 +482,115 @@ describe.skipIf(process.platform !== 'win32')('the Windows agent install on a re
       expect(fs.existsSync(layout.versionDirPrev)).toBe(false);
       expect(fs.existsSync(layout.envFilePrev)).toBe(false);
     }, 600_000);
+  });
+
+  describe('updating the agent from one version to another (updateWindowsAgent, through the Task Scheduler)', () => {
+    const bundleDir = path.join(os.tmpdir(), `azito-ci-bundles-${SUFFIX}`);
+    const hexVersion = (): string => crypto.randomBytes(6).toString('hex');
+
+    /** The real bundle with another version.txt (and, for a broken one, an entry that exits at once): a release of its own. */
+    async function makeBundle(entryReplacement?: string): Promise<WindowsDeployInput> {
+      const bundleVersion = hexVersion();
+      const dir = path.join(bundleDir, bundleVersion);
+      fs.mkdirSync(dir, { recursive: true });
+      const tar = path.win32.join(host.systemRoot, 'System32', 'tar.exe');
+      const run = (...args: string[]): Promise<void> => new Promise((resolve, reject) => {
+        execFile(tar, args, { windowsHide: true }, (err, _stdout, stderr) => (err ? reject(new Error(`tar ${args.join(' ')}: ${stderr}`)) : resolve()));
+      });
+      await run('-xzf', input.tarballPath, '-C', dir);
+      fs.writeFileSync(path.join(dir, 'version.txt'), bundleVersion);
+      if (entryReplacement !== undefined) fs.writeFileSync(path.join(dir, 'azito-agent.cjs'), entryReplacement);
+      const tarballPath = path.join(bundleDir, `${bundleVersion}.tar.gz`);
+      await run('-czf', tarballPath, '-C', dir, '.');
+      const expectedSha256 = crypto.createHash('sha256').update(fs.readFileSync(tarballPath)).digest('hex');
+      return { ...input, version: bundleVersion, tarballPath, expectedSha256 };
+    }
+
+    /** Resolves when the agent on this run's port answers `/health` (with `expected`, when given). */
+    async function checkHealth(expected: string | undefined): Promise<void> {
+      const deadline = Date.now() + 30_000;
+      let last = '';
+      while (Date.now() < deadline) {
+        try {
+          const res = await fetch(`http://${BIND}:${OPTIONS.port}/health`, { signal: AbortSignal.timeout(3000) });
+          const body = await res.json() as { version: string };
+          if (res.ok && (expected === undefined || body.version === expected)) return;
+          last = `HTTP ${res.status}, version ${body.version}`;
+        } catch (err) {
+          last = (err as Error).message;
+        }
+        await new Promise((r) => setTimeout(r, 500));
+      }
+      throw new Error(`The agent did not answer /health${expected ? ` with ${expected}` : ''} (${last})`);
+    }
+
+    const deps = () => ({ deployer, checkHealth, logger: { warn: (m: string) => console.warn(m) } });
+    const currentToken = (): string => /AZITO_AGENT_TOKEN="([^"]+)"/.exec(fs.readFileSync(layoutOf().envFile, 'utf8'))![1]!;
+    const releaseDirs = (): string[] => fs.readdirSync(layoutOf().root, { withFileTypes: true }).filter((e) => e.isDirectory() && /^[0-9a-f]{12}$/.test(e.name)).map((e) => e.name).sort();
+    const registeredEntry = async (): Promise<string> => (await cmdExec('ci', `"${schtasksPath()}" /Query /TN ${OPTIONS.taskName} /XML`, 60_000)).stdout;
+
+    afterAll(() => {
+      fs.rmSync(bundleDir, { recursive: true, force: true });
+    });
+
+    it('A to B: the agent answers B with the same token, A is kept as the previous release, older releases are removed and other folders are not touched', async (ctx) => {
+      if (!logonSession) ctx.skip('no interactive logon session on this machine');
+      await deployer.start('ci', host);
+      await waitForHealth(OPTIONS.port, version, 60_000);
+      const root = layoutOf().root;
+      for (const name of ['aaaaaaaaaaaa', 'bbbbbbbbbbbb', 'not-a-release']) {
+        fs.mkdirSync(path.join(root, name), { recursive: true });
+        fs.writeFileSync(path.join(root, name, 'file.txt'), 'x');
+      }
+      const token = currentToken();
+      const b = await makeBundle();
+
+      const result = await updateWindowsAgent(deps(), { ...b, token }, OPTIONS.port, layoutOf().logFile);
+
+      expect(result, JSON.stringify(result)).toMatchObject({ success: true, version: b.version });
+      await checkHealth(b.version);
+      expect(currentToken()).toBe(token);
+      expect(await registeredEntry()).toContain(windowsAgentLayout(host.home, OPTIONS, b.version).entry);
+      // The current (B) and the previous (A) release stay; the older ones go; a folder that is no release is not touched.
+      expect(releaseDirs()).toEqual([version, b.version].sort());
+      expect(fs.existsSync(path.join(root, 'not-a-release', 'file.txt'))).toBe(true);
+      expect(fs.existsSync(layoutOf().envFilePrev)).toBe(false);
+    }, 600_000);
+
+    it('B to a release whose agent never starts: the error says what was restored, and B runs again with its own settings and task', async (ctx) => {
+      if (!logonSession) ctx.skip('no interactive logon session on this machine');
+      const before = await checkHealthVersion();
+      const settingsBefore = fs.readFileSync(layoutOf().envFile, 'utf8');
+      const taskBefore = await registeredEntry();
+      const broken = await makeBundle('process.exit(1);\n');
+
+      const result = await updateWindowsAgent(deps(), { ...broken, token: currentToken() }, OPTIONS.port, layoutOf().logFile);
+
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('Rolled back:');
+      expect(result.error).toContain('the previous agent answers again');
+      await checkHealth(before);
+      expect(fs.readFileSync(layoutOf().envFile, 'utf8')).toBe(settingsBefore);
+      expect(actionOf(await registeredEntry())).toEqual(actionOf(taskBefore));
+      expect(fs.existsSync(windowsAgentLayout(host.home, OPTIONS, broken.version).versionDir)).toBe(false);
+      expect(fs.existsSync(layoutOf().envFilePrev)).toBe(false);
+    }, 600_000);
+
+    it('B to D: only D and B (the previous release) are left, A is removed', async (ctx) => {
+      if (!logonSession) ctx.skip('no interactive logon session on this machine');
+      const before = await checkHealthVersion();
+      const d = await makeBundle();
+
+      const result = await updateWindowsAgent(deps(), { ...d, token: currentToken() }, OPTIONS.port, layoutOf().logFile);
+
+      expect(result, JSON.stringify(result)).toMatchObject({ success: true, version: d.version });
+      await checkHealth(d.version);
+      expect(releaseDirs()).toEqual([before, d.version].sort());
+    }, 600_000);
+
+    async function checkHealthVersion(): Promise<string> {
+      const res = await fetch(`http://${BIND}:${OPTIONS.port}/health`, { signal: AbortSignal.timeout(5000) });
+      return (await res.json() as { version: string }).version;
+    }
   });
 });

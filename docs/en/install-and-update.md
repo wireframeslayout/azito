@@ -482,7 +482,7 @@ To update manually, use Servers → target server → Setup → Agent Server →
 
 ## Adding a Windows host as an agent
 
-Servers → Add → Agent works for a Windows host over SSH. The bundled **misao** is installed after the agent (the Task Scheduler task `AzitoMisao`; see `misao.md`). Windows has no tmux, so misao is the only pane server and the default mux of a new server is misao. If only misao fails, the agent stays installed and the reason is reported as `misaoError` beside the successful install. Windows panes are cmd.exe; a worker (claude / codex) is started as the first pane of its window, and tasks run on a Windows agent (see below). Updating and removing a Windows agent comes with #372 (a Windows agent is reinstalled from the Setup row, which replaces it in place).
+Servers → Add → Agent works for a Windows host over SSH. The bundled **misao** is installed after the agent (the Task Scheduler task `AzitoMisao`; see `misao.md`). Windows has no tmux, so misao is the only pane server and the default mux of a new server is misao. If only misao fails, the agent stays installed and the reason is reported as `misaoError` beside the successful install. Windows panes are cmd.exe; a worker (claude / codex) is started as the first pane of its window, and tasks run on a Windows agent (see below). A Windows agent is updated when the hub starts and its version differs; removing it comes with #372 (reinstalling from the Setup row replaces it in place).
 
 What works on a Windows agent, and what does not yet. The hub reads the OS from the agent (`hostProfile`) and shows it on the server list and in the server's Overview. Operations are closed one by one, on the code path each takes today (the decision is one table, `hostFeatureSupport` in `@azito/shared`, with the path that closes each row in a comment). A closed entry point stays focusable (`aria-disabled`), does nothing, and shows the reason as text or a tooltip tied to it with `aria-describedby`. An operation that reaches the hub anyway is answered `unsupported_os` (501) with the reason, and the UI shows it as it is. Tasks are judged by the server they would run on, resolved with the hub's own rule (the task's server, else the project's only server).
 
@@ -499,7 +499,8 @@ What works on a Windows agent, and what does not yet. The hub reads the OS from 
 | tmux (default mux choice, tmux runtime, apply tmux config, install tmux) | Not offered: Windows has no tmux, misao is the only pane server | — |
 | AZITO Harness (`setup.mjs`), its install-status row | Works | — |
 | Browser runtime (Chromium) install | Disabled in the UI | #372 |
-| Update and removal of the agent on the host | Not available; reinstall from Setup replaces it in place | #372 |
+| Update of the agent on the host | Works: when the hub starts and the agent's version differs, the update runs as the install does (deploy, start, health check) with the agent's current token, and goes back to the previous version, settings and task if the new agent does not answer. misao is not touched. Releases older than the previous one are removed afterwards (one in use is left and tried again at the next update) | — |
+| Removal of the agent on the host | Not available; remove it by hand (below) | #372 |
 
 A server whose OS is not recorded yet (a Unix agent registered before the OS was kept) is treated as Unix: nothing is disabled.
 

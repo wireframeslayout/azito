@@ -43,6 +43,16 @@ export interface WindowsDeployment {
   commit(): Promise<void>;
   /** The new install is bad (it did not start, or did not answer): stop it and restore the previous one. Returns what it did, including anything it could not restore. */
   rollback(): Promise<string>;
+  /** The version the registered task ran before this deploy (read from its definition); undefined when there was no task or its definition names no version folder. */
+  readonly previousVersion: string | undefined;
+  /** The task was running when the deploy began: after a rollback it is started again, so it is expected to answer. */
+  readonly previousWasRunning: boolean;
+}
+
+/** What {@link WindowsAgentDeployer.pruneOldVersions} did: the folders it removed, and each one it could not (with the reason, e.g. a file in use). */
+export interface PruneResult {
+  removed: string[];
+  failed: Array<{ version: string; reason: string }>;
 }
 
 const QUICK_MS = 60_000;
@@ -53,6 +63,17 @@ const STOP_POLL_MS = 500;
 const RESTART_INTERVAL_MINUTES = 1;
 const RESTART_COUNT = 999;
 const SAFE_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
+/** The folder name of an agent release: `build-agent.ts` names a bundle by the first 12 hex digits of its content hash. Only such folders are ever pruned. */
+const RELEASE_DIR_PATTERN = '^[0-9a-f]{12}$';
+/** The version folder a task definition runs its entry from (`...\<version>\azito-agent.cjs`). */
+const ENTRY_VERSION = /([A-Za-z0-9][A-Za-z0-9._-]*)\\azito-agent\.cjs/;
+
+/** The version a task definition (its XML) starts the agent from; undefined when the definition names no such entry. */
+export function versionOfTaskXml(xml: string): string | undefined {
+  const args = /<Arguments>([^<]*)<\/Arguments>/.exec(xml)?.[1];
+  const version = args === undefined ? undefined : ENTRY_VERSION.exec(args)?.[1];
+  return version !== undefined && SAFE_VERSION.test(version) ? version : undefined;
+}
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -158,6 +179,8 @@ interface DeployProgress {
 interface Previous {
   /** The registered task's XML, or undefined when there was none. */
   taskXml: string | undefined;
+  /** The version folder that definition runs. */
+  version: string | undefined;
   wasRunning: boolean;
 }
 
@@ -220,6 +243,8 @@ export class WindowsAgentDeployer {
     return {
       commit: () => this.discardPrevious(input.sshHost, layout),
       rollback,
+      previousVersion: previous?.version,
+      previousWasRunning: previous?.wasRunning ?? false,
     };
   }
 
@@ -242,6 +267,26 @@ export class WindowsAgentDeployer {
     await this.stopTask(sshHost, client, windowsAgentEnvFile(host.home, this.options));
     await client.start(this.options.taskName);
     return 'restarted';
+  }
+
+  /**
+   * Removes the release folders (`<12 hex digits>`) of this install other than the ones in `keep`. Folders of anything else
+   * (`*.prev`, scratch folders, a folder somebody made) are not touched. A folder that cannot be removed (a file in it is in use) is
+   * left, reported in `failed` with the reason, and tried again by the next call; the others are still removed.
+   */
+  async pruneOldVersions(sshHost: string, host: Pick<WindowsPreflightInfo, 'home'>, keep: readonly string[]): Promise<PruneResult> {
+    const q = powershellDialect.quote;
+    const root = windowsAgentRoot(host.home, this.options);
+    const out = await this.script(sshHost, 'Removing the old agent versions', [
+      `$root = ${q(root)}`,
+      `$keep = @(${keep.map(q).join(', ')})`,
+      `$old = @(Get-ChildItem -LiteralPath $root -Directory -Force | Where-Object { $_.Name -match '${RELEASE_DIR_PATTERN}' -and $keep -notcontains $_.Name })`,
+      'foreach ($dir in $old) {',
+      '  try { Remove-Item -LiteralPath $dir.FullName -Recurse -Force -ErrorAction Stop; Write-Output (\'REMOVED \' + $dir.Name) }',
+      '  catch { Write-Output (\'FAILED \' + $dir.Name + \' \' + (($_.Exception.Message -replace \'[\\r\\n]+\', \' \').Trim())) }',
+      '}',
+    ].join('\n'), EXTRACT_MS);
+    return parsePruneOutput(out);
   }
 
   /** What the Task Scheduler says about the task, for the message of a health check that failed. */
@@ -276,8 +321,9 @@ export class WindowsAgentDeployer {
   /** Reads what is registered now. A definition that cannot be read stops the deploy, before anything is changed. */
   private async capturePrevious(client: SchtasksClient): Promise<Previous> {
     const state = await client.query(this.options.taskName);
-    if (!state.exists) return { taskXml: undefined, wasRunning: false };
-    return { taskXml: await client.exportXml(this.options.taskName), wasRunning: state.running };
+    if (!state.exists) return { taskXml: undefined, version: undefined, wasRunning: false };
+    const taskXml = await client.exportXml(this.options.taskName);
+    return { taskXml, version: versionOfTaskXml(taskXml), wasRunning: state.running };
   }
 
   /**
@@ -479,6 +525,18 @@ export class WindowsAgentDeployer {
     }
     return [...(previous === undefined ? ['nothing on the host had been changed'] : done), ...problems].join('; ');
   }
+}
+
+/** The `REMOVED <name>` / `FAILED <name> <reason>` lines of the prune script. */
+export function parsePruneOutput(output: string): PruneResult {
+  const result: PruneResult = { removed: [], failed: [] };
+  for (const line of output.replace(/\r/g, '').split('\n')) {
+    const removed = /^REMOVED (\S+)$/.exec(line);
+    if (removed) { result.removed.push(removed[1]!); continue; }
+    const failed = /^FAILED (\S+) (.*)$/.exec(line);
+    if (failed) result.failed.push({ version: failed[1]!, reason: redactSecretText(failed[2]!).slice(0, 300) });
+  }
+  return result;
 }
 
 function describeState(taskName: string, state: TaskScheduleState): string {

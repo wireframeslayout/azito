@@ -441,7 +441,7 @@ function buildLocalMisaoWatchdog(misaoService: MisaoServiceService): LocalMisaoW
 }
 
 function buildAgentUpdater(agentBundler: AgentBundler, infra: SharedInfra, repos: Repositories, agentHostRecorder: AgentHostRecorder): AgentUpdater {
-  return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo, agentHostRecorder);
+  return new AgentUpdater(agentBundler, infra.agentInstaller, repos.serverRepo, repos.taskRepo, agentHostRecorder, infra.serverIsolationMutex);
 }
 
 // Constructed ONCE and shared between TaskRestoreService and

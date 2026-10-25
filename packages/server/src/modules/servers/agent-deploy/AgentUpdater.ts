@@ -1,5 +1,5 @@
 import type { AgentBundler } from './AgentBundler';
-import { HostProfileError } from '../../../shared/os/hostProfile';
+import type { KeyedMutex } from '../../../shared/keyedMutex';
 import type { AgentInstaller } from './AgentInstaller';
 import type { AgentHostRecorder } from './AgentHostRecorder';
 import type { IServerRepository } from '../Server';
@@ -30,6 +30,11 @@ export class AgentUpdater {
     private serverRepo: IServerRepository,
     private taskRepo: SqliteTaskRepository,
     private hostRecorder: AgentHostRecorder,
+    /**
+     * The per-server lock that installs, edits and `AgentRecoveryWatchdog` take: an update holds it from its first command to the
+     * health check, so the watchdog never sees the agent stopped for the update as one that died and starts it again in the middle.
+     */
+    private serverLock: Pick<KeyedMutex, 'withLock'>,
   ) {}
 
   async checkAndUpdate(server: ServerConfig): Promise<UpdateCheckResult> {
@@ -51,11 +56,7 @@ export class AgentUpdater {
 
       try {
         await this.installer.recoverAgent(sshHost, server.host, server.agentToken, server.hostProfile, server.muxRuntime);
-      } catch (recoverErr) {
-        // The restart over SSH is the Unix bootstrap: for a Windows agent it is refused, and that is the reason to show.
-        if (recoverErr instanceof HostProfileError) {
-          return { name: server.name, status: 'error', message: `Agent unreachable: ${(err as Error).message}; ${recoverErr.code}: ${recoverErr.message}` };
-        }
+      } catch {
         // Best-effort: fall through to the health re-check below, which reports the
         // appropriate error status regardless of why recovery failed.
       }
@@ -106,11 +107,13 @@ export class AgentUpdater {
       return { name: server.name, status: 'error', message: 'Cannot determine SSH host for update' };
     }
 
-    const result = await this.installer.update(sshHost, server.host, server.agentToken, server.hostProfile, server.muxRuntime);
+    const host = server.host;
+    const agentToken = server.agentToken;
+    const result = await this.serverLock.withLock(server.name, () => this.installer.update(sshHost, host, agentToken, server.hostProfile, server.muxRuntime));
     if (result.success) {
       this.serverRepo.updateAgentVersion(server.name, result.version);
       // The new agent may be the first to know how to report its host: ask again.
-      return this.withHostRecorded(server, { name: server.name, status: 'updated', currentVersion: result.version }, true);
+      return this.withHostRecorded(server, { name: server.name, status: 'updated', currentVersion: result.version, ...(result.warning ? { message: result.warning } : {}) }, true);
     }
 
     return { name: server.name, status: 'error', currentVersion: remoteVersion, message: result.error };

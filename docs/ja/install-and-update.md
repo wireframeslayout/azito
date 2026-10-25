@@ -479,7 +479,7 @@ Hub 起動時に、登録済みの Agent サーバーすべてのバージョン
 
 ## Windows ホストをエージェントとして追加する
 
-Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。タスク実行は #371、Windows の agent の更新と削除は #372 です（Windows の agent は Setup の行から再導入すると、その場で置き換わります）。
+Servers → Add → Agent で、SSH 経由で Windows ホストを追加できます。agent のあとに、同梱の **misao** も入ります（タスクスケジューラのタスク `AzitoMisao`。詳しくは `misao.md`）。Windows には tmux が無いので、ペインサーバーは misao だけで、新しいサーバーの既定の mux は misao になります。misao だけが失敗しても agent は導入済みのままで、理由が `misaoError` として導入成功と並べて出ます。Windows のペインは cmd.exe で、ワーカー（claude / codex）の起動は #371 です。タスク実行は #371、Windows の agent は、ハブの起動時に版が違えば更新されます。削除は #372 です（Setup の行から再導入すると、その場で置き換わります）。
 
 Windows のエージェントで使える機能と、まだ使えない機能は次のとおりです。ハブはエージェントから OS（`hostProfile`）を受け取り、サーバー一覧とサーバーの概要に表示します。操作ごとに、いまのコードの経路で閉じるかどうかを決めます（判定は `@azito/shared` の `hostFeatureSupport` の 1 つの表で、各行を閉じる経路はコメントに書いてあります）。閉じた入口はフォーカスできる（`aria-disabled`）まま何もせず、理由を文字かツールチップで出し、`aria-describedby` で結び付けます。それでもハブに届いた操作は、理由付きの `unsupported_os`（501）で断られ、UI はその理由をそのまま出します。タスクは、実行先のサーバー（タスク自身のサーバー、無ければプロジェクトの唯一のサーバー。ハブと同じ規則）で判定します。
 
@@ -496,7 +496,8 @@ Windows のエージェントで使える機能と、まだ使えない機能は
 | tmux（既定の mux の選択・tmux の実行方式・tmux 設定の適用・tmux の導入） | 出さない（Windows には tmux が無く、ペインサーバーは misao だけ） | — |
 | AZITO ハーネス（`setup.mjs`）と、その install-status の行 | 使える | — |
 | ブラウザ実行環境（Chromium）の導入 | UI で無効 | #372 |
-| ホスト上の agent の更新・削除 | 使えない（Setup からの再導入でその場で置き換わる） | #372 |
+| ホスト上の agent の更新 | 使える（ハブの起動時に agent の版が違えば、導入と同じ手順（配置、起動、health 確認）で、今の agent のトークンのまま更新する。新しい agent が応答しなければ、前の版・設定・タスクに戻す。misao には触れない。直前の版より古い版は更新のあとに削除する（使用中のものは残し、次の更新で再び試す） | — |
+| ホスト上の agent の削除 | 使えない（手作業で削除する。下記） | #372 |
 
 OS がまだ記録されていないサーバー（OS を記録する前に登録された Unix の agent）は Unix として扱い、何も無効にしません。
 
