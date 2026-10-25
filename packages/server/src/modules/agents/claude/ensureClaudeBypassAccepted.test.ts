@@ -7,7 +7,7 @@ import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import type { HostPlatform } from '../../../shared/os/hostEnv';
 import { LocalFileOps, localFileOpsHost } from '../../../shared/fs/LocalFileOps';
 import { ensureClaudeBypassAccepted, ensureClaudeLegacyBypassAccepted } from './ensureClaudeBypassAccepted';
-import { ensureClaudeTrust } from './ensureClaudeTrust';
+import { claudeProjectKeys, ensureClaudeTrust } from './ensureClaudeTrust';
 import { prepareClaudeLaunch } from './prepareClaudeLaunch';
 
 let fakeHome: string;
@@ -207,6 +207,101 @@ describe('ensureClaudeLegacyBypassAccepted (Claude Code 2.0.x keeps the acceptan
     const transport = transportWithHome(fakeHome);
     await Promise.all([ensureClaudeLegacyBypassAccepted(transport), ensureClaudeTrust(transport, '/wt-a'), ensureClaudeTrust(transport, '/wt-b')]);
     const config = JSON.parse(readFileSync(configPath(), 'utf8'));
+    expect(config.bypassPermissionsModeAccepted).toBe(true);
+    expect(Object.keys(config.projects).length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe('~/.claude.json as a symbolic link (folder trust and the 2.0.x acceptance)', () => {
+  beforeEach(() => {
+    fakeHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-json-link-')));
+  });
+  afterEach(() => {
+    rmSync(fakeHome, { recursive: true, force: true });
+  });
+  const linkPath = (): string => join(fakeHome, '.claude.json');
+  const targetPath = (): string => join(fakeHome, 'dotfiles', 'claude.json');
+  const readTarget = (): { bypassPermissionsModeAccepted?: boolean; projects: Record<string, unknown> } => JSON.parse(readFileSync(targetPath(), 'utf8'));
+
+  // Windows では symlink に権限が要る
+  describe.skipIf(process.platform === 'win32')('with a real link', () => {
+    beforeEach(() => {
+      mkdirSync(join(fakeHome, 'dotfiles'));
+    });
+
+    it('writes both updates through the link and keeps the link, even when they run at once', async () => {
+      writeFileSync(targetPath(), JSON.stringify({ numStartups: 1, projects: {} }));
+      symlinkSync(targetPath(), linkPath());
+      const transport = transportWithHome(fakeHome);
+      const results = await Promise.all([
+        ensureClaudeLegacyBypassAccepted(transport),
+        ensureClaudeTrust(transport, '/wt-a'),
+        ensureClaudeTrust(transport, '/wt-b'),
+      ]);
+      expect(results.map((r) => r.action).sort()).toEqual(['accepted', 'registered', 'registered']);
+      expect(lstatSync(linkPath()).isSymbolicLink()).toBe(true);
+      const config = readTarget();
+      expect(config.bypassPermissionsModeAccepted).toBe(true);
+      expect(Object.keys(config.projects).length).toBeGreaterThanOrEqual(2);
+    });
+
+    it('loses nothing when one home reaches the file by its link and another by its real path, at the same time', async () => {
+      const otherHome = realpathSync.native(mkdtempSync(join(tmpdir(), 'claude-json-link-other-')));
+      try {
+        writeFileSync(join(otherHome, '.claude.json'), JSON.stringify({ projects: {} }));
+        symlinkSync(join(otherHome, '.claude.json'), linkPath());
+        const viaLink = transportWithHome(fakeHome);
+        const viaRealPath = transportWithHome(otherHome);
+        const results = await Promise.all([
+          ensureClaudeLegacyBypassAccepted(viaLink),
+          ensureClaudeTrust(viaRealPath, '/wt-a'),
+          ensureClaudeTrust(viaLink, '/wt-b'),
+          ensureClaudeLegacyBypassAccepted(viaRealPath),
+        ]);
+        expect(results.every((r) => r.action === 'accepted' || r.action === 'registered' || r.action === 'already_accepted')).toBe(true);
+        const config = JSON.parse(readFileSync(join(otherHome, '.claude.json'), 'utf8'));
+        expect(config.bypassPermissionsModeAccepted).toBe(true);
+        expect(Object.keys(config.projects)).toEqual(expect.arrayContaining([...claudeProjectKeys(process.platform === 'win32' ? 'win32' : 'linux', '/wt-a'), ...claudeProjectKeys(process.platform === 'win32' ? 'win32' : 'linux', '/wt-b')]));
+      } finally {
+        rmSync(otherHome, { recursive: true, force: true });
+      }
+    });
+
+    it('treats a dangling link as a missing file', async () => {
+      symlinkSync(targetPath(), linkPath());
+      const transport = transportWithHome(fakeHome);
+      expect(await ensureClaudeLegacyBypassAccepted(transport)).toEqual({ action: 'absent' });
+      expect(await ensureClaudeTrust(transport, '/wt')).toEqual({ action: 'skipped', reason: '~/.claude.json not found' });
+      expect(existsSync(targetPath())).toBe(false);
+      expect(lstatSync(linkPath()).isSymbolicLink()).toBe(true);
+    });
+  });
+
+  /** The real file operations, except that the link's path resolves to the target and the file operations refuse the link's own path (as the host's do). */
+  function transportWithResolvedLink(): { transport: IServerTransport; touched: string[] } {
+    const real = transportWithHome(fakeHome).files();
+    const touched: string[] = [];
+    const guard = (p: string): void => {
+      touched.push(p);
+      if (p === linkPath()) throw new FileOpsError('SYMLINK_REFUSED', 'refused');
+    };
+    const ops = {
+      ...real,
+      platform: real.platform,
+      realpath: async (p: string) => (p === linkPath() ? targetPath() : real.realpath(p)),
+      read: async (p: string) => (guard(p), real.read(p)),
+      write: async (p: string, ...rest: unknown[]) => (guard(p), (real.write as (...a: unknown[]) => Promise<unknown>)(p, ...rest)),
+    } as unknown as IFileOps;
+    return { transport: { files: () => ops } as unknown as IServerTransport, touched };
+  }
+
+  it('reads and writes the resolved path and serialises both updates on it (no symbolic link needed)', async () => {
+    mkdirSync(join(fakeHome, 'dotfiles'));
+    writeFileSync(targetPath(), JSON.stringify({ projects: {} }));
+    const { transport, touched } = transportWithResolvedLink();
+    await Promise.all([ensureClaudeLegacyBypassAccepted(transport), ensureClaudeTrust(transport, '/wt-a'), ensureClaudeTrust(transport, '/wt-b')]);
+    expect(touched).not.toContain(linkPath());
+    const config = readTarget();
     expect(config.bypassPermissionsModeAccepted).toBe(true);
     expect(Object.keys(config.projects).length).toBeGreaterThanOrEqual(2);
   });

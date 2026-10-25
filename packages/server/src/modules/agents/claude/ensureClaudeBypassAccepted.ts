@@ -4,6 +4,7 @@ import { FileOpsError, type IFileOps } from '../../../shared/fs/fileOps';
 import { pathApiFor } from '../../../shared/os/hostPath';
 import { KeyedMutex } from '../../../shared/keyedMutex';
 import { configLocks } from './ensureClaudeTrust';
+import { realpathOrSelf, resolveClaudeConfigPath } from './claudeConfigPath';
 
 /** Two tasks starting at once would each read the same file and the later write would drop the earlier change. */
 const settingsLocks = new KeyedMutex();
@@ -59,18 +60,8 @@ export async function ensureClaudeBypassAccepted(transport: IServerTransport): P
  */
 export async function ensureClaudeLegacyBypassAccepted(transport: IServerTransport): Promise<EnsureClaudeBypassAcceptedResult> {
   const ops = transport.files();
-  const configPath = pathApiFor(ops.platform).join(await ops.realpath('~'), '.claude.json');
+  const configPath = await resolveClaudeConfigPath(ops);
   return configLocks.withLock(configPath, () => setTrueKey(ops, configPath, LEGACY_ACCEPTED_KEY, '~/.claude.json', null));
-}
-
-/** The file's real path, or the path itself when nothing is there (or the link dangles). */
-async function realpathOrSelf(ops: IFileOps, filePath: string): Promise<string> {
-  try {
-    return await ops.realpath(filePath);
-  } catch (err) {
-    if (err instanceof FileOpsError && err.code === 'NOT_FOUND') return filePath;
-    throw err;
-  }
 }
 
 /** `create`: where a missing file is made (its directory is created too); null: a missing file is skipped. */
