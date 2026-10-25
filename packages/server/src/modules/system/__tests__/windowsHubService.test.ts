@@ -58,7 +58,7 @@ describe('buildHubLauncherScript', () => {
     expect(script).toContain("$hubRoot = 'C:\\Users\\Foo Bar (Work)\\.azito\\hub'");
     expect(script).toContain('$pointer = "$hubRoot\\current.txt"');
     expect(script).toContain("-notmatch '^v?[0-9]+\\.[0-9]+\\.[0-9]+([-+.][0-9A-Za-z.-]+)?$'");
-    expect(script).toContain('& $run -Service -LogFile $logFile');
+    expect(script).toContain('& $run -Service -LogFile $logFile -FollowPid $parentId -FollowStart $parentFt');
     expect(script).toContain('AppendAllText($logFile');
   });
 
@@ -66,7 +66,7 @@ describe('buildHubLauncherScript', () => {
     const loop = script.slice(script.indexOf('while ($true) {'));
     expect(loop.startsWith('while ($true) {\n  Stop-IfEnded')).toBe(true);
     expect(loop).toContain('ReadAllText($pointer)');
-    expect(loop).toContain('& $run -Service -LogFile $logFile');
+    expect(loop).toContain('& $run -Service -LogFile $logFile -FollowPid $parentId -FollowStart $parentFt');
   });
 
   it('does not start the hub again after exit code 0 or after the task was ended', () => {
@@ -99,7 +99,7 @@ describe('buildHubLauncherScript', () => {
 
 describe('the launcher in the task\'s command line', () => {
   it('fits the 8191 characters a command line can have, for a long prefix too', () => {
-    const prefix = `C:\\Users\\${'a'.repeat(100)}\\${'b'.repeat(60)}\\.azito`;
+    const prefix = `C:\\Users\\${'a'.repeat(90)}\\${'b'.repeat(40)}\\.azito`;
     const xml = buildHubTaskXml({ userId: 'PC\\me', systemRoot: 'C:\\Windows', layout: hubWindowsLayout(prefix) });
     const line = /<Command>([^<]*)<\/Command>\s*<Arguments>([^<]*)<\/Arguments>/.exec(xml);
     expect(line).not.toBeNull();

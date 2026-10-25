@@ -180,6 +180,7 @@ export class AgentRecoveryWatchdog {
       this.deps.logger.warn(`${server.name}: could not bring the ${what} back: ${describe(err)}`);
     }
     if (waits.get(server.name) !== wait) return; // reset while waiting for the lock
+    if (outcome === 'busy') return; // another operation holds the misao folder: not an attempt, looked at again next tick
     if (outcome !== undefined) this.report(server.name, what, outcome, wait.attempts + 1);
     waits.set(server.name, afterAttempt(wait, this.deps.now(), this.timing));
   }

@@ -13,7 +13,7 @@ import { MisaoServiceError } from './MisaoServiceError';
 import { renderMisaoUnit } from './misaoUnit';
 import { taskStartsMisaoOf, type LocalMisaoWindows } from './misaoLocalWindows';
 import { isManagedMisaoDown } from './MisaoWindowsInstaller';
-import { ProcessLockBusyError } from '../../../shared/processLock';
+import { underMisaoRootLock } from './misaoRootLock';
 
 export interface MisaoServiceDeps {
   /** Null when this hub is not a release install (no prefix): a source checkout never installs a service. */
@@ -417,7 +417,7 @@ export class MisaoServiceService {
 
   /**
    * One install / start / update at a time: two of them interleaving could stop a daemon the other just started. In this process by
-   * a flag; on Windows also across processes by the lock file of `LocalMisaoWindows.operationLock`, because `azito misao ...` runs in
+   * a flag; on Windows also across processes by the named-pipe lock of `LocalMisaoWindows.operationLock`, because `azito misao ...` runs in
    * its own process beside the hub (whose Setup row, API and watchdog share this instance). Nothing waits: a taken slot is `busy`.
    * Unix is not locked across processes (systemd / launchd are driven by the CLI and the hub as before, and nothing there starts the
    * service on its own, so no watchdog contends for it).
@@ -427,10 +427,9 @@ export class MisaoServiceService {
     this.busy = true;
     try {
       const lock = this.deps.windows?.operationLock;
-      return await (lock ? lock.run(operation) : operation());
+      return await (lock ? underMisaoRootLock(lock, operation) : operation());
     } catch (err) {
       if (err instanceof DuplicateLoadError) throw new MisaoServiceError('duplicate_load', err.message);
-      if (err instanceof ProcessLockBusyError) throw new MisaoServiceError('busy', `Another process${err.owner ? ` (${err.owner.pid})` : ''} is running a misao operation (${err.file}). Try again when it has finished; if no such process exists, delete that file.`);
       throw err;
     } finally {
       this.busy = false;

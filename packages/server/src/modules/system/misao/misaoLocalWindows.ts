@@ -10,8 +10,8 @@ import { MisaoWindowsInstaller, type WindowsTarget } from './MisaoWindowsInstall
 import { MISAO_SERVICE, type MisaoPaths } from './misaoPaths';
 import { taskMisaoRoot } from './misaoWindowsTask';
 import { resolveRealPath } from '../../../shared/os/realPath';
-import { ProcessLock } from '../../../shared/processLock';
-import { processExists, readWindowsProcessCreation } from '../../../agent/parentWatch';
+import type { ProcessLock } from '../../../shared/processLock';
+import { createMisaoRootLock } from './misaoRootLock';
 
 /**
  * The hub's own misao on Windows: the very installer an agent server gets (`MisaoWindowsInstaller`), pointed at this machine.
@@ -26,8 +26,9 @@ export interface LocalMisaoWindows {
   tasks: SchtasksClient;
   taskName: string;
   /**
-   * One misao operation at a time across processes: the hub (Setup, the API, `LocalMisaoWatchdog`) and `azito misao install|start|update` run in
-   * different processes, so the in-process flag of `MisaoServiceService` cannot keep them apart. A file under the misao folder, see `ProcessLock`.
+   * One misao operation at a time across processes: the hub (Setup, the API, `LocalMisaoWatchdog`), `azito misao install|start|update` and a
+   * Windows agent on this machine run in different processes, so the in-process flag of `MisaoServiceService` cannot keep them apart. A named
+   * pipe made from the misao folder, held while the operation runs (the OS frees it when the holder dies), see `misaoRootLock.ts`.
    */
   operationLock: ProcessLock;
 }
@@ -67,11 +68,7 @@ export function createLocalMisaoWindows(hostEnv: LocalWindowsHostEnv, paths: Mis
     target,
     tasks: new SchtasksClient(rawRunnerOf((command) => runCommandSpec(command, { ...runHost, rawOutput: true })), hostEnv),
     taskName: MISAO_SERVICE.windowsTaskName,
-    operationLock: new ProcessLock(path.win32.join(paths.root, '.operation.lock'), {
-      pid: process.pid,
-      exists: processExists,
-      readStart: (pid) => readWindowsProcessCreation(hostEnv.systemRoot!, pid),
-    }),
+    operationLock: createMisaoRootLock(paths.root),
   };
 }
 

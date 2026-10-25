@@ -37,9 +37,8 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
   let update: ReturnType<typeof vi.fn>;
   let controller: ServiceManager;
   let controllerInstall: ReturnType<typeof vi.fn>;
-  /** The processes of the fake host: id -> start time. This one is 100; the CLI is 200. */
-  let processes: Map<number, string>;
-  const lockFor = (pid: number): ProcessLock => new ProcessLock(path.join(paths.root, '.operation.lock'), { pid, exists: (p) => processes.has(p), readStart: async (p) => processes.get(p) ?? null });
+  /** The slot of this folder (a named pipe on Windows, a socket path elsewhere), as taken by this hub (pid 100) or by the CLI (pid 200). */
+  const lockFor = (pid: number): ProcessLock => new ProcessLock(process.platform === 'win32' ? `\\\\.\\pipe\\azito-lock-test-${path.basename(dir)}` : path.join(dir, 'l.sock'), pid);
 
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'azw-'));
@@ -47,7 +46,6 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
     paths = { prefix: dir, root, current: path.join(root, 'current'), socket: PIPE, log: path.join(root, 'misao.log'), hubEnvFile: path.join(dir, 'hub', '.env') };
     fs.mkdirSync(path.join(dir, 'hub'), { recursive: true });
     fs.mkdirSync(root, { recursive: true });
-    processes = new Map([[100, 'hub'], [200, 'cli']]);
     taskExists = false;
     exportedXml = taskXml(root);
     install = vi.fn(async () => RESULT);
@@ -222,10 +220,7 @@ describe('MisaoServiceService on Windows (the hub\'s own misao)', () => {
       expect(during).toBe('busy');
       expect(revive).not.toHaveBeenCalled();
       expect(update).not.toHaveBeenCalled();
-      // The slot is free again once the other process is done (and a dead holder does not keep it).
-      expect(await service().reviveWindowsDaemon(false)).toBe('started');
-      await cli.run(async () => undefined);
-      fs.writeFileSync(path.join(paths.root, '.operation.lock'), JSON.stringify({ pid: 300, started: 'gone' }));
+      // The slot is free again once the other process is done.
       expect(await service().reviveWindowsDaemon(false)).toBe('started');
     });
 

@@ -27,7 +27,7 @@ function installFakeRun(exitCodes: number[]): void {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(layout.pointer, 'v0.0.1\r\n');
   fs.writeFileSync(path.join(dir, 'run.ps1'), [
-    'param([switch]$Service, [string]$LogFile = \'\')',
+    'param([switch]$Service, [string]$LogFile = \'\', [int]$FollowPid = 0, [long]$FollowStart = 0)',
     `$counter = '${counter.replace(/'/g, "''")}'`,
     '$n = 0; if (Test-Path -LiteralPath $counter) { $n = [int](Get-Content -LiteralPath $counter) }',
     '$n++; Set-Content -LiteralPath $counter -Value $n',

@@ -1,126 +1,80 @@
-import * as fs from 'fs';
-import * as path from 'path';
+import { createHash } from 'crypto';
+import net from 'net';
+import path from 'path';
 
-/** Who holds a lock: the process id AND when that process started (an id can be handed to another process once it has ended). */
-export interface ProcessLockOwner {
-  pid: number;
-  started: string;
-}
-
-/** What the lock needs to know about processes; the host supplies it (on Windows: `agent/parentWatch`). */
-export interface ProcessLockHost {
-  /** This process's id. */
-  pid: number;
-  /** Whether a process with this id exists. */
-  exists(pid: number): boolean;
-  /** When a process started, as a string that is the same every time it is read for the same process; null when it cannot be read (no such process, no answer). */
-  readStart(pid: number): Promise<string | null>;
-}
-
-/** Another process holds the lock. */
+/** Another process (or another holder in this one) has the lock. */
 export class ProcessLockBusyError extends Error {
-  constructor(readonly file: string, readonly owner: ProcessLockOwner | undefined) {
-    super(owner ? `${file} is held by process ${owner.pid}` : `${file} is held by another process`);
+  constructor(readonly endpoint: string, readonly ownerPid: number | undefined) {
+    super(`${endpoint} is held${ownerPid !== undefined ? ` by process ${ownerPid}` : ' by another process'}`);
     this.name = 'ProcessLockBusyError';
   }
 }
 
-/** A lock that is half-written for longer than this was left by a process that died while writing it. */
-const UNREADABLE_STALE_MS = 10_000;
+/** How long a refused taker waits to hear who holds the lock (only to name it in the refusal). */
+const OWNER_PROBE_MS = 1000;
 
 /**
- * One-at-a-time across processes, by a file: created exclusively (`wx`) with the owner's process id and start time. A file whose owner
- * is not running any more (no such process, or a process of that id that started at another time) is a stale lock and is taken over;
- * a lock is always released (only if the file still names this process). Not queued: when it is held, {@link run} throws
- * {@link ProcessLockBusyError} at once, and the caller says so or looks again later.
- *
- * Two processes that both find the same stale file can still race on removing it; the loser's exclusive create then fails and it
- * reports busy, which is the safe side. A process that is killed leaves its file until the next taker finds it stale.
+ * One-at-a-time across processes, by an endpoint only one server can listen on: the lock is held for as long as a `net` server
+ * listens on it (a Windows named pipe `\\.\pipe\...`; a unix socket path serves the tests on other OSes). The OS releases it when the
+ * holder dies, however it dies, so there is no stale lock to judge or take over and nothing for two takers to race on: `listen` either
+ * succeeds (EADDRINUSE otherwise) for exactly one of them. Not queued: when it is held, {@link run} throws {@link ProcessLockBusyError}
+ * at once. A holder answers a connection with its process id, which the refusal names.
  */
 export class ProcessLock {
-  private selfStart: string | undefined;
-
-  constructor(private readonly file: string, private readonly host: ProcessLockHost) {}
+  constructor(private readonly endpoint: string, private readonly pid: number = process.pid) {}
 
   async run<T>(operation: () => Promise<T>): Promise<T> {
-    const self = await this.self();
-    await this.acquire(self);
+    const server = await this.acquire();
     try {
       return await operation();
     } finally {
-      this.release(self);
+      await new Promise<void>((resolve) => { server.close(() => resolve()); });
     }
   }
 
-  private async self(): Promise<ProcessLockOwner> {
-    this.selfStart ??= (await this.host.readStart(this.host.pid)) ?? undefined;
-    if (this.selfStart === undefined) throw new Error(`Cannot tell when this process (${this.host.pid}) started, so it cannot take ${this.file}`);
-    return { pid: this.host.pid, started: this.selfStart };
+  private acquire(): Promise<net.Server> {
+    return new Promise<net.Server>((resolve, reject) => {
+      const server = net.createServer((socket) => {
+        socket.on('error', () => undefined); // a probe that went away
+        socket.end(String(this.pid));
+      });
+      server.once('error', (err: NodeJS.ErrnoException) => {
+        if (err.code !== 'EADDRINUSE') {
+          reject(err);
+          return;
+        }
+        this.readOwner().then((owner) => reject(new ProcessLockBusyError(this.endpoint, owner)), reject);
+      });
+      server.listen(this.endpoint, () => {
+        server.removeAllListeners('error');
+        server.on('error', () => undefined); // after listening, nothing here can fail an operation that already runs
+        resolve(server);
+      });
+    });
   }
 
-  private async acquire(self: ProcessLockOwner): Promise<void> {
-    fs.mkdirSync(path.dirname(this.file), { recursive: true });
-    if (this.tryCreate(self)) return;
-    const held = this.read();
-    if (held.state === 'owned' && (await this.isRunning(held.owner))) throw new ProcessLockBusyError(this.file, held.owner);
-    if (held.state === 'unreadable' && !held.stale) throw new ProcessLockBusyError(this.file, undefined);
-    if (held.state === 'gone') {
-      if (this.tryCreate(self)) return;
-      throw new ProcessLockBusyError(this.file, undefined);
-    }
-    // Stale: its owner is gone. Taken over only if it is still the file that was judged.
-    const again = this.read();
-    if (again.state === 'owned' && held.state === 'owned' && (again.owner.pid !== held.owner.pid || again.owner.started !== held.owner.started)) {
-      throw new ProcessLockBusyError(this.file, again.owner);
-    }
-    fs.rmSync(this.file, { force: true });
-    if (!this.tryCreate(self)) throw new ProcessLockBusyError(this.file, undefined);
+  private readOwner(): Promise<number | undefined> {
+    return new Promise((resolve) => {
+      const socket = net.connect(this.endpoint);
+      let text = '';
+      const done = (): void => {
+        socket.destroy();
+        clearTimeout(timer);
+        resolve(/^\d+$/.test(text) ? Number(text) : undefined);
+      };
+      const timer = setTimeout(done, OWNER_PROBE_MS);
+      socket.on('data', (chunk) => { text += chunk.toString('utf-8'); });
+      socket.on('end', done);
+      socket.on('error', done);
+    });
   }
+}
 
-  private tryCreate(self: ProcessLockOwner): boolean {
-    let fd: number;
-    try {
-      fd = fs.openSync(this.file, 'wx', 0o600);
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
-      throw err;
-    }
-    try {
-      fs.writeFileSync(fd, JSON.stringify(self));
-    } finally {
-      fs.closeSync(fd);
-    }
-    return true;
-  }
-
-  private read(): { state: 'owned'; owner: ProcessLockOwner } | { state: 'unreadable'; stale: boolean } | { state: 'gone' } {
-    let text: string;
-    let mtimeMs: number;
-    try {
-      text = fs.readFileSync(this.file, 'utf-8');
-      mtimeMs = fs.statSync(this.file).mtimeMs;
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { state: 'gone' };
-      throw err;
-    }
-    try {
-      const parsed = JSON.parse(text) as Partial<ProcessLockOwner>;
-      if (typeof parsed.pid === 'number' && typeof parsed.started === 'string') return { state: 'owned', owner: { pid: parsed.pid, started: parsed.started } };
-    } catch {
-      // not JSON: unreadable, below
-    }
-    return { state: 'unreadable', stale: Date.now() - mtimeMs > UNREADABLE_STALE_MS };
-  }
-
-  private async isRunning(owner: ProcessLockOwner): Promise<boolean> {
-    if (!this.host.exists(owner.pid)) return false;
-    // A running process whose start cannot be read is taken for the owner: a lock is never taken over on a guess.
-    const start = await this.host.readStart(owner.pid);
-    return start === null || start === owner.started;
-  }
-
-  private release(self: ProcessLockOwner): void {
-    const held = this.read();
-    if (held.state === 'owned' && held.owner.pid === self.pid && held.owner.started === self.started) fs.rmSync(this.file, { force: true });
-  }
+/**
+ * The lock endpoint of one misao folder: `\\.\pipe\azito-lock-<hash of the folder, lower-cased and normalised>`. The same folder gives the
+ * same name whoever asks (the hub, `azito misao ...`, an agent install the hub runs for the same folder), whatever its letter case.
+ */
+export function misaoRootLockEndpoint(root: string): string {
+  const normalised = path.win32.normalize(root).replace(/[\\/]+$/, '').toLowerCase();
+  return `\\\\.\\pipe\\azito-lock-${createHash('sha256').update(normalised).digest('hex').slice(0, 16)}`;
 }

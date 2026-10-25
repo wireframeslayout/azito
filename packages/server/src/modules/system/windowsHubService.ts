@@ -91,13 +91,13 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     '  } catch { }',
     '}',
     // The conhost.exe this runs under: once it is gone the task was ended, and no hub is started for nobody.
-    '$parentId = $null',
     'try {',
     '  $parentId = (Get-CimInstance Win32_Process -Filter "ProcessId = $PID").ParentProcessId',
     '  $parentStart = (Get-Process -Id $parentId).StartTime',
-    '} catch { Log "no parent to follow: $($_.Exception.Message)"; $parentId = $null }',
+    '} catch { Log "no parent to follow, so no hub is started: $($_.Exception.Message)"; exit 1 }',
+    // run.ps1 is given the same process (id and start time) and starts no hub unless it is still running: an End in between must not leave one nobody follows.
+    '$parentFt = $parentStart.ToFileTimeUtc()',
     'function Stop-IfEnded {',
-    '  if (-not $parentId) { return }',
     '  $p = Get-Process -Id $parentId -ErrorAction SilentlyContinue',
     '  if (-not $p -or $p.StartTime -ne $parentStart) { Log \'task ended: not restarting\'; exit 0 }',
     '}',
@@ -107,9 +107,9 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     '  try {',
     '    $json = [pscustomobject]@{ startedAt = $started; restarts = $restarts; lastExitCode = $code; lastExitAt = $at; nextWaitSeconds = $wait } | ConvertTo-Json -Compress',
     '    New-Item -ItemType Directory -Force -Path $logDir | Out-Null',
-    // Written beside and moved over, so `azito status` never reads half a file.
+    // Written beside and swapped in (Replace is one operation; Move for the first one, in the same folder), so `azito status` never reads half a file or none.
     '    [IO.File]::WriteAllText("$stateFile.tmp", $json, (New-Object Text.UTF8Encoding($false)))',
-    '    Move-Item -LiteralPath "$stateFile.tmp" -Destination $stateFile -Force',
+    '    if (Test-Path -LiteralPath $stateFile) { [IO.File]::Replace("$stateFile.tmp", $stateFile, $null) } else { [IO.File]::Move("$stateFile.tmp", $stateFile) }',
     '  } catch { Log "cannot write ${stateFile}: $($_.Exception.Message)" }',
     '}',
     'Save-State $null $null 0',
@@ -123,7 +123,7 @@ export function buildHubLauncherScript(layout: HubWindowsLayout, timing: HubRest
     `    if ($version -notmatch ${q(VERSION_PATTERN)}) { throw "$pointer is not a version (it holds '$version')" }`,
     "    $run = Join-Path (Join-Path $hubRoot $version) 'run.ps1'",
     '    if (-not (Test-Path -LiteralPath $run -PathType Leaf)) { throw "$run does not exist (not installed)" }',
-    '    & $run -Service -LogFile $logFile',
+    '    & $run -Service -LogFile $logFile -FollowPid $parentId -FollowStart $parentFt',
     '    $code = $LASTEXITCODE',
     '  } catch { Log $_.Exception.Message }',
     '  if ($code -eq 0) { Log "run.ps1 ($version) exited with code 0: done"; exit 0 }',

@@ -55,6 +55,8 @@ import { AgentInstaller } from '../modules/servers/agent-deploy/AgentInstaller';
 import { resolveWindowsAgentOptions, type WindowsAgentOptions } from '../modules/servers/agent-deploy/windowsAgentConfig';
 import { AgentUpdater } from '../modules/servers/agent-deploy/AgentUpdater';
 import { AgentRecoveryWatchdog } from '../modules/servers/agent-deploy/AgentRecoveryWatchdog';
+import { createMisaoRootLock } from '../modules/system/misao/misaoRootLock';
+import type { ProcessLock } from '../shared/processLock';
 import { LocalMisaoWatchdog } from '../modules/system/misao/LocalMisaoWatchdog';
 import { HostProfileError, resolveHubHostProfile, type HostProfile, type HubHostProfile } from '../shared/os/hostProfile';
 import { registerTmuxDriver } from '../modules/tmux/registerTmuxDriver';
@@ -263,7 +265,7 @@ export interface Wiring extends SharedInfra, Repositories, PushNotificationModul
 
 function buildSharedInfra(agentBundler: AgentBundler, publicUrl: string, localUrl: string, dataPaths: DataPaths, uiToken: string, webhookToken: string, scopedAuthEnabled: boolean, misaoRuntime: MisaoRuntime, hostEnv: HostEnv, hubHost: HubHostProfile, windowsAgent: WindowsAgentOptions, findServer: (name: string) => ServerConfig | null, db?: SqliteDatabase, fingerprintStore?: FingerprintStore, auditLogService?: AuditLogService): SharedInfra {
   const sshClient = new SshClient(resolveSshClientEnv(hostEnv, process.env), fingerprintStore);
-  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName });
+  const misaoAgentInstaller = new MisaoAgentInstaller(readMisaoBundle(getBundleRoot()), { windowsTaskName: windowsAgent.misaoTaskName, ...optionalLocalMisao(localWindowsMisaoRoot(hostEnv)) });
   // A hub with no bundled misao installs agents without it (instead of reporting a failed misao step on every install).
   const agentInstaller = new AgentInstaller(sshClient, agentBundler, windowsAgent, misaoAgentInstaller.bundledVersion !== undefined ? misaoAgentInstaller : undefined);
   const harnessInstaller = new HarnessInstaller(sshClient);
@@ -592,6 +594,22 @@ function buildExecuteTaskUseCase(
     harnessPrefix,
     hubGitIdentity,
   );
+}
+
+/** The folder of this hub's own Windows misao, or undefined where it is not one (the reason a prefix is unusable is reported by buildMisaoService). */
+function localWindowsMisaoRoot(hostEnv: HostEnv): string | undefined {
+  const windowsUser = misaoWindowsUserOf(hostEnv.platform);
+  const prefix = resolveInstallPrefix(getBundleRoot());
+  if (!windowsUser || !prefix) return undefined;
+  try {
+    return resolveMisaoPaths(prefix, windowsUser).root;
+  } catch {
+    return undefined;
+  }
+}
+
+function optionalLocalMisao(root: string | undefined): { localMisao?: { root: string; lock: ProcessLock } } {
+  return root === undefined ? {} : { localMisao: { root, lock: createMisaoRootLock(root) } };
 }
 
 function buildMisaoService(misao: MisaoHandle, hostEnv: HostEnv, secretFileGuard: SecretFileGuard): MisaoServiceService {

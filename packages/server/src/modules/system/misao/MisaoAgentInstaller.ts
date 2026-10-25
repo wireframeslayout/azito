@@ -10,6 +10,8 @@ import { MISAO_SYSTEMD_UNIT } from './misaoPaths';
 import { assertPosixHost, HostProfileError, pathDelimiterFor, type HostProfile } from '../../../shared/os/hostProfile';
 import { renderMisaoUnit } from './misaoUnit';
 import { MisaoWindowsInstaller } from './MisaoWindowsInstaller';
+import { underMisaoRootLock } from './misaoRootLock';
+import type { ProcessLock } from '../../../shared/processLock';
 import type { MisaoAgentInstallResult, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
 
 export type { MisaoAgentInstallResult, MisaoAgentStartMethod, MisaoInstallStep, MisaoInstallTarget } from './misaoInstallTypes';
@@ -23,6 +25,12 @@ export interface MisaoAgentInstallerOptions {
   windowsTaskName?: string;
   /** How long a stopped Windows daemon's task gets to leave the running state before it is ended. */
   taskIdleTimeoutMs?: number;
+  /**
+   * The hub's own Windows misao folder and its slot (undefined where the hub's misao is not a Windows task). A Windows agent that reports the very same
+   * folder is on this machine, as this user, and shares that daemon: its install / update / revive then take the same cross-process slot as
+   * the hub's own operations (`misaoRootLock.ts`) instead of only the per-server mutex. Compared by the folder's name alone.
+   */
+  localMisao?: { root: string; lock: ProcessLock };
 }
 
 const DEFAULT_READY_TIMEOUT_MS = 15_000;
@@ -64,6 +72,11 @@ function assertSafePath(value: string, label: string): void {
   }
 }
 
+function sameWindowsPath(a: string, b: string): boolean {
+  const norm = (value: string): string => path.win32.normalize(value).replace(/[\\/]+$/, '').toLowerCase();
+  return norm(a) === norm(b);
+}
+
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -99,14 +112,38 @@ export class MisaoAgentInstaller {
   }
 
   /** A Windows agent's misao daemon died: see {@link MisaoWindowsInstaller.reviveDaemon}. Only Windows agents have this problem (a Unix daemon is a systemd unit with `Restart=`). */
-  async reviveWindowsDaemon(target: MisaoInstallTarget, force: boolean): ReturnType<MisaoWindowsInstaller['reviveDaemon']> {
+  async reviveWindowsDaemon(target: MisaoInstallTarget, force: boolean): Promise<Awaited<ReturnType<MisaoWindowsInstaller['reviveDaemon']>> | 'busy'> {
     if (target.hostProfile?.platform !== 'win32') throw new MisaoServiceError('unsupported_host', 'Only a Windows agent\'s misao daemon is started again by the hub.');
-    return this.windows().reviveDaemon(target, force);
+    try {
+      return await this.underSharedRoot(target, () => this.windows().reviveDaemon(target, force));
+    } catch (err) {
+      if (err instanceof MisaoServiceError && err.code === 'busy') return 'busy';
+      throw err;
+    }
+  }
+
+  /**
+   * Runs a change to a Windows agent's misao. When the agent's folder is the hub's own (same machine, same user, same daemon), it holds the
+   * folder's cross-process slot meanwhile, so the hub's watchdog, `azito misao ...` and the Setup row cannot touch the daemon in the middle
+   * of it. Any other folder is only covered by the per-server mutex of the caller, as before. The match is by the folder's name: another
+   * machine whose agent reports the same path (the same user name and prefix) is serialised with it needlessly, never wrongly let through.
+   */
+  private async underSharedRoot<T>(target: MisaoInstallTarget, operation: () => Promise<T>): Promise<T> {
+    const local = this.options.localMisao;
+    if (local === undefined) return operation();
+    let reported: string | undefined;
+    try {
+      reported = (await target.fetchMisaoStatus()).host.windows?.misaoRoot;
+    } catch {
+      return operation(); // an agent that cannot say gets the refusal the operation itself gives
+    }
+    if (reported === undefined || !sameWindowsPath(reported, local.root)) return operation();
+    return underMisaoRootLock(local.lock, operation);
   }
 
   async install(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
     const bundle = this.requireBundle();
-    if (target.hostProfile?.platform === 'win32') return this.windows().install(target, bundle, onProgress);
+    if (target.hostProfile?.platform === 'win32') return this.underSharedRoot(target, () => this.windows().install(target, bundle, onProgress));
     this.assertSupported(target);
 
     onProgress('inspect');
@@ -152,7 +189,7 @@ export class MisaoAgentInstaller {
    */
   async update(target: MisaoInstallTarget, onProgress: (step: MisaoInstallStep) => void = () => undefined): Promise<MisaoAgentInstallResult> {
     const bundle = this.requireBundle();
-    if (target.hostProfile?.platform === 'win32') return this.windows().update(target, bundle, onProgress);
+    if (target.hostProfile?.platform === 'win32') return this.underSharedRoot(target, () => this.windows().update(target, bundle, onProgress));
     this.assertSupported(target);
 
     onProgress('inspect');
