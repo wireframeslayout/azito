@@ -423,6 +423,14 @@ describe('uninstallWindowsAgent', () => {
       expect(host.ran('Looking for processes still running from the misao folder')).toBe(true);
     });
 
+    it('tells how to stop a daemon that outlived its task: its own stop through the pipe of the task, from the release the task runs', async () => {
+      const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
+      host.answers['Looking for processes still running from the misao folder'] = `LEFT|7|misao.exe|${MISAO_ROOT}\\0.3.0\\misao.exe`;
+      const text = detail(await run(host, true), 'misaoProcesses');
+      expect(text).toContain('Ending the task does not end a misao daemon');
+      expect(text).toContain(`$env:MISAO_SOCKET = '${windowsMisaoPipe(MISAO_ROOT, 'dev')}'; & '${MISAO_ROOT}\\0.3.0\\misao.exe' stop`);
+    });
+
     it('keeps the misao folder, and says which process is left, when the daemon did not go', async () => {
       const host = new FakeUninstallHost({ AzitoMisao: { xml: MISAO_XML } });
       host.answers['Looking for processes still running from the misao folder'] = `LEFT|7|misao.exe|${MISAO_ROOT}\\0.3.0\\misao.exe`;

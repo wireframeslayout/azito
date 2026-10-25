@@ -173,7 +173,7 @@ export function leftoverProcessesScript(root: string, home: string): string {
   ].join('\n');
 }
 
-export function parseLeftoverOutput(output: string, root: string): ScriptOutcome {
+export function parseLeftoverOutput(output: string, root: string, advice = ''): ScriptOutcome {
   const all = lines(output);
   if (all.length === 1 && all[0] === 'CLEAR') return { outcome: 'absent' };
   const hidden = all.filter((l) => l.startsWith('HIDDEN|')).map((l) => {
@@ -196,7 +196,7 @@ export function parseLeftoverOutput(output: string, root: string): ScriptOutcome
   const parts: string[] = [];
   if (left.length > 0) {
     const listed = left.map((p) => `${p.name} (process ${p.pid}${p.exe ? `, ${p.exe}` : ''})`).join('; ');
-    parts.push(`The task was ended, but ${left.length === 1 ? 'a process is' : `${left.length} processes are`} still running from ${root}: ${listed}. AZITO does not stop ${left.length === 1 ? 'it' : 'them'}: check what ${left.length === 1 ? 'it is' : 'they are'} and stop ${left.length === 1 ? 'it' : 'them'} yourself (Stop-Process -Id <pid>).`);
+    parts.push(`The task was ended, but ${left.length === 1 ? 'a process is' : `${left.length} processes are`} still running from ${root}: ${listed}. AZITO does not stop ${left.length === 1 ? 'it' : 'them'}: check what ${left.length === 1 ? 'it is' : 'they are'} and stop ${left.length === 1 ? 'it' : 'them'} yourself (Stop-Process -Id <pid>).${advice === '' ? '' : ` ${advice}`}`);
   }
   if (blind.length > 0) {
     const listed = blind.map((p) => `${p.name} (process ${p.pid})`).join('; ');

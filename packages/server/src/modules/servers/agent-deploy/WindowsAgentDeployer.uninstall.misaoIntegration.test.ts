@@ -184,22 +184,35 @@ describe.skipIf(process.platform !== 'win32' || !fs.existsSync(MISAO_CLI))('remo
     if (problems.length > 0) throw new Error(`The test could not clean up after itself:\n${problems.join('\n')}`);
   }, 120_000);
 
-  it('stops the daemon of the folder (process gone, pipe closed), removes its task and folder, and leaves a daemon of another folder running', async (ctx) => {
+  it('ending the task does not end the daemon: the removal says which processes are left and how to stop the daemon; once it is stopped the same removal goes through, and a daemon of another folder is never touched', async (ctx) => {
     if (noLogonSession !== undefined) ctx.skip(noLogonSession);
     expect((await daemonPids(misaoRoot)).length).toBeGreaterThan(0);
     expect(await pipeUp(pipeOf(misaoRoot))).toBe(true);
 
     const seen = await describeDaemons(misaoRoot);
-    const result = await deployer.uninstall('ci', host, { removeMisao: true });
+    const first = await deployer.uninstall('ci', host, { removeMisao: true });
+    const stepOf = (result: typeof first, id: string) => result.steps.find((s) => s.id === id);
+    const context = `${JSON.stringify(first.steps)}\nthe daemon as the host saw it: ${seen}`;
 
-    const step = (id: string): string | undefined => result.steps.find((s) => s.id === id)?.outcome;
-    expect([step('misaoTask'), step('misaoProcesses'), step('misaoFolder')], `${JSON.stringify(result.steps)}\nthe daemon as the host saw it: ${seen}`).toEqual(['done', 'absent', 'done']);
-    expect(await daemonPids(misaoRoot)).toEqual([]);
-    await waitFor('the pipe to close', async () => !(await pipeUp(pipeOf(misaoRoot))), 15_000);
+    // The Task Scheduler's /End leaves the daemon (and the cmd.exe it runs under) running; AZITO does not stop it, and says so.
+    expect(stepOf(first, 'misaoTask')?.outcome, context).toBe('done');
+    expect(stepOf(first, 'misaoProcesses')?.outcome, context).toBe('failed');
+    expect(stepOf(first, 'misaoProcesses')?.detail, context).toContain('misao.exe');
+    expect(stepOf(first, 'misaoProcesses')?.detail, context).toContain(`& '${path.win32.join(misaoRoot, VERSION, 'misao.exe')}' stop`);
+    expect(stepOf(first, 'misaoFolder')?.outcome, context).toBe('skipped');
+    expect(fs.existsSync(misaoRoot)).toBe(true);
     expect((await schtasks(['/Query', '/TN', OPTIONS.misaoTaskName])).code).not.toBe(0);
+    expect(await pipeUp(pipeOf(misaoRoot))).toBe(true);
+
+    // The person stops the daemon the way the message says (the daemon's own stop through its pipe); the same removal then goes through.
+    await new Promise<void>((resolve) => execFile(path.win32.join(misaoRoot, VERSION, 'misao.exe'), ['stop'], { env: { ...process.env, MISAO_SOCKET: pipeOf(misaoRoot) }, windowsHide: true, timeout: 30_000 }, () => resolve()));
+    await waitFor('the daemon to go', async () => (await daemonPids(misaoRoot)).length === 0, 30_000);
+    await waitFor('the pipe to close', async () => !(await pipeUp(pipeOf(misaoRoot))), 15_000);
+    const second = await deployer.uninstall('ci', host, { removeMisao: true });
+    expect([stepOf(second, 'misaoTask')?.outcome, stepOf(second, 'misaoProcesses')?.outcome, stepOf(second, 'misaoFolder')?.outcome], JSON.stringify(second.steps)).toEqual(['absent', 'absent', 'done']);
     expect(fs.existsSync(misaoRoot)).toBe(false);
 
-    // The other folder's daemon was not touched.
+    // The other folder's daemon was not touched, by either run.
     expect(await daemonPids(otherRoot)).toContain(otherPid);
     expect(await pipeUp(pipeOf(otherRoot))).toBe(true);
     expect(fs.existsSync(otherRoot)).toBe(true);

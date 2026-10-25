@@ -2,6 +2,7 @@ import * as path from 'path';
 import type { SchtasksClient } from '../../../shared/os/taskScheduler/schtasks';
 import { hubRootOfScript, soleExecAction, taskExecActions } from '../../../shared/os/taskScheduler/taskXmlRead';
 import { firewallRuleName } from './windowsFirewall';
+import { windowsMisaoPipe } from '../transport/agentMisaoSocket';
 import { agentTaskIdentity, misaoTaskVersion, type AgentTaskIdentity } from './windowsAgentTask';
 import type { WindowsAgentOptions } from './windowsAgentConfig';
 import { folderScript, leftoverProcessesScript, parseFolderOutput, parseLeftoverOutput, type ScriptOutcome, type UninstallOutcome } from './windowsAgentUninstallScripts';
@@ -170,8 +171,12 @@ async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options
     const why = guard.outcome === 'failed' ? 'the owner of the misao could not be determined' : 'misao was left in place';
     return [guard, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
+  let version: string | undefined;
   const task = await step('misaoTask', async () => {
-    const removal = await removeTask(host, options.misaoTaskName, (xml) => misaoTaskOf(xml, facts, root) !== undefined, `have the form the AZITO install writes for the misao of ${root}`);
+    const removal = await removeTask(host, options.misaoTaskName, (xml) => {
+      version = misaoTaskOf(xml, facts, root);
+      return version !== undefined;
+    }, `have the form the AZITO install writes for the misao of ${root}`);
     return removal.step;
   });
   if (task.outcome === 'failed') {
@@ -179,11 +184,20 @@ async function removeMisao(host: WindowsUninstallHost, facts: HostFacts, options
     return [task, skipped('misaoProcesses', why), skipped('misaoFolder', why)];
   }
   // The task is ended and that is all AZITO does to the daemon (a daemon of another folder, or one started by hand, is not touched); then only a look.
-  const processes = await step('misaoProcesses', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root, home), QUICK_MS), root));
+  const processes = await step('misaoProcesses', async () => parseLeftoverOutput(await host.script('Looking for processes still running from the misao folder', leftoverProcessesScript(root, home), QUICK_MS), root, misaoAdvice(root, userNameOf(facts.userId), version as string | undefined)));
   const folder = processes.outcome === 'failed'
     ? skipped('misaoFolder', 'the misao daemon may still be running: its folder is left so that nothing breaks underneath it')
     : await step('misaoFolder', async () => parseFolderOutput(await host.script(`Removing ${root}`, folderScript(home, root), FOLDER_MS)));
   return [task, processes, folder];
+}
+
+/**
+ * What to tell the person when a misao daemon outlived its task (ending the task does not end it, measured on a Windows runner: the daemon
+ * and the `cmd.exe` it runs under stay). A daemon is stopped cleanly by its own `stop`, with the pipe of the task; its windows close.
+ */
+function misaoAdvice(root: string, userName: string, version: string | undefined): string {
+  const exe = version === undefined ? '<the misao.exe of the daemon>' : path.win32.join(root, version, 'misao.exe');
+  return `Ending the task does not end a misao daemon. To stop it cleanly (every window it holds closes), in PowerShell: $env:MISAO_SOCKET = '${windowsMisaoPipe(root, userName)}'; & '${exe}' stop`;
 }
 
 /** The hub's misao folder, from the hub task's launcher script (`$hubRoot = '<prefix>\hub'`; the hub keeps its misao in `<prefix>\misao`). */
