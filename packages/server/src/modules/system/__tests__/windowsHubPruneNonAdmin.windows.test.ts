@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { CommandSpec } from '../../../shared/exec/commandSpec';
 import { runCommandSpec, runHostOf } from '../../../shared/exec/runCommandSpec';
 import { resolveCurrentHostEnv } from '../../../shared/os/hostEnv';
+import { powershellEncodedArgs } from '../../../shared/os/shellDialect';
 import { findHubVersionsInUse, removeFolderWithRd } from '../windowsHubFolderOps';
 import { pruneHubVersions } from '../windowsHubPrune';
 import { windowsPowershell, type SpecRunner } from '../windowsHubService';
@@ -73,7 +74,7 @@ describe.skipIf(process.platform !== 'win32')('tidying the old versions as a use
   /** A PowerShell run by the user that lists how many processes' image paths WMI cannot give (the premise of the test). */
   async function unreadablePaths(): Promise<number> {
     const script = '$n = @(Get-CimInstance Win32_Process | Where-Object { -not $_.ExecutablePath -and $_.ProcessId -gt 4 }).Count; Write-Output "n $n"';
-    const spec = { file: windowsPowershell(host!.systemRoot!), args: ['-NoProfile', '-NonInteractive', '-Command', script] } as CommandSpec;
+    const spec = { file: windowsPowershell(host!.systemRoot!), args: powershellEncodedArgs(script) } as CommandSpec;
     const r = await runAsUser(spec);
     return Number(/n (\d+)/.exec(r.stdout)?.[1] ?? -1);
   }
